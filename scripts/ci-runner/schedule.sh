@@ -55,12 +55,29 @@ ci_schedule_note() { # ci_schedule_note <kind> <ran|skipped> <why>
       > "$cache/alerts/.$now-sched.part" && mv -f "$cache/alerts/.$now-sched.part" "$cache/alerts/$now-${GITHUB_SHA:0:7}-schedule-skipped.txt"
   return 0
 }
+# A nightly dispatched by hand (CI_DISPATCH_NIGHTLY=<kind>) leaves <cache>/nightly-dispatch/<kind>-<local date> when it starts; the
+# schedule of that kind does nothing on that local day, so a day never has two. Another kind, or another day, does not match.
+ci_dispatch_marker() { # ci_dispatch_marker <kind>: the marker's path
+  local cache
+  cache="$(ci_cache_dir 2>/dev/null)" || return 1
+  printf '%s\n' "$cache/nightly-dispatch/$1-$(date +%F)"
+}
 ci_schedule_skip() { # 0 (and says why) when this scheduled run is to do nothing
-  local why kind=nightly
+  local why kind=nightly marker
   [ "${GITHUB_EVENT_NAME:-}" = schedule ] || return 1
   [ "${CI_HOSTILE:-}" != 1 ] || kind=hostile
+  if [ -z "${CI_DISPATCH_NIGHTLY:-}" ] && marker="$(ci_dispatch_marker "$kind")" && [ -e "$marker" ]; then
+    why="a dispatched $kind run already started today ($(date +%F), local date), so this scheduled one is not needed."
+    echo "ci-runner: skipped: $why Nothing tested, nothing posted."
+    ci_schedule_note "$kind" skipped "$why"
+    return 0
+  fi
   why="$(ci_schedule_why)"
-  if [ -z "$why" ]; then ci_schedule_note "$kind" ran ""; return 1; fi
+  if [ -z "$why" ]; then
+    if [ -n "${CI_DISPATCH_NIGHTLY:-}" ] && marker="$(ci_dispatch_marker "$kind")"; then mkdir -p "${marker%/*}" 2>/dev/null && : > "$marker"; fi
+    ci_schedule_note "$kind" ran ""
+    return 1
+  fi
   echo "ci-runner: skipped: $why Nothing tested, nothing posted."
   ci_schedule_note "$kind" skipped "$why"
   return 0

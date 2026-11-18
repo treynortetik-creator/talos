@@ -317,17 +317,24 @@ export class Inbound {
     if (this.ctx.closing) return this.letGo(items) // a settle timer or the queue got here after stop began
     let backlog: Item[] = []
     if (fromReplay) {
+      // the owner messages already in this backlog: the same message replayed under a fresh frame id is one message, so its
+      // second copy is left to the one-by-one path below, which finds it seen and consumes it without a second note
+      const inBacklog = new Set<string>()
       for (const it of items) {
         if (it.frame.type !== 'message' && it.frame.type !== 'voice_note') continue
         it.owner = await this.verifyOwner(it)
+        const msgId = (it.frame as Of<'message'>).client_msg_id
         // A Run is never folded into a backlog note: that note gets a fresh time, and a Run is judged on its own age.
         if (
           it.owner.ok &&
           (it.frame as Of<'message'>).intent !== 'run' &&
           this.isStale(it) &&
-          !this.ctx.store.hasSeen((it.frame as Of<'message'>).client_msg_id)
-        )
+          !this.ctx.store.hasSeen(msgId) &&
+          !inBacklog.has(msgId)
+        ) {
+          inBacklog.add(msgId)
           backlog.push(it)
+        }
       }
       if (backlog.length < 2) backlog = []
     }

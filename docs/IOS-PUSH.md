@@ -69,6 +69,26 @@ send a message from the Mac and expect its text on the lock screen and a Reply b
 passcode) and expect the text in the thread; send a small decision card and expect Approve; send an email card and expect only
 Open. If the lock screen shows the fixed phrase instead, the extension did not run or the Keychain group did not match.
 
+Keys belong to one pairing each. The encryption key, the action key and the grant are Keychain items named by a key id the PHONE
+minted when it scanned the relay's code (`enc.<key id>`, `act.<key id>`, `grant.<key id>`; the key id is the profile's data store
+id), never by the relay's own id: a relay chooses its own id, so a hostile relay can claim an earlier relay's, and a new scan must
+never reach the earlier pairing's keys. Removing or replacing a relay deletes its items, and at every launch the app deletes the
+items of any pairing no stored profile owns (a deletion that failed is tried again then). The notification extension tries each
+paired relay's key on a seal (the active relay first); the seal opens only with the key of the relay that made it, so that pairing is
+the push's relay, and the extension believes nothing the push says about where it came from. A push from a paired relay that is not
+the active one shows its words with no Reply or Approve; a push no paired relay's key opens stays the fixed phrase. On a relay
+switch the phone also gives back its APNs registration, and the new relay's page registers again through its normal flow. Keys made
+by the single-relay builds may be known to a relay the owner has left, so they are deleted at launch, not adopted: turn "Show message
+text" on again once per relay.
+
+A button press must come from button data the extension made. The extension adds to the data (`talos_rich`) the key id of the pairing
+(`r`) and a MAC (`m`): HMAC-SHA256, base64url, over the ASCII text `talos-rich/v1` followed, for each of `r`, `t`, `c`, `h` and `shown`
+in that order, by a line break and `<field>=<UTF-8 byte count>:<value>` (a field that is absent counts as an empty value), keyed by
+HKDF-SHA256 (secret: the pairing's 32-byte encryption private key, empty salt, info `talos-rich/v1 hmac`, 32 bytes). Before any
+action key or grant is read, a press checks that `r` is the active pairing's key id and that `m` verifies with that pairing's key;
+a missing or wrong `m`, or another pairing, is refused with a fixed notice and nothing is signed or sent. The press looks at the
+active pairing again just before the frame goes out.
+
 What the phone has to do, and what each side checks:
 
 1. **Grant.** Only after you tap "Show message text". The phone makes two keys that never leave the shared Keychain: an encryption key and an action key. The page
@@ -94,8 +114,8 @@ What the phone has to do, and what each side checks:
    nothing unless it is the hash the extension stored, so a push the extension never rewrote cannot show one card and carry
    another. On top of that, when the extension runs it keeps button data and the Reply and Approve buttons only from a seal it
    opened, so a seal it cannot open is shown plain, with no button that signs. A push sent without `mutable-content` never
-   reaches the extension and keeps whatever buttons the relay gave it; its Approve is refused by the press check, and its
-   Reply goes to the thread the relay named, which a relay could always choose inside the seal anyway. The signed approval
+   reaches the extension and keeps whatever buttons the relay gave it; any Reply or Approve on it is refused, because its button
+   data carries no MAC that only the extension can make (see "A button press must come from button data the extension made"). The signed approval
    also carries `shown_v` (the hash version), which an older phone never sends: an older build signed whatever hash the
    notification data held, so the relay and the Mac refuse its approvals, and it is told to open Talos. A card
    with an attachment or a hidden payload is never approvable here. High-risk cards need the passkey step-up in the app.

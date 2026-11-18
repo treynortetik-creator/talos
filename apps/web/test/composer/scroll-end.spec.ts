@@ -15,6 +15,10 @@ async function open(page: Page) {
   await page.goto('/t/general')
   const box = page.getByLabel('Message', { exact: true })
   await box.click()
+  // The web fonts land after the first paint and re-lay the box out; the browser then re-settles its scroll offset by a pixel
+  // (120 reads back as 119, on a desktop pixel ratio too; the app does nothing on a font load). The owner sees no jump, but the
+  // specs below compare exact offsets, so the layout must have stopped changing first.
+  await page.evaluate(() => document.fonts.ready)
   return box
 }
 

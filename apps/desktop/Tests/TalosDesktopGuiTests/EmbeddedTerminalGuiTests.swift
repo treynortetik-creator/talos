@@ -159,10 +159,8 @@ struct EmbeddedTerminalGuiTests {
     let window = spyWindow(holding: host)
     open(t, in: host)
     let viewer = try #require(t.viewerForTest)
-    let click = try #require(
-      NSEvent.mouseEvent(
-        with: .leftMouseDown, location: NSPoint(x: 20, y: 20), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-        context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+    // the owner's own click (pid 0, the hardware state, no token): a terminal takes nothing else (`SyntheticInput`)
+    let click = try guiMouse(.leftMouseDown, in: window, at: NSPoint(x: 20, y: 20))
     viewer.mouseDown(with: click)
     #expect(window.asked.contains { $0 === viewer })
     t.close()

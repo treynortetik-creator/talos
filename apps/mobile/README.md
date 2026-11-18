@@ -24,7 +24,7 @@ Home Screen is the default phone path; this native app is optional.
 
 ## Security model (IOS-SPEC rev 2)
 
-- The relay origin is fixed at build time (`server.url`). Page content cannot change it.
+- The relay origin is the active relay profile (`RelayRuntime`, `TalosRelayCore`), saved only by the native scan sheet; each relay has its own WebKit data store. A debug build with nothing paired may use the build-time `server.url`; a release build shows the native first-run screen and loads no page. Page content, a deep link or a plugin argument cannot set it.
 - `TalosBridgeViewController` wraps Capacitor's `bridge` script-message handler. A plugin call is delivered only from
   the top frame, on the relay origin, at a path outside `/media/` (`ios/BridgeGuard`, unit-tested with `swift test`).
 - Top-level `/media/` navigations open in the in-app viewer (`MediaViewerController`, a separate web view with no bridge); files it cannot show, attachments and PDFs download to a temp file and open in the system preview with Share. Other new-window requests open in `SFSafariViewController`. Neither ever loads in the shell.

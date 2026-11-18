@@ -19,10 +19,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { gateTestEnv } from './gate-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: scaled(30_000), hookTimeout: scaled(30_000) })
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })

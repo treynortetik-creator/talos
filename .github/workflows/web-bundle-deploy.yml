@@ -1,0 +1,27 @@
+name: "Web bundle: production deploy seen"
+run-name: "Web bundle: production deploy seen"
+
+# The trigger for web-bundle.yml, which saves the deployed web bundle (docs/OLD-CLIENT.md). A deployment_status run is tied
+# to no branch ref, so the Actions cache refuses it ("Event Validation Error"), and the cache is what carries the bundle
+# from web-bundle.yml's read-only build to its publish job (the artifact quota is account-wide and full). So this run only
+# notices a successful production deploy; web-bundle.yml runs on its completion (workflow_run, on main's ref, where the
+# cache works) and builds the sha this run carries as its head sha. No token, no checkout, no code of the repository.
+on:
+  deployment_status:
+
+permissions: {}
+
+jobs:
+  seen:
+    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SHA: ${{ github.event.deployment.sha }}
+    steps:
+      - name: A successful production deploy of a commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "not a commit sha"; exit 1; }
+          echo "production deploy of ${SHA:0:8}: web-bundle.yml saves its bundle"

@@ -3,6 +3,7 @@
 // securitypolicyviolation. The owner bubble and the phone top band must take the theme's colours, not Talos browns.
 import { expect, type Page, test } from '@playwright/test'
 import { appCsp, STOCK_THEMES } from '@talos-app/protocol'
+import { proxyFailures, proxyWithCsp } from '../helpers/csp-route.ts'
 
 const CSP = appCsp('https://talos.example.com')
 test.use({ serviceWorkers: 'block' })
@@ -21,20 +22,15 @@ async function withCsp(page: Page, theme: string, mode: 'light' | 'dark') {
     },
     [theme, mode],
   )
-  await page.route('**/*', async (route) => {
-    // A request can outlive the test (the page is closing): the response is then disposed, and that is not a failure.
-    try {
-      const res = await route.fetch()
-      const headers = res.headers()
-      if ((headers['content-type'] ?? '').includes('text/html')) headers['content-security-policy'] = CSP
-      await route.fulfill({ status: res.status(), headers, body: await res.body() })
-    } catch {
-      await route.abort().catch(() => {})
-    }
-  })
+  await page.route('**/*', (route) => proxyWithCsp(route, CSP))
 }
+test.beforeEach(() => {
+  proxyFailures.length = 0
+})
 test.afterEach(async ({ page }) => {
+  const failed = proxyFailures.splice(0)
   await page.unrouteAll({ behavior: 'ignoreErrors' })
+  expect(failed, 'requests the proxy could not pass on').toEqual([])
 })
 /** The fake client keeps its config in memory, so a theme goes in through the app's own config path and pages are
  *  reached without reloading (a reload would start a fresh config). */
@@ -109,6 +105,17 @@ for (const theme of STOCK_THEMES)
         expect(await violations(page)).toEqual([])
       })
     })
+
+test.describe('five swatches on the narrowest phone', () => {
+  test.use({ viewport: { width: 320, height: 568 } })
+
+  test('Settings > Appearance has all five themes and no sideways scroll at 320 px', async ({ page }) => {
+    await withCsp(page, 'talos', 'light')
+    await page.goto('/settings/appearance')
+    await expect(page.getByTestId('theme-swatch')).toHaveCount(5)
+    expect(await sideways(page)).toBe(0)
+  })
+})
 
 test.describe('picker in the browser', () => {
   test.use({ viewport: { width: 375, height: 812 } })

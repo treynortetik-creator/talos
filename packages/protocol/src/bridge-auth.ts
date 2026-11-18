@@ -1,7 +1,7 @@
 // Bridge authentication (spec 5.4): Ed25519 over a relay challenge (WebSocket) or over a canonical request string
 // (HTTP). WebCrypto Ed25519 is available in Node 24, Bun and current browsers.
 import { b64urlDecode, b64urlEncode, randomBytes, utf8 } from './encoding.ts'
-import { sha256Hex } from './hash.ts'
+import { sha256, sha256Hex } from './hash.ts'
 
 const subtle = () => globalThis.crypto.subtle
 
@@ -23,6 +23,21 @@ export type BridgeKeyPair = {
 /** First 16 hex chars of sha256(raw public key). */
 export function bridgeKeyId(rawPublicKey: Uint8Array): string {
   return sha256Hex(rawPublicKey).slice(0, 16)
+}
+
+/**
+ * The full sha256 of the raw 32-byte public key, base64url without padding (43 chars). The setup link carries it as `fp=` so the
+ * phone can pin this bridge's key on first use. It is public (a hash of a public key), not a secret.
+ */
+export function bridgeKeyFingerprint(rawPublicKey: Uint8Array): string {
+  return b64urlEncode(sha256(rawPublicKey))
+}
+
+/** The same from the BRIDGE_PUBKEY form (base64url raw key); throws unless it is exactly 32 bytes. */
+export function bridgeKeyFingerprintFromB64(publicKeyB64: string): string {
+  const raw = b64urlDecode(publicKeyB64)
+  if (raw.length !== 32) throw new Error('bridge public key must be 32 raw bytes')
+  return bridgeKeyFingerprint(raw)
 }
 
 export async function generateBridgeKey(): Promise<BridgeKeyPair> {

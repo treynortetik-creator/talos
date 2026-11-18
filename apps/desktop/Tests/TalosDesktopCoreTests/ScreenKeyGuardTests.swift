@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -102,17 +103,18 @@ struct ScreenInputPacingTests {
     #expect(ScreenCore.textPaceSeconds >= 0.005 && ScreenCore.textPaceSeconds * Double(ScreenCore.maxTypedCharacters / 16) < 15)
   }
 
-  @Test func theFieldIsReadBackOnceAfterTyping() throws {
-    let a = FakeApps(front: Fx.notes)
-    let c = Fx.core(apps: a)
+  @Test func theFieldIsReadBeforeAndAfterTyping() throws {
     let all: ScreenAllowed = .ids(["com.example.notes"])
-    a.value = { $0 == Fx.notes.pid ? "before hello there" : nil }
-    #expect(try c.typeText("hello", allowed: all) == (1, .verified))
+    func typed(_ reads: [String?]) throws -> ScreenCore.ReadBack {
+      let a = FakeApps(front: Fx.notes)
+      let r = ScreenTypeTests.Reads(reads)
+      a.value = { $0 == Fx.notes.pid ? r.next() : nil }
+      return try Fx.core(apps: a).typeText("hello", allowed: all).readBack
+    }
+    #expect(try typed(["before", "before hello there"]) == .verified)
     let long = String(repeating: "x", count: 100) + "END"
-    a.value = { _ in long }
-    #expect(try c.typeText("hello", allowed: all) == (1, .mismatch(suffix: String(long.suffix(40)))))
-    a.value = { _ in nil }
-    #expect(try c.typeText("hello", allowed: all) == (1, .unverified))
+    #expect(try typed(["before", long]) == .mismatch(suffix: String(long.suffix(40))))
+    #expect(try typed([nil]) == .unverified)
   }
 
   @Test func theReadBackNeverReadsAnAppThatWasNotGated() throws {
@@ -125,11 +127,12 @@ struct ScreenInputPacingTests {
     let a = FakeApps(front: Fx.notes)
     let reads = Reads()
     a.value = { reads.add($0); return "hello" }
-    // call 1 is the gate, 2 the check after the last piece, 3 the read-back's own look: the front changes just before it
-    a.onFrontmost = { n in if n == 3 { a.front = Fx.secret } }
+    // call 1 is the read before the gate, 2 the gate, 3 the check after the last piece, 4 the read-back's own look: the front
+    // changes just before it
+    a.onFrontmost = { n in if n == 4 { a.front = Fx.secret } }
     let c = Fx.core(apps: a)
     #expect(try c.typeText("hello", allowed: .ids(["com.example.notes"])) == (1, .unverified))
-    #expect(reads.pids.isEmpty, "no read for any pid, Secret's least of all")
+    #expect(reads.pids == [Fx.notes.pid], "one read, of the gated app before it was typed into, and none of Secret's")
   }
 
   @Test func eachClickOfADoubleClickIsGatedOnItsOwn() throws {
@@ -369,54 +372,169 @@ struct MenuWalkTests {
 /// and the Apple menu. The list below mirrors that Mac, front to back.
 @Suite("Screen input: what is under the pointer")
 struct ScreenPointOwnerTests {
-  static func w(_ pid: Int32, _ name: String, _ r: CGRect, layer: Int, alpha: Double = 1, bundle: String? = nil) -> ScreenPointWindow {
-    ScreenPointWindow(pid: pid, name: name, bundleID: bundle, bounds: r, layer: layer, alpha: alpha, onScreen: true)
+  static func w(_ pid: Int32, _ name: String, _ r: CGRect, layer: Int, alpha: Double = 1, bundle: String? = nil, id: UInt32 = 0) -> ScreenPointWindow {
+    ScreenPointWindow(pid: pid, name: name, bundleID: bundle, bounds: r, layer: layer, alpha: alpha, onScreen: true, windowID: id)
   }
   static let mac: [ScreenPointWindow] = [
-    w(40, "Google Chrome", CGRect(x: 0, y: 0, width: 1512, height: 33), layer: 26, alpha: 0, bundle: "com.google.Chrome"),
-    w(60, "Talos", CGRect(x: 1250, y: 0, width: 30, height: 24), layer: 25, bundle: "app.talos.desktop"),
-    w(61, "Control Center", CGRect(x: 1300, y: 0, width: 30, height: 24), layer: 25, bundle: "com.apple.controlcenter"),
-    w(0, "Window Server", CGRect(x: 0, y: 0, width: 1512, height: 33), layer: 24),
-    w(40, "Google Chrome", CGRect(x: 200, y: 200, width: 100, height: 100), layer: 0, alpha: 0, bundle: "com.google.Chrome"),
-    w(501, "Notes Example", CGRect(x: 150, y: 150, width: 300, height: 300), layer: 0, bundle: "com.example.notes"),
-    w(40, "Google Chrome", CGRect(x: 0, y: 33, width: 1512, height: 900), layer: 0, bundle: "com.google.Chrome"),
+    w(40, "Google Chrome", CGRect(x: 0, y: 0, width: 1512, height: 33), layer: 26, alpha: 0, bundle: "com.google.Chrome", id: 1),
+    w(60, "Talos", CGRect(x: 1250, y: 0, width: 30, height: 24), layer: 25, bundle: "app.talos.desktop", id: 2),
+    w(61, "Control Center", CGRect(x: 1300, y: 0, width: 30, height: 24), layer: 25, bundle: "com.apple.controlcenter", id: 3),
+    w(0, "Window Server", CGRect(x: 0, y: 0, width: 1512, height: 33), layer: 24, id: 4),
+    w(40, "Google Chrome", CGRect(x: 200, y: 200, width: 100, height: 100), layer: 0, alpha: 0, bundle: "com.google.Chrome", id: 5),
+    w(501, "Notes Example", CGRect(x: 150, y: 150, width: 300, height: 300), layer: 0, bundle: "com.example.notes", id: 6),
+    w(40, "Google Chrome", CGRect(x: 0, y: 33, width: 1512, height: 900), layer: 0, bundle: "com.google.Chrome", id: 7),
   ]
+  static let chrome = ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")
+  static let notes = ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")
 
   @Test func theMenuBarAndItsExtrasAreNeverAnAppsWindow() {
+    // the server names a level 24+ window there (live: the window server's own menu bar window), or cannot be asked
     for p in [CGPoint(x: 10, y: 10), CGPoint(x: 700, y: 10), CGPoint(x: 1260, y: 10), CGPoint(x: 1310, y: 10)] {
-      #expect(ScreenPointWindow.owner(at: p, in: Self.mac) == .systemArea, "\(p)")
+      for hit: UInt32? in [1, 2, 3, 4, 999, nil] {
+        #expect(ScreenPointWindow.owner(at: p, in: Self.mac, hit: hit) == .systemArea, "\(p) \(String(describing: hit))")
+      }
     }
   }
 
-  @Test func anInvisibleWindowIsSkippedAndTheVisibleOneBelowOwnsThePoint() {
-    // (250, 250) lies under an invisible Chrome window above Notes: Chrome owns it, see anInvisibleWindowOfAnotherAppAboveTheTargetOwnsThePoint
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 250, y: 250), in: Self.mac) == .coveredBy(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 400, y: 400), in: Self.mac) == .app(ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")))
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 900, y: 600), in: Self.mac) == .app(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 5000, y: 5000), in: Self.mac) == .nothing)
-    // a window off screen is not under anything
+  @Test func theOwnerIsTheWindowTheServerHitNotTheFirstOneListed() {
+    // (250, 250): the invisible Chrome window above Notes owns the click when the server hits it, Notes when the server hits Notes
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 250, y: 250), in: Self.mac, hit: 5) == .coveredBy(Self.chrome))
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 250, y: 250), in: Self.mac, hit: 6) == .app(Self.notes))
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 900, y: 600), in: Self.mac, hit: 7) == .app(Self.chrome))
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 5000, y: 5000), in: Self.mac, hit: 0) == .nothing)
+  }
+
+  @Test func aServerThatCannotBeAskedOrNamesAWindowTheListLacksIsRefused() {
+    let p = CGPoint(x: 400, y: 400)
+    #expect(ScreenPointWindow.owner(at: p, in: Self.mac, hit: nil) == .systemArea)
+    #expect(ScreenPointWindow.owner(at: p, in: Self.mac, hit: 999) == .systemArea)
+    // a hit window that does not hold the point, or is off screen, is not an owner
+    #expect(ScreenPointWindow.owner(at: p, in: Self.mac, hit: 5) == .systemArea)
     var off = Self.mac
     off[5].onScreen = false
-    #expect(ScreenPointWindow.owner(at: CGPoint(x: 160, y: 160), in: off) == .app(ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")))
+    #expect(ScreenPointWindow.owner(at: p, in: off, hit: 6) == .systemArea)
   }
 
-  @Test func anInvisibleWindowOfAnotherAppAboveTheTargetOwnsThePoint() {
-    let p = CGPoint(x: 50, y: 50)
-    let r = CGRect(x: 0, y: 0, width: 100, height: 100)
-    let notes = ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")
-    let visible = Self.w(501, "Notes Example", r, layer: 0, bundle: "com.example.notes")
-    let chrome = ScreenApp(bundleID: "com.google.Chrome", pid: 40, name: "Google Chrome")
-    for layer in [0, 3, 23] {
-      #expect(
-        ScreenPointWindow.owner(at: p, in: [Self.w(40, "Google Chrome", r, layer: layer, alpha: 0, bundle: "com.google.Chrome"), visible])
-          == .coveredBy(chrome), "layer \(layer)")
+  /// R1-2: the all-windows list is not in stacking order, so a window of an app that is not allowed, over an allowed window, used to be
+  /// attributed to the allowed app. The owner is what the server hits, whatever the list's order is.
+  @Test func aDockOrFloatingPanelOverAnAllowedWindowIsThatOtherAppsPoint() throws {
+    let r = CGRect(x: 0, y: 0, width: 400, height: 400)
+    let allowedWindow = Self.w(501, "Notes Example", r, layer: 0, bundle: "com.example.notes", id: 10)
+    let dock = Self.w(697, "Dock", CGRect(x: 100, y: 100, width: 100, height: 100), layer: 20, bundle: "com.apple.dock", id: 11)
+    let panel = Self.w(502, "Secret Example", CGRect(x: 100, y: 100, width: 100, height: 100), layer: 3, bundle: "com.example.secret", id: 12)
+    for (top, other) in [(dock, "com.apple.dock"), (panel, "com.example.secret")] {
+      // listed the way the all-windows list can list them: the allowed window first, the covering one after it
+      for list in [[top, allowedWindow], [allowedWindow, top]] {
+        let apps = FakeApps(front: Fx.notes)
+        apps.owner = { ScreenPointWindow.owner(at: $0, in: list, hit: top.windowID) }
+        let input = FakeInput()
+        #expect(throws: ScreenRefusal.self, Comment(rawValue: other)) {
+          try Fx.core(input: input, apps: apps).perform(.click(CGPoint(x: 150, y: 150)), allowedBundleIDs: ["com.example.notes"])
+        }
+        #expect(input.posted.isEmpty, Comment(rawValue: other))
+      }
     }
-    // the same app's own invisible window is no cover
-    #expect(ScreenPointWindow.owner(at: p, in: [Self.w(501, "Notes Example", r, layer: 0, alpha: 0), visible]) == .app(notes))
-    // an invisible window below the target is skipped as before
-    #expect(ScreenPointWindow.owner(at: p, in: [visible, Self.w(40, "Google Chrome", r, layer: 0, alpha: 0)]) == .app(notes))
-    // no invisible window: unchanged
-    #expect(ScreenPointWindow.owner(at: p, in: [visible, Self.w(40, "Google Chrome", r, layer: 0)]) == .app(notes))
+    // and a click on the allowed app's own visible window, beside the panel, still goes through
+    let apps = FakeApps(front: Fx.notes)
+    apps.owner = { ScreenPointWindow.owner(at: $0, in: [panel, dock, allowedWindow], hit: 10) }
+    let input = FakeInput()
+    #expect(try Fx.core(input: input, apps: apps).perform(.click(CGPoint(x: 300, y: 300)), allowedBundleIDs: ["com.example.notes"]) == 1)
+    #expect(input.posted.count == 1)
+  }
+
+  /// The layers of a real desktop's on-screen list, front to back, are not monotonic (a recorded list reads 2147483630, 2004, 2003,
+  /// 2001, 8, 1000, 25, 24, 0, then negative wallpaper levels). Both the owner and the top-window check must rest on the list's ORDER
+  /// and the server's hit, never on the layer numbers rising or falling.
+  static let recorded: [ScreenPointWindow] = {
+    let full = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    let mid = CGRect(x: 400, y: 400, width: 300, height: 300)
+    let dot = CGRect(x: 0, y: 0, width: 4, height: 4)
+    return [
+      w(90, "Overlay Example", dot, layer: 2_147_483_630, alpha: 0, id: 20),
+      w(91, "Shield Example", dot, layer: 2004, alpha: 0, id: 21),
+      w(92, "Popup Example", dot, layer: 2003, alpha: 0, id: 22),
+      w(93, "Cursor Example", dot, layer: 2001, alpha: 0, id: 23),
+      w(501, "Notes Example", mid, layer: 8, bundle: "com.example.notes", id: 24),
+      w(61, "Status Example", full, layer: 1000, bundle: "com.example.status", id: 25),
+      w(60, "Menu Extra Example", CGRect(x: 1250, y: 0, width: 30, height: 24), layer: 25, bundle: "com.example.extra", id: 26),
+      w(0, "Window Server", CGRect(x: 0, y: 0, width: 1512, height: 33), layer: 24, id: 27),
+      w(40, "Browser Example", full, layer: 0, bundle: "com.example.browser", id: 28),
+      w(95, "Wallpaper Example", full, layer: -2_147_483_624, bundle: "com.example.wallpaper", id: 29),
+    ]
+  }()
+
+  static let recordedNotes = recorded[4]
+  static let recordedBrowser = recorded[8]
+
+  @Test func theTopVisibleWindowIsTheFirstEligibleOneInListOrderNotTheLowestOrHighestLayer() {
+    // layer 8 is listed before layer 0, so the layer-8 window wins over the browser's layer-0 one; the windows at 2001 and above,
+    // 1000, 25 and 24 around it are not eligible
+    #expect(ScreenPointWindow.topVisibleAppPID(in: Self.recorded) == 501)
+    // a layer-0 window listed first and the layer-8 one later: the layer-0 window wins, a higher number does not
+    let browser = Self.recordedBrowser
+    let notes = Self.recordedNotes
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [browser, notes]) == 40)
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [Self.recorded[0], browser] + Self.recorded[4...]) == 40)
+  }
+
+  /// The window server's own list on this Mac: only that it is read at all (a broken `kCGWindowNumber` read would give every window
+  /// id 0, and every click would then be refused). No order is asserted: it is a property of the machine's screen, not of our code.
+  @Test func theLiveWindowListIsReadWithIdsAndPids() throws {
+    let list = try #require(LiveScreenApps.windowList())
+    try #require(!list.isEmpty)
+    #expect(list.contains { $0.windowID != 0 && $0.pid > 0 })
+  }
+
+  @Test func theOwnerIsTheWindowTheServerNamesWhereverItSitsInTheList() {
+    let p = CGPoint(x: 500, y: 500)
+    let notes = ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")
+    let browser = ScreenApp(bundleID: "com.example.browser", pid: 40, name: "Browser Example")
+    // the layer-8 window is listed first and the layer-0 one near the end: each is credited when, and only when, it is the hit
+    #expect(ScreenPointWindow.owner(at: p, in: Self.recorded, hit: 24) == .app(notes))
+    #expect(ScreenPointWindow.owner(at: p, in: Self.recorded, hit: 28) == .app(browser))
+    #expect(ScreenPointWindow.owner(at: p, in: Self.recorded.reversed(), hit: 28) == .app(browser))
+    #expect(ScreenPointWindow.owner(at: p, in: Self.recorded.reversed(), hit: 24) == .app(notes))
+    // a hit on the level-1000 window, on a level 24 or 25 one, or on one far above them is system area
+    #expect(ScreenPointWindow.owner(at: p, in: Self.recorded, hit: 25) == .systemArea)
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 1260, y: 10), in: Self.recorded, hit: 26) == .systemArea)
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 10, y: 10), in: Self.recorded, hit: 27) == .systemArea)
+    #expect(ScreenPointWindow.owner(at: CGPoint(x: 2, y: 2), in: Self.recorded, hit: 20) == .systemArea)
+  }
+
+  static let screen = CGSize(width: 1512, height: 982)
+
+  @Test func theRealDocksScreenWideWindowIsNotTheTopWindowForTheKeyboard() {
+    let dock = Self.w(697, "Dock", CGRect(origin: .zero, size: Self.screen), layer: 20, bundle: "com.apple.dock")
+    let mine = Self.w(501, "Notes Example", CGRect(x: 0, y: 0, width: 300, height: 300), layer: 0, bundle: "com.example.notes")
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [dock, mine], realDockPID: 697, screenSizes: [Self.screen]) == 501)
+    // a window a little larger than the screen (spanning a second display) is still the event window
+    let wide = Self.w(697, "Dock", CGRect(x: 0, y: 0, width: 3000, height: 982), layer: 20, bundle: "com.apple.dock")
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [wide, mine], realDockPID: 697, screenSizes: [Self.screen]) == 501)
+  }
+
+  /// R2-1: an app that only claims the Dock's bundle id gets no skip: its panel above the allowed app is on top, so the allowed app
+  /// does not own the keyboard (`appOwnsKeyboard` is this pid compared with the app's).
+  @Test func anImpostorWithTheDocksIdIsStillOnTop() {
+    let panel = Self.w(999, "Fake Dock", CGRect(origin: .zero, size: Self.screen), layer: 20, bundle: "com.apple.dock")
+    let mine = Self.w(501, "Notes Example", CGRect(x: 0, y: 0, width: 300, height: 300), layer: 0, bundle: "com.example.notes")
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [panel, mine], realDockPID: 697, screenSizes: [Self.screen]) == 999)
+    // and with no real Dock known, nothing is skipped
+    #expect(ScreenPointWindow.topVisibleAppPID(in: [panel, mine]) == 999)
+  }
+
+  @Test func theRealDocksOtherWindowsStillCountAsOnTop() {
+    let mine = Self.w(501, "Notes Example", CGRect(x: 0, y: 0, width: 300, height: 300), layer: 0, bundle: "com.example.notes")
+    let small = Self.w(697, "Dock", CGRect(x: 600, y: 900, width: 300, height: 80), layer: 20, bundle: "com.apple.dock")
+    let otherLevel = Self.w(697, "Dock", CGRect(origin: .zero, size: Self.screen), layer: 3, bundle: "com.apple.dock")
+    for w in [small, otherLevel] {
+      #expect(ScreenPointWindow.topVisibleAppPID(in: [w, mine], realDockPID: 697, screenSizes: [Self.screen]) == 697, Comment(rawValue: w.name))
+    }
+  }
+
+  @Test func theRealDockIsFoundByItsSystemBundleNotItsId() throws {
+    // on a Mac the Dock is running: its pid is the one whose bundle is the system's Dock.app
+    let pid = try #require(LiveScreenApps.realDockPID())
+    #expect(NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock")
   }
 
   @Test func theTopVisibleWindowSkipsInvisibleSlivers() {

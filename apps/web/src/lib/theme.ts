@@ -1,16 +1,13 @@
 // Appearance: System / Light / Dark, and Text size. "System" removes the override so tokens.css follows prefers-color-scheme.
 // Text size sets the root font size (a percentage, so the browser's own default still counts): tokens and Tailwind spacing
 // are rem, so the whole app scales with it. Both are device settings, like light/dark: never sent anywhere (audit D53).
-// The stock theme further down (talos | paper | hearth) is the exception: it is a setting of the owner's config.
+// The stock theme further down (talos | paper | hearth | iris | harbor) is the exception: it is a setting of the owner's config.
 import {
   DEFAULT_THEME,
   STOCK_THEME_IDS,
   STOCK_THEMES,
   type StockThemeId,
   THEME_COLOR_TOKENS,
-  THEME_FONT_STACKS,
-  THEME_FONT_TOKENS,
-  THEME_RADIUS_TOKENS,
   THEME_TOKEN_NAMES,
   type Theme,
   type ThemeMode,
@@ -96,8 +93,9 @@ export function useTheme(): ThemeChoice {
 
 /**
  * The CSS custom properties of a theme for one mode, as {name: value}. Only names on the protocol's allowlist appear, and
- * every value is rebuilt from the validated theme (a #rrggbb, a number of pixels, a font stack from the bundled list), never
- * copied. A theme that fails validation gives the default's values, and `problems` says why.
+ * every value is rebuilt from the validated theme (a #rrggbb), never copied. Colours only: fonts and radii are tokens.css's
+ * own, whatever an older custom theme still holds. A theme that fails validation gives the default's values, and
+ * `problems` says why.
  */
 export function themeDeclarations(
   theme: unknown,
@@ -108,10 +106,18 @@ export function themeDeclarations(
   const colours = t[mode] as Record<string, string>
   const vars: Record<string, string> = {}
   for (const name of THEME_COLOR_TOKENS) vars[name] = colours[name] as string
-  for (const name of THEME_RADIUS_TOKENS) vars[name] = `${t.radius[name]}px`
-  for (const name of THEME_FONT_TOKENS) vars[name] = THEME_FONT_STACKS[t.fonts[name]]
   return { vars, problems: checked.ok ? [] : [checked.error] }
 }
+
+/** Font and radius tokens an older build set inline on <html>; no theme sets them now, so they are taken off. */
+const LEGACY_SHAPE_TOKENS = [
+  '--font-display',
+  '--font-ui',
+  '--font-mono',
+  '--radius-card',
+  '--radius-bubble',
+  '--radius-button',
+]
 
 /**
  * Sets a theme's tokens on the root element, for one mode (see `themeDeclarations`). The result says whether the theme
@@ -124,11 +130,12 @@ export function applyThemeTokens(
 ): { applied: 'theme' | 'default'; problems: string[] } {
   const { vars, problems } = themeDeclarations(theme, mode)
   const style = document.documentElement.style
+  for (const name of LEGACY_SHAPE_TOKENS) style.removeProperty(name)
   for (const [name, value] of Object.entries(vars)) style.setProperty(name, value)
   return { applied: problems.length === 0 ? 'theme' : 'default', problems }
 }
 
-// ---- Applied theme (talos | paper | hearth | a custom theme) -------------------------------------------------------------
+// ---- Applied theme (a stock id | a custom theme) -------------------------------------------------------------
 // The theme the owner applied is a setting of the owner's config (`theme`), so every device follows it: a stock id, or a whole
 // custom theme the agent drafted and the owner approved on a card. This device keeps a copy so a launch paints the right
 // colours before the config has arrived. Light/dark/system above stays per device, and a theme has both modes. Talos is the
@@ -147,7 +154,7 @@ export function stockThemeFromConfig(v: unknown): AppliedTheme {
   return r.ok ? r.theme : 'talos'
 }
 
-/** 'talos' | 'paper' | 'hearth' | 'custom': the part of an applied theme that is a stable string. */
+/** a stock id | 'custom': the part of an applied theme that is a stable string. */
 export const themeKey = (t: AppliedTheme): StockThemeId | 'custom' => (typeof t === 'string' ? t : 'custom')
 const same = (a: AppliedTheme, b: AppliedTheme) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -172,7 +179,8 @@ function paintStockTheme(choice: ThemeChoice) {
   const applied = getStockTheme()
   const theme = typeof applied === 'string' ? STOCK_THEMES.find((t) => t.name === applied) : applied
   if (applied === 'talos' || !theme) {
-    for (const name of THEME_TOKEN_NAMES) document.documentElement.style.removeProperty(name)
+    for (const name of [...THEME_TOKEN_NAMES, ...LEGACY_SHAPE_TOKENS])
+      document.documentElement.style.removeProperty(name)
     return
   }
   applyThemeTokens(theme, currentMode(choice))

@@ -422,6 +422,53 @@ struct WorkerUnknownAdopt {
     r.clearFault("has-session")
     usleep(800_000)
     #expect(r.starts.isEmpty, "\(r.starts)")
+    // and it is not a quiet park: the thread is failed, which is where the owner sees a start that did not happen
+    #expect(r.state("trip") == "failed", "\(String(describing: r.state("trip")))")
+  }
+
+  /// A restart whose start cannot read the session name for a moment (tmux busy, as in an update on a loaded Mac) waits and starts as
+  /// soon as it can, on the same conversation.
+  @Test func aRestartThatCannotReadTheNameForAMomentIsRetriedAndStarts() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    let shim = try r.faultShim()
+    r.manager(tmux: shim)
+    r.mgr.tune { $0.auditLogPath = r.root + "/audit.log" }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(15) { r.up("trip") }, "\(r.why("trip"))")
+    let sid = r.entry("trip")?.session_id
+    try r.fault("has-session", "hold")
+    try r.wake("trip", action: "restart", ids: [])
+    #expect(r.wait(10) { r.state("trip") == "parked" }, "\(r.why("trip"))")
+    usleep(1_000_000)
+    #expect(r.state("trip") == "parked" && r.entry("trip")?.error == nil && r.starts.count == 1, "\(r.why("trip"))")
+    #expect(r.auditLines.contains { $0.contains("worker_start_held thread=trip reason=tmux_session_unreadable has-session status=") })
+    r.clearFault("has-session")
+    #expect(r.wait(15) { r.up("trip") && r.starts.count == 2 }, "\(r.why("trip"))")
+    #expect(r.entry("trip")?.session_id == sid)
+  }
+
+  /// A restart that cannot read the name for the whole hold is not dropped into a quiet "parked": the thread is failed with the reason
+  /// (as every other start that did not happen is), the log says so, and nothing starts later.
+  @Test func aRestartThatNeverReadsTheNameFailsLoudlyAfterTheHold() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    let shim = try r.faultShim()
+    r.manager(tmux: shim, capHold: 0.6)
+    r.mgr.tune { $0.auditLogPath = r.root + "/audit.log" }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(15) { r.up("trip") }, "\(r.why("trip"))")
+    try r.fault("has-session", "hold")
+    try r.wake("trip", action: "restart", ids: [])
+    #expect(r.wait(10) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+    let e = r.entry("trip")?.error
+    #expect(e?.code == "start_failed" && e?.detail?.contains("tmux could not be read") == true, "\(String(describing: e))")
+    #expect(r.auditLines.contains { $0.contains("worker_start_hold_dropped thread=trip") && $0.contains("unreadable=true") }, "\(r.auditLines)")
+    r.clearFault("has-session")
+    usleep(800_000)
+    #expect(r.starts.count == 1, "\(r.starts)")
   }
 
   /// A failed read after `new-session`: the worker is ours once it can be read, and owned from then on.

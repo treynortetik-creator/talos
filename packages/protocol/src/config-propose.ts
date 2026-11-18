@@ -27,6 +27,7 @@ import {
   type ThreadField,
   type ThreadFieldRow,
 } from './settings-table.ts'
+import { clipUnits } from './untrusted.ts'
 
 /** Advertised by a relay whose Card enum knows `kind:'config'`. The bridge mints these cards only against such a relay. */
 export const CONFIG_PROPOSE_FEATURE = 'config-propose/1'
@@ -451,9 +452,9 @@ export function configCardCandidate(i: ConfigCardInput): Omit<CardT, 'payload_ha
       : oneTarget?.kind === 'new_thread'
         ? `Create thread ${oneTarget.id}`
         : `Change ${labelOfPath(one.path).toLowerCase()}`,
-    summary: i.reason.slice(0, 280),
+    summary: clipUnits(i.reason, 280),
     destination: i.changes.slice(0, 6).map((c) => ({ label: 'Setting', value: labelOfPath(c.path) })),
-    body: `${i.changes.map(describeChange).join('\n')}\n\nWhy: ${i.reason}`.slice(0, 20_000),
+    body: clipUnits(`${i.changes.map(describeChange).join('\n')}\n\nWhy: ${i.reason}`, 20_000),
     body_format: 'plain',
     fields: [],
     attachments: [],

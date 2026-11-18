@@ -350,6 +350,15 @@ fails closed; there is no warning-only mode. Run by a hook, not a doc, because a
    remote's old tip, or for a new branch from its merge base with `<remote>/main`. A hook takes no flags: `GATE_FULL=1 git push`
    runs the full gate, and `gate.sh --push --full` sets it for the push it makes.
 
+**The `Verified:` trailer (observe mode).** Beside those two, `scripts/verified-trailer.sh` looks at each commit being pushed
+(merges skipped, commits already on the remote's main not counted) for a `Verified:` trailer: what was driven and where the
+evidence is, or `Verified: none - <reason>` (the verify skill, `.claude/skills/verify/SKILL.md`). `TALOS_VERIFIED_TRAILER` (or
+`git config talos.verifiedTrailer`) is `off`, `observe` or `enforce`; the default is **observe**: one line per commit lacking it,
+to stderr and to `<git common dir>/talos-verified-trailer.log` (`TALOS_VERIFIED_LOG` moves it), and it never refuses a push,
+even when git errors inside the check. `enforce` refuses a push with a commit lacking it (or one that cannot be listed); it is
+written and tested, and not switched on: the owner decides when.
+It looks at the newest 20 commits of each pushed ref only (`TALOS_VERIFIED_MAX`), so a new branch with no remote main or a force push stays quick; it names at most 3 commits, then a count, and keeps its log to a few hundred lines.
+
 `git push --no-verify` skips the hook; that is the owner's own override, never a builder's. `git config talos.nohooks true` keeps
 it off for good; `TALOS_NO_HOOKS=1 pnpm install` is for one install. CI's scratch worktrees never install it, and neither does a
 repo with hooks of its own in `.git/hooks`, because `core.hooksPath` would stop them.

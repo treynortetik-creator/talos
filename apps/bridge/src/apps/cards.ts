@@ -5,6 +5,7 @@ import {
   bindingFrom,
   Card,
   type CardT,
+  clipUnits,
   newId,
   payloadHash,
   sanitizeExternal,
@@ -36,10 +37,7 @@ export const AppCardPayload = z.discriminatedUnion('kind', [
 ])
 export type AppCardPayloadT = z.infer<typeof AppCardPayload>
 
-const clean = (s: string, max: number) =>
-  sanitizeExternal(s, max)
-    .replace(/[\r\n\t]+/g, ' ')
-    .slice(0, max)
+const clean = (s: string, max: number) => clipUnits(sanitizeExternal(s, max).replace(/[\r\n\t]+/g, ' '), max)
 
 export type AppCardSpec = {
   threadId: string
@@ -61,7 +59,7 @@ export async function sendAppCard(ctx: BridgeContext, s: AppCardSpec): Promise<C
     kind: 'app_action',
     title: clean(s.title, 120),
     destination: s.destination.map((d) => ({ label: clean(d.label, 20), value: clean(d.value, 500) })),
-    body: s.body.slice(0, APP_CARD_BODY_MAX),
+    body: clipUnits(s.body, APP_CARD_BODY_MAX),
     body_format: 'plain',
     fields: [],
     attachments: [],

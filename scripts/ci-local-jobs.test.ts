@@ -7,12 +7,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 const live: ChildProcess[] = []

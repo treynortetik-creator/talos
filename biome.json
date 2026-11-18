@@ -16,6 +16,9 @@
       "!plugins/*/skills/*/SKILL.md",
       "!plugins/*/agents/*.md",
       "!**/dist",
+      "!**/dist-fake",
+      "!**/test-results",
+      "!**/playwright-report",
       "!packages/protocol/fixtures",
       "!packages/testkit/fixtures",
       "!**/public/brand"

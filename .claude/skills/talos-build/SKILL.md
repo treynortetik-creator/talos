@@ -2,7 +2,7 @@
 
 name: talos-build
 description: The shared rules for building, reviewing and landing changes to this repository (Talos), on any machine. Use for every Talos build, fix, test run, review or landing - before writing code, before running a suite or a time-limited command, and before any push, handoff or worktree removal. A builder brief can say "load talos-build" instead of pasting these rules.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # talos-build: how every builder works in this repo
@@ -188,6 +188,7 @@ Also, where the change touches them: hostile text, size limits, checks that run 
   screenshot, a short clip or real output), or one line saying why there is none. A CI, gate or guard change gets one real
   run of the changed path before it lands.
 - User-visible changes get a plain-language line in `CHANGELOG.md`.
+- **Verify before commit.** Load `.claude/skills/verify/SKILL.md`: drive the real app on every route the change reaches, keep before/after evidence, and end the commit message with a `Verified:` trailer.
 - **Your report is a claim.** Say what you checked on disk, not what you meant to do: files changed; tests added (name and
   what each proves); each command you ran with its exit code; the sha; what you could not verify.
 - A sub-agent's report is a claim too. Read the artifact and check the sha before calling anything done.
@@ -201,6 +202,7 @@ newest copy.
 
 ## Changelog
 
+- 1.3.0: a pointer to the verify skill (drive the real app, evidence, the `Verified:` trailer) in landing and reporting.
 - 1.2.0: the owner's own review limit restored (tier 1 is one review and one fix check, a third round only for a
   serious finding; the guards leave tier 1); a lead may skip the pre-push hook for test- or doc-only changes and urgent red-main
   fixes, saying so; no copying the private list into worktrees (the gate reads it from the main checkout); red-main triage

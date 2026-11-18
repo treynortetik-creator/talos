@@ -3,6 +3,8 @@ import Capacitor
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    /// What a relay switch clears (the share token and the notification grant). Tests replace it.
+    var clearRelayBoundState: () -> Void = RelayRuntime.clearRelayBoundNativeState
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
@@ -31,6 +33,22 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         } else {
             swap()
         }
+    }
+
+    /// The app moved to another relay (the Add-relay sheet's Done): a new web view built from the saved profile, without the
+    /// "Reconnecting" notice, with the old relay's audio session and push taps dropped. `enrollURL` is loaded once, so the page
+    /// continues pairing with the code that was just scanned.
+    func switchRelay(enrollURL: URL?) {
+        guard let window else { return }
+        (window.rootViewController as? TalosBridgeViewController)?.retire()
+        // The old relay's page stayed trusted from the save until now and may have stored a share token or grant meanwhile
+        // (a grant renewal, setToken, a call in flight). It is retired, so nothing more can arrive: clear once more.
+        clearRelayBoundState()
+        TalosAudioPlugin.resetSession()
+        TalosPushCenter.shared.resetForRelaySwitch()
+        let next = TalosBridgeViewController()
+        next.firstPage = enrollURL
+        window.rootViewController = next
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {

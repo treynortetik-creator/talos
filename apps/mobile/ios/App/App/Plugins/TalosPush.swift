@@ -41,6 +41,19 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
         viewingThread = nil
     }
 
+    /// Gives the phone's APNs registration back. Tests replace it.
+    var unregisterRemote: () -> Void = { UIApplication.shared.unregisterForRemoteNotifications() }
+
+    /// The app moved to another relay: a tap or a thread from the old one means nothing to the new page, and the old relay's
+    /// APNs registration is let go (the old relay is told nothing: only a page on that relay could talk to it, and none is left).
+    /// The new relay's page registers again through its own normal flow (`register`), which asks iOS for a token afresh.
+    func resetForRelaySwitch() {
+        waiting = nil
+        delivered = nil
+        viewingThread = nil
+        unregisterRemote()
+    }
+
     /// Capacitor would take the delegate when its bridge is built (after launch) unless `ios.handleApplicationNotifications`
     /// is false in capacitor.config.ts; with it off, this stays the delegate and taps reach `didReceive` (review R2). The
     /// plugin installs it again when it loads, in case a build ever turns that setting back on.
@@ -108,9 +121,10 @@ final class TalosPushCenter: NSObject, UNUserNotificationCenterDelegate {
 ///   unregister()
 ///   setBadge({count})
 ///   setViewing({thread})   thread = the key Apple's pushes carry for it (General/Inbox id, or the relay's opaque ref), or null
-///   nativeKeys()           -> { enc_pub, act_pub }  makes the notification keys the first time (public halves only ever leave)
-///   storeGrant({grant})    keeps the device-key-signed grant, only if it names these keys; rejects otherwise
-///   clearGrant()           Turn off / sign out: deletes the grant and both private keys
+///   nativeKeys()           -> { enc_pub, act_pub }  makes this relay's notification keys the first time (public halves only ever leave)
+///   storeGrant({grant})    keeps the device-key-signed grant, only if it names this relay's keys; rejects otherwise
+///   clearGrant()           Turn off / sign out: deletes this relay's grant and both private keys (other relays' are kept)
+/// The keys are per pairing, named by the key id of the profile the calling page's web view was built from (never by a value the page sends).
 ///   clearDelivered({tags}) removes delivered notifications whose thread-id is one of tags (`thread:<key>`, `card:<id>`)
 ///   event "action"         -> { action: 'open' | 'approve', navigate: '/in/app/path' }
 @objc(TalosPushPlugin)
@@ -275,8 +289,9 @@ public class TalosPushPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func nativeKeys(_ call: CAPPluginCall) {
         guard TalosPluginGate.allows(bridge) else { return call.reject("not allowed from this page") }
+        guard let keyId = TalosPluginGate.keyId(bridge) else { return call.reject("no relay", "no relay") }
         do {
-            let keys = try NativeKeyStore.ensureKeys()
+            let keys = try NativeKeyStore.ensureKeys(keyId: keyId)
             call.resolve(["enc_pub": keys.encPub, "act_pub": keys.actPub])
         } catch {
             call.reject("keychain", "keychain")
@@ -285,9 +300,10 @@ public class TalosPushPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func storeGrant(_ call: CAPPluginCall) {
         guard TalosPluginGate.allows(bridge) else { return call.reject("not allowed from this page") }
+        guard let keyId = TalosPluginGate.keyId(bridge) else { return call.reject("no relay", "no relay") }
         guard let grant = call.getString("grant"), grant.utf8.count <= 2048 else { return call.reject("invalid", "invalid") }
         do {
-            try NativeKeyStore.saveGrant(grant) ? call.resolve() : call.reject("invalid", "invalid")
+            try NativeKeyStore.saveGrant(grant, keyId: keyId) ? call.resolve() : call.reject("invalid", "invalid")
         } catch {
             call.reject("keychain", "keychain")
         }
@@ -295,7 +311,8 @@ public class TalosPushPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func clearGrant(_ call: CAPPluginCall) {
         guard TalosPluginGate.allows(bridge) else { return call.reject("not allowed from this page") }
-        NativeKeyStore.clearAll()
+        guard let keyId = TalosPluginGate.keyId(bridge) else { return call.reject("no relay", "no relay") }
+        NativeKeyStore.clearAll(keyId: keyId)
         // The words already on the lock screen and in Notification Center go with the keys: only notifications the extension
         // marked as showing text (a fixed phrase is left alone).
         removeDelivered(

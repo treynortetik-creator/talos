@@ -8,10 +8,12 @@
 import { writeSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import {
+  bridgeKeyFingerprintFromB64,
   deriveEnrollAuth,
   enrollAuthHash,
   enrollCodeId,
   fingerprintWords,
+  formatEnrollLink,
   newEnrollCode,
   PGP_EVEN_WORDS,
   PGP_ODD_WORDS,
@@ -26,7 +28,9 @@ import { RelayHttpError } from './relay-http.ts'
 
 /** What enroll needs of the CLI: kept here as parameters so this file does not import cli-main (which imports it). */
 export type EnrollCli = {
-  http(): Promise<Pick<RelayHttp, 'enroll'>>
+  http(): Promise<Pick<RelayHttp, 'enroll' | 'descriptor'>>
+  /** This bridge's public key (what the relay pins as BRIDGE_PUBKEY), base64url. The public half only. */
+  bridgeKeyB64(): Promise<string>
   relayUrl(): string
   /** The live bridge, in words: `ok`, or why nobody can pin a device right now. */
   bridge(): { level: string; text: string }
@@ -34,7 +38,15 @@ export type EnrollCli = {
   keyRefusedHint(e: RelayHttpError): Promise<string>
   /** A usage or relay failure, as the CLI reports it (exit 1). */
   fail(message: string): Error
+  /** Whether the link may carry `fp=` (default ENROLL_LINK_FP); the tests turn it on to cover that path. */
+  linkFp?: boolean
 }
+
+/**
+ * On since the saved web bundle (docs/OLD-CLIENT.md) reads `fp` (BYOR phase 2): a relay that answers its descriptor gets
+ * `&fp=` in the link. Off gives the plain link and asks for no descriptor, the link before phase 2.
+ */
+export const ENROLL_LINK_FP = true
 export type EnrollIO = {
   out(line: string): void
   prompt(question: string): Promise<string>
@@ -44,6 +56,9 @@ export type EnrollIO = {
   emit?(line: string): void
 }
 
+const NO_FP_TEXT =
+  "This link carries no key fingerprint (the relay's descriptor did not answer). Browsers are fine; the Talos phone app will refuse it: run enroll again."
+const OLD_RELAY_TEXT = 'This relay is older than the Talos phone app needs; browsers are fine.'
 const CODE_MS = 10 * 60_000
 const PIN_WAIT_MS = 60_000
 /** An answer sooner than this after the question was typed ahead, before the words could be read: it is a no. */
@@ -111,7 +126,7 @@ async function promptPending(files: EnrollFiles, codeId: string, io: EnrollIO) {
 
 /** A new one-use code: kept here, its hash sent to the relay. Returns the link and when it stops working. */
 async function newCode(
-  relay: { http: Pick<RelayHttp, 'enroll'>; url: string },
+  relay: { http: Pick<RelayHttp, 'enroll' | 'descriptor'>; url: string },
   cli: EnrollCli,
   files: EnrollFiles,
   label: string | undefined,
@@ -122,6 +137,14 @@ async function newCode(
   const hash = enrollAuthHash(deriveEnrollAuth(code))
   const codeId = enrollCodeId(hash)
   const expiresAt = new Date(now + CODE_MS).toISOString()
+  // Before anything is written, so a failure here cannot leave a pending code. Only a relay that answers its descriptor gets
+  // `fp=`: an older relay's web takes the whole fragment as the code, so a link with `fp` would fail there, while a relay
+  // that has a descriptor serves a web built at the same sha, which reads `fp`.
+  // 404 is an old relay (plain link, nothing said); a descriptor that cannot be read is NOT that, so the caller says so.
+  const d = (cli.linkFp ?? ENROLL_LINK_FP) ? await http.descriptor() : ({ kind: 'off' } as const)
+  const fp = d.kind === 'found' ? bridgeKeyFingerprintFromB64(await cli.bridgeKeyB64()) : undefined
+  const noFp = d.kind === 'unavailable'
+  const oldRelay = d.kind === 'absent'
   files.writePending(codeId, {
     code,
     ...(label ? { label } : {}),
@@ -137,7 +160,15 @@ async function newCode(
       throw Object.assign(cli.fail(await cli.keyRefusedHint(e)), { keyRefused: true })
     throw e
   }
-  return { codeId, link: `${relayUrl}/enroll#${code}`, expiresAt }
+  return {
+    codeId,
+    link: formatEnrollLink(relayUrl, code),
+    fpLink: formatEnrollLink(relayUrl, code, fp),
+    fp,
+    noFp,
+    oldRelay,
+    expiresAt,
+  }
 }
 
 export async function cmdEnroll(env: BridgeEnv, args: string[], io: EnrollIO, cli: EnrollCli): Promise<number> {
@@ -196,15 +227,21 @@ export async function cmdEnroll(env: BridgeEnv, args: string[], io: EnrollIO, cl
   }
   const now = io.now()
   ensureDir(p.enrollPending)
-  const { codeId, link } = await newCode(relay, cli, files, values.label, now)
+  const noQr = values['no-qr'] === true
+  const { codeId, link, fpLink, fp, noFp, oldRelay } = await newCode(relay, cli, files, values.label, now)
   io.out('Open this link on the device you want to add (it works once, for 10 minutes):')
-  io.out(link)
-  if (!values['no-qr']) {
+  // `--no-qr` is the Mac app, which takes a line that STARTS with the relay origin as the code: the first line stays the plain
+  // link. The fingerprint link goes on a second line that starts with words (the Mac app skips it), for a person over SSH.
+  io.out(noQr ? link : fpLink)
+  if (noQr && fp) io.out(`For the Talos phone app: ${fpLink}`)
+  if (noFp) io.out(NO_FP_TEXT)
+  if (!noQr) {
     io.out('Or point the phone camera at this code:')
-    const lines = await cli.renderQr(link)
+    const lines = await cli.renderQr(fpLink)
     if (lines) for (const l of lines) io.out(l)
     else io.out('(The code could not be drawn here; use the link above.)')
   }
+  if (oldRelay) io.out(OLD_RELAY_TEXT) // after the QR, so it never sits between the link and its code
   io.out('Waiting for the device… (Ctrl-C to stop; `talos-app enroll --confirm` answers later)')
   while (io.now() - now < CODE_MS) {
     if (files.readConfirm(codeId)) {
@@ -222,8 +259,8 @@ export async function cmdEnroll(env: BridgeEnv, args: string[], io: EnrollIO, cl
 }
 
 type JsonEvent =
-  | { event: 'warning'; code: 'bridge_not_live'; text: string }
-  | { event: 'link'; link: string; expires_at: string }
+  | { event: 'warning'; code: 'bridge_not_live' | 'no_fp' | 'old_relay'; text: string }
+  | { event: 'link'; link: string; expires_at: string; fp?: string }
   | { event: 'confirm'; device_name: string; words: string[] }
   | { event: 'answered'; yes: boolean }
   | { event: 'pinned'; device_id: string }
@@ -259,7 +296,10 @@ async function enrollJson(env: BridgeEnv, label: string | undefined, io: EnrollI
   }
   enrollingNow.add(made.codeId)
   const now = io.now()
-  emit(io, { event: 'link', link: made.link, expires_at: made.expiresAt })
+  // `link` stays the plain link for older readers (the Windows pair script takes nothing after the code); `fp` is separate
+  if (made.noFp) emit(io, { event: 'warning', code: 'no_fp', text: NO_FP_TEXT })
+  if (made.oldRelay) emit(io, { event: 'warning', code: 'old_relay', text: OLD_RELAY_TEXT })
+  emit(io, { event: 'link', link: made.link, expires_at: made.expiresAt, ...(made.fp ? { fp: made.fp } : {}) })
   while (io.now() - now < CODE_MS) {
     const c = files.readConfirm(made.codeId)
     if (c) {

@@ -385,13 +385,13 @@ describe('check-no-personal.sh', () => {
       const clean = go()
       expect(clean.status, clean.stderr).toBe(0)
       expect(clean.stdout).toContain(`ok (${names.length + 1} files`) // every name, plus the script; the rule list is not scanned
-      for (const n of names) {
-        writeFileSync(join(root, n), `${j('jo', '@', 'gmail.com')}\n`)
-        const r = go()
-        expect(r.status, `${JSON.stringify(n)} in git=${useGit}`).toBe(1)
-        expect(r.stderr).toContain('FAILED')
-        writeFileSync(join(root, n), 'fine\n')
-      }
+      // one scan with a hit in every name: each must be reported by its own name, so none was skipped (two script runs per
+      // mode, not six: the test's cost is its script runs, and a loaded machine makes each one slow)
+      for (const n of names) writeFileSync(join(root, n), `${j('jo', '@', 'gmail.com')}\n`)
+      const r = go()
+      expect(r.status, `git=${useGit}`).toBe(1)
+      expect(r.stderr).toContain('FAILED')
+      for (const n of names) expect(r.stderr, `${JSON.stringify(n)} in git=${useGit}`).toContain(`${n}:1`)
     }
   })
 

@@ -168,6 +168,39 @@ describe('ci-runner.sh plan: one commit, and which machine runs what', () => {
     })
   })
 
+  it('a scheduled run on a day a dispatched nightly of its kind started plans nothing for other machines; another kind still plans', () => {
+    const s = setup()
+    const on = { CI_DELPHI: 'on', CI_CYCLOPS: 'on', CI_HESTIA: 'on', CI_TITAN_IMAGE: 'on' }
+    const sched = { ...push(s.real), GITHUB_EVENT_NAME: 'schedule', ...on }
+    const day = new Date()
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+    const marker = (kind: string) => {
+      mkdirSync(join(s.T, 'home/.cache/talos-ci/nightly-dispatch'), { recursive: true })
+      writeFileSync(join(s.T, `home/.cache/talos-ci/nightly-dispatch/${kind}-${date}`), '')
+    }
+    expect(outputs(s.run('plan', sched).out)).toMatchObject({ hestia: 'linux', titan: 'image', remote_jobs: 'image' })
+    marker('nightly')
+    const r = s.run('plan', sched)
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({
+      sha: s.real,
+      remote_parts: '',
+      delphi: '',
+      cyclops: '',
+      hestia: '',
+      titan: '',
+      remote_jobs: '',
+      fallback: '',
+    })
+    // the hostile schedule has no marker of its own kind: unaffected (and it plans nothing anyway); the dispatched one plans as before
+    expect(
+      outputs(s.run('plan', { ...sched, GITHUB_EVENT_NAME: 'workflow_dispatch', CI_DISPATCH_NIGHTLY: 'nightly' }).out),
+    ).toMatchObject({
+      hestia: 'linux',
+      titan: 'image',
+    })
+  })
+
   it('Delphi and Cyclops on: their parts go to them, and Lemnos is told to fold them in', () => {
     const s = setup()
     const o = outputs(s.run('plan', { ...push(s.real), CI_DELPHI: 'on', CI_CYCLOPS: 'on' }).out)

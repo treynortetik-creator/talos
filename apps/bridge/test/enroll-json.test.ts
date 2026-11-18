@@ -28,7 +28,11 @@ function jsonCli(answer: string) {
     io: {
       out: (l: string) => out.push(l),
       err: (l: string) => err.push(l),
-      emit: (l: string) => events.push(JSON.parse(l) as Ev),
+      // the fake relay has no descriptor, so every run gets the old_relay warning; enroll-fp.test.ts holds that one
+      emit: (l: string) => {
+        const e = JSON.parse(l) as Ev
+        if (!(e.event === 'warning' && e.code === 'old_relay')) events.push(e)
+      },
       prompt: async (q: string) => {
         prompts.push(q)
         now += 600 // a person reads the words first (an answer under 500 ms is typed ahead, a no)

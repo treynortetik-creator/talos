@@ -11,12 +11,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { gateTestEnv } from './gate-test-env'
 import { FAKE, hits, noValue, RULE, s12, watch, setup as watchSetup } from './personal-watch-fixture'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
-vi.setConfig({ testTimeout: 90_000 })
+vi.setConfig({ testTimeout: scaled(90_000), hookTimeout: scaled(90_000) })
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -635,6 +636,63 @@ describe('the rebase-clean pass matches names folded', () => {
     const p = r.print('GATE_PUSH_PRINT_CLEAN', old, now)
     expect(p.stdout).toContain('none touching a file of this change or a gate-wide input')
     expect(p.stdout).toContain('rc=0')
+  })
+})
+
+describe('a race over a change that builds a Swift package: the cheap checks and the rebase-clean pass build no Swift', () => {
+  const PKG = 'apps/desktop'
+  /** two Swift packages on main; this change edits Sources/A.swift in PKG; `theirs` is the other machine's commit */
+  const swiftRace = (
+    theirs: Record<string, string>,
+    mine: Record<string, string> = { [`${PKG}/Sources/A.swift`]: 'let a = 2\n' },
+  ) => {
+    const r = pushSetup(true)
+    r.change(r.clone, {
+      [`${PKG}/Package.swift`]: '// swift-tools-version:5.9\n',
+      [`${PKG}/Sources/A.swift`]: 'let a = 1\n',
+      [`${PKG}/Sources/B.swift`]: 'let b = 1\n',
+      'apps/mobile/ios/BridgeGuard/Package.swift': '// swift-tools-version:5.9\n',
+      'apps/mobile/ios/BridgeGuard/Sources/C.swift': 'let c = 1\n',
+    })
+    r.ok(r.clone, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.ok(r.other, 'pull', '-q')
+    const { old, now } = r.raced(mine, theirs)
+    return { r, old, now }
+  }
+
+  it('a new main commit to another Swift file of the same package: the pass is refused, and race_mode says full', () => {
+    const { r, old, now } = swiftRace({ [`${PKG}/Sources/B.swift`]: 'let b = 2\n' })
+    const clean = r.print('GATE_PUSH_PRINT_CLEAN', old, now).stdout
+    expect(clean).toContain(`changes ${PKG}/Sources/B.swift, in a Swift package this change builds`)
+    expect(clean).toContain('rc=1')
+    const race = spawnSync('bash', ['scripts/gate-push.sh'], {
+      cwd: r.clone,
+      env: { ...r.env, GATE_PUSH_PRINT_RACE: `${old},${now}`, GATE_PUSH_PRINT_RACE_WHY: '1' },
+      encoding: 'utf8',
+    })
+    expect(race.stdout).toMatch(
+      /^full: .*changes apps\/desktop\/Sources\/B\.swift, in a Swift package this change builds/,
+    )
+  })
+
+  it('a new main commit in an unrelated Swift package does not force it', () => {
+    const { r, old, now } = swiftRace({ 'apps/mobile/ios/BridgeGuard/Sources/C.swift': 'let c = 2\n' })
+    const clean = r.print('GATE_PUSH_PRINT_CLEAN', old, now).stdout
+    expect(clean).toContain('rc=0')
+  })
+
+  it('a words-only main commit leaves race_mode cheap: the Swift step is no suite of its own', () => {
+    // (the Mac app's own files run the whole bridge suite, which is a suite: this one edits the iPhone package)
+    const { r, old, now } = swiftRace(
+      { 'docs/b.md': 'x\n' },
+      { 'apps/mobile/ios/BridgeGuard/Sources/C.swift': 'let c = 2\n' },
+    )
+    const race = spawnSync('bash', ['scripts/gate-push.sh'], {
+      cwd: r.clone,
+      env: { ...r.env, GATE_PUSH_PRINT_RACE: `${old},${now}`, GATE_PUSH_PRINT_RACE_WHY: '1' },
+      encoding: 'utf8',
+    })
+    expect(race.stdout.trim()).toMatch(/^cheap/)
   })
 })
 

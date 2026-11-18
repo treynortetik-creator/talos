@@ -750,6 +750,14 @@ function Format-TalosPairWords($e) {
 function Get-TalosPairText($e) {
   switch ("$($e.event)") {
     'link' { return "On your iPhone, open the Talos app and scan this code, or open the link below on the phone. It works once, for 10 minutes." }
+    # pair.py passes only these two warning codes (the no-live-bridge one ends the pairing there); anything else shows nothing
+    'warning' {
+      switch ("$($e.code)") {
+        'no_fp' { return 'This code has no key check for the Talos app. A browser can still use the link; for the app, start again.' }
+        'old_relay' { return 'Your relay is older than the Talos app needs. A browser can still use the link.' }
+        default { return $null }
+      }
+    }
     'confirm' { return 'Do these four words match your phone?' }
     'answered' { if ($e.yes) { return 'Thanks. Finishing the pairing...' } else { return 'Not paired: the words did not match, or you said No. Start again if you want to pair.' } }
     'pinned' { return 'Paired. Your iPhone can now reach Talos.' }

@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
+import TalosTestSupport
 @testable import TalosDesktopCore
 
 /// A screen service that records what it was asked and answers what it is told to.
@@ -83,6 +84,12 @@ struct ScreenProtocolTests {
     t.readBack = .unverified
     o = try await answer(p, line)
     #expect(o["read_back"] as? String == "unverified")
+    t.readBack = .unchanged
+    o = try await answer(p, line)
+    #expect(o["read_back"] as? String == "unchanged" && o["field_suffix"] == nil)
+    t.readBack = .unverifiedReturn
+    o = try await answer(p, line)
+    #expect(o["read_back"] as? String == "unverified_return")
     // a service with no read-back of its own says unverified
     o = try await answer(ScreenProtocol(service: FakeScreenService(), allowList: allow, signing: FakeSigning()), line)
     #expect(o["events"] as? Int == 1 && o["read_back"] as? String == "unverified")
@@ -330,6 +337,110 @@ struct ScreenSocketTests {
     FileManager.default.createFile(atPath: d.path, contents: Data("keep".utf8))
     #expect(throws: ScreenSocket.StartError.notASocket(d.path)) { try ScreenSocket(path: d.path, proto: proto).start() }
     #expect(FileManager.default.contents(atPath: d.path) == Data("keep".utf8))
+  }
+
+  /// A server stopped before its accept thread has run once must not answer for the next server: closing its descriptor let the next
+  /// socket take the same number, and the late accept then took that socket's first connection and dropped it.
+  @Test func aServerStoppedRightAfterItStartedNeverTakesTheNextServersConnection() throws {
+    let d = try SocketDir()
+    defer { d.cleanup() }
+    let proto = ScreenProtocol(service: FakeScreenService(), allowList: EmptyScreenAllowList(), signing: FakeSigning())
+    for round in 0..<300 {
+      let first = ScreenSocket(path: d.path, proto: proto)
+      try first.start()
+      first.stop()
+      let second = ScreenSocket(path: d.path, proto: proto)
+      try second.start()
+      let answered = lineJSON(roundTrip(d.path, Data(#"{"op":"apps"}"#.utf8 + [0x0A])))?["ok"] as? Bool == true
+      second.stop()
+      #expect(answered, "round \(round)")
+      if !answered { return }
+    }
+  }
+
+  /// A server released before its accept thread has run leaves no descriptor behind (the thread closes it).
+  @Test func aServerReleasedRightAfterItStartedLeavesNoDescriptorOpen() throws {
+    func openDescriptors() -> Int { (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0 }
+    let d = try SocketDir()
+    defer { d.cleanup() }
+    let proto = ScreenProtocol(service: FakeScreenService(), allowList: EmptyScreenAllowList(), signing: FakeSigning())
+    let before = openDescriptors()
+    for _ in 0..<200 {
+      let s = ScreenSocket(path: d.path, proto: proto)
+      try s.start()
+    }
+    let leaked = waitUntil(timeout: 5) { openDescriptors() <= before + 2 } ? 0 : openDescriptors() - before
+    #expect(leaked == 0, "\(leaked) descriptors still open")
+  }
+
+  /// A server released without `stop()` after its accept thread has really run (one connection answered) stops by itself: the loop
+  /// holds the server weakly, so deinit runs, the socket goes quiet, the descriptor closes and the path can be taken again.
+  @Test func aServerReleasedAfterItAnsweredStopsAnsweringAndFreesItsPath() throws {
+    func openDescriptors() -> Int { (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0 }
+    let d = try SocketDir()
+    defer { d.cleanup() }
+    let proto = ScreenProtocol(service: FakeScreenService(), allowList: EmptyScreenAllowList(), signing: FakeSigning())
+    let before = openDescriptors()
+    func startAndAnswerOnce() throws {
+      let s = ScreenSocket(path: d.path, proto: proto)
+      try s.start()
+      #expect(lineJSON(roundTrip(d.path, Data(#"{"op":"apps"}"#.utf8 + [0x0A])))?["ok"] as? Bool == true)
+    }  // the last reference is dropped here, with no stop()
+    try startAndAnswerOnce()
+    #expect(waitUntil(timeout: 5) { !ScreenSocket.answers(d.path) }, "still answering after its server was released")
+    #expect(waitUntil(timeout: 5) { openDescriptors() <= before + 2 }, "its listening descriptor was not closed")
+    let next = ScreenSocket(path: d.path, proto: proto)
+    try next.start()
+    defer { next.stop() }
+    #expect(lineJSON(roundTrip(d.path, Data(#"{"op":"apps"}"#.utf8 + [0x0A])))?["ok"] as? Bool == true)
+  }
+
+  /// A connection left open and idle does not keep a released server alive either.
+  @Test func anIdleConnectionDoesNotKeepAReleasedServerAlive() throws {
+    let d = try SocketDir()
+    defer { d.cleanup() }
+    let proto = ScreenProtocol(service: FakeScreenService(), allowList: EmptyScreenAllowList(), signing: FakeSigning())
+    var client: Int32 = -1
+    func startAndConnect() throws {
+      let s = ScreenSocket(path: d.path, proto: proto)
+      try s.start()
+      client = socket(AF_UNIX, SOCK_STREAM, 0)
+      var addr = ScreenSocket.address(d.path)
+      let c = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+      }
+      #expect(c == 0)
+      // the server has the connection once it answers on it
+      _ = Data(#"{"op":"apps"}"#.utf8 + [0x0A]).withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+      var b = [UInt8](repeating: 0, count: 1)
+      #expect(read(client, &b, 1) == 1)
+    }
+    try startAndConnect()
+    defer { close(client) }
+    #expect(waitUntil(timeout: 5) { !ScreenSocket.answers(d.path) }, "an idle connection kept the released server alive")
+    // and the connection itself was closed by the server: the client reaches end-of-stream
+    var tv = timeval(tv_sec: 5, tv_usec: 0)
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    var b = [UInt8](repeating: 0, count: 4096)
+    var n = read(client, &b, b.count)
+    while n > 0 { n = read(client, &b, b.count) }  // the rest of the earlier answer, then the end
+    #expect(n == 0, "the connection of a released server stayed open")
+  }
+
+  /// One server stopped and started again keeps answering, however often: the loop of the descriptor it left serves nothing.
+  @Test func aServerStoppedAndStartedAgainAnswersOnItsNewDescriptor() throws {
+    let d = try SocketDir()
+    defer { d.cleanup() }
+    let proto = ScreenProtocol(service: FakeScreenService(), allowList: EmptyScreenAllowList(), signing: FakeSigning())
+    let s = ScreenSocket(path: d.path, proto: proto)
+    defer { s.stop() }
+    for round in 0..<100 {
+      try s.start()
+      let answered = lineJSON(roundTrip(d.path, Data(#"{"op":"apps"}"#.utf8 + [0x0A])))?["ok"] as? Bool == true
+      #expect(answered, "round \(round)")
+      s.stop()
+      if !answered { return }
+    }
   }
 
   @Test func stopLeavesAnotherServersSocketAlone() throws {

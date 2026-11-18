@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { classifySkips, failureReport, runScript } from './kit-run.ts'
 import { ROOT } from './size-report.ts'
 
@@ -137,7 +138,9 @@ describe('kit test scripts', () => {
       it.skip(`${name} (${reason})`, () => {})
       continue
     }
-    const timeoutMs = SLOW_MS[name] ?? TIMEOUT_MS
+    // x TALOS_TEST_TIME_FACTOR like every test budget: a flat cap killed test-hub-fence.sh (163 s alone) and test-update.sh at
+    // 290 s in a loaded gate (factor 3), while the script itself was fine
+    const timeoutMs = scaled(SLOW_MS[name] ?? TIMEOUT_MS)
     it.concurrent(name, { timeout: timeoutMs }, async () => {
       // Kill the script a little before the test timeout, so a hang reports as a failure with its output.
       const { code, out } = await runScript(join(KIT_SCRIPTS, name), {

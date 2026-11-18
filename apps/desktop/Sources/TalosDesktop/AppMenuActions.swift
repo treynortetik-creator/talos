@@ -96,6 +96,7 @@ final class TalosAppDelegate: NSObject, NSApplicationDelegate {
   /// The main Talos window opens once per launch (a start at login too) when a relay is set up and the owner has not turned
   /// it off. It waits one turn of the run loop so the app's scenes exist first.
   func applicationDidFinishLaunching(_ notification: Notification) {
+    MainActor.assumeIsolated { SyntheticInputGuard.installMonitor() }
     DispatchQueue.main.async { [weak self] in
       MainActor.assumeIsolated {
         let start = SupervisorController.startupConfig(store: DefaultsStore())

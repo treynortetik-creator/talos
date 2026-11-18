@@ -48,6 +48,7 @@ talos-sweep-
 !talos-native-claude-v1
 !talos-native-claude-
 talos-desktop-log-
+talos-synth-
 talos-devch-ver-
 talos-dl-
 talos-dotenv-
@@ -74,6 +75,7 @@ talos-problem-
 talos-r2-
 talos-rules-
 talos-rv-
+talos-rv-exit-now-
 talos-rv-hk-
 talos-rv-world-
 talos-rv61-

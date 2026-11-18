@@ -9,6 +9,7 @@ import {
   Card,
   type CardBinding,
   type CardT,
+  clipUnits,
   newId,
   payloadHash,
   UNDO_FEATURE,
@@ -94,7 +95,7 @@ export class UndoCards {
       paths.length
         ? `${title} (${paths.length}):\n${paths
             .slice(0, shown)
-            .map((p) => `  ${p.length > NAME_SHOWN ? `${p.slice(0, NAME_SHOWN)}…` : p}`)
+            .map((p) => `  ${p.length > NAME_SHOWN ? `${clipUnits(p, NAME_SHOWN)}…` : p}`)
             .join('\n')}${paths.length > shown ? `\n  and ${paths.length - shown} more` : ''}`
         : ''
     const body = [
@@ -137,10 +138,10 @@ export class UndoCards {
       id: newId('c'),
       thread_id: row.thread_id,
       kind: 'undo',
-      title: `Undo files to "${words}"`.slice(0, 120),
+      title: clipUnits(`Undo files to "${words}"`, 120),
       summary: `${plan.rewrite.length + plan.recreate.length} files come back, ${deletable.length} new files deleted`,
-      destination: [{ label: 'Folder', value: plan.root.slice(0, 500) }],
-      body: body.slice(0, 20_000),
+      destination: [{ label: 'Folder', value: clipUnits(plan.root, 500) }],
+      body: clipUnits(body, 20_000),
       body_format: 'plain',
       fields: deletable.length
         ? [
@@ -274,7 +275,7 @@ export class UndoCards {
         cardUpdateFrame(ctx.clock.now(), {
           card_id: cardId,
           state: ok ? 'done' : 'failed',
-          result: { ok, text: text.slice(0, 500), at: new Date(ctx.clock.now()).toISOString() },
+          result: { ok, text: clipUnits(text, 500), at: new Date(ctx.clock.now()).toISOString() },
         }),
       )
       .catch((e) => ctx.log.warn('card.update not sent', { error: (e as Error).message }))

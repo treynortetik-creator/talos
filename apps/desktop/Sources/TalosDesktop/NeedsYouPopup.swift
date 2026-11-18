@@ -199,7 +199,8 @@ final class NeedsYouPopupView: NSView {
     return PopupClickCheck.isRealClick(
       kind: kind, age: now - e.timestamp, sameWindow: button.window.map { $0.windowNumber == e.windowNumber } ?? false,
       onButton: button.bounds.contains(button.convert(e.locationInWindow, from: nil)),
-      sourcePid: cg?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1, sourceStateId: cg?.getIntegerValueField(.eventSourceStateID) ?? -1)
+      sourcePid: cg?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1, sourceStateId: cg?.getIntegerValueField(.eventSourceStateID) ?? -1,
+      eventsOfOursInFlight: SyntheticInput.flight.active)
   }
 
   private static let log = Logger(subsystem: "app.talos.desktop", category: "popup")
@@ -212,7 +213,11 @@ final class NeedsYouPopupView: NSView {
     let cg = e?.cgEvent
     Self.log.notice(
       "answer click: source pid \(cg?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1, privacy: .public), state \(cg?.getIntegerValueField(.eventSourceStateID) ?? -1, privacy: .public), counted \(real, privacy: .public)")
-    guard real else { return }
+    // an agent's click that got this far is counted, so the agent is told it answered nothing (`SyntheticInput.Flight`)
+    guard real else {
+      SyntheticInput.flight.drop(e.map(SyntheticInputGuard.token(of:)) ?? 0)
+      return
+    }
     onClick(sender.tag)
   }
   @objc private func closeClicked() { onClose() }

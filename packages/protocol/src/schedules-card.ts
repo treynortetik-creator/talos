@@ -17,6 +17,7 @@ import {
   type ScheduleWhenT,
   safeLine,
 } from './schedules.ts'
+import { clipUnits } from './untrusted.ts'
 
 export const SCHEDULE_CARD_BODY_MAX_BYTES = 16 * 1024
 export const SCHEDULE_CARD_TRUNCATED = '… full text under Details'
@@ -645,8 +646,8 @@ function doesLine(change: ScheduleChangeT, base: ScheduleCardBase | null): strin
       .split('\n')
       .map((l) => l.trim())
       .find((l) => l) ?? ''
-  const cut = line.length > 200 ? `${line.slice(0, 199)}…` : line
-  if (change.op === 'delete') return `Stops running${cut ? `: ${cut}` : ''}`.slice(0, 500)
+  const cut = line.length > 200 ? `${clipUnits(line, 199)}…` : line
+  if (change.op === 'delete') return clipUnits(`Stops running${cut ? `: ${cut}` : ''}`, 500)
   return cut || 'Runs the job as it stands'
 }
 
@@ -684,15 +685,15 @@ export function composeScheduleCard(
         { label: 'When', value: preview.when_text },
         { label: 'Does', value: doesLine(change, opts.base) },
         { label: 'As', value: permissionWords(eff.permissions, eff.allowed_tools) },
-        { label: 'Posts to', value: opts.threadName(eff.thread_id).slice(0, 500) },
-        { label: 'Proposed by', value: `${session}'s session`.slice(0, 500) },
+        { label: 'Posts to', value: clipUnits(opts.threadName(eff.thread_id), 500) },
+        { label: 'Proposed by', value: clipUnits(`${session}'s session`, 500) },
       ]
     : [
         { label: 'Runs', value: preview.when_text },
         { label: 'Next', value: preview.next_runs[0] ?? 'Not scheduled' },
         { label: 'As', value: permissionWords(eff.permissions, eff.allowed_tools) },
         { label: 'Where', value: runnerWords(eff.runner) },
-        { label: 'Posts to', value: opts.threadName(eff.thread_id).slice(0, 500) },
+        { label: 'Posts to', value: clipUnits(opts.threadName(eff.thread_id), 500) },
         { label: 'Proposed by', value: opts.proposedBy === 'agent' ? opts.agentName : 'your form' },
       ]
   const fullBody = body(change, preview, approved, opts)
@@ -705,10 +706,10 @@ export function composeScheduleCard(
     id: opts.cardId,
     thread_id: opts.threadId,
     kind: 'schedule',
-    title: (session
-      ? `${session}'s session wants to ${SESSION_VERB[change.op]} ${eff.name}`
-      : `${labels.title}: ${eff.name}`
-    ).slice(0, 120),
+    title: clipUnits(
+      session ? `${session}'s session wants to ${SESSION_VERB[change.op]} ${eff.name}` : `${labels.title}: ${eff.name}`,
+      120,
+    ),
     destination,
     body: capBody(fullBody),
     body_format: 'plain',
@@ -736,7 +737,7 @@ export function composeScheduleCard(
     created_at: new Date(created).toISOString(),
     expires_at: new Date(created + EXPIRY_S[opts.origin] * 1000).toISOString(),
   }
-  if (opts.reason) card.summary = opts.reason.slice(0, 280)
+  if (opts.reason) card.summary = clipUnits(opts.reason, 280)
   if (eff.permissions === 'full' && change.op !== 'delete') card.warning = SCHEDULE_FULL_WARNING
   if (opts.supersedes) card.supersedes = opts.supersedes
   card.payload_hash = payloadHash(bindingFrom(card))

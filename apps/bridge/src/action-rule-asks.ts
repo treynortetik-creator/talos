@@ -23,6 +23,7 @@ import {
   Card,
   type CardBinding,
   type CardT,
+  clipUnits,
   newId,
   payloadHash,
   permissionCallTail,
@@ -39,7 +40,7 @@ import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
 import { agentDirFromEnv } from './last-good.ts'
 import { gazetteerPath } from './memory/reflex.ts'
 import { foldWhitespace } from './permission/hook-render.ts'
-import { assertFrameFits } from './transport.ts'
+import { assertFrameFits, type DurableResult } from './transport.ts'
 
 /** An approval is good for one use, this long after the tap (the kit's old default). */
 export const RULE_APPROVAL_MS = 15 * 60_000
@@ -50,8 +51,8 @@ export const RULE_MAX_PENDING = 8
 const MAX_BODY = 20_000
 
 export const RULE_TEXT = {
-  title: (rule: string) => `Allow once: ${rule}`.slice(0, 120),
-  summary: (why: string) => (why.trim() || 'One of your "ask me first" rules stopped this.').slice(0, 280),
+  title: (rule: string) => clipUnits(`Allow once: ${rule}`, 120),
+  summary: (why: string) => clipUnits(why.trim() || 'One of your "ask me first" rules stopped this.', 280),
   warning: 'Runs exactly this, once. Anything else asks again.',
   allowed: 'Allowed once. Your agent can run it now.',
   used: 'Allowed once. The bridge restarted before it was used, so your agent has to ask again.',
@@ -365,7 +366,7 @@ export class ActionRuleAsks {
 
   /**
    * `approve`: an approval for this call, from a kind the owner always allows or from his tap on the card raised here. Waits up
-   * to waitMs (and while the asker is connected); the card stays open after that, and a tap still makes the approval.
+   * to waitMs from the start, the send of the card included (and while the asker is connected); the card stays open after that, and a tap still makes the approval.
    */
   async ask(c: RuleAsk, signal: AbortSignal, waitMs: number): Promise<RuleAnswer> {
     const { ctx } = this
@@ -404,16 +405,36 @@ export class ActionRuleAsks {
       }
       ctx.ledger.create(card, 'bridge')
       this.cards.set(key, card.id)
-      try {
-        await ctx.transport.sendDurable(frame)
-      } catch (e) {
-        ctx.ledger.expire(card.id)
-        this.forget(key, none('send_failed'))
-        ctx.log.warn('action rule card not sent', { error: (e as Error).message })
-        return none('send_failed')
+      // The asker waits from here, before the send: a tap, an expiry or a send that fails is heard.
+      const answer = this.wait(key, signal, waitMs)
+      // Not awaited: the send can take many seconds, and a tap, an expiry or the asker leaving must be heard meanwhile.
+      // The send starts here, before ask() returns (the Promise executor runs at once, and a synchronous throw from it becomes a
+      // rejection). A throw in the handlers is logged if the logger still works, never left unhandled.
+      const quietly = (what: string, f: () => void) => {
+        try {
+          f()
+        } catch (e) {
+          try {
+            ctx.log.warn(`action rule card: ${what} failed`, { card: card.id, error: (e as Error).message })
+          } catch {}
+        }
       }
-      ctx.expiry?.sync()
-      ctx.log.info('action rule card posted', { card: card.id, rule: c.rule })
+      void new Promise<DurableResult>((r) => r(ctx.transport.sendDurable(frame))).then(
+        () =>
+          quietly('posted', () => {
+            ctx.expiry?.sync()
+            ctx.log.info('action rule card posted', { card: card.id, rule: c.rule })
+          }),
+        (e) => {
+          // first, and only this card's own waiters: a newer card for the same call is not touched by an older card's late failure
+          if (this.cards.get(key) === card.id) this.forget(key, none('send_failed'))
+          quietly('expire', () => {
+            ctx.ledger.expire(card.id)
+            ctx.log.warn('action rule card not sent', { error: (e as Error).message })
+          })
+        },
+      )
+      return answer
     }
     return this.wait(key, signal, waitMs)
   }
@@ -463,11 +484,11 @@ export class ActionRuleAsks {
       id: newId('c'),
       thread_id: thread,
       kind: kind ?? ('generic' as const),
-      title: visibleText(RULE_TEXT.title(c.rule)).slice(0, 120),
-      summary: visibleText(RULE_TEXT.summary(c.why ?? '')).slice(0, 280),
+      title: clipUnits(visibleText(RULE_TEXT.title(c.rule)), 120),
+      summary: clipUnits(visibleText(RULE_TEXT.summary(c.why ?? '')), 280),
       destination: [
-        { label: 'Tool', value: permissionVisibleText(c.tool_name).slice(0, 500) },
-        ...(c.cwd ? [{ label: 'Folder', value: permissionVisibleText(c.cwd).slice(0, 500) }] : []),
+        { label: 'Tool', value: clipUnits(permissionVisibleText(c.tool_name), 500) },
+        ...(c.cwd ? [{ label: 'Folder', value: clipUnits(permissionVisibleText(c.cwd), 500) }] : []),
       ],
       body: shown,
       body_format: 'plain' as const,
@@ -506,18 +527,19 @@ export class ActionRuleAsks {
     const p = payloadOf(row)
     if (!p) return
     if (action !== 'primary') {
-      this.forget(p.key, { decision: 'deny', reason: 'owner' })
+      if (this.cards.get(p.key) === row.id) this.forget(p.key, { decision: 'deny', reason: 'owner' })
       return
     }
     // an approval only for a card this process raised: one from before a restart is ended in words (recover)
     if (this.cards.get(p.key) !== row.id) return this.end(row, false, RULE_TEXT.used)
     this.approvals.set(p.key, ctx.clock.now() + RULE_APPROVAL_MS)
     ctx.log.info('action rule: allowed once by the owner', { rule: p.rule })
+    // The asker hears the answer first: recording "always" waits on a config sync and a notice, which can take many seconds.
+    this.forget(p.key, { decision: 'allow', reason: 'owner' })
     if (always && p.kind)
       await addFromOwnerTap(ctx, p.kind, row.thread_id).catch((e) =>
         ctx.log.warn('always allow not recorded', { card: row.id, error: (e as Error).message }),
       )
-    this.forget(p.key, { decision: 'allow', reason: 'owner' })
     await this.end(row, true, RULE_TEXT.allowed)
   }
 
@@ -530,7 +552,12 @@ export class ActionRuleAsks {
   recover(): Promise<void> {
     const { ctx } = this
     for (const r of ctx.ledger.list('pending'))
-      if (r.actor === 'bridge' && isRuleAskCard(r.binding) && ctx.ledger.expire(r.id))
+      if (
+        r.actor === 'bridge' &&
+        isRuleAskCard(r.binding) &&
+        ![...this.cards.values()].includes(r.id) && // a card this process raised is live, not left over
+        ctx.ledger.expire(r.id)
+      )
         void ctx.transport
           .sendDurable(
             cardUpdateFrame(ctx.clock.now(), { card_id: r.id, state: 'expired', reason: 'bridge_restarted' }),

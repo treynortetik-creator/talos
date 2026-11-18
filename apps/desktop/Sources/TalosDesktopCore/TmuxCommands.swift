@@ -217,6 +217,9 @@ public struct TmuxCommands: Equatable, Sendable {
   /// Every pane of the session (all windows), by id.
   public func listPanes() -> [String] { base + ["list-panes", "-s", "-t", sessionTarget, "-F", "#{pane_id}"] }
 
+  /// The tmux server's own pid (`#{pid}`), asked of the server on this socket.
+  public func serverPid() -> [String] { base + ["display-message", "-p", "-t", sessionTarget, "#{pid}"] }
+
   public func killSession() -> [String] { base + ["kill-session", "-t", sessionTarget] }
 
   /// `#{client_activity}` (seconds since 1970) of each client attached to the session (Option C's typing guard).

@@ -72,6 +72,7 @@ What it does:
 - Builds from a throwaway checkout of `origin/main` (set `TESTFLIGHT_REF` for another commit), so uncommitted work never ships.
 - Build number is the UTC time, `YYYYMMDDHHMM`, passed on the command line. Every upload is higher than the last, with no file to edit. The version shown to testers is `MARKETING_VERSION` in `apps/mobile/ios/App/project.yml`; change it there (then `xcodegen`) for a new version.
 - Push needs the paid Apple program: also `export TALOS_APP_ENTITLEMENTS=App/AppPush.entitlements`. `TALOS_RELAY_HOST` is optional (taken from `TALOS_RELAY_URL`, and if you set it, it must match); the script passes the host to the build: the throwaway checkout has no `Local.xcconfig`, so without it the app would be signed for the placeholder host `unset.invalid` and the passkey prompt would be refused. See `docs/IOS-PUSH.md`.
+- Refuses to ship (also in `--dry-run`) unless `RelayTrust.verifiesTheMac` is `true` in the ref's `RelayTrust.swift`; the attest commit sets it, so no build trusts a scanned relay without verifying the Mac.
 - Refuses to run if any variable is missing, or if the key file is inside the repo. It never prints the key.
 - Export compliance is answered in the app (`ITSAppUsesNonExemptEncryption: false` in `project.yml`), so App Store Connect does not ask on each build.
 

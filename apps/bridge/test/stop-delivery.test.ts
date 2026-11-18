@@ -149,7 +149,7 @@ async function restart(hh: Harness, main: string, clock?: ReturnType<typeof fake
   const notes: Notification[] = []
   const b = await Bridge.create({
     env: loadEnv({ TALOS_APP_HOME: hh.home, TALOS_APP_RELAY_URL: hh.relay.httpUrl, TALOS_APP_BRIDGE: '1' }),
-    logger: nullLogger,
+    logger: createLogger(null, 'error', () => {}), // its own: a tap is stored on the logger
     inbound: { settleMs: 20, maxSettleMs: 200 },
     undo: { agentDir: main },
     ...(clock ? { clock } : {}),
@@ -248,7 +248,7 @@ async function startWorkerBridge(hh: Harness): Promise<Bridge> {
       TALOS_APP_WORKER_THREAD: 'trip',
       TALOS_APP_WORKER_NONCE: nonce,
     }),
-    logger: nullLogger,
+    logger: createLogger(null, 'error', () => {}), // its own: a tap is stored on the logger
   })
   later.push(worker)
   expect(await worker.startWorker()).toBe(true)
@@ -424,7 +424,12 @@ describe('a bridge that is stopping hands nothing over', () => {
       .slice(before)
       .filter((r) => r.direction === 'to_bridge' && r.raw.type === 'message' && r.raw.id === sent.id)
     expect(replayed).toHaveLength(0)
-    expect(notes).toHaveLength(0)
+    // not given again. The agent never answered it, so the restart tells it so, once, in a system note (D39, posted after ready
+    // without being awaited): wait for that note, then it is the only one
+    await waitFor(() => notes.length > 0, 4000, 'the D39 note')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.meta.kind).toBe('system')
+    expect(notes[0]?.content).toStartWith('A message you sent may not have been answered')
     expect(hh.notes.filter((x) => x.meta.message_id === sent.client_msg_id)).toHaveLength(1)
   })
 
@@ -495,7 +500,12 @@ describe('a bridge that is stopping hands nothing over', () => {
     await hh.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
     await waitFor(() => b.client?.connected === true, 10_000, 'the new bridge to be connected')
     await b.inbound?.idle()
-    expect(notes).toHaveLength(0)
+    // not given again. The agent never answered it, so the restart tells it so, once, in a system note (D39, posted after ready
+    // without being awaited): wait for that note, then it is the only one
+    await waitFor(() => notes.length > 0, 4000, 'the D39 note')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.meta.kind).toBe('system')
+    expect(notes[0]?.content).toStartWith('A message you sent may not have been answered')
     expect(
       hh.relay.rec.frames.slice(before).filter((r) => r.direction === 'to_bridge' && r.raw.id === sent.id),
     ).toHaveLength(0)

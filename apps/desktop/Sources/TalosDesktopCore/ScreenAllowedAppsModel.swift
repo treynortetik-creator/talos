@@ -14,7 +14,7 @@ public final class ScreenAllowedAppsModel: @unchecked Sendable {
 
   public static let title = "Apps your agent may control"
   public static let explainer =
-    "Your agent can see and click and type only in these apps on this Mac. The first time it needs another app, Talos asks you on your phone. Talos itself is never on this list."
+    "Your agent can see and click and type only in these apps on this Mac. The first time it needs another app, Talos asks you on your phone. Talos itself can be on it too; even then, nothing your agent sends ever answers an approval card or a permission prompt."
   public static let empty = "No apps yet. Talos asks you the first time your agent needs one."
   /// The known gap (review R2-1), said where the owner removes apps.
   public static let knownGap =

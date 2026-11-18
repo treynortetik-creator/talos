@@ -12,11 +12,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const affected = join(here, 'ci-affected.sh')
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 afterAll(() => {

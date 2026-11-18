@@ -265,6 +265,47 @@ plan_suites() {
 # plan) whenever the plan runs the root installer's test: that is what an install.sh, kit/ or scripts/ change plans through the
 # guard lines on those tests, and a change to the test itself; not --full, whose every-project run has the tests once already and
 # which plans from no change. The second count (plan-check.cjs) says the same from its own list.
+# The Swift packages a change must build (the gate's "swift build" step). A changed *.swift file, or a Package.resolved, belongs to
+# the nearest folder above it that holds a Package.swift (a changed Package.swift is a *.swift file). apps/mobile/ios/App is the Xcode
+# app (its CapApp-SPM package is generated and pulls Capacitor): too slow for a gate, CI's mobile job builds it. A deleted file counts
+# by its folder, so a deleted source still builds what is left.
+swift_package_of() { # prints the package folder of changed file `f`, or nothing
+  local f="$1" d
+  case "$f" in *.swift | */Package.resolved) ;; *) return 0 ;; esac
+  d="${f%/*}"
+  [ "$d" != "$f" ] || return 0
+  while [ -n "$d" ]; do
+    case "$d" in apps/mobile/ios/App | apps/mobile/ios/App/*) return 0 ;; esac
+    if [ -f "$d/Package.swift" ]; then
+      printf '%s\n' "$d"
+      return 0
+    fi
+    case "$d" in */*) d="${d%/*}" ;; *) return 0 ;; esac
+  done
+}
+plan_swift() { # SWIFT = the package folders to build for CHANGED, sorted, once each; SWIFT_PARSE = the Xcode app's changed *.swift files
+  local f p all=() parse=()
+  for f in "${CHANGED[@]+"${CHANGED[@]}"}"; do
+    p="$(swift_package_of "$f")"
+    [ -z "$p" ] || all+=("$p")
+    case "$f" in apps/mobile/ios/App/*.swift) [ ! -f "$f" ] || parse+=("$f") ;; esac # a deleted file has nothing to parse
+  done
+  uniq_into SWIFT "${all[@]+"${all[@]}"}"
+  uniq_into SWIFT_PARSE "${parse[@]+"${parse[@]}"}"
+}
+plan_swift_all() { # --full: SWIFT = every SwiftPM package (every Package.swift but the Xcode app's), SWIFT_PARSE = the Xcode app's *.swift files
+  local f d all=() parse=()
+  while IFS= read -r -d '' f; do
+    [ -f "$f" ] || continue # tracked, deleted in the tree
+    case "$f" in apps/mobile/ios/App/*.swift) parse+=("$f") ;; esac
+    case "$f" in */Package.swift) ;; *) continue ;; esac
+    d="${f%/*}"
+    case "$d" in apps/mobile/ios/App | apps/mobile/ios/App/*) continue ;; esac
+    all+=("$d")
+  done < <(git ls-files -z --cached --others --exclude-standard -- ':(glob)**/*.swift')
+  uniq_into SWIFT "${all[@]+"${all[@]}"}"
+  uniq_into SWIFT_PARSE "${parse[@]+"${parse[@]}"}"
+}
 plan_corepack() {
   local t
   COREPACK=0

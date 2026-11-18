@@ -130,7 +130,8 @@ export function SchedulesScreen() {
   // pull to refresh: a downward drag from the very top of the list
   const pull = useRef<number | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
-  const loading = !snap && macOnline && kind === null
+  // while the Mac is away the saved copy is still being read: say Loading, not "Your Mac is offline" with no list
+  const loading = !snap && kind === null && (macOnline || !slice.cacheChecked)
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="schedules-screen">

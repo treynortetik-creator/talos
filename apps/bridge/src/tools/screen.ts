@@ -129,7 +129,7 @@ function inputTool(
 
 export const screenClick = inputTool(
   'screen_click',
-  "Click at a point on this Mac's screen (screen points, as screen_shot explains). Refused unless the app in front, and the window under the point, are on this Mac's allowed list, and never into Talos itself. button: left (default), right or middle; count: 1-3.",
+  "Click at a point on this Mac's screen (screen points, as screen_shot explains). Refused unless the app in front, and the window under the point, are on this Mac's allowed list. Talos itself can be on that list like any app, but a click or key never answers an approval card or a permission prompt. button: left (default), right or middle; count: 1-3.",
   { ...point, button: { type: 'string', enum: ['left', 'right', 'middle'] }, count: { type: 'number' } },
   ['x', 'y'],
   (a) => {
@@ -148,19 +148,25 @@ export const screenClick = inputTool(
 
 export const screenType = inputTool(
   'screen_type',
-  "Type text into the app in front on this Mac. Refused unless that app is on this Mac's allowed list; if another app comes to the front mid-way, typing stops there.",
+  'Type text into the app in front on this Mac (characters go in as key presses). A newline in the text IS the Return key: it submits forms, sends messages and runs commands, so only include one when you mean to press Return. Refused unless that app is on this Mac\'s allowed list; if another app comes to the front mid-way, typing stops there. The reply says whether the text was checked: "verified" means the field now shows it; "could not verify" means this app\'s text can\'t be read (or the text included Return, which may have cleared the field), so the text may NOT have landed (look with screen_shot before relying on it); "did not land" is an error: the field did not change.',
   { text: { type: 'string', maxLength: 10_000 } },
   ['text'],
   (a) => (typeof a.text === 'string' && a.text !== '' ? { op: 'type', text: a.text } : 'text is required.'),
   (a, body) => {
     const n = [...String(a.text)].length
-    // an old Mac app sends no read_back: the same as a field that cannot be read
-    if (body.read_back === 'verified') return `Typed ${n} characters.`
+    // an old Mac app sends no read_back: the same as a field that cannot be read. Never a bare "Typed N".
+    if (body.read_back === 'verified') return `Typed ${n} characters and verified: the field now shows them.`
+    if (body.read_back === 'unchanged')
+      return fail(
+        `Typing did not land: the field is the same after ${n} characters were sent. Click into the field with screen_click, then type again, and check with screen_shot.`,
+      )
+    if (body.read_back === 'unverified_return')
+      return `Typed ${n} characters, could not verify: the text included Return, so the field may have been submitted or cleared. Check with screen_shot.`
     if (body.read_back === 'mismatch' && typeof body.field_suffix === 'string')
       return ok(
         `The field doesn't show the text exactly as sent (autocorrect or formatting can change it, or only part landed). It now ends with "${body.field_suffix.slice(-80)}".`,
       )
-    return `Sent ${n} characters (the field can't be read back to check them).`
+    return `Typed ${n} characters, could not verify (this app's text isn't readable). It may not have landed: check with screen_shot.`
   },
 )
 

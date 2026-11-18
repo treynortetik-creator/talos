@@ -104,7 +104,7 @@ export const AgentConfig = z.object({
   /** Option C (docs/OPTION-C.md): the master switch and limits for per-thread sessions. Absent = off. */
   dedicated: DedicatedConfig.optional().catch(undefined),
   /**
-   * The theme the owner applied, the same on every device: a stock id (`talos`, `paper`, `hearth`) or a whole custom theme
+   * The theme the owner applied, the same on every device: a stock id (`talos`, `paper`, `hearth`, `iris`, `harbor`) or a whole custom theme
    * the agent drafted and the owner tapped Apply on. Absent, or any other value (a custom theme that fails validation), means
    * `talos`. An older bridge drops the key when it reads the file. theme.json in the agent folder is a draft, never read as this.
    */

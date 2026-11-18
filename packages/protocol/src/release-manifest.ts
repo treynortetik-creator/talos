@@ -18,6 +18,10 @@
 // the result (`applyKeyUpdate`), never lets it go empty, and a retired kid is refused from then on.
 import { createHash, createPrivateKey, createPublicKey, type KeyObject, sign, verify } from 'node:crypto'
 import { jcs } from './canonical.ts'
+import { compareSemver, SEMVER } from './semver.ts'
+
+// re-exported: the updater and the relay's env read them from here
+export { compareSemver, SEMVER }
 
 /** Put in front of the manifest bytes before signing and verifying. */
 export const RELEASE_MANIFEST_DOMAIN = 'talos-release-manifest/v1\n'
@@ -85,7 +89,6 @@ export type ReleaseRefusal =
 
 export type ReleaseVerdict = { ok: true; manifest: ReleaseManifest } | { ok: false; why: ReleaseRefusal }
 
-const SEMVER = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/
 const KID = /^[0-9a-f]{16}$/
 const FIELDS = {
   kid: KID,
@@ -261,19 +264,6 @@ export function applyKeyUpdate(
   const left = keys.filter((k) => !retired.has(k.kid))
   if (left.length === 0) return { ok: false, why: 'would_empty' }
   return { ok: true, trust: { keys: left, retired: [...retired].sort() } }
-}
-
-/** -1, 0 or 1 for two `x.y.z` versions; null when either is not one. */
-export function compareSemver(a: string, b: string): -1 | 0 | 1 | null {
-  const pa = SEMVER.exec(a)
-  const pb = SEMVER.exec(b)
-  if (!pa || !pb) return null
-  for (let i = 1; i <= 3; i++) {
-    const x = Number(pa[i])
-    const y = Number(pb[i])
-    if (x !== y) return x < y ? -1 : 1
-  }
-  return 0
 }
 
 /**

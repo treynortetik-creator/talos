@@ -12,6 +12,7 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import {
   buildDialogProof,
+  clipUnits,
   composeDialogCard,
   DIALOG_ALREADY_ANSWERED_TEXT,
   DIALOG_ANSWER_MAX_BYTES,
@@ -402,7 +403,7 @@ export class DialogCards {
   /** The device that tapped, by the name it was paired under. */
   deviceLabel(deviceId: string): string {
     const name = this.ctx.devices.get(deviceId)?.name
-    return (name?.trim() || 'a paired device').slice(0, 60)
+    return clipUnits(name?.trim() || 'a paired device', 60)
   }
 
   /**

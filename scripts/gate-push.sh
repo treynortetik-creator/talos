@@ -73,7 +73,7 @@ LOCK=refs/locks/push
   exit 1
 }
 # shellcheck source=scripts/path-fold.sh
-. scripts/path-fold.sh
+. scripts/path-fold.sh; . scripts/gate/swift-race.sh
 MACHINE="$(talos_machine)" || exit 1
 LEASE_S="${GATE_PUSH_LEASE_S:-600}"     # how long a lease holds (at least; see the last gate time below)
 RENEW_EVERY_S="${GATE_PUSH_RENEW_EVERY_S:-240}" # while the gate runs, the lease is renewed this often
@@ -546,6 +546,7 @@ race_mode() {
     { echo "full: cannot list the new commits (main moved to $(first_touch "$old" "$new"))"; return; }
   [ -n "$theirs" ] || { echo "full: the new commits change no file ($(first_touch "$old" "$new"))"; return; }
   n="$(git rev-list --count "$old..$new" 2>/dev/null || echo '?')"
+  f="$(swift_touched "$plan" "$theirs")" && { echo "full: $(first_touch "$old" "$new" "$f") changes $f, in a Swift package this change builds"; return; }
   # A change only to the e2e package (its specs, harness or config) was gated by running those specs on the old base. When
   # every new commit is in a place the specs never run or build (an allow-list: words, the Windows, Mac and iPhone apps,
   # evals, CI config, the shell scripts and their tests), what they saw is unchanged and the passing run stands: the cheap
@@ -560,7 +561,7 @@ race_mode() {
     return
   fi
   # a change that ran any suite: the new commits may reach it (tests read and import across the tree), so it runs again
-  suites="$(grep -Ev $'^(typecheck|lint|personal|size|\t.*)$' <<<"$plan" | paste -sd, -)"
+  suites="$(grep -Ev $'^(typecheck|lint|personal|size|swift build \\(.*|swift parse \\(.*|\t.*)$' <<<"$plan" | paste -sd, -)"
   if [ -n "$suites" ]; then
     echo "full: $n new commit(s), first $(first_touch "$old" "$new"), and this change ran ${suites}"
     return
@@ -605,6 +606,7 @@ rebase_clean() { # rebase_clean <old> <new>, after the rebase onto <new>: 0 when
     { echo "cannot list this change"; return 1; }
   theirs="$(changed_names "$old" "$new")" && [ -n "$theirs" ] ||
     { echo "cannot list the new commits, or they change no file"; return 1; }
+  f="$(swift_touched "$(plan_of "$new")" "$theirs")" && { echo "$(first_touch "$old" "$new" "$f") changes $f, in a Swift package this change builds"; return 1; }
   # Both compared folded (path-fold.sh): on a Mac "Scripts/x.sh" is scripts/x.sh, and an "é" composed or not is one file.
   # changed_names has refused a name with a newline, so a line is a name: NUL-separated again for the one node process.
   # A file both sides changed is a refusal, but for words (a Markdown file under docs/, or at the top) that no test reads: those

@@ -95,7 +95,7 @@ mobile_swift_steps() { # mobile_swift_steps <log>: the Swift packages, the gener
   mkdir -p "$CACHE/swiftpm"
   local pkg
   # ci-swift-retry.sh: a failed test runs once more, alone (--filter); a pass then is "passed on retry"
-  for pkg in BridgeGuard TalosAudioCore TalosCrashCore TalosPushCore; do
+  for pkg in BridgeGuard TalosAudioCore TalosCrashCore TalosPushCore TalosRelayCore; do
     run "$log" bash -c "cd apps/mobile/ios/$pkg && bash '$ROOT/scripts/ci-swift-retry.sh' swift test --cache-path '$CACHE/swiftpm'" || return 1
   done
   run "$log" env TALOS_SWIFTPM_CACHE="$CACHE/swiftpm" bash "$ROOT/scripts/ci-swift-retry.sh" bash apps/mobile/ios/TalosShareCore/test.sh || return 1

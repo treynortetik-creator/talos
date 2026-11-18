@@ -14,8 +14,9 @@ extension ScreenCore {
   ) -> ScreenCore {
     var c = ScreenCore(
       capture: LiveScreenCapture(), input: LiveScreenInput(), apps: LiveScreenApps(), permissions: LiveScreenPermissions(),
-      selfBundleID: Bundle.main.bundleIdentifier, selfPID: getpid(), maxLongEdge: maxLongEdge)
+      maxLongEdge: maxLongEdge)
     c.refusedKeys = { talosHotkeys() + SystemShortcuts.enabled() }
+    c.layout = { LiveKeyLayout.shared.current() }
     return c
   }
 }
@@ -123,7 +124,11 @@ public struct LiveScreenInput: ScreenInputBackend {
     move.post(tap: .cghidEventTap)
   }
 
-  public func post(_ event: ScreenInputEvent) throws {
+  public func post(_ event: ScreenInputEvent) throws { try post(event, token: 0) }
+
+  /// Every CGEvent carries `token` in its user data (`SyntheticInput`), so each window that receives one knows it is an agent's, which
+  /// request it belongs to, and answers it. The ones a window answers (`ScreenInputEvent.answers`): a release, a key-up, a scroll.
+  public func post(_ event: ScreenInputEvent, token: Int64) throws {
     let src = CGEventSource(stateID: .hidSystemState)
     switch event {
     case .click(let p, let button, let count):
@@ -138,41 +143,57 @@ public struct LiveScreenInput: ScreenInputBackend {
         guard let move = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: b) else {
           throw Failure.noEvent
         }
-        move.post(tap: .cghidEventTap)
+        Self.post(move, token)
       }
       guard let d = CGEvent(mouseEventSource: src, mouseType: down, mouseCursorPosition: p, mouseButton: b),
         let u = CGEvent(mouseEventSource: src, mouseType: up, mouseCursorPosition: p, mouseButton: b)
       else { throw Failure.noEvent }
       d.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, count)))
       u.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, count)))
-      d.post(tap: .cghidEventTap)
-      u.post(tap: .cghidEventTap)
+      Self.post(d, token)
+      Self.post(u, token)
     case .text(let s):
-      let units = Array(s.utf16)
-      guard let d = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
-        let u = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
-      else { throw Failure.noEvent }
-      d.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-      u.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-      d.post(tap: .cghidEventTap)
-      u.post(tap: .cghidEventTap)
+      try postUnicode(s, src, token)
+    case .keys(let ks):
+      // each one the key press screen_key posts
+      for k in ks { try postKey(k, src, token) }
     case .key(let k):
-      guard let d = CGEvent(keyboardEventSource: src, virtualKey: k.keyCode, keyDown: true),
-        let u = CGEvent(keyboardEventSource: src, virtualKey: k.keyCode, keyDown: false)
-      else { throw Failure.noEvent }
-      d.flags = CGEventFlags(rawValue: k.flags)
-      u.flags = CGEventFlags(rawValue: k.flags)
-      d.post(tap: .cghidEventTap)
-      u.post(tap: .cghidEventTap)
+      try postKey(k, src, token)
     case .scroll(let p, let dx, let dy):
       guard let move = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left),
         let s = CGEvent(
           scrollWheelEvent2Source: src, units: .pixel, wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0)
       else { throw Failure.noEvent }
-      move.post(tap: .cghidEventTap)
+      Self.post(move, token)
       s.location = p
-      s.post(tap: .cghidEventTap)
+      Self.post(s, token)
     }
+  }
+
+  private func postKey(_ k: ScreenKeyCombo, _ src: CGEventSource?, _ token: Int64) throws {
+    guard let d = CGEvent(keyboardEventSource: src, virtualKey: k.keyCode, keyDown: true),
+      let u = CGEvent(keyboardEventSource: src, virtualKey: k.keyCode, keyDown: false)
+    else { throw Failure.noEvent }
+    d.flags = CGEventFlags(rawValue: k.flags)
+    u.flags = CGEventFlags(rawValue: k.flags)
+    Self.post(d, token)
+    Self.post(u, token)
+  }
+
+  private func postUnicode(_ text: String, _ src: CGEventSource?, _ token: Int64) throws {
+    let units = Array(text.utf16)
+    guard let d = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
+      let u = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
+    else { throw Failure.noEvent }
+    d.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    u.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    Self.post(d, token)
+    Self.post(u, token)
+  }
+
+  private static func post(_ e: CGEvent, _ token: Int64) {
+    e.setIntegerValueField(.eventSourceUserData, value: token)
+    e.post(tap: .cghidEventTap)
   }
 }
 
@@ -198,16 +219,51 @@ public struct LiveScreenApps: ScreenAppsBackend {
 
   public func frontmost() -> ScreenApp? { NSWorkspace.shared.frontmostApplication.map(Self.app) }
 
-  /// Every window the window server lists (`optionAll`, so menu bar extras too), front to back, with level and alpha; bounds and
-  /// owner need no permission.
+  /// What a click at `point` lands on: the window the server hits, looked up in the on-screen window list (`windowList()`, front to
+  /// back, menu bar extras and invisible windows included); bounds and owner need no permission.
   public func pointOwner(at point: CGPoint) -> ScreenPointOwner {
+    // the hit first, the list after: a window that appears in between is then in the list, never missing from it
+    let hit = Self.windowServerHit(at: point)
     guard let windows = Self.windowList() else { return .nothing }
-    return ScreenPointWindow.owner(at: point, in: windows)
+    return ScreenPointWindow.owner(at: point, in: windows, hit: hit)
   }
 
-  /// The window server's list, front to back; nil when it cannot be read.
+  /// The window the window server would hand a click at this global point (top-left origin) to: 0 when there is none, nil when it
+  /// could not be asked in time. It is the server's own answer, so a window that ignores the mouse is skipped and one that takes
+  /// it is named, whatever its alpha says. It needs no Screen Recording. AppKit answers on the main thread; a caller on another
+  /// thread (the socket's) hops there and waits at most `hitTimeout`, then fails closed.
+  static func windowServerHit(at p: CGPoint) -> UInt32? {
+    let ask: @Sendable () -> UInt32? = {
+      guard let top = NSScreen.screens.first?.frame.height else { return nil }
+      let n = NSWindow.windowNumber(at: NSPoint(x: p.x, y: top - p.y), belowWindowWithWindowNumber: 0)
+      return n > 0 ? UInt32(n) : 0
+    }
+    if Thread.isMainThread { return ask() }
+    let answer = LockedValue<UInt32?>(nil)
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.main.async {
+      answer.value = ask()
+      done.signal()
+    }
+    guard done.wait(timeout: .now() + hitTimeout) == .success else { return nil }
+    return answer.value
+  }
+
+  /// The pid of the real Dock: the running app whose bundle is the system's Dock.app (a protected path, so another app cannot be
+  /// there). nil when it is not found, which skips nothing.
+  static func realDockPID() -> Int32? {
+    NSWorkspace.shared.runningApplications.first {
+      $0.bundleURL?.resolvingSymlinksInPath().path == "/System/Library/CoreServices/Dock.app"
+    }?.processIdentifier
+  }
+
+  /// How long the main thread gets to answer a hit test before the point is refused.
+  static let hitTimeout: TimeInterval = 2
+
+  /// The window server's on-screen list, front to back (`optionAll` is not in stacking order: it lists Terminal at level 0 ahead of
+  /// the Dock's level 20 window); nil when it cannot be read. Invisible windows and menu bar extras are in it.
   static func windowList() -> [ScreenPointWindow]? {
-    guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return nil }
     return list.compactMap { w in
       guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b as CFDictionary),
         let pid = (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
@@ -217,7 +273,8 @@ public struct LiveScreenApps: ScreenAppsBackend {
         pid: pid, name: run?.localizedName ?? (w[kCGWindowOwnerName as String] as? String) ?? "an app", bundleID: run?.bundleIdentifier,
         bounds: r, layer: (w[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
         alpha: (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
-        onScreen: (w[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false)
+        onScreen: (w[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false,
+        windowID: (w[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0)
     }
   }
 
@@ -257,7 +314,7 @@ public struct LiveScreenApps: ScreenAppsBackend {
     guard AXUIElementGetPid(win, &owner) == .success, owner == pid else { return false }
     let key = [kAXFocusedAttribute, kAXMainAttribute].contains { (attr(win, $0) as? Bool) == true }
     guard key, let list = Self.windowList() else { return false }
-    return ScreenPointWindow.topVisibleAppPID(in: list) == pid
+    return ScreenPointWindow.topVisibleAppPID(in: list, realDockPID: Self.realDockPID(), screenSizes: NSScreen.screens.map(\.frame.size)) == pid
   }
 
   /// Whether the app's focused window is a sheet (role AXSheet, or it has an AXSheet child) or a dialog (subrole AXDialog or
@@ -279,7 +336,7 @@ public struct LiveScreenApps: ScreenAppsBackend {
   }
 
   /// The system-wide focused element's `kAXValueAttribute` as text, when the element belongs to `pid`.
-  public func focusedValue(pid: Int32) -> String? {
+  public func focusedField(pid: Int32) -> ScreenField? {
     var f: CFTypeRef?
     guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &f) == .success,
       let f, CFGetTypeID(f) == AXUIElementGetTypeID()
@@ -293,8 +350,8 @@ public struct LiveScreenApps: ScreenAppsBackend {
       sub as? String == kAXSecureTextFieldSubrole as String
     { return nil }
     var v: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &v) == .success else { return nil }
-    return v as? String
+    guard AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &v) == .success, let text = v as? String else { return nil }
+    return ScreenField(element: Int(bitPattern: CFHash(el)), value: text)
   }
 
   /// The key equivalents in the app's menu bar (`AXMenuItemCmdChar` / `CmdVirtualKey` / `CmdModifiers`), at most 4 menus deep and

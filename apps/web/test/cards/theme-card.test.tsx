@@ -51,7 +51,7 @@ describe('the theme preview card', () => {
     renderWith(<CardView card={card} threadName="General" />, setup({ cards: [card] }))
     const sample = await screen.findByTestId('theme-preview-sample')
     expect(sample.style.getPropertyValue('--accent')).toBe('#7a1fa2')
-    expect(sample.style.getPropertyValue('--radius-card')).toBe(`${dusk.radius['--radius-card']}px`)
+    expect(sample.style.getPropertyValue('--radius-card')).toBe('') // colours only
     expect(screen.getByRole('button', { name: 'Apply' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Keep current' })).toBeTruthy()
     expect(accent()).toBe('')
@@ -75,7 +75,7 @@ describe('the theme preview card', () => {
     const evil = structuredClone(dusk) as any
     evil.light['--accent'] = 'red; background: url(https://evil.example/x.png)'
     evil.light['--bg'] = 'url(https://evil.example/y.png)'
-    evil.fonts['--font-ui'] = 'x}body{display:none'
+    evil.fonts = { '--font-ui': 'x}body{display:none' }
     evil['--injected'] = '1'
     const card = themeCard(evil) // the card itself is only a display: the bridge would have refused this one
     renderWith(<CardView card={card} threadName="General" />, setup({ cards: [card] }))

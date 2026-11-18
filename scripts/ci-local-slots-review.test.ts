@@ -6,13 +6,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
 const base = { CI_MAX_LOAD: '0', CI_POLL: '0.05', CI_LOCK_TIMEOUT: '2', TALOS_CI_NESTED: '0', CI_SLOTS: '1' }
 // Real shells beside two other CI runs: a slow machine takes longer, it does not fail (see ci-local-slots.test.ts).
-vi.setConfig({ testTimeout: 120_000 })
+vi.setConfig({ testTimeout: scaled(120_000), hookTimeout: scaled(120_000) })
 const scratchDirs: string[] = []
 const scratch = () => {
   const d = mkdtempSync(join(tmpdir(), 'cilr-'))

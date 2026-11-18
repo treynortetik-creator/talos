@@ -28,7 +28,7 @@ import type { LedgerRow } from '../cards-ledger.ts'
 import type { BridgeContext } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { say } from '../owner-words.ts'
-import { assertFrameFits } from '../transport.ts'
+import { assertFrameFits, type DurableResult } from '../transport.ts'
 import { type Explainer, type ExplainRequest, explainRequestOf, explainToCard } from './explainer.ts'
 import { agentFileWarning } from './frontmatter-risk.ts'
 import { renderHookCall } from './hook-render.ts'
@@ -580,22 +580,44 @@ export class PermissionRelay {
       signal.addEventListener('abort', onAbort, { once: true })
       timer = ctx.clock.setTimeout(() => this.closeHookCard(card.id, 'timeout'), this.hookMaxWaitMs)
     })
-    try {
-      await ctx.transport.sendDurable(frame)
-    } catch (e) {
-      // the app will never see it: nothing may answer it, and the prompt stays at the Mac
-      this.drop(card.id, requestId, 'send_failed')
-      ctx.ledger.expire(card.id)
-      ctx.log.warn('permission hook card not sent', { error: (e as Error).message })
-      return answer
+    // Not awaited: the send can take many seconds, and a tap, a timeout or the hook leaving must be heard meanwhile.
+    // The send starts here, before runHook returns (the Promise executor runs at once, and a synchronous throw from it becomes a
+    // rejection). A throw in the handlers is logged if the logger still works, never left unhandled.
+    const quietly = (what: string, f: () => void) => {
+      try {
+        f()
+      } catch (e) {
+        try {
+          ctx.log.warn(`permission hook card: ${what} failed`, { error: (e as Error).message })
+        } catch {}
+      }
     }
-    ctx.expiry?.sync()
-    // the model gets the command and Claude's own description, not the "asked by pid" note the bridge adds above
-    const own =
-      typeof (req.tool_input as { description?: unknown } | null)?.description === 'string'
-        ? (req.tool_input as { description: string }).description
-        : ''
-    this.explainCard(card.id, explainRequestOf(req.tool_name, call.json, own))
+    void new Promise<DurableResult>((r) => r(ctx.transport.sendDurable(frame))).then(
+      () =>
+        quietly('posted', () => {
+          ctx.expiry?.sync()
+          // answered, closed or timed out while the send was out: nothing is left to explain
+          if (!this.pending.has(card.id)) return
+          // the model gets the command and Claude's own description, not the "asked by pid" note the bridge adds above
+          const own =
+            typeof (req.tool_input as { description?: unknown } | null)?.description === 'string'
+              ? (req.tool_input as { description: string }).description
+              : ''
+          // only after the create frame is sent: the explanation's update refers to the card
+          this.explainCard(card.id, explainRequestOf(req.tool_name, call.json, own))
+        }),
+      (e) => {
+        // the app will never see it: nothing may answer it, and the prompt stays at the Mac. First, so the waiter is answered;
+        // only while this card is still open (an answered or closed card has nothing left to drop)
+        quietly('drop', () => {
+          if (this.pending.get(card.id)) this.drop(card.id, requestId, 'send_failed')
+        })
+        quietly('expire', () => {
+          ctx.ledger.expire(card.id)
+          ctx.log.warn('permission hook card not sent', { error: (e as Error).message })
+        })
+      },
+    )
     return answer
   }
 

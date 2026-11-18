@@ -14,6 +14,8 @@ RECPID=""
 cleanup(){ [ -n "$RECPID" ] && kill "$RECPID" 2>/dev/null; rm -rf "$D"; }
 trap cleanup EXIT
 PASS=0; FAIL=0
+# A loaded machine (the gate sets TALOS_TEST_TIME_FACTOR=3) runs this for minutes: the decoy's life and the hook's wait scale
+scale(){ awk -v a="$1" -v f="${TALOS_TEST_TIME_FACTOR:-1}" 'BEGIN { f += 0; if (!(f >= 1) || f == f + 1) f = 1; printf "%g", a * f }'; }
 ok(){ PASS=$((PASS+1)); }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
@@ -27,13 +29,13 @@ s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(path); s.listen(16
 json.dump({"pid": os.getpid()}, open(os.path.join(home, "bridge.pid"), "w"))
 open(os.path.join(home, "up"), "w").close()
 import time
-start_ppid, t0 = os.getppid(), time.time()
+start_ppid, t0, life = os.getppid(), time.time(), float(sys.argv[2])
 s.settimeout(1.0)
 while True:
     try:
         c, _ = s.accept()
     except socket.timeout:
-        if os.getppid() != start_ppid or time.time() - t0 > 300: sys.exit(0)    # never outlives the test that started it
+        if os.getppid() != start_ppid or time.time() - t0 > life: sys.exit(0)    # never outlives the test that started it
         continue
     c.settimeout(5.0); buf = b""
     while b"\n" not in buf:
@@ -46,7 +48,7 @@ while True:
     t = "perm_result" if m.get("t") == "perm" or "perm" in str(m.get("t")) else "rule_result"
     c.sendall((json.dumps({"t": t, "id": m.get("id"), "decision": "allow", "reason": "always"}) + "\n").encode()); c.close()
 PY
-python3 "$D/recorder.py" "$APP" & RECPID=$!
+python3 "$D/recorder.py" "$APP" "$(scale 300)" & RECPID=$!
 for _ in $(seq 50); do [ -e "$APP/up" ] && break; sleep 0.1; done
 [ -e "$APP/up" ] || { echo "the decoy hub did not start" >&2; exit 2; }
 got(){ [ -s "$APP/got.jsonl" ] && wc -l < "$APP/got.jsonl" | tr -d ' ' || echo 0; }
@@ -70,10 +72,10 @@ printf '%s' '{"tool_name":"Bash","cwd":"/srv/app","tool_input":{"command":"npm p
   | ( cd "$D/agent" && env "${HOOKENV[@]}" python3 hooks/action-rules.py check >/dev/null 2>&1 )
 [ "$(got)" = 0 ] && ok || no "action-rules check reached the decoy hub from outside its test sandbox"
 CALL='{"session_id":"abc","cwd":"/srv/proj","permission_mode":"bypassPermissions","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf /srv/proj/build","description":"remove it"},"permission_suggestions":[]}'
-out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S=3 python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
+out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S="$(scale 3)" python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
 [ "$(got)" = 0 ] && [ -z "$out" ] && ok || no "permission-relay reached the decoy hub from outside its test sandbox" "output: $out"
 # and the fence is only for tests: without TALOS_TEST_SANDBOX the same hook still reaches a hub (nothing changes for owners)
-out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_TEST_SANDBOX= TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S=3 python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
+out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_TEST_SANDBOX= TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S="$(scale 3)" python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
 [ "$(got)" != 0 ] && ok || no "without TALOS_TEST_SANDBOX the permission hook no longer reaches its hub"
 
 # ---- the tripwire: a test that seals nothing refuses to run
@@ -89,8 +91,10 @@ mkdir -p "$D/sb/linkapp/run"; ln -s "$APP/run/hub.sock" "$D/sb/linkapp/run/hub.s
 LINKENV=(HOME="$D/home" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg" TALOS_TEST_SANDBOX="$D/sb" TALOS_APP_HOME="$D/sb/linkapp" TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_THREAD=t1 TALOS_APP_WORKER_NONCE=0123456789abcdef0123 CLAUDE_PID=$$)
 printf '%s' '{"tool_name":"Bash","cwd":"/srv/app","tool_input":{"command":"npm publish","description":"publish it"}}' \
   | ( cd "$D/agent" && env "${LINKENV[@]}" python3 hooks/action-rules.py check >/dev/null 2>&1 )
-out="$(printf '%s' "$CALL" | env "${LINKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S=3 python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
+out="$(printf '%s' "$CALL" | env "${LINKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S="$(scale 3)" python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
 [ "$(got)" = 0 ] && [ -z "$out" ] && ok || no "a link from the sandbox to the decoy's socket was followed" "output: $out"
+# every "got nothing" above means something only while the decoy still listens: one that quit early would pass them all
+kill -0 "$RECPID" 2>/dev/null && ok || no "the decoy hub stopped before the last check that needs it"
 
 # ---- static check: every test script scrubs first, seals its sandbox when it sets HOME, and no HOME-less script runs the hooks
 python3 - "$KIT/scripts" <<'PY' || FAIL=$((FAIL+1))

@@ -306,7 +306,11 @@ struct ReviewOC3Parking {
 
   /// Spec 2.5: 5 exits in 15 min = `crash_loop`. `restartTimes` is memory only, so a relaunch forgets what the file says.
   @Test func FINDING_theCrashLoopCountSurvivesARelaunch() throws {
-    let r = try WorkerRig(scenario: reviewScenario, extraEnv: ["FAKE_RV_EXIT_AFTER": "0.5"])
+    // The session exits only when the test says so, once the manager has it live: an exit seen while still starting is a failed
+    // start (start_failed), never a crash, so a time after ready made the outcome depend on how fast the manager looked.
+    let exitNow = NSTemporaryDirectory() + "talos-rv-exit-now-\(UUID().uuidString)"
+    defer { unlink(exitNow) }
+    let r = try WorkerRig(scenario: reviewScenario, extraEnv: ["FAKE_RV_EXIT_AFTER": "1", "FAKE_RV_EXIT_ON": exitNow])
     defer { r.teardown() }
     var e = WorkersFile.Entry(threadId: "trip", cwd: r.agentDir)
     e.state = "parked"
@@ -318,9 +322,11 @@ struct ReviewOC3Parking {
     r.manager()
     r.mgr.startTicking()
     try r.wake("trip")
-    #expect(r.wait(5) { r.lines(r.log).count == 1 })
-    #expect(r.wait(5) { ["parked", "failed"].contains(r.state("trip") ?? "") && r.entry("trip")?.pane_pid == 0 })
-    #expect(r.entry("trip")?.error?.code == "crash_loop", "\(String(describing: r.state("trip")))")
+    #expect(r.wait(8) { r.up("trip") }, "\(r.why("trip"))")
+    FileManager.default.createFile(atPath: exitNow, contents: nil)
+    #expect(r.wait(5) { r.entry("trip")?.error?.code == "crash_loop" }, "\(String(describing: r.state("trip"))) \(r.why("trip"))")
+    #expect(r.state("trip") == "failed" && r.entry("trip")?.pane_pid == 0)
+    #expect(r.lines(r.log).count == 1, "started once")
   }
 
   /// adopt() turns `starting` into `live`, so a session that never connected gets pointers and no ready timeout.
@@ -790,6 +796,9 @@ struct ReviewOC3Panes {
     try r.wake("trip")
     try r.wake("garden")
     #expect(r.wait(10) { r.up("trip") && r.up("garden") })
+    // both pointers typed first: a crash with one still owed starts the worker again to deliver it (the same tick that parks it), so
+    // "parked" would never be seen
+    #expect(r.wait(10) { r.typedLines.count == 2 }, "\(r.typedLines)")
     let trip = try #require(r.entry("trip")?.pane_pid)
     let garden = try #require(r.entry("garden")?.pane_pid)
     let sid = r.entry("trip")?.session_id
@@ -809,5 +818,22 @@ struct ReviewOC3Panes {
     #expect(r.up("garden"))
     #expect(!r.mgr.ownedGroups.contains(trip))
     #expect(!r.mgr.ownedGroups.contains(mainPid))
+  }
+
+  /// The case the test above waits out: a crash while a pointer is still owed (the input box is not drawn yet) starts the worker
+  /// again in the same tick that parks it, and the pointer is delivered to the new one, once.
+  @Test func aWorkerCrashWithAPointerStillOwedStartsItAgainAndDeliversThePointer() throws {
+    let r = try WorkerRig(scenario: reviewScenario, extraEnv: ["FAKE_RV_BOX_DELAY": "4"])
+    defer { r.teardown() }
+    r.manager()
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.typedLines.isEmpty, "the box is not drawn yet: \(r.typedLines)")
+    let pid = try #require(r.entry("trip")?.pane_pid)
+    killpg(pid, SIGKILL)
+    #expect(r.wait(30) { r.starts.count == 2 && r.typedLines.count == 1 }, "\(r.why("trip")) typed \(r.typedLines)")
+    #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.typedLines.count == 1 && r.starts.count == 2, "typed \(r.typedLines) starts \(r.starts)")
   }
 }

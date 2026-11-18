@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  clipUnits,
   heartbeatConfigFromMeta,
   runsInSession,
   type ScheduleSnapshotT,
@@ -127,7 +128,7 @@ export function toolRunDoneQueued(
     const job = this.sidecar.jobOfRun(a.runId)
     if (!job) return yes('not yours: no such run on this bridge')
     const status: 'ok' | 'failed' = a.ok ? 'ok' : 'failed'
-    const report = (a.report ?? a.summary).slice(0, 64 * 1024)
+    const report = clipUnits(a.report ?? a.summary, 64 * 1024)
     const r = await d.adapter.finish(job.id, { runId: a.runId, status, report })
     const excerpt = excerptOf(a.report ?? a.summary)
     if (!r.ok) {
@@ -135,7 +136,7 @@ export function toolRunDoneQueued(
       if (r.reason === 'late') {
         this.sidecar.setNote(
           a.runId,
-          { id: job.id, ds: this.sidecar.note(a.runId)?.ds ?? job.ds, late_note: a.summary.slice(0, 280) },
+          { id: job.id, ds: this.sidecar.note(a.runId)?.ds ?? job.ds, late_note: clipUnits(a.summary, 280) },
           this.now(),
         )
         return yes('late: noted on the closed run')
@@ -155,7 +156,7 @@ export function toolRunDoneQueued(
         // the key Chronos answered the claim with (a Run now on a times job: an ad-hoc minute), never one rebuilt from the offer
         ds: note?.ds ?? job.ds,
         status,
-        summary: a.summary.slice(0, 280),
+        summary: clipUnits(a.summary, 280),
         report: excerpt,
         finished_at: this.iso(),
         duration_s: Math.max(0, Math.round((this.now() - started) / 1000)),
@@ -278,7 +279,7 @@ export function heartbeatRunEnded(this: ScheduleService, runId: string): boolean
 
 /** The 4th pending card becomes this: one plain row in the job's thread. Throws if it cannot be posted. */
 export function heartbeatPlainLine(this: ScheduleService, jobId: string, title: string): Promise<void> {
-  const t = visibleMetaText(title).slice(0, 120)
+  const t = clipUnits(visibleMetaText(title), 120)
   return this.heartbeat.postLine(
     jobId,
     `${t}\nThree Heartbeat cards are already waiting for you, so this one is a line. Reply here and I'll take it.`,

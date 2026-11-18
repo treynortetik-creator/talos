@@ -19,12 +19,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { ciLocalSource, cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 const live: ChildProcess[] = []
@@ -133,9 +134,17 @@ describe('the desktop and mobile jobs on a commit that is already on main (push,
     cpSync(join(here, 'ci-desktop-gate.sh'), join(r.clone, 'scripts/ci-desktop-gate.sh'))
     mkdirSync(join(r.clone, 'apps/desktop/scripts'), { recursive: true })
     writeFileSync(join(r.clone, 'apps/desktop/scripts/ci.sh'), '#!/bin/bash\ntouch "$HOME/desktop-ci-ran"\n')
-    for (const d of ['App', 'BridgeGuard', 'TalosAudioCore', 'TalosCrashCore', 'TalosPushCore', 'TalosShareCore'])
+    for (const d of [
+      'App',
+      'BridgeGuard',
+      'TalosAudioCore',
+      'TalosCrashCore',
+      'TalosPushCore',
+      'TalosRelayCore',
+      'TalosShareCore',
+    ])
       mkdirSync(join(r.clone, 'apps/mobile/ios', d), { recursive: true }) // git keeps a folder only if it holds a file
-    for (const d of ['App', 'BridgeGuard', 'TalosAudioCore', 'TalosCrashCore', 'TalosPushCore'])
+    for (const d of ['App', 'BridgeGuard', 'TalosAudioCore', 'TalosCrashCore', 'TalosPushCore', 'TalosRelayCore'])
       writeFileSync(join(r.clone, 'apps/mobile/ios', d, 'keep'), '')
     writeFileSync(join(r.clone, 'apps/mobile/ios/TalosShareCore/test.sh'), '#!/bin/bash\ntouch "$HOME/mobile-ci-ran"\n')
     r.git(r.clone, 'add', '-A')
@@ -220,12 +229,14 @@ describe('the desktop and mobile jobs on a commit that is already on main (push,
     expect(ran(r, 'mobile-ci-ran')).toBe(true)
   })
 
-  it('a branch that changes only the TypeScript half of the push seal still runs the mobile job (the Swift half reads it)', async () => {
-    for (const path of [
-      'packages/protocol/src/push-rich.ts',
-      'packages/protocol/src/push.ts',
-      'packages/protocol/fixtures/push-rich/vectors.json',
-    ]) {
+  // one run of the whole runner per file, each its own test: three runs in one test add up past a loaded machine's budget
+  it.each([
+    'packages/protocol/src/push-rich.ts',
+    'packages/protocol/src/push.ts',
+    'packages/protocol/fixtures/push-rich/vectors.json',
+  ])(
+    'a branch that changes only the TypeScript half of the push seal (%s) still runs the mobile job (the Swift half reads it)',
+    async (path) => {
       const { r, env } = swiftRepo()
       mkdirSync(join(r.clone, path, '..'), { recursive: true })
       writeFileSync(join(r.clone, path), 'changed\n')
@@ -234,8 +245,8 @@ describe('the desktop and mobile jobs on a commit that is already on main (push,
       expect(await r.start([...withStatus, '--jobs', 'mobile'], env).done, path).toBe(0)
       expect(ran(r, 'mobile-ci-ran'), path).toBe(true)
       expect(r.posted(), path).not.toContain('skipped (no mobile changes)')
-    }
-  })
+    },
+  )
 
   it('TALOS_CI_FORCE_DESKTOP, kept for hand runs, still forces a branch, and no job child process inherits it', async () => {
     const { r, env } = swiftRepo()

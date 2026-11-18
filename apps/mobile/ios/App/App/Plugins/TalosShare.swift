@@ -4,7 +4,7 @@ import TalosShareCore
 
 /// `TalosShare.setToken({token, scopes})` and `TalosShare.clearToken()` (IOS-SPEC 6.1). The token goes straight into the
 /// shared Keychain group for the share extension. There is no read method, and no relay argument: the extension posts to
-/// the relay compiled into the app (`CompiledRelay`). Any extra field in the call (a `relay`, say) is ignored.
+/// the active relay (`SharedRelayOrigin`). Any extra field in the call (a `relay`, say) is ignored.
 @objc(TalosSharePlugin)
 public class TalosSharePlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "TalosSharePlugin"

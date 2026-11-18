@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
@@ -19,7 +20,7 @@ const LOCKS = join(here, 'ci-local', 'locks.sh')
 const RUNNER = join(here, 'ci-runner.sh')
 const DAY = 86_400_000
 const SHIFT = 30 * DAY
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 const live: ChildProcess[] = []
@@ -524,6 +525,28 @@ describe('ci-runner.yml: the hostile nightly by its own schedule, or by hand', (
     expect(evalExpr(hostileExpr, dispatch, { hostile: false, ref: 'main' })).toBe('')
     for (const e of ['push', 'pull_request'])
       expect(evalExpr(hostileExpr, { event_name: e, event: {} }, {}), e).toBe('')
+  })
+
+  it('a nightly dispatch input: nightly=hostile is the hostile run; nightly=nightly the nightly group; none is a plain dispatch', () => {
+    expect(yml).toMatch(
+      /\n {6}nightly:\n {8}description: .*\n {8}type: choice\n {8}options: \[none, nightly, hostile\]\n {8}default: none\n/,
+    )
+    const dispatchedExpr = line(/^ {2}CI_DISPATCH_NIGHTLY: (.*)$/m)
+    const group = (i: object) => evalExpr(groupExpr, dispatch, i)
+    const cancel = (i: object) => evalExpr(cancelExpr, dispatch, i)
+    expect(evalExpr(hostileExpr, dispatch, { hostile: false, nightly: 'hostile', ref: 'main' })).toBe('1')
+    expect(evalExpr(hostileExpr, dispatch, { hostile: false, nightly: 'nightly', ref: 'main' })).toBe('')
+    expect(evalExpr(hostileExpr, dispatch, { hostile: false, nightly: 'none', ref: 'main' })).toBe('')
+    expect(evalExpr(dispatchedExpr, dispatch, { nightly: 'hostile' })).toBe('hostile')
+    expect(evalExpr(dispatchedExpr, dispatch, { nightly: 'nightly' })).toBe('nightly')
+    expect(evalExpr(dispatchedExpr, dispatch, { nightly: 'none' })).toBe('')
+    expect(evalExpr(dispatchedExpr, cron('17 9 * * *'), {})).toBe('')
+    expect(group({ nightly: 'hostile', ref: 'main', jobs: '' })).toBe('hostile')
+    expect(group({ nightly: 'nightly', ref: 'main', jobs: '' })).toBe('nightly') // the schedule's own group: never two at once
+    expect(group({ nightly: 'none', ref: 'main', jobs: '' })).toBe('ref-main-')
+    expect(cancel({ nightly: 'hostile' })).toBe(false)
+    expect(cancel({ nightly: 'nightly' })).toBe(false)
+    expect(cancel({ nightly: 'none' })).toBe(true)
   })
 
   it('its own group, never cancelled; the nightly, pushes and plain dispatches keep theirs', () => {

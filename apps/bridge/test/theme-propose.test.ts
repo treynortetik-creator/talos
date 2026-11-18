@@ -54,19 +54,27 @@ describe('theme proposals', () => {
     const t = draft() as any
     t.light['--background'] = '#ffffff'
     t.dark['--text'] = t.dark['--bg']
-    t.fonts['--font-ui'] = 'comic-sans'
     t.sparkle = true
     const r = await propose(h, t)
     expect(r.isError).toBe(true)
     const msg = text(r)
     expect(msg).toContain('light.--background: not an allowed token')
-    expect(msg).toContain('fonts.--font-ui')
     expect(msg).toContain('sparkle: not an allowed key')
     const lowPair = draft() as any
     lowPair.dark['--text'] = lowPair.dark['--bg']
     const r2 = await propose(h, lowPair)
     expect(text(r2)).toContain('dark: --text on --bg')
     expect(cards(h).filter((c) => c.kind === 'config')).toHaveLength(0)
+  })
+
+  // fonts and radius are colours-only leftovers: ignored, never refused, never stored
+  test('a legacy draft with radius and a bad font is accepted and the theme that is stored has neither', async () => {
+    h = await start({ config: (c) => ({ ...c, settings_lock: false }) })
+    await ownerAsks(h)
+    const r = await propose(h, draft({ radius: { '--radius-card': 99 }, fonts: { '--font-ui': 'comic-sans' } }))
+    expect(r.isError, text(r)).toBeFalsy()
+    const stored = h.bridge.ctx.config.config.theme as Record<string, unknown>
+    expect(Object.keys(stored).sort()).toEqual(['dark', 'light', 'name'])
   })
 
   test('a good draft makes a card; Apply writes the theme into config; the old value survives nowhere else', async () => {

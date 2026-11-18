@@ -159,6 +159,7 @@ public final class Supervisor: @unchecked Sendable {
   public func startTicking() {
     q.async { [weak self] in
       guard let me = self, me.timer == nil else { return }
+      me.detached = false
       let t = DispatchSource.makeTimerSource(queue: me.q)
       t.schedule(deadline: .now() + me.timings.tick, repeating: me.timings.tick)
       t.setEventHandler { [weak me] in me?.tick() }
@@ -172,13 +173,14 @@ public final class Supervisor: @unchecked Sendable {
   /// `allowColdStart`, a cold start (the owner presses Enter).
   public func attachOrStart(allowColdStart: Bool) {
     q.async {
+      self.detached = false
       if self.attachLocked() { return }
       if allowColdStart { self.startColdLocked() }
     }
   }
 
   /// Manual Start, Adopt's Continue: a cold start.
-  public func start() { q.async { self.startColdLocked() } }
+  public func start() { q.async { self.detached = false; self.startColdLocked() } }
 
   /// The one-shot answer to a Blocked screen: start anyway, skipping the takeover check for this launch only. A cold start
   /// only (a crash restart never gets it), and never while Telegram is among the holders: that ban stands. The flag is
@@ -223,9 +225,12 @@ public final class Supervisor: @unchecked Sendable {
     }
   }
 
-  /// App quit with tmux: stop watching, leave the agent running.
+  /// App quit with tmux: stop watching, leave the agent running. Once detached it takes no part until started again: the exit of
+  /// the child it let go (an owned pty's child goes with it) arrives on the queue after this returns, and must not take the
+  /// session lock back from whoever holds it next (`handleExit` ignores it).
   public func detach() {
     q.sync {
+      self.detached = true
       self.timer?.cancel()
       self.timer = nil
       self.syncNapGuard()
@@ -240,6 +245,7 @@ public final class Supervisor: @unchecked Sendable {
   /// supervisor of the same session (a dev build next to the installed app, `open -n`) stays passive: it watches and
   /// re-attaches after the active one restarts the pane, so a crash gets one restart and at most one Enter.
   private var lockFd: Int32 = -1
+  private var detached = false
   private var passiveReattach = false
   public var holdsSessionLock: Bool { statusLock.withLock { _holdsLock } }
   private var _holdsLock = false
@@ -248,6 +254,7 @@ public final class Supervisor: @unchecked Sendable {
 
   func tryLock() -> Bool {
     if lockFd >= 0 { return true }
+    if detached { return false }  // let go at quit: nothing already queued (an exit, a restore) takes the session back
     let dir = (lockPath as NSString).deletingLastPathComponent
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let fd = open(lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
@@ -735,7 +742,7 @@ public final class Supervisor: @unchecked Sendable {
   // MARK: exit, clean-up, restart
 
   private func handleExit(_ info: ExitInfo) {
-    guard let l = launch, info.pid == l.childPid else { return }
+    guard !detached, let l = launch, info.pid == l.childPid else { return }
     lastExit = info
     let now = clock.now()
     if !tryLock() {

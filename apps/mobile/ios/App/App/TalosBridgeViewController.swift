@@ -2,6 +2,7 @@ import BridgeGuard
 import Capacitor
 import Network
 import SafariServices
+import TalosRelayCore
 import UIKit
 import WebKit
 
@@ -11,7 +12,9 @@ import WebKit
 ///  2. Anything that is not a relay page leaves this web view: other hosts go to SFSafariViewController, relay /media/
 ///     pages (agent-written HTML, "Open in new tab", downloads) go to a bridge-less in-app viewer that shares the
 ///     session cookie. Capacitor's prompt() cookie channel and the camera/mic grant are limited to the trusted frame.
-/// The relay origin is the build-time `server.url` baked into capacitor.config.json. It is never read from page content.
+/// The relay origin is the active `RelayProfile` (RelayRuntime), saved only by the native scan. A DEBUG build with no profile may
+/// use the build-time `server.url` instead; a release build with none shows the native first-run screen and loads no page. It is
+/// never read from page content.
 final class TalosBridgeViewController: CAPBridgeViewController {
     private var navigationGate: NavigationGate?
     private var keyboardHideObserver: NSObjectProtocol?
@@ -19,6 +22,21 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     private var leavingObservers: [NSObjectProtocol] = []
     private var guardian: BridgeGuard?
     private var relayURL: URL?
+    /// The active relay, its guard and the shared trust object, made once when the web view is built. nil while nothing is paired.
+    private(set) var relayContext: RelayContext?
+    /// Where the active relay is read from. Only a DEBUG build (the tests) can replace it; a release build always uses the Keychain list.
+    #if DEBUG
+    static var runtime: @MainActor () -> RelayRuntime = { .live }
+    #else
+    static let runtime: @MainActor () -> RelayRuntime = { .live }
+    #endif
+    /// The bridge and share handlers this controller installed, kept so a test can see they hold the context's trust object.
+    private(set) var guardedMessageHandler: GuardedMessageHandler?
+    private(set) var shareMessageHandler: ShareMediaMessageHandler?
+    /// Loaded once instead of the start page: `<origin>/enroll#<code>` after a scan, so the page continues pairing. Set by the scene
+    /// before the view loads and kept in memory only.
+    var firstPage: URL?
+    private var firstRunView: FirstRunView?
     private var pathMonitor: NWPathMonitor?
     private var launchWatchdog: Timer?
     private var revival: WebViewRevival?
@@ -84,6 +102,12 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             recovering = true
             updateReconnectNotice()
         }
+        if relayContext == nil {
+            showFirstRun()
+        } else if let page = firstPage {
+            firstPage = nil
+            if guardian?.isRelayURL(page) == true { loadRelay(startingAt: page) }
+        }
     }
 
     /// Shows or hides the notice from the two flags. VoiceOver is told when it appears.
@@ -116,9 +140,48 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         return "TalosIOS/\(clean(info?["CFBundleShortVersionString"]))+\(clean(info?["CFBundleVersion"]))"
     }
 
+    /// The start URL, the navigation allow-list and the offline page come from the active relay, not from capacitor.config.json. With
+    /// no usable relay there is no server URL, so no relay page can load. A web view that is built after a relay is saved is built
+    /// by a new controller, so this runs once per relay.
+    override func instanceDescriptor() -> InstanceDescriptor {
+        let descriptor = super.instanceDescriptor()
+        let runtime = TalosBridgeViewController.runtime()
+        let context = RelayContext(active: runtime.active(buildTimeURL: descriptor.serverURL.flatMap(URL.init(string:))))
+        relayContext = context
+        if let active = context?.active {
+            if active.profile != nil {
+                descriptor.serverURL = active.origin.absoluteString
+                descriptor.allowedNavigationHostnames = [ActiveRelay.navigationHost(of: active.origin)]
+                descriptor.errorPath = "offline.html"
+            }
+        } else {
+            // Nothing is paired: no server URL, and the web view is pointed at an empty folder, so not even the bundled page loads.
+            descriptor.serverURL = nil
+            descriptor.appLocation = TalosBridgeViewController.emptyAppFolder()
+        }
+        // Stores no relay owns (a removed or replaced relay) go now, before this web view is built. A store a web view still holds
+        // is kept and tried again later and at the next launch. The old shared store goes once, the first time a paired relay is
+        // active in a release build.
+        let clearsDefault = context?.active.profile != nil && !runtime.allowBuildTime
+        Task { @MainActor in
+            if clearsDefault { await runtime.clearDefaultStoreOnce() }
+            for _ in 0..<3 where await runtime.sweepOrphans() > 0 { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+        }
+        return descriptor
+    }
+
+    /// A folder with nothing in it, so the web view of a controller with no relay has no page to load.
+    private static func emptyAppFolder() -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("talos-no-relay", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
     /// Capacitor builds the web view from this configuration, so the suffix is in place before the first request.
     override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
         let configuration = super.webViewConfiguration(for: instanceConfiguration)
+        // One data store per relay: cookies and storage never cross relays. The build-time fallback keeps the default store.
+        if let id = relayContext?.active.dataStoreId { configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: id) }
         let suffix = TalosBridgeViewController.userAgentSuffix()
         if let existing = configuration.applicationNameForUserAgent, !existing.isEmpty {
             configuration.applicationNameForUserAgent = "\(existing) \(suffix)"
@@ -131,13 +194,23 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         // The app's own plugins. Registered before the guard below so a missing origin still leaves them gated
-        // (TalosPluginGate refuses when no relay origin is compiled in).
+        // (TalosPluginGate refuses when there is no active relay).
         bridge?.registerPluginInstance(TalosAudioPlugin())
         bridge?.registerPluginInstance(TalosSharePlugin())
         bridge?.registerPluginInstance(TalosPushPlugin())
         bridge?.registerPluginInstance(TalosCrashPlugin())
         bridge?.registerPluginInstance(TalosSnapshotPlugin())
         bridge?.registerPluginInstance(TalosPickerPlugin())
+        bridge?.registerPluginInstance(TalosRelayPlugin())
+        #if DEBUG
+        // Test hook (no camera in the simulator): a launch argument opens the Add relay sheet once and feeds it a link.
+        if DebugAddRelay.link != nil, !DebugAddRelay.opened {
+            DebugAddRelay.opened = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                if let host = self { AddRelayViewController.present(from: host) }
+            }
+        }
+        #endif
         // The stock Keyboard plugin (resize: native) shrinks the web view to what the keyboard leaves. If a hide
         // notification ever arrives with the frame left short (upstream #12, #23), put it back to the window. Never
         // reproduced here; this only restores a frame that is already wrong. Done before the origin guard.
@@ -148,28 +221,34 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             web.frame = bounds
         }
         guard let bridge = bridge as? CapacitorBridge, let webView = webView else { return }
-        guard let guardian = BridgeGuard(relayURL: bridge.config.serverURL) else {
-            // No usable origin: leave the bridge closed rather than open.
+        guard let context = relayContext else {
+            // No relay is paired: leave the bridge closed. The web view points at an empty folder (instanceDescriptor), and viewDidLoad
+            // puts the native scan screen over it.
             bridge.webViewDelegationHandler.contentController.removeScriptMessageHandler(forName: "bridge")
+            webView.stopLoading()
             return
         }
+        let guardian = context.guardian
+        let trust = context.trust
 
         // 1. Wrap the bridge message handler.
         let handler = bridge.webViewDelegationHandler
         handler.contentController.removeScriptMessageHandler(forName: "bridge")
-        handler.contentController.add(GuardedMessageHandler(inner: handler, guardian: guardian), name: "bridge")
+        let guarded = GuardedMessageHandler(inner: handler, guardian: guardian, trust: trust)
+        guardedMessageHandler = guarded
+        handler.contentController.add(guarded, name: "bridge")
 
         // 1b. The page's "share this attachment" message. A separate handler (not a Capacitor plugin call) so the only thing
         //     it can ever do is fetch one relay /media/<id> file and open the system share sheet.
         handler.contentController.removeScriptMessageHandler(forName: ShareMediaMessageHandler.name)
-        handler.contentController.add(
-            ShareMediaMessageHandler(guardian: guardian) { [weak self] url, name in self?.shareMedia(url, name: name) },
-            name: ShareMediaMessageHandler.name)
+        let share = ShareMediaMessageHandler(guardian: guardian, trust: trust) { [weak self] url, name in self?.shareMedia(url, name: name) }
+        shareMessageHandler = share
+        handler.contentController.add(share, name: ShareMediaMessageHandler.name)
 
         // 2. Route navigations, popups, prompts and permissions. WKWebView holds its delegates weakly, so the gate
         //    lives on self.
         let gate = NavigationGate(
-            inner: handler, guardian: guardian,
+            inner: handler, guardian: guardian, trust: trust,
             openInSafari: { [weak self] url in self?.openInSafari(url) },
             showMedia: { [weak self] url in self?.showMedia(url, guardian: guardian) },
             pageDidReset: {
@@ -185,7 +264,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         webView.navigationDelegate = gate
         webView.uiDelegate = gate
         self.guardian = guardian
-        relayURL = bridge.config.serverURL
+        relayURL = context.active.origin
         revival = WebViewRevival(
             hasPage: { [weak webView] in webView?.url != nil },
             isBusy: { [weak self] in
@@ -211,6 +290,25 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         startLaunchWatchdog()
     }
 
+    // MARK: First run
+
+    /// Nothing is paired: the web view stays empty under a native screen whose button opens the Add-relay sheet. The origin is
+    /// set only by the scan inside that sheet. (This controller's view is the web view, so the screen is a subview of it.)
+    private func showFirstRun() {
+        launchSpinner.stopAnimating()
+        let screen = FirstRunView { [weak self] in
+            guard let self, self.presentedViewController == nil else { return }
+            AddRelayViewController.present(from: self)
+        }
+        screen.frame = view.bounds
+        screen.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(screen)
+        firstRunView = screen
+    }
+
+    /// For tests: whether the native first-run screen is up.
+    var isShowingFirstRun: Bool { firstRunView?.superview != nil && firstRunView?.isHidden == false }
+
     // MARK: Retry and launch fallback (audit D3, D49)
 
     /// Reload the relay when the web view is not showing a relay page: offline page, blank view, nothing loaded.
@@ -224,9 +322,9 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// Loads the start URL (the one Capacitor loaded at launch) and starts the launch watchdog again. `keepingRoute`: a page
     /// that is on a relay page (not /media/) is loaded where it was, so a process that died does not take the owner back to the start.
     /// `recovering`: the page was lost (not the owner's own retry), so "Reconnecting…" covers the view until a page finishes.
-    private func loadRelay(keepingRoute: Bool = false, recovering: Bool = false) {
+    private func loadRelay(keepingRoute: Bool = false, recovering: Bool = false, startingAt: URL? = nil) {
         guard let relayURL, let webView else { return }
-        var target = relayURL
+        var target = startingAt ?? relayURL
         if keepingRoute, let current = webView.url, guardian?.isRelayURL(current) == true, !BridgeGuard.isMediaPath(current) {
             target = current
         }
@@ -478,14 +576,16 @@ final class ReconnectNoticeView: UIView {
 }
 
 /// Receives `talosShareMedia {path, name, mime}` from the page. Same gate as plugin calls (top frame, relay origin, a page outside
-/// /media/), then the path must be exactly `/media/<id>`; the URL is built from the compiled-in relay origin, never from the page.
+/// /media/), then the path must be exactly `/media/<id>`; the URL is built from the active relay origin, never from the page.
 final class ShareMediaMessageHandler: NSObject, WKScriptMessageHandler {
     static let name = "talosShareMedia"
     private let guardian: BridgeGuard
+    let trust: RelayTrust
     private let share: (URL, String) -> Void
 
-    init(guardian: BridgeGuard, share: @escaping (URL, String) -> Void) {
+    init(guardian: BridgeGuard, trust: RelayTrust, share: @escaping (URL, String) -> Void) {
         self.guardian = guardian
+        self.trust = trust
         self.share = share
     }
 
@@ -494,7 +594,7 @@ final class ShareMediaMessageHandler: NSObject, WKScriptMessageHandler {
         let o = frame.securityOrigin
         let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
         let page = message.webView?.url ?? frame.request.url
-        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page),
+        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page, trust: trust.state),
               let body = message.body as? [String: Any],
               let path = body["path"] as? String,
               let url = guardian.shareMediaURL(path: path)
@@ -559,20 +659,28 @@ enum MediaFetcher {
 final class GuardedMessageHandler: NSObject, WKScriptMessageHandler {
     private let inner: WKScriptMessageHandler
     private let guardian: BridgeGuard
+    let trust: RelayTrust
     private var dropped = 0
 
-    init(inner: WKScriptMessageHandler, guardian: BridgeGuard) {
+    init(inner: WKScriptMessageHandler, guardian: BridgeGuard, trust: RelayTrust) {
         self.inner = inner
         self.guardian = guardian
+        self.trust = trust
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // Capacitor's own cookie and HTTP plugins are never reachable (BridgeGuard.blockedPluginIds).
+        guard !BridgeGuard.blocksPluginCall(body: message.body) else {
+            dropped += 1
+            CAPLog.print("Talos bridge guard: dropped call #\(dropped) to a blocked plugin")
+            return
+        }
         let frame = message.frameInfo
         let o = frame.securityOrigin
         let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
         // The top frame's URL decides the path; frameInfo.request is the fallback.
         let page = message.webView?.url ?? frame.request.url
-        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page) else {
+        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page, trust: trust.state) else {
             dropped += 1
             let who = origin.map { "\($0.scheme)://\($0.host)" } ?? "unknown origin"
             CAPLog.print("Talos bridge guard: dropped call #\(dropped) from \(who)")
@@ -588,6 +696,7 @@ final class GuardedMessageHandler: NSObject, WKScriptMessageHandler {
 final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let inner: NSObject
     private let guardian: BridgeGuard
+    let trust: RelayTrust
     private let openInSafari: (URL) -> Void
     private let showMedia: (URL) -> Void
     private let pageDidReset: () -> Void
@@ -597,7 +706,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let didFinish: () -> Void
 
     init(
-        inner: NSObject, guardian: BridgeGuard,
+        inner: NSObject, guardian: BridgeGuard, trust: RelayTrust,
         openInSafari: @escaping (URL) -> Void, showMedia: @escaping (URL) -> Void,
         pageDidReset: @escaping () -> Void = {},
         retry: @escaping () -> Void = {},
@@ -607,6 +716,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     ) {
         self.inner = inner
         self.guardian = guardian
+        self.trust = trust
         self.openInSafari = openInSafari
         self.showMedia = showMedia
         self.pageDidReset = pageDidReset
@@ -629,7 +739,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         let o = frame.securityOrigin
         let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
         return guardian.allowsPluginCall(
-            isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: webView.url ?? frame.request.url)
+            isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: webView.url ?? frame.request.url, trust: trust.state)
     }
 
     private func frameParts(_ frame: WKFrameInfo, _ webView: WKWebView) -> (Bool, Origin?, URL?) {
@@ -640,12 +750,12 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     private func promptChannelAllowed(_ frame: WKFrameInfo, _ webView: WKWebView) -> Bool {
         let p = frameParts(frame, webView)
-        return guardian.allowsPromptChannel(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2)
+        return guardian.allowsPromptChannel(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2, trust: trust.state)
     }
 
     private func devicePermission(_ frame: WKFrameInfo, _ webView: WKWebView) -> BridgeGuard.Permission {
         let p = frameParts(frame, webView)
-        return guardian.devicePermission(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2)
+        return guardian.devicePermission(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2, trust: trust.state)
     }
 
     private func route(_ url: URL) {
@@ -745,7 +855,9 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping (String?) -> Void
     ) {
-        guard promptChannelAllowed(frame, webView), let ui = inner as? WKUIDelegate else { return completionHandler(nil) }
+        // Capacitor's cookie and HTTP plugins are refused here too: its handler answers CapacitorCookies.* for any enabled state.
+        guard !BridgeGuard.blocksPrompt(prompt), promptChannelAllowed(frame, webView), let ui = inner as? WKUIDelegate
+        else { return completionHandler(nil) }
         ui.webView?(
             webView, runJavaScriptTextInputPanelWithPrompt: prompt, defaultText: defaultText,
             initiatedByFrame: frame, completionHandler: completionHandler) ?? completionHandler(nil)

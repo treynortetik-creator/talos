@@ -197,6 +197,47 @@ describe('the "Allow once" card', () => {
     expect(await take(x)).toBe('none')
   })
 
+  test('a hub line still running when the bridge stops ends quietly: no error line, so no problem report', async () => {
+    const x = await start()
+    const errors: string[] = []
+    const log = x.bridge.ctx.log
+    const logError = log.error
+    log.error = (m, f, d) => {
+      errors.push(m)
+      logError(m, f, d)
+    }
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let entered: () => void = () => {}
+    const inFlight = new Promise<void>((r) => {
+      entered = r
+    })
+    let ended: () => void = () => {}
+    const finished = new Promise<void>((r) => {
+      ended = r
+    })
+    const asks = x.bridge.ctx.actionRuleAsks as NonNullable<typeof x.bridge.ctx.actionRuleAsks>
+    asks.take = async () => {
+      entered()
+      await gate
+      try {
+        x.bridge.ctx.store.outboxCount() // the store is closed by now: "Cannot use a closed database"
+        return { decision: 'none', reason: '' }
+      } finally {
+        ended()
+      }
+    }
+    rawCall(x.home, takeLine())
+    await inFlight
+    await x.stop()
+    release()
+    await finished
+    await new Promise((r) => setImmediate(r)) // the line's own catch runs in the microtasks after that
+    expect(errors).toEqual([])
+  })
+
   test('the asker giving up leaves the card open; a later tap still approves', async () => {
     const x = await start()
     const ask = rawCall(x.home, askLine({ wait_ms: 100 }))
@@ -220,6 +261,278 @@ describe('the "Allow once" card', () => {
     await x.bridge.ctx.expiry?.expire(card.id, 'expired')
     expect((await ask.result)?.decision).toBe('none')
     expect(await take(x)).toBe('none')
+  })
+
+  // The card is created in the ledger before it is sent; an answer in that window must reach the asker (it waits from the start).
+  describe('an answer while the card is still being sent', () => {
+    const LONG = 30_000
+    const isRuleCreate = (f: unknown) => {
+      const fr = f as { type?: string; card?: { payload?: { action_rule?: unknown } } }
+      return fr?.type === 'card.create' && typeof fr.card?.payload?.action_rule === 'object'
+    }
+    // Holds the FIRST rule card's send open until release() (or fails it with fail()); other frames pass through.
+    function holdSend(x: Harness) {
+      const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
+      const real = t.sendDurable
+      let release: () => void = () => {}
+      let fail: () => void = () => {}
+      let held = false
+      t.sendDurable = function (this: unknown, f: unknown) {
+        if (!isRuleCreate(f) || held) return real.call(this, f)
+        held = true
+        return new Promise((res, rej) => {
+          release = () => real.call(this, f).then(res, rej)
+          fail = () => rej(new Error('relay down'))
+        })
+      }
+      return {
+        release: () => release(),
+        fail: () => fail(),
+        restore: () => {
+          t.sendDurable = real
+        },
+        sent: () => waitFor(() => held, 4000, 'held send'),
+      }
+    }
+    const pendingRow = (x: Harness) => {
+      const row = x.bridge.ctx.ledger.list('pending').find((r) => r.actor === 'bridge')
+      if (!row) throw new Error('no pending rule card')
+      return row
+    }
+    const promptly = async (p: Promise<Answer | null>) =>
+      await Promise.race([p, sleep(3000).then(() => 'timed out' as const)])
+    const waiterSizes = (x: Harness) =>
+      [...(x.bridge.ctx.actionRuleAsks as unknown as { waiters: Map<string, Set<unknown>> }).waiters.values()].map(
+        (v) => v.size,
+      )
+    const waiterKeys = (x: Harness) => [
+      ...(x.bridge.ctx.actionRuleAsks as unknown as { waiters: Map<string, unknown> }).waiters.keys(),
+    ]
+
+    test('(a) the card expires during the send: the asker hears none, promptly, and nothing is approved', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await hold.sent()
+        await x.bridge.ctx.expiry?.expire(pendingRow(x).id, 'expired')
+        const a = await promptly(ask.result) // heard while the send is still held
+        expect(a).toMatchObject({ decision: 'none', reason: 'expired' })
+        hold.release()
+        expect(await take(x)).toBe('none')
+      } finally {
+        hold.restore()
+      }
+    })
+
+    // Route for (b) and (c): the create frame has not reached the fake relay, so the app cannot sign a tap. This is the call
+    // inbound-cards.ts makes after it has checked the signature, on the row in the ledger.
+    test('(b) Allow once during the send: the asker hears allow, promptly, and the approval is used once', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await hold.sent()
+        await x.bridge.ctx.actionRuleAsks?.onResolved(pendingRow(x), 'primary', false)
+        expect(await promptly(ask.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
+        hold.release()
+        expect(await take(x)).toBe('allow')
+        expect(await take(x)).toBe('none')
+      } finally {
+        hold.restore()
+      }
+    })
+
+    test('(c) Deny during the send: the asker hears deny, promptly', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await hold.sent()
+        await x.bridge.ctx.actionRuleAsks?.onResolved(pendingRow(x), 'kill', false)
+        expect(await promptly(ask.result)).toMatchObject({ decision: 'deny' })
+        hold.release()
+        expect(await take(x)).toBe('none')
+      } finally {
+        hold.restore()
+      }
+    })
+
+    test('(d) a send that fails: none with send_failed, the card expired, no waiter left behind', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await hold.sent()
+        const id = pendingRow(x).id
+        hold.fail()
+        expect(await promptly(ask.result)).toMatchObject({ decision: 'none', reason: 'send_failed' })
+        expect(x.bridge.ctx.ledger.get(id)?.state).toBe('expired')
+        expect(waiterKeys(x)).toEqual([])
+      } finally {
+        hold.restore()
+      }
+    })
+
+    // "Always allow" records the kind and syncs the setting before it closes the card. That sync can take many seconds, and the
+    // asker must not wait for it.
+    test('(f) Always allow while the config sync is held: the asker hears allow at once, and the kind is still recorded', async () => {
+      const x = await start()
+      const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
+      const real = t.sendDurable
+      let held = false
+      let release: () => void = () => {}
+      t.sendDurable = function (this: unknown, f: unknown) {
+        if ((f as { type?: string })?.type !== 'config.sync' || held) return real.call(this, f)
+        held = true
+        return new Promise((res, rej) => {
+          release = () => real.call(this, f).then(res, rej)
+        })
+      }
+      try {
+        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+        const card = await nextCard(x, 0)
+        await x.app.resolveCard(card, 'primary', card.payload_hash, { always: true })
+        await waitFor(() => held, 4000, 'held config.sync')
+        expect(await promptly(ask.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
+        release()
+        await waitFor(
+          () => (x.bridge.ctx.config.config.always_allow ?? []).some((e) => e.kind === 'deploy'),
+          4000,
+          'always_allow',
+        )
+        await eventually(() => expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('done'))
+      } finally {
+        t.sendDurable = real
+      }
+    })
+
+    test('(e) the asker disconnects during the send: gone, and the card stays pending', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const ctl = new AbortController()
+        const asks = x.bridge.ctx.actionRuleAsks as ActionRuleAsks
+        const answer = asks.ask(
+          { rule: 'deploy-or-publish', why: 'w', tool_name: 'Bash', tool_input: PUBLISH, cwd: '/srv/app' } as never,
+          ctl.signal,
+          LONG,
+        )
+        await hold.sent()
+        const id = pendingRow(x).id
+        ctl.abort()
+        expect(await Promise.race([answer, sleep(3000).then(() => 'timed out')])).toEqual({
+          decision: 'none',
+          reason: 'gone',
+        })
+        hold.release()
+        await eventually(() => expect(ruleCards(x)).toHaveLength(1))
+        expect(x.bridge.ctx.ledger.get(id)?.state).toBe('pending')
+      } finally {
+        hold.restore()
+      }
+    })
+
+    test('a second asker joining during the send: both hear the expiry while the send is still held', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const one = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await hold.sent()
+        const two = rawCall(x.home, askLine({ wait_ms: LONG }))
+        await eventually(() => expect(waiterSizes(x)).toEqual([2]))
+        await x.bridge.ctx.expiry?.expire(pendingRow(x).id, 'expired')
+        expect(await promptly(one.result)).toMatchObject({ decision: 'none', reason: 'expired' })
+        expect(await promptly(two.result)).toMatchObject({ decision: 'none', reason: 'expired' })
+        hold.release()
+      } finally {
+        hold.restore()
+      }
+    })
+
+    // An old card whose send fails late must not touch a newer card raised for the same call.
+    async function oldCardThenNew(x: Harness, hold: ReturnType<typeof holdSend>) {
+      const one = rawCall(x.home, askLine({ wait_ms: LONG }))
+      await hold.sent()
+      const old = pendingRow(x)
+      await x.bridge.ctx.expiry?.expire(old.id, 'expired')
+      expect(await promptly(one.result)).toMatchObject({ reason: 'expired' })
+      const two = rawCall(x.home, askLine({ wait_ms: LONG }))
+      const card = await nextCard(x, 0) // the old card's create frame never left: this is the new one
+      expect(card.id).not.toBe(old.id)
+      return { old, two, card }
+    }
+    const stillWaiting = async (p: Promise<Answer | null>) =>
+      expect(await Promise.race([p, sleep(300).then(() => 'waiting')])).toBe('waiting')
+
+    test("an old card's send failing late leaves the newer card for the same call alone", async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const { two, card } = await oldCardThenNew(x, hold)
+        hold.fail()
+        await sleep(100)
+        await stillWaiting(two.result)
+        await x.app.resolveCard(card, 'primary', card.payload_hash)
+        expect(await promptly(two.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
+        expect(await take(x)).toBe('allow')
+      } finally {
+        hold.restore()
+      }
+    })
+
+    test('a Deny on an old card leaves the newer card for the same call waiting', async () => {
+      const x = await start()
+      const hold = holdSend(x)
+      try {
+        const { old, two, card } = await oldCardThenNew(x, hold)
+        await x.bridge.ctx.actionRuleAsks?.onResolved(old, 'kill', false)
+        await stillWaiting(two.result)
+        await x.app.resolveCard(card, 'primary', card.payload_hash)
+        expect(await promptly(two.result)).toMatchObject({ decision: 'allow' })
+        hold.release()
+      } finally {
+        hold.restore()
+      }
+    })
+
+    test('a send that succeeds still syncs the expiry and logs that the card was posted', async () => {
+      const x = await start()
+      const lines: string[] = []
+      const log = x.bridge.ctx.log as unknown as { info: (m: string, f?: unknown) => void }
+      const realInfo = log.info
+      log.info = (m, f) => {
+        lines.push(m)
+        return realInfo.call(log, m, f)
+      }
+      let syncs = 0
+      const exp = x.bridge.ctx.expiry as unknown as { sync: () => void }
+      const realSync = exp.sync
+      exp.sync = function (this: unknown) {
+        syncs++
+        return realSync.call(this)
+      }
+      try {
+        rawCall(x.home, askLine({ wait_ms: LONG }))
+        await nextCard(x, 0)
+        await eventually(() => expect(lines).toContain('action rule card posted'))
+        expect(syncs).toBeGreaterThan(0)
+      } finally {
+        log.info = realInfo
+        exp.sync = realSync
+      }
+    })
+
+    test('recover() leaves a card this process raised alone: it stays pending and a tap allows', async () => {
+      const x = await start()
+      const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+      const card = await nextCard(x, 0)
+      await x.bridge.ctx.actionRuleAsks?.recover()
+      expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
+      await x.app.resolveCard(card, 'primary', card.payload_hash)
+      expect(await promptly(ask.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
+      expect(await take(x)).toBe('allow')
+    })
   })
 
   test('the card shows what is there: hidden characters marked, padding folded, the end pinned', async () => {
@@ -633,10 +946,12 @@ describe('the notice that a rule file cannot be read', () => {
       const text = replies(x)[0]?.message.text ?? ''
       // the line is the bridge's own (the file's second line), not the 99 the sender claimed
       expect(text).toBe(ruleFileNotice({ file: 'user', line: 2, unattended: false, offPath: agent.off }))
-      expect(text).not.toContain('99')
+      // (the off path is a random temp folder, whose name may hold a 99 or any other run of letters: Titan, 11-17)
+      const own = text.replace(agent.off, '')
+      expect(own).not.toContain('99')
       // how to turn the rules off: the kit's own kill switch for this agent folder, so the owner is never stuck
       expect(text.endsWith(`until it is fixed, or create ${agent.off} to turn these rules off.`)).toBe(true)
-      expect(text).not.toContain('money')
+      expect(own).not.toContain('money')
       // the same file and content again, under any hash the sender likes, live or unattended: nothing more is posted
       expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('dup')
       expect((await rawCall(x.home, noticeLine({ unattended: true, hash: 'd'.repeat(64) })).result)?.reason).toBe('dup')
@@ -708,14 +1023,20 @@ describe('the notice that a rule file cannot be read', () => {
       t += 29_000
       await look()
       expect(runs).toBe(1)
-      // the look is asynchronous: the event loop keeps turning while it runs
-      let ticks = 0
-      const timer = setInterval(() => ticks++, 5)
+      // the look is asynchronous: a timer set after it starts fires before it ends (a look that held the event loop would settle
+      // first). Order, not a count of ticks: a tick count depends on the machine's load (Titan, 11-17)
+      const order: string[] = []
       t += 2_000
-      await look()
-      clearInterval(timer)
+      const looking = look().then(() => order.push('look'))
+      await new Promise<void>((r) =>
+        setTimeout(() => {
+          order.push('timer')
+          r()
+        }, 0),
+      )
+      await looking
       expect(runs).toBe(2)
-      expect(ticks).toBeGreaterThan(2)
+      expect(order).toEqual(['timer', 'look'])
       // other content is looked at again at once
       writeFileSync(agent.user, 'rules:\n  something else\n')
       await look()

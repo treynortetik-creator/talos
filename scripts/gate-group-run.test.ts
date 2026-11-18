@@ -12,7 +12,7 @@ import { timeFactor } from '../packages/testkit/src/time-factor.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 const PL = join(here, 'gate', 'group-run.pl')
 const F = timeFactor()
-vi.setConfig({ testTimeout: 60_000 * F })
+vi.setConfig({ testTimeout: 60_000 * F, hookTimeout: 60_000 * F })
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })

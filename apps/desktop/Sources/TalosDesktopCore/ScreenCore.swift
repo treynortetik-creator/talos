@@ -10,12 +10,14 @@ import Foundation
 ///   is an allow list (windows named one by one), so a window that opens after the list was read is a gap as well. When the
 ///   list cannot be read, the answer is a refusal with a plain reason, never the whole screen.
 /// - `ownerCapture` is the owner's own keypress: whole display, one window or a region, unfiltered.
-/// - Input goes only to an allowed app that is in front at the moment of each event, and never to Talos itself. A click or a
-///   scroll also needs the window under the pointer to belong to an allowed app.
+/// - Input goes only to an allowed app that is in front at the moment of each event. Talos is an app like any other here: the owner
+///   puts it on the list the same way. What an agent's event can never do, in any app list, is answer an approval card or a
+///   permission prompt (`SyntheticInput`, `ProtectedInputScript`). A click or a scroll also needs the window under the pointer to
+///   belong to an allowed app.
 /// - Nothing here asks macOS for a permission. A missing one is a refusal, checked before any capture or event, so no system
 ///   prompt is ever raised by an agent's call.
 public struct ScreenCore: Sendable {
-  /// The Talos app's own bundle id (`Resources/Info.plist.template`).
+  /// The Talos app's own bundle id (`Resources/Info.plist.template`). Only the tests and the docs name it: it gets no special case.
   public static let talosBundleID = "app.talos.desktop"
   /// The long edge, in pixels, a PNG is scaled down to by default.
   public static let defaultMaxLongEdge = 1568
@@ -24,27 +26,29 @@ public struct ScreenCore: Sendable {
   let input: any ScreenInputBackend
   let apps: any ScreenAppsBackend
   let permissions: any ScreenPermissionProbe
-  /// Bundle ids that count as Talos (compared without case) and this process's pid: input to them is always refused.
-  let selfBundleIDs: Set<String>
-  let selfPID: Int32
+  /// Marks the span in which an event this process posts is still on its way to a window (`SyntheticInput`).
+  let flight: SyntheticInput.Flight
   public var maxLongEdge: Int
+  /// How long an answer about an event aimed at Talos itself is waited for (`SyntheticInput.Flight`); then `deliveryUnverified`.
+  public var deliveryTimeout: Double = 2
+  /// Windows no agent screenshot shows (`ScreenSecretWindows`); a test passes its own.
+  public var secretWindows: @Sendable () -> Set<UInt32> = { ScreenSecretWindows.current }
   /// Keys besides `ScreenKeyGuard`'s own that are never pressed: the owner's Talos hotkeys and this Mac's enabled shortcuts.
   public var refusedKeys: @Sendable () -> [ScreenKeyCombo] = { [] }
   /// How typing waits between pieces (`textPaceSeconds`); tests record it instead of sleeping.
   public var pause: @Sendable (Double) -> Void = { usleep(useconds_t(max(0, $0) * 1_000_000)) }
+  /// The keyboard layout typed text is made from. Empty (the default): all text goes as Unicode strings.
+  public var layout: @Sendable () -> ScreenKeyLayout = { .empty }
 
   public init(
     capture: any ScreenCaptureBackend, input: any ScreenInputBackend, apps: any ScreenAppsBackend,
-    permissions: any ScreenPermissionProbe, selfBundleID: String?, selfPID: Int32, maxLongEdge: Int = defaultMaxLongEdge
+    permissions: any ScreenPermissionProbe, flight: SyntheticInput.Flight = SyntheticInput.flight, maxLongEdge: Int = defaultMaxLongEdge
   ) {
     self.capture = capture
     self.input = input
     self.apps = apps
     self.permissions = permissions
-    var ids: Set<String> = [Self.talosBundleID.lowercased()]
-    if let s = selfBundleID?.trimmingCharacters(in: .whitespaces), !s.isEmpty { ids.insert(s.lowercased()) }
-    self.selfBundleIDs = ids
-    self.selfPID = selfPID
+    self.flight = flight
     self.maxLongEdge = maxLongEdge
   }
 
@@ -57,7 +61,7 @@ public struct ScreenCore: Sendable {
     do { content = try await capture.content() } catch {
       throw .filterUnavailable(ScreenRefusal.detail(error))
     }
-    let plan = try ScreenPlanner.agent(area: area, allowed: allowed, content: content)
+    let plan = try ScreenPlanner.agent(area: area, allowed: allowed, content: content, secret: secretWindows())
     return try await shoot(plan)
   }
 
@@ -89,13 +93,12 @@ public struct ScreenCore: Sendable {
     apps.runningApps().sorted { ($0.name.lowercased(), $0.pid) < ($1.name.lowercased(), $1.pid) }
   }
 
-  /// Opens (or brings forward) an allowed app. Talos itself and apps not on the list are refused. The app on disk that macOS would
+  /// Opens (or brings forward) an allowed app; an app not on the list is refused. The app on disk that macOS would
   /// open for the id is the one checked against the owner's entry, and that same app is opened: an impostor that claims the id
   /// is not opened.
   public func openApp(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal) {
     let id = bundleID.trimmingCharacters(in: .whitespaces)
     guard !id.isEmpty else { throw .badRequest("no app named") }
-    guard !Self.isTalos(id, selfBundleIDs) else { throw .talosItself }
     guard let path = apps.appPath(bundleID: id) else {
       throw allowed.entry(id) == nil ? .appNotAllowed(app: id) : .openFailed(app: id, detail: "no app with that id is installed")
     }
@@ -103,16 +106,6 @@ public struct ScreenCore: Sendable {
     do { try await apps.open(appPath: path) } catch let r as ScreenRefusal { throw r } catch {
       throw .openFailed(app: id, detail: ScreenRefusal.detail(error))
     }
-  }
-
-  /// Talos's own ids: this app's, the release id, and anything under `app.talos.` (helpers, dev builds). Never on the list.
-  public static func isTalos(_ bundleID: String, _ selfIDs: Set<String> = [talosBundleID]) -> Bool {
-    let b = bundleID.trimmingCharacters(in: .whitespaces).lowercased()
-    return selfIDs.contains(b) || b == talosBundleID || b.hasPrefix("app.talos.")
-  }
-
-  func isSelf(_ app: ScreenApp) -> Bool {
-    app.pid == selfPID || app.bundleID.map { Self.isTalos($0, selfBundleIDs) } == true
   }
 }
 
@@ -234,9 +227,9 @@ enum ScreenPlanner {
     var hiddenWindows: Int
   }
 
-  static func agent(area: ScreenArea, allowed: ScreenAllowed, content: ScreenContent) throws(ScreenRefusal) -> Planned {
+  static func agent(area: ScreenArea, allowed: ScreenAllowed, content: ScreenContent, secret: Set<UInt32> = []) throws(ScreenRefusal) -> Planned {
     if case .window(let id) = area {
-      guard let w = content.windows.first(where: { $0.id == id && $0.isOnScreen }) else { throw .windowNotFound(id) }
+      guard let w = content.windows.first(where: { $0.id == id && $0.isOnScreen && !secret.contains($0.id) }) else { throw .windowNotFound(id) }
       guard allowed.allows(bundleID: w.ownerBundleID, pid: w.ownerPID) else {
         throw .appNotAllowed(app: w.ownerBundleID ?? "an app with no id", subject: .running(pid: w.ownerPID))
       }
@@ -250,7 +243,9 @@ enum ScreenPlanner {
     var apps = Set<String>()
     var hidden = 0
     for w in content.windows where w.isOnScreen && w.frame.intersects(global) {
-      if w.isDesktop, let b = w.ownerBundleID, allowed.isAppleProcess(w.ownerPID, claiming: b) {
+      if secret.contains(w.id) {
+        hidden += 1
+      } else if w.isDesktop, let b = w.ownerBundleID, allowed.isAppleProcess(w.ownerPID, claiming: b) {
         shown.append(PlannedWindow(w))
       } else if allowed.allows(bundleID: w.ownerBundleID, pid: w.ownerPID), let b = w.ownerBundleID {
         shown.append(PlannedWindow(w))
@@ -325,7 +320,6 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
   case appNotAllowed(app: String, subject: ScreenSubject? = nil)
   /// The app can never go on the list (unsigned, no app id); `why` is one plain line.
   case appNotAllowable(app: String, why: String)
-  case talosItself
   /// A shortcut macOS or Talos handles for the whole Mac (`ScreenKeyGuard`); the text as the agent wrote it.
   case keyNotAllowed(String)
   /// A cmd/ctrl/opt combination that is not one of the front app's own menu shortcuts (review R2-2).
@@ -342,6 +336,11 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
   case nothingAtPoint
   case openFailed(app: String, detail: String)
   case inputFailed(String)
+  /// The event landed on a button that answers an approval card or a permission prompt, and Talos dropped it: only the owner's own
+  /// hand answers those (`SyntheticInput`).
+  case protectedPrompt
+  /// The events went to Talos's own window and nothing said they were handled in time: they may or may not have landed.
+  case deliveryUnverified
   case badRequest(String)
 
   public var reason: String {
@@ -360,7 +359,6 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .regionOffScreen: return "That region is not on any display."
     case .appNotAllowed(let app, _): return "\(app) isn't on this Mac's allowed list yet."
     case .appNotAllowable(_, let why): return why
-    case .talosItself: return "Talos does not let an agent click or type in Talos itself."
     case .keyNotAllowed(let k):
       return "\(String(k.prefix(60))) is a shortcut macOS or Talos handles for the whole Mac, so Talos never presses it for an agent. Nothing was pressed."
     case .keyNotInMenu(let k, let app):
@@ -376,6 +374,10 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .nothingAtPoint: return "Nothing is at that spot on the screen, so nothing was clicked."
     case .openFailed(let app, let d): return "\(app) did not open: \(d)."
     case .inputFailed(let d): return "The click or keypress was not sent: \(d)."
+    case .protectedPrompt:
+      return "That click or key was on a button that answers an approval card or a permission prompt. Only the owner's own click or key does that, so Talos dropped it and nothing was answered. Ask the owner to answer it."
+    case .deliveryUnverified:
+      return "The click or key went to Talos's own window, but Talos did not confirm it was handled in time, so it may or may not have landed. Take a screenshot to check before trying again."
     case .badRequest(let d): return "Bad request: \(d)."
     }
   }
@@ -394,7 +396,6 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .regionOffScreen: return "region_off_screen"
     case .appNotAllowed: return "app_not_allowed"
     case .appNotAllowable: return "app_not_allowable"
-    case .talosItself: return "talos_itself"
     case .keyNotAllowed: return "key_not_allowed"
     case .keyNotInMenu: return "key_not_in_menu"
     case .focusElsewhere: return "focus_elsewhere"
@@ -405,6 +406,8 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .nothingAtPoint: return "nothing_at_point"
     case .openFailed: return "open_failed"
     case .inputFailed: return "input_failed"
+    case .protectedPrompt: return "protected_prompt"
+    case .deliveryUnverified: return "delivery_unverified"
     case .badRequest: return "bad_request"
     }
   }
@@ -437,8 +440,24 @@ public protocol ScreenCaptureBackend: Sendable {
 /// CGEvent, or a fake. Each call is one event already allowed by the gate.
 public protocol ScreenInputBackend: Sendable {
   func post(_ event: ScreenInputEvent) throws
+  /// The same, with the token the events carry in their CGEvent user data (`SyntheticInput`); the live one sets it, a fake may record it.
+  func post(_ event: ScreenInputEvent, token: Int64) throws
   /// Setup's live test: proves an event can be posted, and posts nothing an app would notice. Throws when it cannot.
   func probe() throws
+}
+
+extension ScreenInputBackend {
+  public func post(_ event: ScreenInputEvent, token: Int64) throws { try post(event) }
+}
+
+/// A text field as read: which element it is (two reads of the same element have the same number) and what it holds.
+public struct ScreenField: Sendable, Equatable {
+  public var element: Int
+  public var value: String
+  public init(element: Int, value: String) {
+    self.element = element
+    self.value = value
+  }
 }
 
 /// NSWorkspace and the window list, or a fake.
@@ -453,9 +472,9 @@ public protocol ScreenAppsBackend: Sendable {
   func appOwnsKeyboard(pid: Int32) -> Bool
   /// True when the app's focused window is a sheet or an open/save panel.
   func frontHasPanel(pid: Int32) -> Bool
-  /// The system-wide focused element's text value, when that element belongs to `pid`; nil when it is not readable, not theirs,
-  /// or a secure (password) field.
-  func focusedValue(pid: Int32) -> String?
+  /// The system-wide focused element and its text value, when that element belongs to `pid`; nil when it is not readable, not
+  /// theirs, or a secure (password) field.
+  func focusedField(pid: Int32) -> ScreenField?
   /// The key equivalents of the app's own menus (cmd/ctrl/opt combinations); nil when they cannot be read.
   func menuShortcuts(pid: Int32) -> [ScreenKeyCombo]?
   /// Where the app macOS would open for an id is, nil when none is installed.

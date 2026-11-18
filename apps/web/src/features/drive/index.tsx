@@ -1,7 +1,7 @@
 // Driving mode screen (docs/V2-FEATURES.md V4.2, route /drive). Dark always, 22 px minimum text, no scroll, 96 px and
 // 140 px targets. Replies arrive as text at once and the voice follows; this screen plays it (see queue.ts). Cards and
 // permission requests are counted and announced once, never approved here.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useStore } from 'zustand'
@@ -105,8 +105,10 @@ export function DriveScreen(_props: DriveScreenProps) {
     }
   }, [active, agent, queue, q.current?.label])
 
-  // /drive open on this device makes it the one that reads replies aloud (other open devices stay silent).
-  useEffect(() => {
+  // /drive open on this device makes it the one that reads replies aloud (other open devices stay silent). A layout effect:
+  // it has run by the time the screen is on show, so a reply that lands right after the screen appears is not read as one
+  // for another device (a passive effect can still be waiting then on a busy phone).
+  useLayoutEffect(() => {
     controller.setScreenOpen(true)
     return () => controller.setScreenOpen(false)
   }, [controller])

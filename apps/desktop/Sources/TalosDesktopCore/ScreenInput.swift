@@ -5,9 +5,30 @@ import Foundation
 public enum ScreenInputEvent: Sendable, Equatable {
   case click(CGPoint, button: ScreenMouseButton, count: Int)
   case text(String)
+  /// Key presses, the events `screen_key` posts: one piece of typed text that goes in as the keys that make it.
+  case keys([ScreenKeyCombo])
   case key(ScreenKeyCombo)
   /// Pixels; positive `dy` scrolls up, positive `dx` scrolls left (CGEvent's own sense).
   case scroll(at: CGPoint, dx: Int, dy: Int)
+}
+
+extension ScreenInputEvent {
+  /// How many of the CGEvents the live backend posts for this event are answered by a window (a release, a key-up, a scroll): the
+  /// live backend must post exactly this many of the types `SyntheticInputGuard.isAnswerType` names.
+  public var answers: Int {
+    switch self {
+    case .click, .text, .key, .scroll: return 1
+    case .keys(let k): return max(1, k.count)
+    }
+  }
+
+  /// Text going in, as Unicode strings or as key presses.
+  var isTyping: Bool {
+    switch self {
+    case .text, .keys: return true
+    case .click, .key, .scroll: return false
+    }
+  }
 }
 
 public enum ScreenMouseButton: String, Sendable, Equatable { case left, right, middle }
@@ -142,26 +163,76 @@ extension ScreenCore {
   public static let textSettleSeconds = 0.05
   /// How many trailing characters of the field a failed read-back reports.
   static let readBackSuffix = 40
+  /// The wait before each look at the field after typing, so an app that takes its events a beat later has shown them.
+  public static let readBackSettleSeconds = 0.1
+  /// How many times the field is looked at before the answer is given (it stops at the first look that shows the text).
+  static let readBackLooks = 3
 
-  /// What the field held after typing.
+  /// What the field held after typing, compared with what it held before.
   public enum ReadBack: Sendable, Equatable {
+    /// The text is in the field one more time than before.
     case verified
+    /// The field changed, but not by the text.
     case mismatch(suffix: String)
-    /// The field could not be read.
+    /// The field is exactly as it was: the typing did not land.
+    case unchanged
+    /// The field could not be read before or after (not readable, secure, another element, or another app came to the front).
     case unverified
+    /// The text held a newline, which is a Return: it may have run a command, sent a message or submitted a form and cleared the
+    /// field, so what the field holds says nothing either way.
+    case unverifiedReturn
   }
 
-  /// Types text (`perform`), then reads the focused field once and says whether the text is in it.
+  /// Types text (`perform`), then looks at the focused field and says whether the text arrived. The field is read once before
+  /// the gate (for the front app, only if it is allowed) and kept only if the gate then passes for that same app; it is read again
+  /// after the last piece, and the text counts only when it appears more often than before and the field is the same element: a
+  /// terminal's buffer already holds the words an agent types, so the text being in the field proves nothing.
   public func typeText(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ReadBack) {
-    let (n, gated) = try send(.type(text), allowed: allowed)
-    // only the app the text was gated for: if another app came to the front since, or it is no longer allowed, nothing is read
-    guard let gated, let now = apps.frontmost(), now.pid == gated.pid, allowed.allows(bundleID: now.bundleID, pid: now.pid),
-      let value = apps.focusedValue(pid: gated.pid)
-    else { return (n, .unverified) }
-    return (n, value.contains(text) ? .verified : .mismatch(suffix: String(value.suffix(Self.readBackSuffix))))
+    let events = try self.events(for: .type(text))
+    var viaKeys = false
+    if case .keys = events.first { viaKeys = true }
+    let hasReturn = text.contains { $0.isNewline }
+    // before the gate, so no read comes between the gate and the first post
+    var before: (pid: Int32, field: ScreenField)?
+    if let f = apps.frontmost(), allowed.allows(bundleID: f.bundleID, pid: f.pid),
+      let field = apps.focusedField(pid: f.pid)
+    { before = (f.pid, field) }
+    let (n, gated) = try send(.type(text), allowed: allowed, events: events)
+    // a Return typed as a Unicode character may or may not be a Return to the app: nothing can be said of the field
+    if hasReturn, !viaKeys { return (n, .unverifiedReturn) }
+    guard let gated, let before, before.pid == gated.pid else { return (n, .unverified) }
+    var result = ReadBack.unverified
+    for _ in 0..<Self.readBackLooks {
+      pause(Self.readBackSettleSeconds)
+      // only the app the text was gated for: if another app came to the front since, or it is no longer allowed, nothing is read
+      guard let now = apps.frontmost(), now.pid == gated.pid, allowed.allows(bundleID: now.bundleID, pid: now.pid),
+        let after = apps.focusedField(pid: gated.pid), after.element == before.field.element
+      else {
+        result = .unverified
+        break
+      }
+      result = Self.judge(text, before: before.field.value, after: after.value)
+      if result == .verified { break }
+    }
+    if hasReturn, result != .verified { return (n, .unverifiedReturn) }
+    return (n, result)
   }
 
-  /// Sends one request if every gate passes: Accessibility granted, an allowed app (not Talos) in front at each event, and
+  /// Whether the field's change from `before` to `after` is the typed text: every line of it (a newline runs a command or starts a
+  /// line, and is not in the field as a character) appears more often than it did.
+  static func judge(_ text: String, before: String, after: String) -> ReadBack {
+    if after == before { return .unchanged }
+    var need: [String: Int] = [:]
+    for line in text.split(whereSeparator: \.isNewline) { need[String(line), default: 0] += 1 }
+    let landed = need.allSatisfy { line, times in occurrences(of: line, in: after) - occurrences(of: line, in: before) >= times }
+    return landed ? .verified : .mismatch(suffix: String(after.suffix(readBackSuffix)))
+  }
+
+  private static func occurrences(of piece: String, in text: String) -> Int {
+    text.components(separatedBy: piece).count - 1
+  }
+
+  /// Sends one request if every gate passes: Accessibility granted, an allowed app in front at each event, and
   /// for a click or scroll an allowed app's window under the pointer. Text is typed a few characters at a time and the
   /// front app is checked before each piece, so a switch to another app mid-way stops the typing there.
   /// Returns the number of events posted.
@@ -170,31 +241,56 @@ extension ScreenCore {
     try send(request, allowed: allowed).posted
   }
 
-  /// `perform`, also saying which app the last event was gated for.
-  func send(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> (posted: Int, front: ScreenApp?) {
+  /// `perform`, also saying which app the last event was gated for. `events` are the request's events when the caller already
+  /// made them (the typed text's way, keys or Unicode, was then decided once).
+  func send(
+    _ request: ScreenInputRequest, allowed: ScreenAllowed, events given: [ScreenInputEvent]? = nil
+  ) throws(ScreenRefusal) -> (posted: Int, front: ScreenApp?) {
     if case .key(let text) = request { try checkKey(text) }
-    let events = try Self.events(for: request)
+    let events: [ScreenInputEvent]
+    if let given { events = given } else { events = try self.events(for: request) }
     var posted = 0
     var gated: ScreenApp?
+    var tokens: [Int64] = []
+    defer { flight.forget(tokens) }
     var keyText: String?
     if case .key(let t) = request { keyText = t }
     for e in events {
       // the socket gave up on this request (it ran past its time): stop between pieces
       if Task.isCancelled { throw .inputFailed("stopped after \(posted) of \(events.count) events: the request ran out of time") }
-      if posted > 0, case .text = e { pause(Self.textPaceSeconds) }
+      if posted > 0, e.isTyping { pause(Self.textPaceSeconds) }
       // the app needs a beat before the first piece, or its first characters are lost; waited before the gate, so nothing can
       // change between the check and the post
-      if posted == 0, case .text = e { pause(Self.textSettleSeconds) }
-      let front = try gate(e, allowed, keyText: keyText)
+      if posted == 0, e.isTyping { pause(Self.textSettleSeconds) }
+      var aimedAtTalos = false
+      let front = try gate(e, allowed, keyText: keyText, touched: { if $0.pid == self.flight.ownPid { aimedAtTalos = true } })
       gated = front
-      do { try input.post(e) } catch let r as ScreenRefusal { throw r } catch {
+      // Talos may be the app that gets this event, and a card's button or a terminal may sit under it. Every event carries its own
+      // token; one aimed at Talos is answered by the window that gets it ("handled") or dropped there, and the request waits for the
+      // answers of its own tokens below (`SyntheticInput.Flight`).
+      let token = flight.begin()
+      if aimedAtTalos {
+        flight.expect(token, answers: e.answers)
+        tokens.append(token)
+      }
+      do { try input.post(e, token: token) } catch let r as ScreenRefusal { flight.end(); throw r } catch {
+        flight.end()
         throw .inputFailed(ScreenRefusal.detail(error))
       }
+      flight.end()
       posted += 1
       // a key or text that made another app come forward: stop, and say so (a click may bring its own window forward)
       if case .click = e { continue }
       if case .scroll = e { continue }
       if apps.frontmost()?.pid != front.pid { throw .frontChanged(app: front.name) }
+    }
+    // Events aimed at Talos itself: wait for their own answers. A drop is `protectedPrompt`; no answer in time is `deliveryUnverified`.
+    if !tokens.isEmpty {
+      switch flight.wait(tokens, timeout: deliveryTimeout) {
+      case .handled: break
+      case .dropped: throw .protectedPrompt
+      case .unverified: throw .deliveryUnverified
+      }
     }
     return (posted, gated)
   }
@@ -226,23 +322,26 @@ extension ScreenCore {
     }
   }
 
-  /// Checked and split, before any event is posted.
-  static func events(for request: ScreenInputRequest) throws(ScreenRefusal) -> [ScreenInputEvent] {
+  /// Checked and split, before any event is posted. Typed text goes in as key presses when every character has a key on the
+  /// current layout (a piece ends at each Return and Tab, so each is gated before more keys go); otherwise the whole text goes as
+  /// Unicode strings, never a mix of the two.
+  func events(for request: ScreenInputRequest) throws(ScreenRefusal) -> [ScreenInputEvent] {
     switch request {
     case .click(let p, let button, let count):
-      try checkPoint(p)
+      try Self.checkPoint(p)
       guard (1...3).contains(count) else { throw .badRequest("a click count is 1, 2 or 3") }
       // one event per click (its click count 1, 2, 3), each gated on its own: a first click that changes what is under the
       // pointer stops the rest
       return (1...count).map { .click(p, button: button, count: $0) }
     case .type(let s):
       guard !s.isEmpty else { throw .badRequest("no text to type") }
-      guard s.count <= maxTypedCharacters else { throw .badRequest("more than \(maxTypedCharacters) characters to type") }
-      return chunks(s).map { .text($0) }
+      guard s.count <= Self.maxTypedCharacters else { throw .badRequest("more than \(Self.maxTypedCharacters) characters to type") }
+      if let pieces = layout().pieces(for: s, maxKeys: Self.textChunkUnits) { return pieces.map { .keys($0) } }
+      return Self.chunks(s).map { .text($0) }
     case .key(let k):
       return [.key(try ScreenKeyCombo.parse(k))]
     case .scroll(let p, let dx, let dy):
-      try checkPoint(p)
+      try Self.checkPoint(p)
       guard abs(dx) <= 10_000, abs(dy) <= 10_000 else { throw .badRequest("a scroll is at most 10000 pixels") }
       guard dx != 0 || dy != 0 else { throw .badRequest("a scroll of zero") }
       return [.scroll(at: p, dx: dx, dy: dy)]
@@ -273,18 +372,18 @@ extension ScreenCore {
   }
 
   @discardableResult
-  func gate(_ e: ScreenInputEvent, _ allowed: ScreenAllowed, keyText: String? = nil) throws(ScreenRefusal) -> ScreenApp {
+  func gate(_ e: ScreenInputEvent, _ allowed: ScreenAllowed, keyText: String? = nil, touched: (ScreenApp) -> Void = { _ in }) throws(ScreenRefusal) -> ScreenApp {
     guard permissions.accessibility() else { throw .accessibilityNotGranted }
     guard let front = apps.frontmost() else { throw .noFrontmostApp }
-    guard !isSelf(front) else { throw .talosItself }
     guard allowed.allows(bundleID: front.bundleID, pid: front.pid) else {
       throw .appNotAllowed(app: front.bundleID ?? front.name, subject: .running(pid: front.pid))
     }
+    touched(front)
     // the menu rule, after the allow list (a disallowed app is refused as such), on the front the gate read
     if case .key(let combo) = e, let keyText { try checkMenu(keyText, combo, front: front) }
     // a key or text goes where the keyboard really is: a panel that took it without coming to the front gets nothing
     switch e {
-    case .key, .text:
+    case .key, .text, .keys:
       // nil: nothing reports focus. Then only an app that provably owns the keyboard passes (it fails closed); another pid never does.
       switch apps.keyboardFocusPID() {
       case front.pid: break
@@ -296,7 +395,7 @@ extension ScreenCore {
     let point: CGPoint?
     switch e {
     case .click(let p, _, _), .scroll(let p, _, _): point = p
-    case .text, .key: point = nil
+    case .text, .keys, .key: point = nil
     }
     if let point {
       let under: ScreenApp
@@ -307,11 +406,11 @@ extension ScreenCore {
       case .app(let a): under = a
       case .coveredBy(let a): (under, covering) = (a, true)
       }
-      guard !isSelf(under) else { throw .talosItself }
       guard allowed.allows(bundleID: under.bundleID, pid: under.pid) else {
         if covering { throw .coveredByInvisibleWindow(app: under.name) }
         throw .appNotAllowed(app: under.bundleID ?? under.name, subject: .running(pid: under.pid))
       }
+      touched(under)
     }
     return front
   }
@@ -326,6 +425,9 @@ public final class LockedValue<T>: @unchecked Sendable {
     get { lock.withLock { _value } }
     set { lock.withLock { _value = newValue } }
   }
+  /// Read and change under one lock hold: `value[i] = x` is a separate read and write, so two threads can lose an update.
+  @discardableResult
+  public func withLock<R>(_ body: (inout T) -> R) -> R { lock.withLock { body(&_value) } }
 }
 
 public enum ScreenPointOwner: Sendable, Equatable {
@@ -347,7 +449,11 @@ public struct ScreenPointWindow: Sendable, Equatable {
   public var layer: Int
   public var alpha: Double
   public var onScreen: Bool
-  public init(pid: Int32, name: String, bundleID: String?, bounds: CGRect, layer: Int, alpha: Double, onScreen: Bool) {
+  /// The window server's number for this window (0 = unknown).
+  public var windowID: UInt32
+  public init(
+    pid: Int32, name: String, bundleID: String?, bounds: CGRect, layer: Int, alpha: Double, onScreen: Bool, windowID: UInt32 = 0
+  ) {
     self.pid = pid
     self.name = name
     self.bundleID = bundleID
@@ -355,37 +461,46 @@ public struct ScreenPointWindow: Sendable, Equatable {
     self.layer = layer
     self.alpha = alpha
     self.onScreen = onScreen
+    self.windowID = windowID
   }
 
   /// The main menu's level (kCGMainMenuWindowLevel): the menu bar, its extras (25) and everything above normal windows.
   public static let systemLayer = 24
 
-  /// What a click at `point` lands on, from a front-to-back list (review R3-1). Any on-screen window at level 24 or above holding
-  /// the point, visible or not, makes it system area: an invisible app window laid over the menu bar does not make the menu bar
-  /// that app's. Otherwise the first visible (alpha above 0) normal window holding it is the owner: an invisible one is skipped,
-  /// since the click goes through it.
-  public static func owner(at point: CGPoint, in windows: [ScreenPointWindow]) -> ScreenPointOwner {
-    let here = windows.filter { $0.onScreen && $0.bounds.contains(point) }
-    if here.contains(where: { $0.layer >= systemLayer }) { return .systemArea }
-    guard let i = here.firstIndex(where: { $0.alpha > 0 }) else { return .nothing }
-    let w = here[i]
-    // the window server can still hand the click to an invisible window above the owner at an app layer: if it is another
-    // app's, that app owns the point, and the allow list decides
-    if let c = here[..<i].first(where: { (0..<systemLayer).contains($0.layer) && $0.alpha == 0 && $0.pid != w.pid }) {
-      return .coveredBy(ScreenApp(bundleID: c.bundleID, pid: c.pid, name: c.name))
-    }
-    return .app(ScreenApp(bundleID: w.bundleID, pid: w.pid, name: w.name))
+  /// What a click at `point` lands on. `hit` is the window the window server itself would hand a click at that point to (0: none;
+  /// nil: it could not be asked). The window list's order, and a window's alpha, are not trusted to say who is on top or who takes
+  /// a click: the owner is the hit window. So a Dock or floating panel of an app that is not allowed, over an allowed window, is that
+  /// other app's point and the allow list refuses it, and a visible window that the server hands no click to (a click-through status
+  /// window at level 1000 over a third of the screen) is not in the way. A hit window at level 24 or above (the menu bar and its
+  /// extras, Control Center, Notification Center, any overlay that takes the click) is system area, as is a hit window the list does
+  /// not hold or one that does not hold the point, and a point the server could not be asked about (it fails closed). An invisible
+  /// (alpha 0) hit window below level 24 is the app that owns the click, reported as `.coveredBy`. What remains is the gap between this
+  /// check and the click: a window that moves or appears in that gap is not seen (the hit is taken a moment before the post).
+  public static func owner(at point: CGPoint, in windows: [ScreenPointWindow], hit: UInt32?) -> ScreenPointOwner {
+    guard let hit else { return .systemArea }
+    if hit == 0 { return .nothing }
+    guard let w = windows.first(where: { $0.windowID == hit && $0.onScreen && $0.bounds.contains(point) }) else { return .systemArea }
+    if w.layer >= systemLayer { return .systemArea }
+    let app = ScreenApp(bundleID: w.bundleID, pid: w.pid, name: w.name)
+    return w.alpha > 0 ? .app(app) : .coveredBy(app)
   }
 
   /// A window smaller than this (either side) is a sliver, not where a person sees an app.
   static let minVisibleSide: CGFloat = 40
 
   /// The pid of the topmost on-screen window at layers 0-23 that a person could see: alpha above 0 and at least
-  /// `minVisibleSide` on each side. Invisible slivers (a notification helper's 4x4 window at alpha 0) are skipped.
-  public static func topVisibleAppPID(in windows: [ScreenPointWindow]) -> Int32? {
-    windows.first {
+  /// `minVisibleSide` on each side. Invisible slivers (a notification helper's 4x4 window at alpha 0) are skipped. So is the
+  /// Dock's screen-wide event window (level 20, alpha 1: it takes no keys and would otherwise be on top of everything), and ONLY that
+  /// one: it must belong to `realDockPID` (the process running from the system's Dock.app, not any app that claims the id), sit at
+  /// level 20, and be at least as large as a screen (`screenSizes`). Any other Dock window, and any impostor's, counts as on top.
+  public static func topVisibleAppPID(in windows: [ScreenPointWindow], realDockPID: Int32? = nil, screenSizes: [CGSize] = []) -> Int32? {
+    func isDockEventWindow(_ w: ScreenPointWindow) -> Bool {
+      guard let dock = realDockPID, w.pid == dock, w.layer == 20 else { return false }
+      return screenSizes.contains { w.bounds.width >= $0.width && w.bounds.height >= $0.height }
+    }
+    return windows.first {
       $0.onScreen && (0..<systemLayer).contains($0.layer) && $0.alpha > 0 && $0.bounds.width >= minVisibleSide
-        && $0.bounds.height >= minVisibleSide
+        && $0.bounds.height >= minVisibleSide && !isDockEventWindow($0)
     }?.pid
   }
 }

@@ -1,17 +1,28 @@
-// Settings > Appearance > Colour theme: the three stock themes, each with a swatch, and a Default theme button. The pick
-// is saved to the owner's config (so every device follows) and applied at once. A real refusal puts the old theme back;
+// Settings > Appearance > Colour theme: the stock themes (five; the original three until the Mac lists themes/2), each
+// with a swatch, and a Default theme button. The pick is saved to the owner's config (so every device follows) and
+// applied at once. A real refusal puts the old theme back;
 // "Mac offline" does not, because the relay keeps the patch and the Mac applies it when it is back.
 // Default theme is an ordinary pick of talos: the same code path and the same patch as tapping Talos.
-import { STOCK_THEME_IDS, STOCK_THEMES, type StockThemeId } from '@talos-app/protocol'
+import { STOCK_THEME_IDS, STOCK_THEMES, type StockThemeId, THEMES_V2_FEATURE } from '@talos-app/protocol'
 import { useState } from 'react'
 import { TalosClientError, useTalosClient } from '../../lib/client.ts'
 import { getStockTheme, pickStockTheme, setStockTheme, useStockTheme } from '../../lib/theme.ts'
+import { useFeature } from '../../lib/v2Client.ts'
 import { Button } from '../../ui/index.ts'
 import { friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 
 const SAVED_OFFLINE = 'Saved. It applies on your other devices when your Mac is back.'
-const LABEL: Record<StockThemeId, string> = { talos: 'Talos', paper: 'Paper', hearth: 'Hearth' }
+const LABEL: Record<StockThemeId, string> = {
+  talos: 'Talos',
+  paper: 'Paper',
+  hearth: 'Hearth',
+  iris: 'Iris',
+  harbor: 'Harbor',
+}
+
+/** The stock themes added after the first three: they need `themes/2` from the Mac. */
+const NEWER_IDS: readonly StockThemeId[] = ['iris', 'harbor']
 
 /** Four chips: the page, the card and the accent in light, and the page in dark. */
 function Swatch({ id }: { id: StockThemeId }) {
@@ -38,6 +49,9 @@ export function ThemePicker({ readOnly: readOnlyProp }: { readOnly: boolean }) {
   const notConnected = useWriteBlock() === 'link'
   const readOnly = readOnlyProp || notConnected
   const current = useStockTheme()
+  // An older Mac drops iris and harbor to talos, so they are offered only once it lists themes/2 (or already holds one).
+  const feature = useFeature(THEMES_V2_FEATURE)
+  const ids = STOCK_THEME_IDS.filter((id) => !NEWER_IDS.includes(id) || feature !== 'off' || current === id)
   const [note, setNote] = useState<{ kind: 'saved' | 'error'; text: string } | null>(null)
   const choose = async (id: StockThemeId) => {
     const before = getStockTheme()
@@ -59,7 +73,7 @@ export function ThemePicker({ readOnly: readOnlyProp }: { readOnly: boolean }) {
       <h3 className="m-0 mt-2 text-base font-medium">Colour theme</h3>
       {notConnected && <p className="m-0 text-sm text-text-2">{NOT_CONNECTED_LINE}</p>}
       <div role="radiogroup" aria-label="Colour theme" className="flex flex-wrap gap-2">
-        {STOCK_THEME_IDS.map((id) => (
+        {ids.map((id) => (
           <Button
             key={id}
             role="radio"

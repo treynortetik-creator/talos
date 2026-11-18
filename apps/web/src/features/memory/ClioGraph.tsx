@@ -238,6 +238,10 @@ function makeScene(el: HTMLDivElement, r: SceneRefs): () => void {
     // the wrong one. So every click picks the note under its own position.
     .onNodeClick((_n: GNode, ev: MouseEvent) => clickAt(ev))
     .onBackgroundClick((ev: MouseEvent) => clickAt(ev))
+  // fake client only, ?nodedrag=off: no press is a note drag, so the orbit controls take every one (the path where a tap on
+  // a note used to go unheard). Read here because the library builds its drag controls with the data, not on a later change.
+  if (import.meta.env.VITE_FAKE === '1' && new URLSearchParams(location.search).get('nodedrag') === 'off')
+    g.enableNodeDrag(false)
   g.d3Force('link')?.distance(60)
   g.d3Force('charge')?.strength(-140)
   // the first settle frames the whole graph; a later search must not yank the camera

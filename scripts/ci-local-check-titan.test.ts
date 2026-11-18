@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { findTestFiles } from '../apps/bridge/scripts/test-parallel.ts'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
@@ -21,7 +22,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const script = join(here, 'ci-local.sh')
 const listScript = join(here, 'ci-local', 'macos-only.sh')
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 const live: ChildProcess[] = []

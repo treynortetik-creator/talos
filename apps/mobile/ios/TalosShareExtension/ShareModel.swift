@@ -32,7 +32,7 @@ final class ShareModel: ObservableObject {
     deinit { if let scratch { try? FileManager.default.removeItem(at: scratch) } }
 
     func load(from items: [NSExtensionItem]) {
-        guard let relay = CompiledRelay.url() else {
+        guard let relay = SharedRelayOrigin.current() else {
             phase = .blocked("Open Talos once, then try sharing again.")
             return
         }

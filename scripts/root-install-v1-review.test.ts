@@ -18,10 +18,11 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { REPO, run, type Sandbox, sandbox, treeHash } from './root-install-harness.ts'
 
 // every case runs install.sh for real, some twice: 30 s ran out on a loaded Lemnos and on Hestia (33-35 s); each passes in seconds alone
-vi.setConfig({ testTimeout: 90_000 })
+vi.setConfig({ testTimeout: scaled(90_000), hookTimeout: scaled(90_000) })
 
 const KIT = join(REPO, 'kit')
 // The gate (the kit's self-test, minutes) is replaced by the installer's test hook, which says so in the output

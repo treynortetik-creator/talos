@@ -81,15 +81,5 @@
     "--figure-wave": "#7f9283",
     "--figure-focus": "#e6efe4",
     "--figure-meander-ink": "#7fcf9d"
-  },
-  "radius": {
-    "--radius-card": 20,
-    "--radius-bubble": 24,
-    "--radius-button": 16
-  },
-  "fonts": {
-    "--font-display": "system-serif",
-    "--font-ui": "system-sans",
-    "--font-mono": "system-mono"
   }
 }

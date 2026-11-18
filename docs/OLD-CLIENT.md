@@ -6,9 +6,16 @@ the bridge's hello is tested against the bundle that is live now, before it ship
 
 ## The saved bundles
 
-- **Who saves them:** `.github/workflows/web-bundle.yml`, on every successful production deploy of talos-app (a GitHub
-  `deployment_status`; Railway records one per deploy). It builds `apps/web` at the deployed sha exactly as
-  `apps/relay/Dockerfile` does, with the deploy's short sha as the version, as on Railway.
+- **Who saves them:** `.github/workflows/web-bundle.yml`, after every successful production deploy of talos-app. Railway
+  posts a GitHub `deployment_status` per deploy; `web-bundle-deploy.yml` only notices the successful production one, and
+  `web-bundle.yml` runs on its completion (`workflow_run`, on main's ref: a `deployment_status` run has no ref, and the
+  Actions cache that carries the bundle between its jobs refuses it). It builds `apps/web` at the deployed sha exactly as
+  `apps/relay/Dockerfile` does, with the deploy's short sha as the version, as on Railway. A missed one can be saved by
+  hand: `gh workflow run web-bundle.yml -f sha=<deployed sha>`, only for the live one (the newest successful production
+  deploy). A rollback to a commit older than this workflow change (2026-11-17) is not saved: that commit's own workflow
+  files run, and they had no working save; save it by hand once it is live.
+- **Seen when it fails:** its `report` job posts the commit status `web-bundle/save` on the deployed commit, success or
+  failure, with a link to the run. From 2026-11-16 to 11-17 the publish step failed on every deploy and nothing said so.
 - **Where:** a prerelease named `web-bundle-<sha8>`, never marked latest. It holds two files: `web-bundle.tar.gz` (the
   built app without source maps or `.md` files) and `manifest.json`. A redeploy of a sha already saved (a rollback)
   replaces its release, so it is the newest again: "newest" means published last, and that is what is live.

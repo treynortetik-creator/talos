@@ -1,6 +1,6 @@
 ---
 name: talos-theme
-description: Draft a colour theme for the owner's app and propose it. Use only when the owner asks to change how the app looks (colours, corner roundness, fonts). When the owner asked for it, the bridge applies it at once and tells them how to undo it; otherwise they preview it on a card.
+description: Draft a colour theme for the owner's app and propose it. Use only when the owner asks to change how the app looks (colours). When the owner asked for it, the bridge applies it at once and tells them how to undo it; otherwise they preview it on a card.
 ---
 
 # Draft a theme
@@ -13,17 +13,16 @@ tell them it is on and that they can ask you to reset it if anything is hard to 
 Otherwise the owner sees a preview card (a thread, the composer and a card in your colours) with **Apply** and **Keep
 current**: tell them to tap Apply, and do not say it is applied until the card says Saved.
 
+A theme changes colours only. The fonts, text sizes, corner roundness and the logo never change, whatever the theme.
+
 ## The shape (every key is required, nothing else is allowed)
 
 ```
 { "name": "sunset",                       // lowercase letters, digits, dashes, up to 32
-  "light": { <colour tokens> }, "dark": { <colour tokens> },
-  "radius": { "--radius-card": 12, "--radius-bubble": 18, "--radius-button": 8 },   // numbers 0 to 32 (pixels)
-  "fonts": { "--font-display": "cinzel", "--font-ui": "inter", "--font-mono": "jetbrains-mono" } }
+  "light": { <colour tokens> }, "dark": { <colour tokens> } }
 ```
 
 - Colours are `#rrggbb` only. No names, no `rgb()`, no `var()`, no `url()`, no other text.
-- Fonts are one of: cinzel, inter, jetbrains-mono, system-sans, system-serif, system-mono.
 - Colour tokens, in both `light` and `dark`: --bg --surface --surface-2 --line --text --text-2 --accent --on-accent
   --accent-text --glow --tint --ok --warn --danger --info --focus --meander-ink --wave --figure-bg --chrome --on-chrome
   --on-chrome-2 --chrome-line --chrome-hover --chrome-active --chrome-accent-text --figure-text --figure-text-2

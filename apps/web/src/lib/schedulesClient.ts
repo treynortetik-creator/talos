@@ -24,10 +24,12 @@ export type SchedulesSlice = {
   error: string | null
   /** etag|state_rev per id as of the last snapshot; a `schedule.status` that differs triggers a re-fetch. */
   revs: Record<string, string>
+  /** True once the copy saved on this device has been looked for (found or not), so "no list yet" is not shown while it loads. */
+  cacheChecked: boolean
 }
 
 export function initialSchedulesSlice(): SchedulesSlice {
-  return { snapshot: null, details: {}, status: 'idle', error: null, revs: {} }
+  return { snapshot: null, details: {}, status: 'idle', error: null, revs: {}, cacheChecked: false }
 }
 
 export interface SchedulesClient {

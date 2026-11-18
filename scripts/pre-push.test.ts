@@ -18,11 +18,12 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
-vi.setConfig({ testTimeout: 60_000 }) // real git pushes, beside other suites on a loaded Mac
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) }) // real git pushes, beside other suites on a loaded Mac
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -71,6 +72,7 @@ function setup() {
   ok(clone, 'init', '-q', '-b', 'main')
   for (const f of [
     'pre-push.sh',
+    'verified-trailer.sh',
     'gate.sh',
     'talos-machine.sh',
     'path-fold.sh',
@@ -628,5 +630,92 @@ describe('install-hooks', () => {
     expect(r.stdout).toBe('')
     const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { scripts: { prepare: string } }
     expect(spawnSync('sh', ['-c', pkg.scripts.prepare], { cwd: d }).status).toBe(0)
+  })
+})
+
+// The "Verified:" trailer check (scripts/verified-trailer.sh), as pre-push.sh runs it. Observe is the default and never refuses.
+describe('pre-push hook: the Verified: trailer', () => {
+  const commit = (r: ReturnType<typeof setup>, msg: string, n: string) => {
+    mkdirSync(join(r.clone, 'docs'), { recursive: true })
+    writeFileSync(join(r.clone, 'docs', `${n}.md`), `${n}\n`)
+    r.ok(r.clone, 'add', '-A')
+    r.ok(r.clone, 'commit', '-qm', msg)
+  }
+  const logOf = (r: ReturnType<typeof setup>) => {
+    const f = join(
+      r.ok(r.clone, 'rev-parse', '--git-common-dir').replace(/^(?!\/)/, `${r.clone}/`),
+      'talos-verified-trailer.log',
+    )
+    return existsSync(f) ? readFileSync(f, 'utf8') : ''
+  }
+
+  it('observe (the default): a commit with no trailer is logged and said on stderr, and the push goes through', () => {
+    const r = setup()
+    r.install()
+    commit(r, 'plain change', 'a')
+    const p = r.push()
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('verified-trailer: commit')
+    expect(p.err).toContain('has no Verified: trailer (plain change)')
+    expect(logOf(r)).toMatch(/has no Verified: trailer \(plain change\)/)
+    expect(r.ok(r.origin, 'rev-parse', 'feat')).toBe(r.ok(r.clone, 'rev-parse', 'HEAD')) // it got there
+  })
+
+  it('a real trailer and "none - reason" (hyphen or em dash) pass without a line; a bare "none" is logged', () => {
+    const r = setup()
+    r.install()
+    commit(r, 'one\n\nVerified: web fake mode, themes all; evidence /home/alex/evidence/abc1234/', 'a')
+    commit(r, 'two\n\nVerified: none \u2014 docs only, nothing to drive', 'b')
+    commit(r, 'three\n\nVerified: none - a rename the compiler checks', 'c')
+    const ok = r.push()
+    expect(ok.code, ok.err).toBe(0)
+    expect(ok.err).not.toContain('verified-trailer:')
+    commit(r, 'four\n\nVerified: none', 'd')
+    const bare = r.push()
+    expect(bare.code, bare.err).toBe(0)
+    expect(bare.err).toContain('unusable Verified: trailer "none"')
+  })
+
+  it('off says nothing; the setting also reads from git config', () => {
+    const r = setup()
+    r.install()
+    commit(r, 'plain', 'a')
+    const off = r.push({ TALOS_VERIFIED_TRAILER: 'off' })
+    expect(off.code, off.err).toBe(0)
+    expect(off.err).not.toContain('verified-trailer:')
+    r.ok(r.clone, 'config', 'talos.verifiedTrailer', 'off')
+    commit(r, 'plain 2', 'b')
+    expect(r.push().err).not.toContain('verified-trailer:')
+  })
+
+  it('observe cannot fail the push: not when the script is gone, not on an unknown mode', () => {
+    const r = setup()
+    r.install()
+    commit(r, 'plain', 'a')
+    rmSync(join(r.clone, 'scripts/verified-trailer.sh'))
+    r.ok(r.clone, 'add', '-A')
+    r.ok(r.clone, 'commit', '-qm', 'drop the check')
+    const gone = r.push()
+    expect(gone.code, gone.err).toBe(0)
+    expect(gone.err).toContain('verified-trailer.sh is missing')
+    const bad = r.push({ TALOS_VERIFIED_TRAILER: 'banana' })
+    expect(bad.code, bad.err).toBe(0)
+    // ...but enforce with the script gone is a refusal: a check that cannot run does not pass
+    commit(r, 'again', 'b')
+    expect(r.push({ TALOS_VERIFIED_TRAILER: 'enforce' }).code).not.toBe(0)
+  })
+
+  it('enforce (written, not switched on) refuses a commit without it, and lets a verified one through', () => {
+    const r = setup()
+    r.install()
+    commit(r, 'plain', 'a')
+    const refused = r.push({ TALOS_VERIFIED_TRAILER: 'enforce' })
+    expect(refused.code).not.toBe(0)
+    expect(refused.err).toContain('REFUSED')
+    expect(r.git(r.origin, 'rev-parse', '--verify', '-q', 'feat').status).not.toBe(0) // nothing arrived
+    r.ok(r.clone, 'commit', '--amend', '-qm', 'plain\n\nVerified: none - test fixture')
+    const passed = r.push({ TALOS_VERIFIED_TRAILER: 'enforce' })
+    expect(passed.code, passed.err).toBe(0)
+    expect(r.ok(r.origin, 'rev-parse', 'feat')).toBe(r.ok(r.clone, 'rev-parse', 'HEAD'))
   })
 })

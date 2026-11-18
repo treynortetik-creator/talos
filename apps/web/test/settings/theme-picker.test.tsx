@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// Settings > Appearance > Theme: the owner picks one of the three stock themes. The pick is written to the owner's config
+// Settings > Appearance > Theme: the owner picks one of the five stock themes. The pick is written to the owner's config
 // (so every device follows) and applied at once; Default goes back to talos. Light/dark/system stays a per-device choice.
-import { STOCK_THEMES } from '@talos-app/protocol'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { STOCK_THEMES, THEMES_V2_FEATURE } from '@talos-app/protocol'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppearanceSection } from '../../src/features/settings/sections.tsx'
@@ -27,8 +27,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount(initial?: string) {
+function mount(initial?: string, features?: (all: string[]) => string[]) {
   const client = createFakeClient()
+  if (features)
+    client.store.setState((s) => ({ presence: { ...s.presence, features: features(s.presence.features ?? []) } }))
   if (initial) client.store.setState((s) => ({ config: s.config && { ...s.config, theme: initial as never } }))
   render(
     <ClientProvider client={client}>
@@ -39,14 +41,35 @@ function mount(initial?: string) {
   return client
 }
 
+const themeRadios = () =>
+  within(screen.getByRole('radiogroup', { name: 'Colour theme' }))
+    .getAllByRole('radio')
+    .map((r) => r.textContent)
+
 describe('theme picker', () => {
-  it('lists the three stock themes by name and a swatch, with talos checked when the config has no theme', () => {
+  it('lists the five stock themes by name and a swatch, with talos checked when the config has no theme', () => {
     mount()
     const group = screen.getByRole('radiogroup', { name: 'Colour theme' })
     expect(group).toBeTruthy()
-    for (const name of ['Talos', 'Paper', 'Hearth']) expect(screen.getByRole('radio', { name })).toBeTruthy()
+    for (const name of ['Talos', 'Paper', 'Hearth', 'Iris', 'Harbor'])
+      expect(screen.getByRole('radio', { name })).toBeTruthy()
     expect(screen.getByRole('radio', { name: 'Talos' }).getAttribute('aria-checked')).toBe('true')
-    expect(screen.getAllByTestId('theme-swatch')).toHaveLength(3)
+    expect(screen.getAllByTestId('theme-swatch')).toHaveLength(5)
+  })
+
+  it('shows the original three while the Mac does not list themes/2, and five once it does', () => {
+    mount(undefined, (all) => all.filter((f) => f !== THEMES_V2_FEATURE))
+    expect(themeRadios()).toEqual(['Talos', 'Paper', 'Hearth'])
+    cleanup()
+    mount()
+    expect(themeRadios()).toEqual(['Talos', 'Paper', 'Hearth', 'Iris', 'Harbor'])
+  })
+
+  it('applies an iris already in the config whatever the feature says, and keeps its radio', async () => {
+    const iris = STOCK_THEMES.find((t) => t.name === 'iris') as (typeof STOCK_THEMES)[number]
+    mount('iris', (all) => all.filter((f) => f !== THEMES_V2_FEATURE))
+    await waitFor(() => expect(accent()).toBe(iris.light['--accent']))
+    expect(screen.getByRole('radio', { name: 'Iris' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('choosing Paper changes the computed --accent at once and writes it to the config', async () => {

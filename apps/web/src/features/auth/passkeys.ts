@@ -10,6 +10,7 @@ import {
   fingerprintWords,
   loginProofCodeId,
   normalizeEnrollCode,
+  parseEnrollFragment,
   routes,
   SESSION_PROOF_CODE_ID,
   signDeviceProof,
@@ -36,9 +37,9 @@ export class EnrollError extends Error {
 }
 
 export function parseSetupLink(input: string): string | null {
-  const trimmed = input.trim()
-  const hash = trimmed.includes('#') ? trimmed.slice(trimmed.lastIndexOf('#') + 1) : trimmed
-  return normalizeEnrollCode(hash)
+  // A browser pins nothing, so `fp` is read and dropped; but a malformed one fails here too, so a tampered link fails everywhere.
+  const r = parseEnrollFragment(input)
+  return r.ok ? r.code : null
 }
 
 /**

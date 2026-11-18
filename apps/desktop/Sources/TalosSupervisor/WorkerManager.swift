@@ -166,6 +166,8 @@ public final class WorkerManager: @unchecked Sendable {
     /// A start waiting for a free slot (`hold`), and since when.
     var heldSince: Double?
     var heldResume = false
+    /// The held start waits because tmux could not be read (not because every slot is busy): past `capHold` it fails, never goes quiet.
+    var heldUnreadable = false
     /// The pointer's text is in the input and its Enter failed: send only the Enter.
     var enterOwed = false
     /// A running worker adopt couldn't read yet: hands off until it can.
@@ -548,9 +550,10 @@ public final class WorkerManager: @unchecked Sendable {
   }
 
   /// Keeps a start for the next tick. `heldSince` stays put, so the hold still ends.
-  func hold(_ id: String, resume: Bool, now t: Double) {
+  func hold(_ id: String, resume: Bool, now t: Double, unreadable: Bool = false) {
     if rt[id]?.heldSince == nil { rt[id]?.heldSince = t }
     rt[id]?.heldResume = resume
+    rt[id]?.heldUnreadable = unreadable
   }
 
   /// Another session holds the folder, unless it is in the same family: a parent and the dedicated sub-threads that share its folder, and two of
@@ -582,6 +585,14 @@ public final class WorkerManager: @unchecked Sendable {
         continue
       }
       if t - since > options.capHold {
+        audit("worker_start_hold_dropped thread=\(id) after_s=\(Int(t - since)) unreadable=\(r.heldUnreadable)")
+        if r.heldUnreadable {
+          // tmux could not be read for the whole wait: the session was not started, and that is said where the owner sees every other
+          // start that failed (an update restart then counts it as failed, not as quietly not restarted)
+          rt[id]?.heldUnreadable = false
+          fail(id, "start_failed", "tmux could not be read for \(Int(t - since)) s, so the session was not started")
+          continue
+        }
         // every slot stayed busy: drop it; the hub's deadline hands the message to main (worker_cap)
         rt[id]?.heldSince = nil
         rt[id]?.pendingPointer = false
@@ -607,16 +618,20 @@ public final class WorkerManager: @unchecked Sendable {
   }
 
   /// What's in the tmux session name this thread would use. A read that fails is `.unknown`, never "free".
-  private enum SessionName { case free, deadLeftover, running, unknown }
+  /// `unknown` carries what the failed read said, for the audit line of the hold it causes.
+  private enum SessionName { case free, deadLeftover, running, unknown(String) }
 
   private func sessionName(_ id: String) -> SessionName {
     let t = tmux(id).withPane(nil)
     let session = run(t.hasSession())
     guard session.ok else {
-      return TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut) ? .free : .unknown
+      return TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut)
+        ? .free : .unknown("has-session status=\(session.status) timed_out=\(session.timedOut) err=\"\(WorkerNotice.logValue(String(session.err.prefix(160))))\"")
     }
     let read = run(t.paneState())
-    guard read.ok, let old = TmuxCommands.parsePaneState(read.out) else { return .unknown }
+    guard read.ok, let old = TmuxCommands.parsePaneState(read.out) else {
+      return .unknown("pane_state status=\(read.status) timed_out=\(read.timedOut) out=\"\(WorkerNotice.logValue(String(read.out.prefix(160))))\" err=\"\(WorkerNotice.logValue(String(read.err.prefix(160))))\"")
+    }
     return old.dead ? .deadLeftover : .running
   }
 
@@ -641,7 +656,9 @@ public final class WorkerManager: @unchecked Sendable {
       // this thread's own worker that this copy does not own (WorkerStray.swift): stopped, and the start goes on
       guard stopStrayWorker(id) else { return fail(id, "start_failed", "a session for this thread is already running in tmux") }
       r = rt[id] ?? r
-    case .unknown: return hold(id, resume: resume, now: t)
+    case .unknown(let said):
+      if rt[id]?.heldSince == nil { audit("worker_start_held thread=\(id) reason=tmux_session_unreadable \(said)") }  // said once per hold, like the other holds
+      return hold(id, resume: resume, now: t, unreadable: true)
     }
     closeNoticeRecord(id)  // a new start has no dialog open
     guard let hook = installHook(id, cwd: cwd, resume: resume, now: t) else { return }  // the copy this session runs, made now; refused when it cannot be
@@ -740,6 +757,7 @@ public final class WorkerManager: @unchecked Sendable {
     r.stopDeadline = nil
     r.afterPark = nil
     r.heldSince = nil
+    r.heldUnreadable = false
     r.enterOwed = false
     r.seenActivity = nil
     r.activityChangedAwake = nil

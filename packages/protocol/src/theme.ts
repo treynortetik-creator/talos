@@ -1,7 +1,9 @@
-// Theme format: plain data that can only set a fixed list of colour, radius and font tokens. A theme can hold no url(),
-// var(), calc() or free text, so applying one cannot run or fetch anything. Colours are #rrggbb, radii are numbers of
-// pixels, fonts are names from a short list of the bundled faces and system stacks.
+// Theme format: plain data that can only set a fixed list of colour tokens, in light and dark. A theme changes colours only:
+// fonts, sizes and corner radii are always tokens.css's own. A theme can hold no url(), var(), calc() or free text, so
+// applying one cannot run or fetch anything. Colours are #rrggbb.
+import harbor from '../themes/harbor.json' with { type: 'json' }
 import hearth from '../themes/hearth.json' with { type: 'json' }
+import iris from '../themes/iris.json' with { type: 'json' }
 import paper from '../themes/paper.json' with { type: 'json' }
 import talos from '../themes/talos.json' with { type: 'json' }
 
@@ -48,33 +50,14 @@ export const THEME_COLOR_TOKENS = [
   '--figure-focus',
   '--figure-meander-ink',
 ] as const
-export const THEME_RADIUS_TOKENS = ['--radius-card', '--radius-bubble', '--radius-button'] as const
-export const THEME_FONT_TOKENS = ['--font-display', '--font-ui', '--font-mono'] as const
 /** The only names a theme may set. */
-export const THEME_TOKEN_NAMES: readonly string[] = [
-  ...THEME_COLOR_TOKENS,
-  ...THEME_RADIUS_TOKENS,
-  ...THEME_FONT_TOKENS,
-]
-
-/** Font choices and the stacks they stand for. The first three are the faces the app bundles. */
-export const THEME_FONT_STACKS = {
-  cinzel: '"Cinzel Variable", "Cinzel", Georgia, serif',
-  inter: '"Inter Variable", "Inter", system-ui, sans-serif',
-  'jetbrains-mono': '"JetBrains Mono Variable", ui-monospace, monospace',
-  'system-sans': 'system-ui, sans-serif',
-  'system-serif': 'Georgia, "Times New Roman", serif',
-  'system-mono': 'ui-monospace, "SF Mono", Menlo, monospace',
-} as const
-export type ThemeFont = keyof typeof THEME_FONT_STACKS
+export const THEME_TOKEN_NAMES: readonly string[] = [...THEME_COLOR_TOKENS]
 
 type Colours = Record<(typeof THEME_COLOR_TOKENS)[number], string>
 export type Theme = {
   name: string
   light: Colours
   dark: Colours
-  radius: Record<(typeof THEME_RADIUS_TOKENS)[number], number>
-  fonts: Record<(typeof THEME_FONT_TOKENS)[number], ThemeFont>
 }
 export type ThemeMode = 'light' | 'dark'
 
@@ -203,20 +186,13 @@ function shapeProblemsAll(v: unknown): string[] {
       }
     }
   }
+  // `radius` and `fonts` are allowed and ignored: a custom theme saved before themes were colours-only still applies.
   for (const k of Object.keys(v))
     if (!['name', 'light', 'dark', 'radius', 'fonts'].includes(k)) out.push(`${safeKey(k)}: not an allowed key`)
   if (typeof v.name !== 'string' || !NAME.test(v.name)) out.push('name: lowercase letters, digits and dashes, up to 32')
   const colourCheck = (x: unknown) => (typeof x === 'string' && COLOUR.test(x) ? null : 'must be #rrggbb')
-  const radiusCheck = (x: unknown) =>
-    typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 32 ? null : 'must be a number from 0 to 32'
-  const fontCheck = (x: unknown) =>
-    typeof x === 'string' && Object.hasOwn(THEME_FONT_STACKS, x)
-      ? null
-      : `must be one of ${Object.keys(THEME_FONT_STACKS).join(', ')}`
   group('light', THEME_COLOR_TOKENS, colourCheck)
   group('dark', THEME_COLOR_TOKENS, colourCheck)
-  group('radius', THEME_RADIUS_TOKENS, radiusCheck)
-  group('fonts', THEME_FONT_TOKENS, fontCheck)
   return out
 }
 
@@ -239,13 +215,16 @@ export function validateTheme(input: unknown): ThemeResult {
   const copy = snapshot(input)
   const problems = themeProblems(copy)
   if (problems.length > 0) return { ok: false, error: problems[0] as string }
-  return { ok: true, theme: copy as Theme }
+  const { radius: _r, fonts: _f, ...theme } = copy as Theme & { radius?: unknown; fonts?: unknown }
+  return { ok: true, theme }
 }
 
 /** The ids of the stock themes: the values the `theme` setting in the owner's config may hold. */
-export const STOCK_THEME_IDS = ['talos', 'paper', 'hearth'] as const
+export const STOCK_THEME_IDS = ['talos', 'paper', 'hearth', 'iris', 'harbor'] as const
+/** A bridge that lists this accepts every id in STOCK_THEME_IDS in its config (an older one drops iris and harbor to talos). */
+export const THEMES_V2_FEATURE = 'themes/2'
 export type StockThemeId = (typeof STOCK_THEME_IDS)[number]
 
-export const STOCK_THEMES: readonly Theme[] = [talos, paper, hearth] as Theme[]
+export const STOCK_THEMES: readonly Theme[] = [talos, paper, hearth, iris, harbor] as Theme[]
 /** The theme that matches tokens.css as shipped. */
 export const DEFAULT_THEME: Theme = talos as Theme

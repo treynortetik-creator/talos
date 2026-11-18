@@ -31,6 +31,7 @@ import {
   SPEAK_FEATURE,
   SUBTHREADS_FEATURE,
   signChallenge,
+  THEMES_V2_FEATURE,
   THREAD_SESSIONS_FEATURE,
   THREADS_FEATURE,
 } from '@talos-app/protocol'
@@ -106,6 +107,8 @@ export function bridgeFeatures(svc: {
     SETTINGS_LOCK_FEATURE,
     ALWAYS_ALLOW_FEATURE,
     ...(svc.problems ? [PROBLEMS_INSTALL_FEATURE] : []),
+    // the config takes every stock theme id (iris, harbor): always on, last, where an older page goes without it
+    THEMES_V2_FEATURE,
   ]
 }
 

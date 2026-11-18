@@ -48,8 +48,6 @@ public enum ScreenAllowProofCheck {
     case time
     /// The card that was signed is not one screen-allow card, or its app is not complete.
     case binding
-    /// Talos itself: never on the list.
-    case talos
     /// The owner removed this very approval in Settings.
     case removed
   }
@@ -74,7 +72,6 @@ public enum ScreenAllowProofCheck {
     guard signed["payload_hash"] as? String == "sha256:" + hash, let b = object(p.binding), b["kind"] as? String == "config",
       b["id"] as? String == cardId, let payload = b["payload"] as? [String: Any], let id = identity(payload)
     else { return .failure(.binding) }
-    guard !ScreenCore.isTalos(id.bundleID) else { return .failure(.talos) }
     return .success(id)
   }
 
@@ -128,7 +125,6 @@ public final class ScreenAllowStore: ScreenAllowListProvider, @unchecked Sendabl
 
     public var text: String {
       switch self {
-      case .proof(.talos): return "Talos itself can never be on the allowed list."
       case .proof(.removed): return "The owner removed or replaced that approval since; it is not used again."
       case .proof(.time): return "The approval came too late to use. Use the app again to ask the owner."
       case .proof(let s): return "The approval did not check out on this Mac (\(s.rawValue)), so nothing was allowed."

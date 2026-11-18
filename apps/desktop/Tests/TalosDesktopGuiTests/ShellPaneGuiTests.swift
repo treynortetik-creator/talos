@@ -520,3 +520,39 @@ struct ShellPaneGuiTests {
     #expect(r.pane.forcedKillsForTest == 0, "an interactive shell ignores SIGTERM: it must go on the hangup, not wait for the kill")
   }
 }
+
+/// R1-3: an agent that can click and type in Talos (`screen_click`, `screen_type`) still cannot reach the owner's own login shell, which
+/// would run what it is given as the owner with no card. `docs/TERMINAL-PANE.md` "No remote path to the shell" stays true.
+extension ShellPaneGuiTests {
+  @Test func nothingAnAgentTypesOrClicksReachesTheOwnersShell() async throws {
+    let window = WebNSWindow(contentRect: CGRect(x: 0, y: 0, width: 1400, height: 900), styleMask: [.titled], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    let r = Rig(window: window)
+    defer { r.end() }
+    r.signIn()
+    r.page(r.slot("trip"))
+    await waitFor { r.up("trip") }
+    let view = try #require(r.pane.viewsForTest("trip").first)
+    window.makeFirstResponder(view)
+    #expect(window.firstResponder === view)
+    // the agent: a command and its Return, as keys (what `screen_type` and `screen_key` post), and a click in the pane
+    let t = SyntheticInput.flight.begin()
+    SyntheticInput.flight.expect(t, answers: 1)
+    SyntheticInput.flight.end()
+    for (c, code) in [("t", UInt16(17)), ("\r", UInt16(36))] {
+      window.sendEvent(try guiKey(.keyDown, in: window, chars: c, code: code, pid: ownPid, token: t))
+      window.sendEvent(try guiKey(.keyUp, in: window, chars: c, code: code, pid: ownPid, token: t))
+    }
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    #expect(r.allInput().isEmpty, "the owner's shell read \(r.allInput().debugDescription)")
+    #expect(SyntheticInput.flight.wait([t], timeout: 0) == .dropped, "and the agent is told")
+    SyntheticInput.flight.forget([t])
+    // the control: the owner's own key, through the same window, arrives
+    for (c, code) in [("t", UInt16(17)), ("\r", UInt16(36))] {  // the shell's line discipline holds "t" until Return
+      window.sendEvent(try guiKey(.keyDown, in: window, chars: c, code: code))
+      window.sendEvent(try guiKey(.keyUp, in: window, chars: c, code: code))
+    }
+    await waitFor { r.allInput().contains("t") }
+    #expect(r.allInput().contains("t"), "the same window delivers a person's key")
+  }
+}

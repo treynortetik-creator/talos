@@ -16,11 +16,12 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { fakeTool } from './fake-tool'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
-vi.setConfig({ testTimeout: 60_000 }) // real git pushes, beside other suites on a loaded Mac
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) }) // real git pushes, beside other suites on a loaded Mac
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })

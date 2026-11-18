@@ -5,6 +5,7 @@ import {
   bindingFrom,
   Card,
   type CardT,
+  clipUnits,
   isAgentCardKind,
   newId,
   payloadHash,
@@ -246,7 +247,7 @@ export const cardResult: ToolRecord = {
     try {
       const id = needStr(args, 'card_id')
       if (typeof args.ok !== 'boolean') throw new ToolError('ok must be true or false')
-      const text = (str(args.text) ?? '').slice(0, 500)
+      const text = clipUnits(str(args.text) ?? '', 500)
       const row = ctx.ledger.get(id)
       if (!row) throw new ToolError(`unknown card ${id}`)
       // A schedule card's outcome is the bridge's: it wrote (or failed to write) the job, and only it says what happened (S3.4)

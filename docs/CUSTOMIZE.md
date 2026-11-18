@@ -21,12 +21,13 @@ an ordinary edit. Anything else in that file needs the owner. Start with [`AGENT
   chosen at build time with `VITE_BRAND`. Do the three places above for it too.
 - Theme and text-size choice (light, dark, system) live in `apps/web/src/lib/theme.ts`; the picker is in
   `apps/web/src/features/settings/sections.tsx`.
-- The stock theme (talos, paper, hearth) is the `theme` setting in the owner's config, so every device follows it. The picker
+- The stock theme (talos, paper, hearth, iris, harbor) is the `theme` setting in the owner's config, so every device follows it. The picker
   is `ThemePicker.tsx`, the sync is `ThemeSync.tsx`, and the stock files are `packages/protocol/themes`. Owner bubbles, the
   phone top band and the frieze warning read the `--figure-*` tokens (text, surfaces, line, status colours, focus ring, wave)
   and `--frieze-warn`, which every stock theme sets. `?theme=default`, or "Reset theme" on the sign-in screen, always gets back to talos.
   The agent can propose a whole custom theme (skill `talos-theme`): `config_propose` path `theme`, checked by the same
   `validateTheme`, shown on a preview card (`ThemePreview.tsx`), written to `theme` only when the owner taps Apply.
+  A theme changes colours only: fonts, text sizes, corner radii and the logo are always `tokens.css`'s own.
   `talos-app theme reset` removes it, typed on the computer or run by the agent when you ask it to ("reset the theme"). `theme.json` in the agent folder is only a draft.
 
 ## A setting

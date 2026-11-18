@@ -159,11 +159,27 @@ public enum PushCore {
         delivered.filter { ($0.userInfo[textMarkerKey] as? String) == textMarkerValue }.map { $0.identifier }
     }
 
-    /// The Keychain accounts that hold the notification keys and the grant. Turn off and sign out delete every one of them.
+    /// The Keychain accounts the single-relay builds used for the notification keys and the grant. Kept only so they can be
+    /// found and deleted: they may be known to a relay the owner has left, so they are never read.
     public static let keychainAccounts = ["enc", "act", "grant"]
 
-    /// Turn off / sign out: deletes every account, even if one deletion is a no-op, so no key or grant is left behind.
-    public static func deleteNotificationSecrets(deleteAccount: (String) -> Void) {
+    /// One pairing's account for `kind` ("enc", "act" or "grant"). `keyId` is the id the PHONE minted for that pairing (the
+    /// profile's data store id), never a name the relay chose: a relay can claim any relay id, so a pairing made later with the
+    /// same relay id must still get new keys.
+    public static func keychainAccount(_ kind: String, keyId: String) -> String { "\(kind).\(keyId)" }
+
+    /// The three accounts one pairing owns. Turn off, sign out and removing the relay delete every one of them.
+    public static func keychainAccounts(keyId: String) -> [String] {
+        keychainAccounts.map { keychainAccount($0, keyId: keyId) }
+    }
+
+    /// Turn off / sign out: deletes every account of the pairing, even if one deletion is a no-op, so no key or grant is left behind.
+    public static func deleteNotificationSecrets(keyId: String, deleteAccount: (String) -> Void) {
+        for account in keychainAccounts(keyId: keyId) { deleteAccount(account) }
+    }
+
+    /// Deletes the old single-relay accounts.
+    public static func deleteLegacyNotificationSecrets(deleteAccount: (String) -> Void) {
         for account in keychainAccounts { deleteAccount(account) }
     }
 

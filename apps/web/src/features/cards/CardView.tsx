@@ -450,6 +450,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       aria-labelledby={titleId}
       data-card-id={card.id}
       data-card-state="pending"
+      data-talos-protected=""
       data-payload-hash={hash}
       {...(editedHash ? { 'data-edited-hash': editedHash } : {})}
       className={cn(

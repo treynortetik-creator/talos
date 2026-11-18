@@ -82,6 +82,8 @@ export const RUNNER_VARS = [
   'CI_NIGHTLY',
   // the hostile nightly (the workflow sets it for the whole run): a test's ci-local copy would post under hostile-ci/ and burn
   'CI_HOSTILE',
+  // a nightly dispatched by hand (the workflow sets it): ci-runner.sh would take the run for a schedule
+  'CI_DISPATCH_NIGHTLY',
   'REPO',
   'RUN_ID',
   'CLOSE_POLL',
@@ -123,11 +125,12 @@ export function copyCiLocalParts(scriptsDir: string): void {
   cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-local'), join(scriptsDir, 'ci-local'), { recursive: true })
 }
 
-/** scripts/ci-runner/main-queue.sh (the part ci-runner.sh sources for run, fallback, settled, superseded and dispatch-wait) copied beside a copy of ci-runner.sh. */
+/** scripts/ci-runner/main-queue.sh (the part ci-runner.sh sources for run, fallback, settled, superseded and dispatch-wait) and schedule.sh copied beside a copy of ci-runner.sh. */
 export function copyRunnerMainQueue(scriptsDir: string): void {
   const dir = join(scriptsDir, 'ci-runner')
   mkdirSync(dir, { recursive: true })
   cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', 'main-queue.sh'), join(dir, 'main-queue.sh'))
+  cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', 'schedule.sh'), join(dir, 'schedule.sh')) // plan reads the dispatch marker
 }
 
 /**

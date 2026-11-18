@@ -103,7 +103,7 @@ while its pane is open, which is the native half of "the layout is remembered pe
 
 ## No remote path to the shell
 
-The claim: nothing in the page, the relay, the bridge or any message can put a byte into the shell, read what it prints,
+The claim: nothing in the page, the relay, the bridge, any message or any screen tool can put a byte into the shell, read what it prints,
 choose what it runs or its environment, or move the owner's typing into it. What a shell reads is what the owner types or
 pastes into the native view, and the terminal's own answers to a program that asks it something (where the cursor is, what
 kind of terminal it is). What holds it:
@@ -123,6 +123,11 @@ kind of terminal it is). What holds it:
    the real window controller, and the shells' input stays empty; a line typed through the view then arrives, which proves
    the check can see input. Every one of those shells also prints the clipboard escape sequences, and the clipboard neither
    changes nor arrives as input (`ShellPaneGuiTests`, needs `TALOS_GUI_TESTS=1`).
+7. The screen tools (`screen_click`, `screen_key`, `screen_type`) may be allowed to drive Talos itself (`docs/SECURITY.md`, "An
+   agent in Talos"), and that is no path to the shell: a synthetic click or key aimed at any terminal view, this pane's
+   included, is dropped before it is dispatched (an event monitor, the window's `sendEvent` and the view's own mouse handlers),
+   and the tool answers `protected_prompt`. The owner's own keys, through the same window, still arrive
+   (`ShellPaneGuiTests.nothingAnAgentTypesOrClicksReachesTheOwnersShell`, `SyntheticInputTerminalGuiTests`).
 
 What this does not claim:
 

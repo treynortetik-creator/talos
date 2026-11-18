@@ -7,12 +7,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CB = join(here, 'cpu-burn.sh')
 // macOS's own bash 3.2 where there is one, so a newer-bash-only construct goes red here
 const BASH = existsSync('/bin/bash') ? '/bin/bash' : 'bash'
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: scaled(30_000), hookTimeout: scaled(30_000) })
 const dirs: string[] = []
 const kids: ChildProcess[] = []
 afterEach(() => {

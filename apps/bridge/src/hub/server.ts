@@ -173,7 +173,12 @@ export class HubServer {
       while (nl >= 0) {
         const line = c.buf.slice(0, nl)
         c.buf = c.buf.slice(nl + 1)
-        void this.onLine(c, line).catch((e) => this.ctx.log.error('hub line failed', { error: (e as Error).message }))
+        void this.onLine(c, line).catch((e) => {
+          // A line that was already running when stop began wakes after the store closed and throws (a closed database); that is
+          // the stop, not a fault, and an `error` here would be filed as a problem report.
+          if (this.ctx.closing) this.ctx.log.warn('hub line ended by stop', { error: (e as Error).message })
+          else this.ctx.log.error('hub line failed', { error: (e as Error).message })
+        })
         nl = c.buf.indexOf('\n')
       }
     })

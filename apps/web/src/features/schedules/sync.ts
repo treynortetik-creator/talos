@@ -64,13 +64,33 @@ export function abandonRefresh(client: TalosClient): void {
   inflight.delete(client)
 }
 
-export async function loadCached(client: TalosClient, storage: Storage): Promise<void> {
+/** How long the page waits for the saved list before it says the Mac is offline: an IndexedDB open can hang (another tab
+ * holding an upgrade), and an endless "Loading…" is worse than an "offline" that the saved list then replaces. */
+export const CACHE_LOOK_MS = 2000
+
+const lookLimit = (f: () => void): (() => void) => {
+  const t = setTimeout(f, CACHE_LOOK_MS)
+  return () => clearTimeout(t)
+}
+
+export async function loadCached(
+  client: TalosClient,
+  storage: Storage,
+  limit: (giveUp: () => void) => (() => void) | undefined = lookLimit,
+): Promise<void> {
   if (client.store.getState().schedules.snapshot) return
+  const lookOver = () => {
+    if (!client.store.getState().schedules.cacheChecked) setSlice(client, { cacheChecked: true })
+  }
+  const stop = limit(lookOver) // past the limit the page may say the Mac is offline; a late answer below still draws the list
   try {
     const c = await storage.get<{ snapshot: ScheduleSnapshotT }>('schedules', CACHE_KEY)
     if (c?.snapshot && !client.store.getState().schedules.snapshot)
-      setSlice(client, { snapshot: c.snapshot, status: 'ready', revs: revsOf(c.snapshot) })
+      setSlice(client, { snapshot: c.snapshot, status: 'ready', revs: revsOf(c.snapshot), cacheChecked: true })
   } catch {}
+  stop?.()
+  // found or not, the look is over: only now may the screen say there is nothing to show
+  lookOver()
 }
 
 /**

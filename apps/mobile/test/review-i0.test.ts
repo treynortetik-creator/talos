@@ -21,11 +21,11 @@ describe('I14: native paths the bridge wrapper does not cover', () => {
     const src = gate()
     const body = swiftBody(src, 'runJavaScriptTextInputPanelWithPrompt prompt')
     expect(body).toMatch(
-      /guard promptChannelAllowed\(frame, webView\),[^\n]*else \{ return completionHandler\(nil\) \}/,
+      /guard !BridgeGuard\.blocksPrompt\(prompt\), promptChannelAllowed\(frame, webView\),[^\n]*\n\s*else \{ return completionHandler\(nil\) \}/,
     )
     // the forward to Capacitor comes only after that guard
-    expect(body.indexOf('guard promptChannelAllowed')).toBeGreaterThan(-1)
-    expect(body.indexOf('guard promptChannelAllowed')).toBeLessThan(body.indexOf('ui.webView?('))
+    expect(body.indexOf('promptChannelAllowed(frame')).toBeGreaterThan(-1)
+    expect(body.indexOf('promptChannelAllowed(frame')).toBeLessThan(body.indexOf('ui.webView?('))
     // and the decision is the same one the bridge uses (BridgeGuard, covered by WebViewDecisionTests)
     expect(swiftBody(src, 'func promptChannelAllowed')).toMatch(/guardian\.allowsPromptChannel\(/)
   })

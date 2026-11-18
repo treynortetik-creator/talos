@@ -82,6 +82,32 @@ extension WorkerRig {
   }
 }
 
+extension WorkerRig {
+  /// What the manager and tmux hold for each session and for the update queue, printed with a failed wait so a restart that does not
+  /// come back says where it is stuck (phase, queue, holds, owed pointer, the park, the panes, the fake's own starts).
+  func updateDump(since mark: Int) -> String {
+    var out: [String] = []
+    mgr.queue.sync {
+      let u = mgr.updateState
+      out.append(
+        "queue \(u.queue.map(\.id)) current \(String(describing: u.current?.id)) restarted \(u.restarted) failed \(u.failed) "
+          + "notRestarted \(u.notRestarted) waiting \(u.waitingNow) notQuietSince \(u.notQuietSince) started \(u.started)")
+      for id in mgr.rt.keys.sorted() {
+        guard let r = mgr.rt[id] else { continue }
+        out.append(
+          "\(id): state \(r.entry.state) pgid \(r.pgid) pane \(String(describing: r.paneId)) afterPark \(String(describing: r.afterPark)) "
+            + "parkDeadline \(String(describing: r.parkDeadline)) heldSince \(String(describing: r.heldSince)) pointer \(r.pendingPointer) "
+            + "enterOwed \(r.enterOwed) adoptPending \(r.adoptPending) started_at \(String(describing: r.entry.started_at)) "
+            + "error \(String(describing: r.entry.error)) stopped_why \(String(describing: r.entry.stopped_why)) restarts \(r.entry.restarts)")
+      }
+    }
+    out.append("events \(allEvents.dropFirst(mark))")
+    out.append("tmux panes \(tmuxCmd(["list-panes", "-a", "-F", "#{session_name} pid=#{pane_pid} dead=#{pane_dead}"]).out)")
+    out.append("fake starts \(starts)")
+    return out.joined(separator: "\n")
+  }
+}
+
 @Suite("Restart on update (Mac)", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerUpdateRestartTests {
   static let ok = "sha256:"
@@ -179,17 +205,23 @@ struct WorkerUpdateRestartTests {
     let mark = r.allEvents.count
     r.updatingManager(release: release, lines: said)
     r.mgr.startTicking()
-    #expect(r.wait(40) { r.liveCount("trip") == 2 && r.liveCount("garden") == 2 && r.starts.count == 4 }, "\(r.why("trip")) \(r.why("garden")) \(r.auditLines)")
-    #expect(r.wait(5) { said.value == ["Updated or instructions changed: restarted garden, trip."] }, "\(said.value)")
+    #expect(
+      r.wait(40) { r.liveCount("trip") == 2 && r.liveCount("garden") == 2 && r.starts.count == 4 },
+      "\(r.why("trip")) \(r.why("garden")) \(r.auditLines)\n\(r.updateDump(since: mark))")
+    // Which goes first is the session that is quiet first (one still busy from its adoption waits and the next goes ahead of it), so
+    // the order is read from the events, not assumed.
+    let ev = Array(r.allEvents.dropFirst(mark))
+    func down(_ t: String) -> Int? { ev.firstIndex { $0 == .parked(thread: t, reason: "update") } }
+    let order = ["garden", "trip"].sorted { (down($0) ?? .max) < (down($1) ?? .max) }
+    #expect(r.wait(5) { said.value == ["Updated or instructions changed: restarted \(order[0]), \(order[1])."] }, "\(said.value)")
     // resumed (never fresh), and not counted as a crash
     #expect(r.entry("trip")?.session_id == sids.0 && r.entry("garden")?.session_id == sids.1)
     #expect(r.starts.suffix(2).allSatisfy { $0.contains("--resume") })
     #expect(r.entry("trip")?.restarts == [] && r.entry("garden")?.restarts == [])
     #expect(r.launched("trip")?.spec_hash == new && r.launched("trip")?.update_tried_hash == new && new != old)
     // one at a time: the second went down only once the first was live again
-    let ev = Array(r.allEvents.dropFirst(mark))
-    let firstBack = try #require(ev.firstIndex { $0 == .live(thread: "garden") })
-    let secondDown = try #require(ev.firstIndex { $0 == .parked(thread: "trip", reason: "update") })
+    let firstBack = try #require(ev.firstIndex { $0 == .live(thread: order[0]) })
+    let secondDown = try #require(down(order[1]))
     #expect(firstBack < secondDown, "\(ev)")
     #expect(r.audits("update_restart thread=").count == 2)
     // the release seen is recorded in the app's own file, readable by the owner only
@@ -242,25 +274,36 @@ struct WorkerUpdateRestartTests {
     let said = UpdateBox<[String]>([])
     try r.status(governor: "ok")
     try r.config(["trip"], restartOnUpdate: "false")
-    r.updatingManager(release: release, lines: said)
+    // poll 0: every tick looks at the release. The test drives the ticks it needs itself (`tickOnce` returns once a whole tick has
+    // run), so what a round did is read after it ran, never after a time that a loaded machine may not have given the timer.
+    r.updatingManager(release: release, lines: said, poll: 0)
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.liveCount("trip") == 1 }, "\(r.why("trip"))")
+    func idle() -> Bool { r.mgr.queue.sync { r.mgr.updateState.queue.isEmpty && r.mgr.updateState.current == nil } }
+    let state = r.talosHome + "/" + WorkerManager.updateStateFile
+    func recorded(_ rel: String) -> Bool { (try? String(contentsOfFile: state, encoding: .utf8))?.contains("\"\(rel)\"") == true }
     try r.instructions("trip", "changed")
     release.value = "r2"
-    usleep(2_000_000)
-    #expect(r.starts.count == 1)
+    r.mgr.tickOnce()
+    #expect(recorded("r2"), "the release it was off through counts as checked")
+    #expect(idle() && r.starts.count == 1)
     #expect(r.audits("update_restart_off").count == 1, "said once: \(r.auditLines)")
     // on again: no burst for the release it was off through
     try r.config(["trip"], restartOnUpdate: "true")
     try r.status(governor: "ok")
-    usleep(2_000_000)
-    #expect(r.starts.count == 1, "\(r.auditLines)")
-    // config.json that cannot be read: nothing this round, whatever the release does
-    try "{not json".write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
-    release.value = "r3"
-    usleep(1_500_000)
-    #expect(r.starts.count == 1)
+    r.mgr.tickOnce()
+    r.mgr.tickOnce()
+    #expect(idle() && r.starts.count == 1, "\(r.auditLines)")
+    // config.json that cannot be read: nothing this round, whatever the release does. Both changes are made between two ticks of the
+    // manager's queue: a tick already under way has read the config whole (a round runs on its own read) and would then see r3.
+    r.mgr.queue.sync {
+      try? "{not json".write(toFile: r.talosHome + "/config.json", atomically: true, encoding: .utf8)
+      release.value = "r3"
+    }
+    r.mgr.tickOnce()
+    #expect(idle() && r.starts.count == 1, "\(r.auditLines)")
+    #expect(!recorded("r3"))
     try r.config(["trip"], restartOnUpdate: "true")
     try r.status(governor: "ok")
     #expect(r.wait(15) { r.liveCount("trip") == 2 }, "\(r.why("trip")) \(r.auditLines)")

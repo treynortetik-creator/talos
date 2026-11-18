@@ -145,7 +145,8 @@ if [ -n "$noisy" ]; then
   q="${FAKE_RV_QUIET:-/nonexistent}"; ( while :; do if [ -f "$q" ]; then [ -n "${FAKE_RV_QUIET_ONCE:-}" ] && rm -f "$q"; break; fi; printf '\033%s\033[1;1Hworking\033%s' 7 8; sleep 0.1; done ) &
 fi
 if [ -n "${FAKE_RV_EXIT_AFTER:-}" ]; then
-  sleep "$FAKE_RV_EXIT_AFTER"
+  # FAKE_RV_EXIT_ON: a file path; the exit waits for that file to exist (the test's own go, not a time) instead of sleeping
+  if [ -n "${FAKE_RV_EXIT_ON:-}" ]; then while [ ! -f "$FAKE_RV_EXIT_ON" ]; do sleep 0.05; done; else sleep "$FAKE_RV_EXIT_AFTER"; fi
   kill $(jobs -p) 2>/dev/null
   exit 3
 fi

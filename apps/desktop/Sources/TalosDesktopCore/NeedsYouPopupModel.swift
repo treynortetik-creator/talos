@@ -79,8 +79,11 @@ public enum PopupClickCheck {
   /// `CGEventSourceStateID.hidSystemState`: events from the mouse, trackpad or keyboard.
   public static let hidSystemStateId: Int64 = 1
   /// `sourcePid` and `sourceStateId` are the event's `eventSourceUnixProcessID` and `eventSourceStateID` fields (-1 when it has no CGEvent).
-  public static func isRealClick(kind: Kind, age: Double, sameWindow: Bool, onButton: Bool, sourcePid: Int64, sourceStateId: Int64) -> Bool {
-    kind != .other && abs(age) < 1 && sameWindow && onButton && sourcePid == 0 && sourceStateId == hidSystemStateId
+  /// `eventsOfOursInFlight`: an event this process posted for an agent may still be on its way (`SyntheticInput.Flight`); then no click counts.
+  public static func isRealClick(
+    kind: Kind, age: Double, sameWindow: Bool, onButton: Bool, sourcePid: Int64, sourceStateId: Int64, eventsOfOursInFlight: Bool = false
+  ) -> Bool {
+    kind != .other && abs(age) < 1 && sameWindow && onButton && sourcePid == 0 && sourceStateId == hidSystemStateId && !eventsOfOursInFlight
   }
 }
 

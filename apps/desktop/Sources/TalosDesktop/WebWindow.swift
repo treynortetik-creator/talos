@@ -3,18 +3,6 @@ import Foundation
 import TalosDesktopCore
 import WebKit
 
-/// The Talos window. Every key event passes `intercept` first, so a key the page's own screen owns (Ctrl+1 … Ctrl+9 on the Terminal
-/// screen, typed into the embedded terminal) never reaches the terminal, which would send it to the session as a control byte.
-/// The hook decides narrowly and returns false for everything else, which then goes the usual way.
-final class WebNSWindow: NSWindow {
-  var intercept: ((NSEvent) -> Bool)?
-
-  override func sendEvent(_ event: NSEvent) {
-    if event.type == .keyDown, intercept?(event) == true { return }
-    super.sendEvent(event)
-  }
-}
-
 /// The Talos web app in a normal window (DESKTOP-SPEC 5.1). The view is never torn down: closing the window orders it out,
 /// so the page keeps its socket and its notifications. Thin by design: every screen is the web app; this file is glue.
 @MainActor
@@ -267,6 +255,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     bridge.delegate = self
     self.bridge = bridge
     cfg.userContentController.addScriptMessageHandler(bridge, contentWorld: .page, name: "talos")
+    SyntheticInputGuard.install(in: cfg)
 
     config = cfg
     let wv = makeWebView()
@@ -280,6 +269,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     w.isReleasedWhenClosed = false
     w.delegate = self
     w.intercept = { [weak self] e in self?.interceptKey(e) ?? false }
+    wireInputStamps(w)
     w.center()
     w.setFrameAutosaveName("TalosWebWindow")
     window = w
@@ -397,6 +387,7 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     windowVisibleForTest = windowVisible
     if let w { window = w }
     (window as? WebNSWindow)?.intercept = { [weak self] e in self?.interceptKey(e) ?? false }
+    if let w = window as? WebNSWindow { wireInputStamps(w) }
   }
 
   /// Lays the terminal over the room the page asked for, or takes it away: nothing asked, the window is hidden, the page is

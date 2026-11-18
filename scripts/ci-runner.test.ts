@@ -417,7 +417,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     writeFileSync(
       fakeLocal,
       `#!/bin/bash
-{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY CI_SETTLE; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
+{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY CI_HOSTILE CI_SETTLE; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
     )
     // `gh` answers the one question a run asks (is the PR still open); never the real GitHub.
     const b = bin({
@@ -628,6 +628,101 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
         'skipped: it is daytime',
       )
       expect(nightly(s, { CI_HOSTILE: '1', GH_PUSH_RUNS: '1' }).out).toContain('skipped: a push run is queued')
+    })
+
+    // A dispatch with nightly=<kind> is that nightly by hand: the same path as the schedule of that kind.
+    describe('a dispatched nightly (nightly=nightly|hostile) is treated as its schedule', () => {
+      const dispatched = (kind: string, s: ReturnType<typeof setup>, extra: Record<string, string> = {}) =>
+        nightly(s, { GITHUB_EVENT_NAME: 'workflow_dispatch', CI_DISPATCH_NIGHTLY: kind, ...extra })
+      const called = (s: ReturnType<typeof setup>) => readFileSync(s.calls, 'utf8')
+
+      it('nightly=nightly runs as the nightly: main, --full, nightly-ci/', () => {
+        const s = setup()
+        const r = dispatched('nightly', s)
+        expect(r.code, r.err).toBe(0)
+        expect(called(s)).toContain(`args: --ref ${s.real} --full`)
+        expect(called(s)).toContain('CI_NIGHTLY=1')
+        expect(called(s)).not.toContain('CI_HOSTILE=1')
+      })
+
+      it('nightly=hostile takes hostile mode, with no workflow help', () => {
+        const s = setup()
+        const r = dispatched('hostile', s)
+        expect(r.code, r.err).toBe(0)
+        expect(called(s)).toContain('CI_HOSTILE=1')
+      })
+
+      it('the daytime, a stale sha and a running push run skip it, as they skip the schedule', () => {
+        const s = setup()
+        expect(dispatched('nightly', s, { TALOS_CI_SCHEDULE_QUIET_HOURS: around() }).out).toContain(
+          'skipped: it is daytime',
+        )
+        expect(dispatched('nightly', s, { GH_PUSH_RUNS: '1' }).out).toContain('skipped: a push run is queued')
+        expect(dispatched('nightly', s, { GITHUB_SHA: 'b'.repeat(40) }).out).toContain("is not main's head")
+        expect(existsSync(s.calls)).toBe(false)
+      })
+
+      it('a ref other than main is refused, as for a schedule', () => {
+        const r = dispatched('nightly', setup(), { GITHUB_REF: 'refs/heads/feat/x' })
+        expect(r.code).toBe(1)
+        expect(r.err).toContain('only refs/heads/main is tested')
+      })
+
+      it('a normal dispatch (nightly=none, no variable) is unchanged: no skips, no marker, ordinary run', () => {
+        const s = setup()
+        const h = home()
+        const r = nightly(s, {
+          GITHUB_EVENT_NAME: 'workflow_dispatch',
+          CI_DISPATCH_NIGHTLY: '',
+          INPUT_REF: 'main',
+          HOME: h,
+          TALOS_CI_SCHEDULE_QUIET_HOURS: around(),
+        })
+        expect(r.code, r.err).toBe(0)
+        expect(r.out).not.toContain('skipped')
+        expect(called(s)).toContain('CI_NIGHTLY=\n')
+        expect(existsSync(join(h, '.cache/talos-ci/nightly-dispatch'))).toBe(false)
+      })
+
+      it('the schedule of the same kind on the same local day then no-ops, with one line saying why', () => {
+        for (const kind of ['nightly', 'hostile']) {
+          const s = setup()
+          const h = home()
+          expect(dispatched(kind, s, { HOME: h }).code).toBe(0)
+          rmSync(s.calls)
+          const sched = nightly(s, { HOME: h, ...(kind === 'hostile' ? { CI_HOSTILE: '1' } : {}) })
+          expect(sched.code, sched.err).toBe(0)
+          expect(sched.out.split('\n').filter((l) => l.includes('skipped:'))).toHaveLength(1)
+          expect(sched.out).toContain(`a dispatched ${kind} run already started today`)
+          expect(existsSync(s.calls)).toBe(false)
+        }
+      })
+
+      it('a different kind does not block the schedule', () => {
+        const s = setup()
+        const h = home()
+        expect(dispatched('hostile', s, { HOME: h }).code).toBe(0)
+        rmSync(s.calls)
+        const sched = nightly(s, { HOME: h }) // the nightly, not the hostile one
+        expect(sched.out).not.toContain('skipped')
+        expect(called(s)).toContain('--full')
+      })
+
+      it('a marker from another local day does not block the schedule', () => {
+        const s = setup()
+        const h = home()
+        const dir = join(h, '.cache/talos-ci/nightly-dispatch')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'nightly-2000-01-01'), '')
+        expect(nightly(s, { HOME: h }).out).not.toContain('skipped')
+      })
+
+      it('a dispatched nightly that skips itself leaves no marker, so the schedule still runs', () => {
+        const s = setup()
+        const h = home()
+        dispatched('nightly', s, { HOME: h, GH_PUSH_RUNS: '1' })
+        expect(nightly(s, { HOME: h }).out).not.toContain('skipped')
+      })
     })
 
     it('two nights skipped in a row are said: a warning line, and a message for the lead in alerts/', () => {
@@ -1940,7 +2035,7 @@ describe('the workflows', () => {
     const c = block(runnerYml, 'concurrency')
     expect(c).toMatch(/group: ci-runner-.*github\.event\.pull_request\.number/)
     expect(c).toMatch(
-      /cancel-in-progress: \$\{\{ github\.event_name != 'push' && github\.event_name != 'schedule' && !inputs\.hostile \}\}/,
+      /cancel-in-progress: \$\{\{ github\.event_name != 'push' && github\.event_name != 'schedule' && !inputs\.hostile && inputs\.nightly != 'nightly' && inputs\.nightly != 'hostile' \}\}/,
     )
   })
 
@@ -2879,15 +2974,59 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
 
   it('web-bundle.yml: only build saves the cache, for a successful production deploy; publish restores it and deletes the entry once released', () => {
     const jobs = wf(join(root, '.github/workflows/web-bundle.yml'))
-    const key = 'web-bundle-${{ github.event.deployment.sha }}-${{ github.run_id }}' // no run_attempt: a re-run of publish must still match
+    const key = 'web-bundle-${{ needs.resolve.outputs.sha }}-${{ github.run_id }}' // no run_attempt: a re-run of publish must still match
     const usesOf = (job: string, prefix: string) =>
       (jobs[job]?.steps ?? []).filter((s) => String(s.uses).startsWith(prefix))
     const withOf = (s: Record<string, unknown> | undefined) => (s?.with ?? {}) as Record<string, unknown>
     expect(uploads(jobs)).toEqual([]) // the artifact storage quota is account-wide and was full: no workflow artifact
     expect(JSON.stringify(jobs)).not.toMatch(/upload-artifact|download-artifact|gh run download/)
-    expect(jobs.build?.if).toBe(
+    // a deployment_status run has no branch ref and the cache refuses it: web-bundle-deploy.yml only sees the deploy, and
+    // this workflow runs on its completion (main's ref) or by hand, for a sha resolve finds a successful production deploy of
+    const deployPath = join(root, '.github/workflows/web-bundle-deploy.yml')
+    const deploy = wf(deployPath)
+    const deployText = readFileSync(deployPath, 'utf8')
+    expect(deployText).toMatch(/^on:\n {2}deployment_status:\n/m)
+    expect(deployText).toMatch(/^permissions: \{\}$/m)
+    expect(deployText).toContain('name: "Web bundle: production deploy seen"')
+    expect(deploy.seen?.if).toBe(
       "github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'",
     )
+    expect(JSON.stringify(deploy)).not.toMatch(/checkout|pnpm|cache|gh /)
+    const text = readFileSync(join(root, '.github/workflows/web-bundle.yml'), 'utf8')
+    expect(text).toContain('workflows: ["Web bundle: production deploy seen"]')
+    expect(text).not.toMatch(/github\.event\.deployment\b/)
+    expect(String(jobs.resolve?.if)).toContain("github.event.workflow_run.conclusion == 'success'")
+    expect(String(jobs.resolve?.if)).toContain("github.event.workflow_run.event == 'deployment_status'")
+    expect(String(jobs.resolve?.if)).toContain(
+      "github.event.workflow_run.path == '.github/workflows/web-bundle-deploy.yml'",
+    )
+    expect(String(jobs.resolve?.if)).toContain(
+      'github.event.workflow_run.head_repository.full_name == github.repository',
+    )
+    // a skipped no-op run must not share the group, where a newer pending run cancels the older pending one (a real save)
+    expect(text).toContain("format('web-bundle-noop-{0}', github.run_id)")
+    const group = /group: >-\n((?: {4}.*\n)+)/.exec(text)?.[1] ?? ''
+    for (const c of [
+      "github.event.workflow_run.event == 'deployment_status'",
+      'github.event.workflow_run.head_repository.full_name == github.repository',
+    ])
+      expect(group, c).toContain(c)
+    // by hand, only the live deploy: a rolled-back sha would become the "newest" bundle
+    expect(JSON.stringify(jobs.resolve)).toContain('is not the live production deploy')
+    expect((jobs.resolve as { permissions?: Record<string, string> }).permissions).toEqual({ deployments: 'read' })
+    expect(JSON.stringify(jobs.resolve)).toContain('has no successful production deploy')
+    // a broken save is seen: report posts web-bundle/save on the deployed commit whatever the other jobs did
+    const report = jobs.report as {
+      if?: string
+      needs?: string[]
+      permissions?: Record<string, string>
+      steps: Record<string, unknown>[]
+    }
+    expect(report.if).toBe("always() && needs.resolve.result == 'success'")
+    expect(report.needs).toEqual(['resolve', 'build', 'publish', 'specs'])
+    expect(report.permissions).toEqual({ statuses: 'write' })
+    expect(JSON.stringify(report.steps)).toContain('context=web-bundle/save')
+    expect(JSON.stringify(report.steps)).not.toMatch(/checkout|pnpm|bun /)
     const save = usesOf('build', 'actions/cache/save@')
     expect(save.length).toBe(1)
     expect(String(save[0]?.uses)).toMatch(/^actions\/cache\/save@[0-9a-f]{40}$/)

@@ -181,7 +181,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -230,7 +231,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -272,7 +274,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -740,7 +743,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -789,7 +793,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -831,7 +836,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -1581,7 +1587,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -1630,7 +1637,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -1672,7 +1680,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -2433,7 +2442,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -2482,7 +2492,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -2524,7 +2535,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -3121,7 +3133,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -3170,7 +3183,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -3212,7 +3226,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -3752,7 +3767,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -3801,7 +3817,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -3843,7 +3860,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -4344,7 +4362,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -4393,7 +4412,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -4435,7 +4455,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -4923,7 +4944,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -4972,7 +4994,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -5014,7 +5037,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -5752,7 +5776,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -5801,7 +5826,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -5843,7 +5869,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -6356,7 +6383,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -6405,7 +6433,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -6447,7 +6476,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },
@@ -7032,7 +7062,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "agent_config_rev": 0
@@ -7081,7 +7112,8 @@
               "memory-roots/1",
               "settings-lock/1",
               "always-allow/1",
-              "problems-install/1"
+              "problems-install/1",
+              "themes/2"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -7123,7 +7155,8 @@
             "memory-roots/1",
             "settings-lock/1",
             "always-allow/1",
-            "problems-install/1"
+            "problems-install/1",
+            "themes/2"
           ]
         }
       },

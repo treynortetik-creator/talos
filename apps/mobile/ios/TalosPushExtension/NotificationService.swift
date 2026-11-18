@@ -1,13 +1,16 @@
 import CryptoKit
 import Foundation
 import TalosPushCore
+import TalosRelayCore
 import UserNotifications
 
 /// Opens the seal the relay added to an iPhone push and shows the words inside it. Apple delivers the fixed phrase and the
 /// sealed bytes and cannot read the words; the relay can, because it builds the seal from the plain text. On this phone the
 /// key that opens the seal is in a Keychain group the app and the other extensions that list it can reach; the words exist in
-/// the clear only inside this process and on the screen. Any failure at all (no grant, no key, a wrong seal, the time limit)
-/// delivers the fixed phrase Apple sent, with no button that signs and none of the relay's button data.
+/// the clear only inside this process and on the screen. Each paired relay has its own key: the seal opens only with the key of
+/// the relay that made it, and only a push from the relay the app is on gets buttons that sign. Any failure at all (no grant,
+/// no key, a wrong seal, the time limit) delivers the fixed phrase Apple sent, with no button that signs and none of the
+/// relay's button data.
 final class NotificationService: UNNotificationServiceExtension {
     private var handler: ((UNNotificationContent) -> Void)?
     /// What is delivered if the seal cannot be opened in time: the push with no button data and no button that signs.
@@ -20,8 +23,16 @@ final class NotificationService: UNNotificationServiceExtension {
         let plain = Self.content(RichPush.deliver(inbound, opened: nil), from: request.content)
         handler = contentHandler
         self.plain = plain
-        let opened = Self.open(request.content.userInfo)
-        contentHandler(opened.map { Self.content(RichPush.deliver(inbound, opened: $0), from: request.content) } ?? plain)
+        // The relay list is read once and used for both questions: which key opens this push, and which relay is active.
+        let store = NativeKeyStore.relayStore()
+        let opened = Self.open(request.content.userInfo, store: store)
+        let activeKeyId = NativeKeyStore.activeKeyId(store: store)
+        contentHandler(
+            opened.map {
+                Self.content(
+                    RichPush.deliver(inbound, opened: $0.content, keyId: $0.keyId, sealKey: $0.key, activeKeyId: activeKeyId),
+                    from: request.content)
+            } ?? plain)
         handler = nil
     }
 
@@ -30,13 +41,14 @@ final class NotificationService: UNNotificationServiceExtension {
         handler = nil
     }
 
-    /// The seal's words, or nil for anything that is not a seal made for this phone (no grant, no key, a wrong seal).
-    static func open(_ info: [AnyHashable: Any]) -> RichContent? {
+    /// The seal's words, the pairing whose key opened it and that key, or nil for anything that is not a seal made for this phone
+    /// (no grant, no key, a wrong seal). Each stored pairing's own key is tried (the active one first); the pairing whose key opens
+    /// it is the push's relay. A push from a relay the phone no longer holds keys for stays closed.
+    static func open(_ info: [AnyHashable: Any], store: RelayStore?) -> (keyId: String, key: P256.KeyAgreement.PrivateKey, content: RichContent)? {
         guard let talos = info["talos"] as? [String: Any], let kind = talos["kind"] as? String,
-              let envelope = talos["enc"] as? [String: Any],
-              let grantJson = NativeKeyStore.grant(), let grant = RichPush.grantInfo(grantJson), let key = NativeKeyStore.encKey()
+              let envelope = talos["enc"] as? [String: Any]
         else { return nil }
-        return RichPush.open(envelope: envelope, key: key, deviceId: grant.deviceId, kind: kind, cardId: talos["card_id"] as? String)
+        return RichPush.open(envelope: envelope, candidates: NativeKeyStore.sealCandidates(store: store), kind: kind, cardId: talos["card_id"] as? String)
     }
 
     static func content(_ d: RichPush.Delivery, from c: UNNotificationContent) -> UNNotificationContent {

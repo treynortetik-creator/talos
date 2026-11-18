@@ -1,6 +1,12 @@
 // Signed bridge HTTP API (spec 3.8, 5.4). Every call carries `Authorization: TalosBridge ...` over the exact body bytes.
 // The live bridge uses it as a fallback when the socket is down; headless processes and the CLI use nothing else.
-import { type Frame, signBridgeHttp } from '@talos-app/protocol'
+import {
+  type Frame,
+  RELAY_DESCRIPTOR_PATH,
+  RelayDescriptorRead,
+  type RelayDescriptorReadT,
+  signBridgeHttp,
+} from '@talos-app/protocol'
 import { assertSecureRelayUrl } from './config.ts'
 import type { KeyMaterial } from './keys.ts'
 
@@ -84,6 +90,34 @@ export class RelayHttp {
         responseDate(res),
       )
     return (await res.json()) as T
+  }
+
+  /**
+   * GET /.well-known/talos-relay, UNSIGNED (no Authorization header: the descriptor is public, and a signed request would only
+   * hand the relay a proof it does not need). `absent` is a relay with no descriptor (404, an old relay). Anything else that
+   * is not a good descriptor (network, timeout, 5xx, bad JSON or shape) is tried once more, then `unavailable`: the caller
+   * says so rather than quietly leaving the key fingerprint out. Never throws.
+   */
+  async descriptor(): Promise<
+    { kind: 'found'; descriptor: RelayDescriptorReadT } | { kind: 'absent' } | { kind: 'unavailable' }
+  > {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        assertSecureRelayUrl(this.baseUrl)
+        const res = await this.fetchFn(`${this.baseUrl}${RELAY_DESCRIPTOR_PATH}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(this.timeoutMs),
+        })
+        if (res.status === 404) return { kind: 'absent' }
+        if (res.status === 200) {
+          const d = RelayDescriptorRead.safeParse(await res.json())
+          if (d.success) return { kind: 'found', descriptor: d.data }
+        }
+      } catch {
+        // falls through to the retry
+      }
+    }
+    return { kind: 'unavailable' }
   }
 
   /** POST /bridge/post: one durable frame (`reply`, `card.create`, `thread.upsert`, `inbox.update`). */

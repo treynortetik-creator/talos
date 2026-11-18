@@ -41,4 +41,13 @@ describe('config theme: a custom theme block (K9c)', () => {
     expect(c.theme).toBeUndefined()
     expect(c.agent.name).toBe('Talos')
   })
+  it('an older bridge schema drops the new stock ids iris and harbor, which this schema keeps', () => {
+    const old = AgentConfig.extend({ theme: z.enum(['talos', 'paper', 'hearth']).optional().catch(undefined) })
+    for (const id of ['iris', 'harbor']) {
+      const c = old.parse({ ...defaultConfig, theme: id })
+      expect(c.theme).toBeUndefined()
+      expect(c.agent.name).toBe('Talos')
+      expect(parse({ theme: id }).theme).toBe(id)
+    }
+  })
 })

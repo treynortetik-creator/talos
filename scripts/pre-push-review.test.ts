@@ -16,10 +16,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 const dirs: string[] = []
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -149,9 +150,9 @@ describe('review #96: install-hooks', () => {
 })
 
 describe('review #96: pre-push.test.ts itself', () => {
-  // scripts/pre-push.test.ts:191. Real pushes under Vitest's default 5 s: the ci-local suites and test-parallel set their own
-  // limit, this one has none, and line 200 asserts under 30 s, which the 5 s limit reaches first on a loaded Mac.
+  // Real pushes under Vitest's default 5 s (review #96): the ci-local suites and test-parallel set their own limit, and so must
+  // pre-push.test.ts, or a loaded Mac reaches 5 s first. (A note here once said it asserts "under 30 s"; it has no such check.)
   it('sets a suite timeout, like the ci-local suites', () => {
-    expect(readFileSync(join(here, 'pre-push.test.ts'), 'utf8')).toMatch(/testTimeout:\s*\d/)
+    expect(readFileSync(join(here, 'pre-push.test.ts'), 'utf8')).toMatch(/testTimeout:\s*(scaled\()?\d/) // a number, scaled with the time factor (scripts/test-timeouts.test.ts)
   })
 })

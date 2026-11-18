@@ -7529,7 +7529,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "theme: refused, nothing was proposed. name: lowercase letters, digits and dashes, up to 32; light: must be an object; dark: must be an object; radius: must be an object; fonts: must be an object"
+          "error": "theme: refused, nothing was proposed. name: lowercase letters, digits and dashes, up to 32; light: must be an object; dark: must be an object"
         },
         "card": {
           "ok": false,
@@ -7565,7 +7565,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<246 chars>"
+          "error": "theme: refused, nothing was proposed. start: not an allowed key; end: not an allowed key; name: lowercase letters, digits and dashes, up to 32; light: must be an object; dark: must be an object"
         },
         "card": {
           "ok": false,

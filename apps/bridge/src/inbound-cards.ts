@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   cardNotice,
   checkNativeAct,
+  clipUnits,
   type ErrorCodeT,
   NATIVE_APPROVE_MAX_AGE_MS,
   nativeReplyMessageId,
@@ -297,7 +298,7 @@ export const cardsFrames = {
    */
   endUndelivered(this: Inbound, row: LedgerRow, res: ResolutionRecord, text: string, unknown: boolean) {
     const { ctx } = this
-    const title = oneLine(row.binding.title).slice(0, 80)
+    const title = clipUnits(oneLine(row.binding.title), 80)
     let notice = text
     // an app request the agent may never run: the gate must refuse it from here on
     if (row.binding.kind === 'app_action' && res.action === 'primary')

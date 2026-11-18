@@ -70,6 +70,13 @@ git -C "$repo" fetch -q origin
 sha="$(git -C "$repo" rev-parse --verify "$ref^{commit}")"
 build="$(date -u +%Y%m%d%H%M)"
 echo "testflight: ref $ref ($sha), build number $build"
+# Owner rule: no build ships until the app verifies the Mac behind a scanned relay. Read from the ref itself (not the caller's
+# checkout or a worktree), so a dry run and a real run agree. The attest commit sets the constant to true.
+trust_file=apps/mobile/ios/BridgeGuard/Sources/BridgeGuard/RelayTrust.swift
+trust_src="$(git -C "$repo" show "$sha:$trust_file" 2>/dev/null)" || trust_src=""
+printf '%s\n' "$trust_src" | grep -Eq '^[[:space:]]*public static let verifiesTheMac = true$' || {
+  echo "testflight: refusing to ship $ref ($sha): $trust_file must have 'public static let verifiesTheMac = true' (file or constant missing, or false). Without the attest check the app would trust any scanned relay." >&2
+  exit 65; }
 [ "$DRY_RUN" = 1 ] && { echo "testflight: dry run, stopping before checkout, archive and upload"; exit 0; }
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/talos-testflight.XXXXXX")"

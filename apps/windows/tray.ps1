@@ -513,11 +513,14 @@ function Show-Pair {
         Log "pair: $($e.event)"
         $text = Get-TalosPairText $e
         if ($text) { $msg.Text = $text }
+        if ("$($e.event)" -eq 'warning') { $s.warn = $text }
         switch ("$($e.event)") {
           'link' {
             # the relay's host on its own line (Fable R5-1): pair.py checked the link is exactly the install's relay
             $link.Text = "$($e.link)"; $link.Visible = $true
             $msg.Text = "$($msg.Text)`r`nRelay: $($e.host)"
+            # a warning came first (no key check, old relay): the link text must not wipe it
+            if ($s.warn) { $msg.Text = "$($msg.Text)`r`n$($s.warn)" }
           }
           'qr' {
             $rows = @($e.rows)
@@ -538,7 +541,7 @@ function Show-Pair {
               $g.Dispose()
               $pic.Image = $bmp; $pic.SizeMode = 'CenterImage'; $pic.Visible = $true
             } else {
-              # too long to draw as a code (over 213 characters): the link is still there to open on the phone
+              # too long to draw as a code (pair.py says reason too_long): the link is still there to open on the phone
               $msg.Text = "$($msg.Text)`r`nThe link is too long for a code here: open it on your iPhone instead (copy it from the box below)."
             }
           }

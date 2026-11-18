@@ -12,6 +12,7 @@ import {
   deriveEnrollBind,
 } from '@talos-app/protocol'
 import { FakeApp } from '@talos-app/testkit'
+import { enrollCodeOf } from './enroll-link.ts'
 import type { Stack } from './stack.ts'
 
 const sha = (b: Uint8Array | string) => new Uint8Array(createHash('sha256').update(b).digest())
@@ -169,7 +170,7 @@ export async function enrollNodePhone(
 ): Promise<NodePhone> {
   const cli = stack.cli(['enroll', '--label', opts.label ?? 'phone'])
   const [link] = await cli.waitFor(/https?:\/\/\S+\/enroll#\S+/)
-  const code = (link as string).split('#')[1] as string
+  const code = enrollCodeOf(link as string)
   const codeAuth = deriveEnrollAuth(code)
   const passkey = opts.passkey ?? softAuthenticator(stack.origin)
   let cookie: string

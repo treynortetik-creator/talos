@@ -40,5 +40,8 @@ apps/.build/
 **/.build/
 *.app
 .desktop-out/
+# the iOS build's DerivedData in a CI worktree (scripts/ci-local/jobs-swift.sh -derivedDataPath "$WT/.dd"): biome reads
+# .gitignore, and lint linted it whenever the mobile job built first (report-ci/fast red since 11-16)
+/.dd/
 # release-install-test.sh: its copies of install.sh, removed at the end of each run
 apps/desktop/scripts/.install-under-test-*

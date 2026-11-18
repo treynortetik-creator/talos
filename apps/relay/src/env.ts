@@ -1,5 +1,6 @@
 // Every relay environment variable (spec section 11). A new switch is a flag01 (0|1, default 0: off is today's behaviour)
 // with an entry in flags.json at the repo root; scripts/flags.test.ts fails on one without.
+import { SEMVER } from '@talos-app/protocol/release-manifest'
 import { z } from 'zod'
 
 /** A kill switch: register it in flags.json (scripts/flags.test.ts checks its default and that it is listed). */
@@ -90,6 +91,10 @@ const base = z.object({
   DEVICE_PROOF_REQUIRED: z.enum(['0', '1']).default('0'),
   /** off = hard kill for every work integration. */
   WORK_INTEGRATIONS: z.enum(['allow', 'off']).default('allow'),
+  /** hosted = run for someone else; self = the owner's own relay (BYOR descriptor, /.well-known/talos-relay). */
+  RELAY_KIND: z.enum(['hosted', 'self']).default('self'),
+  /** Oldest app version this relay asks for in its descriptor. Advisory: the app shows an update notice, nothing enforces it. */
+  MIN_APP_VERSION: z.string().regex(SEMVER, { message: 'must be x.y.z' }).default('0.0.0'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   // ---- v2 features (docs/V2-FEATURES.md V1.4) ----------------------------------------------------------------------
   /** Optional ntfy topic (`https://`): a phone push that doesn't depend on Web Push. */

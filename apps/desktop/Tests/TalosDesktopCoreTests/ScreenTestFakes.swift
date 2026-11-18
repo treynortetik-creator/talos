@@ -122,6 +122,7 @@ func colours(of shot: ScreenShot) throws -> Set<RGB> {
 final class FakeInput: ScreenInputBackend, @unchecked Sendable {
   private let lock = NSLock()
   private var _posted: [ScreenInputEvent] = []
+  private var _tokens: [Int64] = []
   private var _probes = 0
   var error: (any Error)?
   var probeError: (any Error)?
@@ -133,10 +134,14 @@ final class FakeInput: ScreenInputBackend, @unchecked Sendable {
   /// Runs after each post: the world reacting to the event.
   var after: (@Sendable (Int) -> Void)?
   var posted: [ScreenInputEvent] { lock.withLock { _posted } }
-  func post(_ event: ScreenInputEvent) throws {
+  /// The token each posted event carried (0 for a post made without one).
+  var tokens: [Int64] { lock.withLock { _tokens } }
+  func post(_ event: ScreenInputEvent) throws { try post(event, token: 0) }
+  func post(_ event: ScreenInputEvent, token: Int64) throws {
     if let error { throw error }
     let n = lock.withLock {
       _posted.append(event)
+      _tokens.append(token)
       return _posted.count
     }
     after?(n)
@@ -164,11 +169,13 @@ final class FakeApps: ScreenAppsBackend, @unchecked Sendable {
   private var _frontCalls = 0
   /// The focused field's value (default nil: not readable).
   var value: @Sendable (Int32) -> String? = { _ in nil }
+  /// Which element the focused field is (default: always the same one).
+  var element: @Sendable (Int32) -> Int = { _ in 1 }
   init(front: ScreenApp?) { _front = front }
   func keyboardFocusPID() -> Int32? { focus.map { $0() } ?? front?.pid }
   func appOwnsKeyboard(pid: Int32) -> Bool { ownsKeyboard(pid) }
   func frontHasPanel(pid: Int32) -> Bool { hasPanel(pid) }
-  func focusedValue(pid: Int32) -> String? { value(pid) }
+  func focusedField(pid: Int32) -> ScreenField? { value(pid).map { ScreenField(element: element(pid), value: $0) } }
   func menuShortcuts(pid: Int32) -> [ScreenKeyCombo]? { menu }
   var front: ScreenApp? {
     get { lock.withLock { _front } }
@@ -269,7 +276,6 @@ enum Fx {
   static let notes = ScreenApp(bundleID: "com.example.notes", pid: 501, name: "Notes Example")
   static let secret = ScreenApp(bundleID: "com.example.secret", pid: 502, name: "Secret Example")
   static let talos = ScreenApp(bundleID: ScreenCore.talosBundleID, pid: 777, name: "Talos")
-  static let selfPID: Int32 = 900
   /// The menu shortcuts the fake front app has: cmd+s/c/v/w/n/a/q and cmd+shift+t.
   static let menu: [ScreenKeyCombo] = ["cmd+s", "cmd+c", "cmd+v", "cmd+w", "cmd+n", "cmd+a", "cmd+shift+t", "cmd+q"].map {
     try! ScreenKeyCombo.parse($0)
@@ -289,10 +295,13 @@ enum Fx {
 
   static func core(
     capture: FakeCapture = FakeCapture(content(), colours: colours), input: FakeInput = FakeInput(),
-    apps: FakeApps = FakeApps(front: notes), permissions: FakePermissions = FakePermissions(), maxLongEdge: Int = 4096
+    apps: FakeApps = FakeApps(front: notes), permissions: FakePermissions = FakePermissions(),
+    flight: SyntheticInput.Flight = SyntheticInput.Flight(), maxLongEdge: Int = 4096
   ) -> ScreenCore {
-    ScreenCore(
-      capture: capture, input: input, apps: apps, permissions: permissions, selfBundleID: "app.talos.desktop.dev",
-      selfPID: selfPID, maxLongEdge: maxLongEdge)
+    var c = ScreenCore(capture: capture, input: input, apps: apps, permissions: permissions, flight: flight, maxLongEdge: maxLongEdge)
+    c.deliveryTimeout = 0.2
+    c.secretWindows = { [] }
+    c.pause = { _ in }  // a test that checks the waits sets its own recorder; none sleeps
+    return c
   }
 }

@@ -47,26 +47,25 @@ struct ScreenInputTests {
     #expect(input.posted.isEmpty)
   }
 
-  /// Talos's own windows (approval cards) are never driven by an agent, even when an allow list names Talos.
-  @Test func talosInFrontIsRefusedByIdAnyCaseAndByPid() {
+  /// Talos is an app like any other: off the list it is refused as such, on the list it is driven (a card's buttons stay the owner's:
+  /// `SyntheticInputTests`).
+  @Test func talosInFrontIsRefusedOffTheListAndDrivenOnIt() throws {
     let input = FakeInput()
-    let withTalos = allowed.union([ScreenCore.talosBundleID, "APP.TALOS.DESKTOP.DEV", "com.example.renamed"])
-    let fronts = [
-      Fx.talos,
-      ScreenApp(bundleID: "App.Talos.Desktop", pid: 1, name: "x"),
-      // The dev build's own id, passed in as selfBundleID
-      ScreenApp(bundleID: "app.talos.desktop.dev", pid: 2, name: "x"),
-      // This process under another name: matched by pid
-      ScreenApp(bundleID: "com.example.renamed", pid: Fx.selfPID, name: "x"),
-    ]
-    for f in fronts {
-      let core = Fx.core(input: input, apps: apps(front: f, under: f))
-      #expect(throws: ScreenRefusal.talosItself, "\(f)") { try core.perform(.type("x"), allowedBundleIDs: withTalos) }
+    let core = Fx.core(input: input, apps: apps(front: Fx.talos, under: Fx.talos))
+    #expect(throws: ScreenRefusal.appNotAllowed(app: ScreenCore.talosBundleID, subject: .running(pid: 777))) {
+      try core.perform(.type("x"), allowedBundleIDs: allowed)
     }
-    // An allowed app in front, but the click would land on a Talos window floating over it
-    let core = Fx.core(input: input, apps: apps(front: Fx.notes, under: Fx.talos))
-    #expect(throws: ScreenRefusal.talosItself) { try core.perform(.click(p), allowedBundleIDs: withTalos) }
     #expect(input.posted.isEmpty)
+    let withTalos = allowed.union([ScreenCore.talosBundleID])
+    #expect(try core.perform(.type("x"), allowedBundleIDs: withTalos) == 1)
+    #expect(try core.perform(.click(p), allowedBundleIDs: withTalos) == 1)
+    #expect(try core.perform(.key("return"), allowedBundleIDs: withTalos) == 1)
+    #expect(input.posted.count == 3)
+    // an allowed app in front with a Talos window over the click: Talos is not on the list, so that click is refused as any other app's
+    let over = Fx.core(input: FakeInput(), apps: apps(front: Fx.notes, under: Fx.talos))
+    #expect(throws: ScreenRefusal.appNotAllowed(app: ScreenCore.talosBundleID, subject: .running(pid: 777))) {
+      try over.perform(.click(p), allowedBundleIDs: allowed)
+    }
   }
 
   @Test func aClickLandingOnAnUngrantedWindowIsRefusedEvenWithAnAllowedAppInFront() {
@@ -154,19 +153,19 @@ struct ScreenInputTests {
 
 @Suite("Screen apps")
 struct ScreenAppsTests {
-  @Test func opensOnlyAllowedAppsAndNeverTalos() async {
+  @Test func opensOnlyAllowedApps() async {
     let a = FakeApps(front: Fx.notes)
     let core = Fx.core(apps: a)
     await #expect(throws: ScreenRefusal.appNotAllowed(app: "com.example.secret", subject: .installed(path: "/Apps/com.example.secret.app"))) {
       try await core.openApp(bundleID: "com.example.secret", allowedBundleIDs: ["com.example.notes"])
     }
-    await #expect(throws: ScreenRefusal.talosItself) {
-      try await core.openApp(bundleID: "App.Talos.Desktop", allowedBundleIDs: [ScreenCore.talosBundleID])
-    }
     await #expect(throws: ScreenRefusal.self) { try await core.openApp(bundleID: "  ", allowedBundleIDs: [""]) }
     #expect(a.opened.isEmpty)
     await #expect(throws: Never.self) { try await core.openApp(bundleID: "com.example.notes", allowedBundleIDs: ["com.example.notes"]) }
     #expect(a.opened == ["com.example.notes"])
+    // Talos is opened like any allowed app
+    await #expect(throws: Never.self) { try await core.openApp(bundleID: ScreenCore.talosBundleID, allowedBundleIDs: [ScreenCore.talosBundleID]) }
+    #expect(a.opened == ["com.example.notes", ScreenCore.talosBundleID])
   }
 
   @Test func aFailedOpenSaysSo() async {
@@ -186,7 +185,7 @@ struct ScreenAppsTests {
   @Test func everyRefusalReadsAsOnePlainLine() {
     let all: [ScreenRefusal] = [
       .screenRecordingNotGranted, .accessibilityNotGranted, .filterUnavailable("a"), .captureFailed("b"), .encodeFailed("c"),
-      .noDisplay, .displayNotFound(1), .windowNotFound(2), .regionOffScreen, .appNotAllowed(app: "d"), .talosItself,
+      .noDisplay, .displayNotFound(1), .windowNotFound(2), .regionOffScreen, .appNotAllowed(app: "d"), .protectedPrompt,
       .noFrontmostApp, .nothingAtPoint, .openFailed(app: "e", detail: "f"), .inputFailed("g"), .badRequest("h"),
     ]
     for r in all {

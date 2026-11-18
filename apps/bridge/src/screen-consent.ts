@@ -18,6 +18,7 @@ import {
   type CardBinding,
   type CardT,
   CONFIG_PROPOSE_FEATURE,
+  clipUnits,
   newId,
   payloadHash,
   validateCard,
@@ -47,7 +48,6 @@ export const SCREEN_CONSENT_TEXT = {
   relayOld: 'the relay needs updating first.',
   busy: 'Talos is already asking the owner about several apps; try again later.',
   noService: 'the main bridge is not running.',
-  talos: 'Talos does not let an agent click or type in Talos itself.',
   title: (app: string) => `Let your agent control ${app} on this Mac?`,
   summary:
     'Any session of yours on this Mac could then see its windows and click and type in it. Remove it any time on the Mac: Talos → Settings → Permissions → "Apps your agent may control".',
@@ -88,11 +88,6 @@ export function displayName(s: string | undefined): string {
     .trim()
   const chars = [...one]
   return chars.length === 0 ? 'That app' : chars.length > 80 ? `${chars.slice(0, 79).join('')}…` : one
-}
-
-const isTalos = (bundleId: string) => {
-  const b = bundleId.trim().toLowerCase()
-  return b === 'app.talos.desktop' || b.startsWith('app.talos.')
 }
 
 /** The Mac's `ask_info` answer, strictly; null for anything else. */
@@ -161,7 +156,6 @@ export class ScreenConsent {
     if (!info.ok) return cant(refusalText(info))
     const app = parseMeasured(info.body)
     if (!app) return cant('the Mac sent an answer the bridge cannot read.')
-    if (isTalos(app.bundle_id)) return { ok: false, text: SCREEN_CONSENT_TEXT.talos }
     // From here to the ledger write nothing awaits: two sessions asking at once make one card.
     const key = keyOf(app)
     const now = ctx.clock.now()
@@ -217,9 +211,9 @@ export class ScreenConsent {
       id: newId('c'),
       thread_id: defaultThreadRef(this.ctx).id,
       kind: 'config' as const,
-      title: SCREEN_CONSENT_TEXT.title(app.name).slice(0, 120),
+      title: clipUnits(SCREEN_CONSENT_TEXT.title(app.name), 120),
       summary: SCREEN_CONSENT_TEXT.summary,
-      destination: [{ label: 'Mac', value: displayName(this.macName()).slice(0, 80) }],
+      destination: [{ label: 'Mac', value: clipUnits(displayName(this.macName()), 80) }],
       body: [`App: ${app.name}`, `App id: ${app.bundle_id}`, `Signed by: ${signedBy(app)}`].join('\n'),
       body_format: 'plain' as const,
       fields: [],
@@ -291,7 +285,7 @@ export class ScreenConsent {
         cardUpdateFrame(ctx.clock.now(), {
           card_id: row.id,
           state: ok ? 'done' : 'failed',
-          result: { ok, text: text.slice(0, 500), at: new Date(ctx.clock.now()).toISOString() },
+          result: { ok, text: clipUnits(text, 500), at: new Date(ctx.clock.now()).toISOString() },
         }),
       )
       .catch((e) => ctx.log.warn('card.update not sent', { error: (e as Error).message }))

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { WorkerDialog } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
 import { SpecHash } from './spec-hash.ts'
+import { clipUnits } from './untrusted.ts'
 import { PendingWakes } from './wake-me.ts'
 import { WORKERS_UNREADABLE_KEY } from './workers-unreadable.ts'
 
@@ -308,13 +309,6 @@ export const WorkerFailure = z.enum([
 export const WorkerCeilingAxis = z.enum(['permission_mode', 'mcp', 'deny_rules'])
 export type WorkerFailureT = z.infer<typeof WorkerFailure>
 
-/** At most `max` UTF-16 units, never ending on half of a pair. */
-function clipUnits(s: string, max: number): string {
-  if (s.length <= max) return s
-  const cut = s.slice(0, max)
-  const last = cut.charCodeAt(max - 1)
-  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, max - 1) : cut
-}
 const clipUnits300 = (s: string): string => clipUnits(s, 300)
 
 const SessionUuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)

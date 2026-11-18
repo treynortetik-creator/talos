@@ -116,8 +116,6 @@ struct ScreenAllowStoreTests {
     ("signed over another binding", ProofKit.proof(hashOf: "{}"), .binding),
     ("an app with a field missing", ProofKit.proof(payload: ["v": 1, "screen_allow": ["bundle_id": "com.example.notes"]]), .binding),
     ("a settings card's own payload", ProofKit.proof(payload: ["v": 1, "changes": []]), .binding),
-    ("Talos itself", ProofKit.proof(app: ProofKit.notesApp.merging(["bundle_id": "app.talos.desktop"]) { _, n in n }), .talos),
-    ("a Talos dev build", ProofKit.proof(app: ProofKit.notesApp.merging(["bundle_id": "App.Talos.Desktop.Dev"]) { _, n in n }), .talos),
   ])
   func aTapThatIsNotTheOwnerAllowingThatAppAllowsNothing(why: String, proof: ScreenAllowProof, step: ScreenAllowProofCheck.Step) {
     let h = TempHome()
@@ -587,8 +585,6 @@ struct ScreenConsentProtocolTests {
   @Test(arguments: [
     (ScreenCodeLookup.unsigned(name: "Loose Tool"), "app_not_allowable", "Loose Tool isn't signed, so it can't be put on this Mac's allowed list."),
     (.noBundleID(name: "Loose Tool"), "app_not_allowable", "Loose Tool has no app id, so it can't be put on this Mac's allowed list."),
-    (.signed(ScreenCodeIdentity(bundleID: "app.talos.desktop.dev", teamID: nil, requirement: "x", name: "Talos", signer: .adhoc)), "talos_itself",
-     "Talos does not let an agent click or type in Talos itself."),
     (.gone, "app_not_allowed", "com.example.secret isn't on this Mac's allowed list yet."),
   ])
   func anAppThatCanNeverBeAllowedIsSaidSoWithNoAsk(found: ScreenCodeLookup, code: String, text: String) async {

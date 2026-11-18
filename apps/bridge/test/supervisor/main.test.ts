@@ -28,9 +28,13 @@ afterEach(() => {
   for (const c of children.splice(0)) c.kill('SIGKILL')
 })
 
-/** A real process leading its own group, as a tmux pane's agent does; `ignoreTerm` makes it need the SIGKILL. */
+/**
+ * A real process leading its own group, as a tmux pane's agent does; `ignoreTerm` makes it need the SIGKILL. The plain agent is
+ * `sleep` itself, never `sh -c 'sleep 300'`: dash forks that sleep instead of exec'ing it, and a sleep forked as the group's
+ * SIGTERM lands can miss it and hold the group open until the SIGKILL deadline, which no test without a clock step reaches.
+ */
 function agentProcess(ignoreTerm = false): number {
-  const c = Bun.spawn(['sh', '-c', ignoreTerm ? 'trap "" TERM; while :; do sleep 1; done' : 'sleep 300'], {
+  const c = Bun.spawn(ignoreTerm ? ['sh', '-c', 'trap "" TERM; while :; do sleep 1; done'] : ['sleep', '300'], {
     detached: true,
   } as never)
   children.push(c)

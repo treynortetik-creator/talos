@@ -341,7 +341,13 @@ describe('the review’s holes, closed', () => {
     const runs: Promise<void>[] = []
     const loop = async () => {
       while (Date.now() < until)
-        await new Promise<void>((r) => spawn(join(bin, 'other'), [], { stdio: 'ignore' }).on('close', () => r()))
+        // a spawn that fails emits 'error' and no 'close': it rejects, so the test fails at once with the spawn's own error (never a hang
+        // to the timeout, and never a pass in which no spawn ran)
+        await new Promise<void>((r, rej) =>
+          spawn(join(bin, 'other'), [], { stdio: 'ignore' })
+            .on('error', rej)
+            .on('close', () => r()),
+        )
     }
     for (let i = 0; i < 4; i++) runs.push(loop())
     const wrong = new Set<string | null>()

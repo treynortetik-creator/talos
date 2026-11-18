@@ -26,6 +26,8 @@ describe('relay env', () => {
       VOLUME_SOFT_CAP_MB: 800,
       TRUST_PROXY_HOPS: 1,
       WORK_INTEGRATIONS: 'allow',
+      RELAY_KIND: 'self',
+      MIN_APP_VERSION: '0.0.0',
       LOG_LEVEL: 'info',
     })
   })
@@ -110,6 +112,14 @@ describe('relay env', () => {
     expect(() => loadEnv({ ...base, BRIDGE_PUBKEY: 'nope' })).toThrow(/BRIDGE_PUBKEY/)
     expect(loadEnv({ ...base, BRIDGE_PUBKEY: 'A'.repeat(43), WORK_INTEGRATIONS: 'off' }).WORK_INTEGRATIONS).toBe('off')
     expect(() => loadEnv({ ...base, WORK_INTEGRATIONS: 'maybe' })).toThrow(/WORK_INTEGRATIONS/)
+  })
+  it('validates RELAY_KIND and MIN_APP_VERSION (the relay descriptor)', () => {
+    expect(loadEnv({ ...base, RELAY_KIND: 'hosted', MIN_APP_VERSION: '1.2.3' })).toMatchObject({
+      RELAY_KIND: 'hosted',
+      MIN_APP_VERSION: '1.2.3',
+    })
+    expect(() => loadEnv({ ...base, RELAY_KIND: 'mine' })).toThrow(/RELAY_KIND/)
+    expect(() => loadEnv({ ...base, MIN_APP_VERSION: '1.2' })).toThrow(/MIN_APP_VERSION/)
   })
   it('APNs variables never stop the relay booting: partial, malformed or the spec names all load', () => {
     const all = {

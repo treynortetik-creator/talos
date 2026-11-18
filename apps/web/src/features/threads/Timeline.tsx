@@ -143,6 +143,13 @@ export function Timeline({
   const stick = useRef(true)
   /** Within NEAR_BOTTOM_PX of the end: growth inside the thread (a streaming reply, an image loading) follows only then. */
   const atEnd = useRef(true)
+  /**
+   * The owner scrolled up away from the end and has not come back: growth inside the thread does not follow. Set from the
+   * owner's own movement (a scroll that went UP), never from a gap worked out against content that has just grown: the
+   * page growing under a view that has not caught up yet is not the owner leaving.
+   */
+  const leftEnd = useRef(false)
+  const lastTop = useRef(0)
   const viewerOpen = useRef(false)
   viewerOpen.current = viewer !== null
   // Jump-to-latest: shown while scrolled away from the end; counts what arrived meanwhile.
@@ -300,6 +307,7 @@ export function Timeline({
         // The scroller grew (keyboard closed) until the thread fits: no scroll event follows, so settle it here.
         stick.current = true
         atEnd.current = true
+        leftEnd.current = false // no scroll event follows this, so onScroll cannot clear it
         setAway(false)
         setFresh(0)
       }
@@ -321,8 +329,9 @@ export function Timeline({
       const before = height - el.scrollTop - el.clientHeight // how far from the end the view was before it grew
       const grew = el.scrollHeight > height
       height = el.scrollHeight
-      // growth inside the thread follows only right at the end; a few lines up, the owner is rereading and the view stays put
-      if (!grew || before >= NEAR_BOTTOM_PX || viewerOpen.current || editingInside(el)) return
+      // growth inside the thread follows only right at the end; a few lines up, the owner is rereading and the view stays put.
+      // This runs a frame after the growth: an owner who scrolled up in between has left the end (leftEnd), whatever the height was.
+      if (!grew || before >= NEAR_BOTTOM_PX || leftEnd.current || viewerOpen.current || editingInside(el)) return
       if (Date.now() - touchedAt.current < OWN_CHANGE_MS) return
       el.scrollTop = el.scrollHeight
     }
@@ -391,6 +400,9 @@ export function Timeline({
     stick.current = isFollowing(el)
     // the down arrow shows whenever the end is out of view, even while new text would still follow
     atEnd.current = isNearBottom(el)
+    if (atEnd.current) leftEnd.current = false
+    else if (el.scrollTop < lastTop.current) leftEnd.current = true
+    lastTop.current = el.scrollTop
     setAway(!atEnd.current)
     if (atEnd.current) setFresh(0)
     // Near the top with more behind it: fetch the next page before the owner hits the wall.

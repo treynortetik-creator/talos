@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   contrastProblems,
   DEFAULT_THEME,
+  STOCK_THEME_IDS,
   STOCK_THEMES,
+  THEME_COLOR_TOKENS,
   THEME_CONTRAST_PAIRS,
   THEME_TOKEN_NAMES,
   themeProblems,
@@ -18,8 +20,11 @@ const withColor = (value: unknown) => {
 
 describe('theme format', () => {
   it('accepts every stock theme', () => {
-    expect(STOCK_THEMES.length).toBe(3)
+    expect(STOCK_THEMES.length).toBe(5)
+    expect(STOCK_THEME_IDS).toEqual(['talos', 'paper', 'hearth', 'iris', 'harbor'])
+    expect(STOCK_THEMES.map((t) => t.name)).toEqual([...STOCK_THEME_IDS])
     for (const t of STOCK_THEMES) {
+      expect(Object.keys(t).sort(), t.name).toEqual(['dark', 'light', 'name'])
       const r = validateTheme(t)
       expect(r.ok, `${t.name}: ${r.ok ? '' : r.error}`).toBe(true)
       expect(contrastProblems(t), t.name).toEqual([])
@@ -29,7 +34,8 @@ describe('theme format', () => {
   it('has no pattern token and no duplicate names', () => {
     expect(THEME_TOKEN_NAMES).not.toContain('--pattern-meander')
     expect(new Set(THEME_TOKEN_NAMES).size).toBe(THEME_TOKEN_NAMES.length)
-    expect(new Set(STOCK_THEMES.map((t) => t.name)).size).toBe(3)
+    expect(new Set(STOCK_THEMES.map((t) => t.name)).size).toBe(5)
+    expect(THEME_TOKEN_NAMES).toEqual([...THEME_COLOR_TOKENS])
   })
 
   for (const bad of [
@@ -58,20 +64,35 @@ describe('theme format', () => {
     }
   })
 
-  it('refuses a missing token, an extra top-level key and a bad radius or font', () => {
+  it('refuses a missing token and an extra top-level key', () => {
     const missing = clone()
     delete missing.dark['--bg']
     expect(validateTheme(missing).ok).toBe(false)
     expect(validateTheme({ ...clone(), extra: 1 }).ok).toBe(false)
-    for (const v of [-1, 33, '12px', 'url(x)', Number.NaN, Number.POSITIVE_INFINITY]) {
-      const t = clone()
-      t.radius['--radius-card'] = v
-      expect(validateTheme(t).ok, String(v)).toBe(false)
+  })
+
+  // A custom theme saved before themes became colours-only still has radius and fonts: it applies, colours only.
+  it('accepts a legacy theme with radius and fonts, ignores their contents and returns it without them', () => {
+    for (const legacy of [
+      { radius: { '--radius-card': 6 }, fonts: { '--font-ui': 'inter' } },
+      { radius: 'anything', fonts: ['Comic Sans', 'url(f.woff)'] },
+      { radius: null, fonts: 7 },
+    ]) {
+      const r = validateTheme({ ...clone(), ...legacy })
+      expect(r.ok, JSON.stringify(legacy)).toBe(true)
+      if (r.ok) {
+        expect(Object.keys(r.theme).sort()).toEqual(['dark', 'light', 'name'])
+        expect(r.theme.light).toEqual(DEFAULT_THEME.light)
+      }
     }
-    for (const v of ['Comic Sans', 'serif; x', 'url(f.woff)', 'var(--font-ui)']) {
-      const t = clone()
-      t.fonts['--font-ui'] = v
-      expect(validateTheme(t).ok, v).toBe(false)
+    expect(validateTheme({ ...clone(), radius: {}, fonts: {}, extra: 1 }).ok).toBe(false)
+  })
+
+  it('has a violet iris and a teal harbor that pass the validator', () => {
+    for (const id of ['iris', 'harbor']) {
+      const t = STOCK_THEMES.find((x) => x.name === id)
+      expect(t, id).toBeDefined()
+      expect(themeProblems(t), id).toEqual([])
     }
   })
 
@@ -255,28 +276,16 @@ describe('the validated theme is a fresh copy', () => {
   })
 })
 
-describe('font ids come from the list only', () => {
-  for (const id of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
-    it(`refuses ${id}`, () => {
-      const t = clone()
-      t.fonts['--font-ui'] = id
-      expect(validateTheme(t).ok).toBe(false)
-    })
-  }
-})
-
 describe('themeProblems (K9c): every problem, named', () => {
   it('lists each disallowed key, bad value and missing token, and each low pair', () => {
     const t = structuredClone(STOCK_THEMES[1]) as any
     t.light['--nope'] = '#000000'
-    t.fonts['--font-ui'] = 'wingdings'
     delete t.dark['--accent']
     t.extra = 1
     const p = themeProblems(t)
     expect(p).toEqual(
       expect.arrayContaining([
         'light.--nope: not an allowed token',
-        expect.stringContaining('fonts.--font-ui: must be one of'),
         'dark.--accent: missing',
         'extra: not an allowed key',
       ]),

@@ -1215,3 +1215,173 @@ describe('an edit of an agent, skill or command file: the card says first when i
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+// The hook's card is sent without the hook waiting on the send: a send can take many seconds (an ack wait, then the HTTP
+// fallback), and the owner's tap, a failed send or the hook leaving must be heard meanwhile.
+describe('the hook hears the card at once, not after its send settles', () => {
+  const LONG = 20_000
+  const isPermissionCreate = (f: unknown) => {
+    const fr = f as { type?: string; card?: { kind?: string } }
+    return fr?.type === 'card.create' && fr.card?.kind === 'permission'
+  }
+  // Holds the FIRST permission card's create send open until release() (or fails it with fail()); other frames pass through.
+  function holdSend(x: Harness) {
+    const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
+    const real = t.sendDurable
+    let release: () => void = () => {}
+    let fail: () => void = () => {}
+    let held = false
+    t.sendDurable = function (this: unknown, f: unknown) {
+      if (!isPermissionCreate(f) || held) return real.call(this, f)
+      held = true
+      return new Promise((res, rej) => {
+        release = () => real.call(this, f).then(res, rej)
+        fail = () => rej(new Error('relay down'))
+      })
+    }
+    return {
+      release: () => release(),
+      fail: () => fail(),
+      restore: () => {
+        t.sendDurable = real
+      },
+      sent: () => eventually(() => expect(held).toBe(true)),
+    }
+  }
+  const promptly = <T>(p: Promise<T>) =>
+    Promise.race([p, sleep(1500).then(() => 'HUNG' as const)]) as Promise<T | 'HUNG'>
+  const heldRow = (x: Harness) => {
+    const row = x.bridge.ctx.ledger.list('pending').find((r) => r.binding.kind === 'permission')
+    if (!row) throw new Error('no pending permission card')
+    return row
+  }
+  // What inbound-cards.ts does for a permission card once the owner's signature is checked: the relay's precheck, then the
+  // ledger's resolve, then onResolved on the row the ledger hands back. (Only the signature and the card.update frames are skipped.)
+  const answerAsInbound = async (x: Harness, action: 'primary' | 'kill') => {
+    const row = heldRow(x)
+    const pre = x.bridge.ctx.permission.precheck(row.id, action)
+    if (pre.handled && !pre.ok) throw new Error(`precheck refused: ${pre.code}`)
+    const out = x.bridge.ctx.ledger.resolve(
+      { card_id: row.id, action, payload_hash: row.payload_hash, ts: new Date(x.bridge.ctx.clock.now()).toISOString() },
+      x.bridge.ctx.clock.now(),
+    )
+    if (!out.ok) throw new Error(`ledger refused: ${out.code}`)
+    return x.bridge.ctx.permission.onResolved(out.row, action)
+  }
+  const longWait = (x: Harness) => x.bridge.ctx.permission.setHookTimings({ maxWaitMs: LONG })
+
+  // The create frame has not reached the fake relay, so the app cannot sign a tap. This is the call inbound-cards.ts makes
+  // after it has checked the signature, on the row in the ledger.
+  test('(a) Allow while the create is held: the hook hears allow at once', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdSend(x)
+    try {
+      const call = rawCall(x.home, permLine())
+      await hold.sent()
+      const explained: string[] = []
+      x.bridge.ctx.permission.setExplainer({
+        explain: async () => {
+          explained.push('asked')
+          return { ok: false, reason: 'spy' }
+        },
+      })
+      await answerAsInbound(x, 'primary')
+      expect(await promptly(call.result)).toMatchObject({ decision: 'allow' })
+      hold.release()
+      await sleep(300)
+      expect(explained).toEqual([]) // answered before the send settled: no model call for a card nobody can answer
+    } finally {
+      hold.restore()
+    }
+  })
+
+  test('(b) Deny while the create is held: the hook hears deny at once', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdSend(x)
+    try {
+      const call = rawCall(x.home, permLine())
+      await hold.sent()
+      await answerAsInbound(x, 'kill')
+      expect(await promptly(call.result)).toMatchObject({ decision: 'deny' })
+      hold.release()
+    } finally {
+      hold.restore()
+    }
+  })
+
+  test('(c) a send that fails: none with send_failed, the card expired, no waiter and no open id left behind', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdSend(x)
+    try {
+      const call = rawCall(x.home, permLine())
+      await hold.sent()
+      const id = heldRow(x).id
+      hold.fail()
+      expect(await promptly(call.result)).toMatchObject({ decision: 'none', reason: 'send_failed' })
+      await eventually(() => expect(x.bridge.ctx.ledger.get(id)?.state).toBe('expired'))
+      expect(x.bridge.ctx.permission.openCount).toBe(0)
+      // nothing is left to answer it
+      const out = await x.bridge.ctx.permission.onResolved(x.bridge.ctx.ledger.get(id) as never, 'primary')
+      expect(out.ok).toBe(false)
+    } finally {
+      hold.restore()
+    }
+  })
+
+  test('(d) a send that succeeds: expiry.sync runs, then the explainer is asked, both only after the send settles', async () => {
+    const x = await start()
+    longWait(x)
+    const order: string[] = []
+    x.bridge.ctx.permission.setExplainer({
+      explain: async () => {
+        order.push('explain')
+        return { ok: false, reason: 'spy' }
+      },
+    })
+    const expiry = x.bridge.ctx.expiry
+    const realSync = expiry?.sync.bind(expiry)
+    if (expiry && realSync)
+      expiry.sync = () => {
+        order.push('sync')
+        return realSync()
+      }
+    const hold = holdSend(x)
+    try {
+      const call = rawCall(x.home, permLine())
+      await hold.sent()
+      await sleep(150)
+      expect(order).toEqual([]) // the send is still held: neither has run
+      hold.release()
+      await eventually(() => expect(order).toContain('explain'))
+      expect(order).toEqual(expiry ? ['sync', 'explain'] : ['explain'])
+      call.close()
+    } finally {
+      hold.restore()
+      if (expiry && realSync) expiry.sync = realSync
+    }
+  })
+
+  test('(e) the hook leaves while the create is held: the card closes as hook_gone', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdSend(x)
+    try {
+      const call = rawCall(x.home, permLine())
+      await hold.sent()
+      const id = heldRow(x).id
+      call.close()
+      await eventually(() => expect(x.bridge.ctx.ledger.get(id)?.state).toBe('expired'))
+      expect(x.bridge.ctx.permission.openCount).toBe(0)
+      hold.release()
+      const gone = await x.relay.expectFrame('card.update', (f) => f.card_id === id && f.state === 'expired', {
+        direction: 'from_bridge',
+      })
+      expect(gone.reason).toBe('hook_gone')
+    } finally {
+      hold.restore()
+    }
+  })
+})

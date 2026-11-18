@@ -5,7 +5,7 @@
 # It runs `talos-app enroll --json` (Cyclops's contract, docs/bridge.md "Enroll from a program") as talos, in a pty and a
 # session of its own (enroll is terminal-only on purpose), and passes on to Windows only the events that contract names,
 # each checked and rebuilt field by field, one ASCII JSON line each:
-#   link {link, host, expires_at}   qr {rows}   confirm {device_name, words}   answered {yes}
+#   warning {code: no_fp | old_relay}   link {link, host, expires_at, fp?}   qr {rows, reason?: too_long}   confirm {device_name, words}   answered {yes}
 #   pinned {device_id}   not_pinned {code}   used   expired   error {code}
 #
 # enroll's `warning bridge_not_live` (no live bridge: Main not signed in, or not running) is never passed on: the pairing
@@ -50,6 +50,8 @@ ERROR_CODES = {"usage", "key_refused", "relay", "no_relay", "bad_words", "intern
 DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 # the enroll code: 16 random bytes in Crockford base32 (packages/protocol/src/enroll.ts newEnrollCode)
 CODE = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")
+WARNING_CODES = ("bridge_not_live", "no_fp", "old_relay")
+FP = re.compile(r"[A-Za-z0-9_-]{43}")  # the bridge key's fingerprint (public), as the enroll link carries it after &fp=
 RELAY = re.compile(r"https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*")
 
 
@@ -90,7 +92,8 @@ def checked(e, relay):
         return None
     ev = e["event"]
     if ev == "warning":
-        return {"event": ev, "code": "bridge_not_live"} if e.get("code") == "bridge_not_live" else None
+        # the codes the contract names, rebuilt as the code alone (enroll's own text is talos's); any other is dropped
+        return {"event": ev, "code": e["code"]} if e.get("code") in WARNING_CODES else None
     if ev == "link":
         link = e.get("link")
         prefix = relay + "/enroll#"
@@ -99,8 +102,16 @@ def checked(e, relay):
             return {"event": "error", "code": "link"}
         exp = e.get("expires_at")
         host = RELAY.fullmatch(relay).group(1)
-        return {"event": ev, "link": link, "host": host,
-                "expires_at": exp if isinstance(exp, str) and re.fullmatch(r"[0-9T:.Z+-]{1,40}", exp) else None}
+        out = {"event": ev, "link": link, "host": host,
+               "expires_at": exp if isinstance(exp, str) and re.fullmatch(r"[0-9T:.Z+-]{1,40}", exp) else None}
+        if "fp" in e:
+            fp = e["fp"]
+            if not isinstance(fp, str) or not FP.fullmatch(fp):
+                return {"event": "error", "code": "link"}
+            # enroll's `link` stays plain for older readers; the link shown and drawn is the one a phone pins by
+            out["link"] = link + "&fp=" + fp
+            out["fp"] = fp
+        return out
     if ev == "confirm":
         words = e.get("words")
         # four words of the PGP list, even/odd/even/odd as fingerprint.ts picks them: never text of the bridge's choosing
@@ -187,15 +198,15 @@ PGP_EVEN_SET = frozenset(PGP_EVEN)
 PGP_ODD_SET = frozenset(PGP_ODD)
 
 # ---- the QR code, drawn here by root from the checked link (Fable R5-1) ---------------------------------------------------
-# QR Code Model 2 (ISO/IEC 18004), byte mode, error correction level M, versions 1 to 10 (up to 213 bytes: an enroll link
-# is under 120). Checked in scripts/windows-distro.test.ts against the bridge's own encoder (uqr) for every mask.
+# QR Code Model 2 (ISO/IEC 18004), byte mode, error correction level M, versions 1 to 12 (up to 287 bytes: the longest enroll link
+# with a fingerprint is 260, a 179-character relay URL). Checked in scripts/windows-distro.test.ts against the bridge's own encoder (uqr) for every mask.
 _M = {  # version: (EC codewords per block, [(blocks, data codewords per block), ...])
     1: (10, [(1, 16)]), 2: (16, [(1, 28)]), 3: (26, [(1, 44)]), 4: (18, [(2, 32)]), 5: (24, [(2, 43)]),
     6: (16, [(4, 27)]), 7: (18, [(4, 31)]), 8: (22, [(2, 38), (2, 39)]), 9: (22, [(3, 36), (2, 37)]),
-    10: (26, [(4, 43), (1, 44)]),
+    10: (26, [(4, 43), (1, 44)]), 11: (30, [(1, 50), (4, 51)]), 12: (22, [(6, 36), (2, 37)]),
 }
 _ALIGN = {1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42],
-          9: [6, 26, 46], 10: [6, 28, 50]}
+          9: [6, 26, 46], 10: [6, 28, 50], 11: [6, 30, 54], 12: [6, 32, 58]}
 _EXP = [0] * 512
 _LOG = [0] * 256
 _x = 1
@@ -283,9 +294,9 @@ def _penalty(g):
 
 
 def qr_rows(text, mask=None):
-    """The QR matrix of text as rows of '0' and '1', with no border; [] if it does not fit version 10-M."""
+    """The QR matrix of text as rows of '0' and '1', with no border; [] if it does not fit version 12-M."""
     data = text.encode("utf-8")
-    for ver in range(1, 11):
+    for ver in range(1, 13):
         ec, groups = _M[ver]
         cap = sum(b * d for b, d in groups)
         if 4 + (8 if ver < 10 else 16) + 8 * len(data) <= cap * 8:
@@ -553,7 +564,7 @@ def main():
                     e = None
                 if e is None:
                     continue
-                if e["event"] == "warning":
+                if e["event"] == "warning" and e["code"] == "bridge_not_live":
                     # no live bridge: no link, no QR, nothing a phone could enrol with; enroll's code stays unused
                     e = {"event": "error", "code": "not-ready"}
                 if e["event"] == "confirm":
@@ -566,7 +577,9 @@ def main():
                     e = {"event": "error", "code": "internal"}
                 say(e)
                 if e["event"] == "link":
-                    say({"event": "qr", "rows": qr_rows(e["link"])})
+                    rows = qr_rows(e["link"])
+                    # too long to draw: say so (the tray shows the link as text), never a silent empty code
+                    say({"event": "qr", "rows": rows} if rows else {"event": "qr", "rows": [], "reason": "too_long"})
                 # every end state ends it (Fable R6-5): nothing enroll prints after one is passed on
                 if e["event"] in ("error", "pinned", "not_pinned", "used", "expired") or (e["event"] == "answered" and not e["yes"]):
                     stop = ended = True

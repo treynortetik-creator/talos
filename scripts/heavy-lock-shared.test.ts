@@ -12,7 +12,7 @@ import { timeFactor } from '../packages/testkit/src/time-factor.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 const HL = join(here, 'heavy-lock.sh')
 const F = timeFactor()
-vi.setConfig({ testTimeout: 60_000 * F })
+vi.setConfig({ testTimeout: 60_000 * F, hookTimeout: 60_000 * F })
 const hasFlock = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0
 // every sleep this file starts has this odd length, so the cleanup stops this file's sleeps and nothing else on the machine
 const NAP = '317.17'

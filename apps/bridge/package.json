@@ -22,7 +22,8 @@
   },
   "devDependencies": {
     "@talos-app/testkit": "workspace:*",
-    "@types/bun": "1.3.14"
+    "@types/bun": "1.3.14",
+    "fast-check": "4.10.2"
   },
   "bin": {
     "talos-app": "src/cli.ts",

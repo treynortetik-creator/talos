@@ -1,6 +1,6 @@
 // The preview on a theme card: the drafted theme applied to a small sample (a thread, the composer, a card) inside this
 // box only. The tokens come from `themeDeclarations`, which rebuilds every value from the validated theme, so a crafted
-// draft cannot put anything but a colour, a pixel size or a bundled font stack into `style`. The page itself is not touched
+// draft cannot put anything but a colour into `style`. The page itself is not touched
 // until the owner taps Apply.
 import { ConfigCardPayload, type ThemeMode } from '@talos-app/protocol'
 import { type CSSProperties, useState } from 'react'

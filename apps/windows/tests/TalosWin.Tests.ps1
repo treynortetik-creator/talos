@@ -549,6 +549,13 @@ Describe '"Pair a phone": what the person reads at each step' {
       Should Be 'Talos is still connecting, so nothing was shown and no phone was paired. If the dot is amber, sign in to Claude first; if it is green, try again in a minute.'
     (Get-TalosPairText ([pscustomobject]@{ event = 'warning'; code = 'bridge_not_live' })) | Should Be $null
   }
+  It "says what a missing key check or an old relay means, and shows nothing for another warning" {
+    (Get-TalosPairText ([pscustomobject]@{ event = 'warning'; code = 'no_fp' })) |
+      Should Be 'This code has no key check for the Talos app. A browser can still use the link; for the app, start again.'
+    (Get-TalosPairText ([pscustomobject]@{ event = 'warning'; code = 'old_relay' })) |
+      Should Be 'Your relay is older than the Talos app needs. A browser can still use the link.'
+    (Get-TalosPairText ([pscustomobject]@{ event = 'warning'; code = 'something_else' })) | Should Be $null
+  }
 }
 
 Describe '"Pair a phone": an accented word reaches the window as itself (Fable on 84354b1f)' {

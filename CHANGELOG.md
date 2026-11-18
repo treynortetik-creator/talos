@@ -1,8 +1,36 @@
 # Changelog
 
+## The iPhone app connects to the relay you scan, and keeps each relay's login apart
+
+- The iPhone app now loads the relay you added by scanning its setup code, not an address fixed when the app was built. With no relay added, a release build shows "Connect your Mac" and loads no page; its button opens the scan sheet. After you add a relay and tap Done, the app switches to it.
+- The first screen now says what to do on the Mac: open Terminal, run `talos-app enroll --label phone`, scan the QR it prints. After you add a relay, the app opens that relay's setup page with the code you scanned, so pairing carries on.
+- Sharing from the iPhone share sheet and the Reply and Approve buttons on notifications now go to the relay you scanned. Switching relays clears the saved share link, so the new relay's page sets it again.
+- Each relay's notification keys are now kept apart on the phone. A notification from a relay you are no longer on shows its words but offers no Reply or Approve, and a button press is refused unless the notification really came through the Talos notification extension for the relay you are on. A relay you remove or replace loses its keys, and the phone lets go of its push registration when you switch. After this update, open Settings and tap Show message text once more: the old keys, which were shared by every relay, are deleted rather than reused.
+- Each relay gets its own storage on the phone, so logins and saved data never mix between relays, and a removed or replaced relay's storage is deleted.
+## Your agent can click through a see-through window that floats over the screen
+
+- A tool that keeps a see-through status window on top of the screen (a dictation tool's, for example) no longer makes your agent's clicks in that part of the screen refuse with "the menu bar or a system overlay". Talos asks macOS which window really takes the click there: if that is the window below, the click goes on to the allowed-list check; if it is the floating window, the menu bar, Control Center or Notification Center, or Talos cannot tell, it is refused as before.
+
+## A click is attributed to the window that is really on top
+
+- When your agent clicked a spot covered by a window of another app (the Dock, a floating panel), Talos could treat the click as landing on the allowed app underneath and then click the other app. It now asks macOS which window takes the click and checks that app against the allowed list, so such a click is refused.
+
+## An "Allow once" tap on a just-posted card goes through at once
+
+- An 'Allow once' tap on a just-posted ask-first card now goes through at once instead of sometimes leaving the action waiting until it timed out.
+- Allowing or denying a permission card on your phone now reaches the waiting session at once, even while the card is still being delivered.
+
+## Typed text goes in as key presses, and your agent is told whether it landed
+
+- `screen_type` now types each character as a key press (the same way `screen_key` does), which apps like Terminal need. Its reply says "verified", "could not verify (this app's text isn't readable)" or "did not land"; it no longer says "Typed N characters" when nothing arrived.
+## Your agent can use Talos itself, but never approve for you
+
+- Talos.app can now go on the Mac's list of apps your agent may control, with the same card and the same signature check as any app, so your agent can open a thread, type and send in Talos. Nothing your agent clicks or types ever answers an approval card or a permission prompt (Approve, Deny, Always allow, dialog options, the needs-you popup, sheets); those stay yours, and the agent is told when one was ignored. Terminals in Talos (your agent's pane, your own shell, the sign-in pane) never take your agent's clicks or keys, and the sign-in window with the setup link is kept out of your agent's screenshots.
+
 ## The Mac app says version 0.1.3
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.3, the release with the bridge stop and park message-loss fixes.
+- Bug reports and logs now hide more secrets: quoted cookies, passwords in Redis-style URLs, dotted setting names like db.password (however long the name), passwords with a ? or # in a URL, unclosed quotes, and a few bot tokens that slipped through. A card no longer fails when an emoji falls at the point where its title is cut.
 ## Threads can change your Claude agents, skills and commands once you allow it
 
 - With the thread fence off, a thread can now change your Claude agents, skills and commands after you allow it on a card; the card warns you when the change would let the agent approve its own actions, use other tools or switch models. Settings files and hooks stay closed to threads.

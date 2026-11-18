@@ -15,6 +15,7 @@ import {
   importDevicePublicKey,
 } from '@talos-app/protocol'
 import { FakeApp } from '@talos-app/testkit'
+import { enrollCodeOf } from '../harness/enroll-link.ts'
 import { Cli } from '../harness/stack.ts'
 import {
   cleanEnv,
@@ -62,7 +63,7 @@ export async function enrollPhone(rec: SandboxRecord, label = 'sandbox-phone'): 
   const cli = new Cli(rec.home, ['enroll', '--label', label, '--no-qr'], cleanEnv())
   try {
     const [link] = await cli.waitFor(/https?:\/\/\S+\/enroll#\S+/, 30_000)
-    const code = (link as string).split('#')[1] as string
+    const code = enrollCodeOf(link as string)
     const codeAuth = deriveEnrollAuth(code)
 
     const session = await post(rec, '/api/auth/enroll/session', { code_auth: codeAuth })

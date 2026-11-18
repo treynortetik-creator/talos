@@ -681,6 +681,32 @@ describe.skipIf(!haveTmux)('the tmux host (real tmux, private socket)', () => {
     expect(Date.now() - t0).toBeLessThan(30_000)
     await until(() => groupMembers(pid).length === 0, 10_000) // the sleep 300 too: the whole group got it
   }, 80_000)
+  // tmux marks a pane dead when its terminal closes and reads the exit status when it reaps the process: the two can come in
+  // either order, so for a moment a dead pane can show neither a status nor a signal. Seen under load (the signal test above,
+  // 2 runs in 10): the exit was reported with code null and signal null, which Main reads as a crash, a clean exit included.
+  it('a dead pane whose exit status tmux has not read yet is asked again, never reported with no code', async () => {
+    let early = 1
+    const racing: typeof runTool = async (argv, env, ms) => {
+      const r = await runTool(argv, env, ms)
+      if (early > 0 && argv.some((a) => a.includes('#{pane_dead_status}'))) {
+        const [row = '', ...rest] = r.out.split('\n')
+        const f = row.split('|')
+        if (f[1] === '1') {
+          early--
+          f[2] = ''
+          f[3] = ''
+          return { ...r, out: [f.join('|'), ...rest].join('\n') }
+        }
+      }
+      return r
+    }
+    const { h } = host('t-early', 50, { run: racing })
+    const ex = exited(h)
+    await h.start(launch(['sh', '-c', 'sleep 0.3; exit 7'], { session: 't-early' }))
+    const r = await Promise.race([ex, new Promise<null>((res) => setTimeout(() => res(null), 20_000))])
+    expect(early).toBe(0) // the read that came too early did happen
+    expect(r).toMatchObject({ code: 7, signal: null, hostLost: false })
+  }, 30_000)
   // P3d3: the pointer is typed without Enter, looked at, then submitted with Enter alone; our own line can be backspaced away
   it('text without Enter, Enter alone and Backspaces arrive as typed; a line break is refused', async () => {
     const { h } = host('t-type')

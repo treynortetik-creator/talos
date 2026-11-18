@@ -8,7 +8,7 @@ final class BridgeGuardTests: XCTestCase {
     private func allows(
         main: Bool = true, origin: Origin? = nil, page: String = "https://relay.example.test/threads"
     ) -> Bool {
-        guardian.allowsPluginCall(isMainFrame: main, frameOrigin: origin ?? relay, pageURL: URL(string: page))
+        guardian.allowsPluginCall(isMainFrame: main, frameOrigin: origin ?? relay, pageURL: URL(string: page), trust: .pass)
     }
 
     func testAllowsTopFrameOnRelay() {
@@ -39,8 +39,8 @@ final class BridgeGuardTests: XCTestCase {
     }
 
     func testDropsWhenOriginOrPageUnknown() {
-        XCTAssertFalse(guardian.allowsPluginCall(isMainFrame: true, frameOrigin: nil, pageURL: URL(string: "https://relay.example.test/")))
-        XCTAssertFalse(guardian.allowsPluginCall(isMainFrame: true, frameOrigin: relay, pageURL: nil))
+        XCTAssertFalse(guardian.allowsPluginCall(isMainFrame: true, frameOrigin: nil, pageURL: URL(string: "https://relay.example.test/"), trust: .pass))
+        XCTAssertFalse(guardian.allowsPluginCall(isMainFrame: true, frameOrigin: relay, pageURL: nil, trust: .pass))
     }
 
     func testDropsMediaPaths() {
@@ -61,7 +61,7 @@ final class BridgeGuardTests: XCTestCase {
     func testCapacitorSchemeRelayDenied() {
         // A build with no relay configured has the capacitor://localhost origin: still a valid, closed origin.
         let g = BridgeGuard(relayURL: URL(string: "capacitor://localhost")!)!
-        XCTAssertFalse(g.allowsPluginCall(isMainFrame: true, frameOrigin: relay, pageURL: URL(string: "https://relay.example.test/")))
+        XCTAssertFalse(g.allowsPluginCall(isMainFrame: true, frameOrigin: relay, pageURL: URL(string: "https://relay.example.test/"), trust: .pass))
     }
 
     func testSafariRouting() {

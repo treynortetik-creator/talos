@@ -70,7 +70,7 @@ final class ReviewI0Tests: XCTestCase {
         ] {
             let o = host.isEmpty ? nil : Origin(scheme: scheme, host: host, port: port)
             XCTAssertFalse(guardian.allowsPluginCall(
-                isMainFrame: true, frameOrigin: o, pageURL: URL(string: "https://relay.example.test/")), "\(scheme)://\(host):\(port)")
+                isMainFrame: true, frameOrigin: o, pageURL: URL(string: "https://relay.example.test/"), trust: .pass), "\(scheme)://\(host):\(port)")
         }
     }
 }

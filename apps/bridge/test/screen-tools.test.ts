@@ -103,6 +103,32 @@ describe('the screen client', () => {
     )
   })
 
+  test('an agent click the Mac dropped on an approval button reaches the agent as the Mac sentence, never as sent', async () => {
+    const h = home()
+    const text =
+      "That click or key was on a button that answers an approval card or a permission prompt. Only the owner's own click or key does that, so Talos dropped it and nothing was answered. Ask the owner to answer it."
+    await fakeSocket(h, () => JSON.stringify({ v: 1, ok: false, error: { code: 'protected_prompt', text } }))
+    for (const req of [
+      { op: 'click', x: 1, y: 2 },
+      { op: 'key', keys: 'return' },
+      { op: 'type', text: '\n' },
+    ]) {
+      const a = await screenRequest(h, req, mac)
+      expect(a.ok).toBe(false)
+      expect(refusalText(a as never)).toBe(text)
+    }
+  })
+
+  test('an event Talos could not confirm reaches the agent as the Mac sentence: not sent, not failed', async () => {
+    const h = home()
+    const text =
+      "The click or key went to Talos's own window, but Talos did not confirm it was handled in time, so it may or may not have landed. Take a screenshot to check before trying again."
+    await fakeSocket(h, () => JSON.stringify({ v: 1, ok: false, error: { code: 'delivery_unverified', text } }))
+    const a = await screenRequest(h, { op: 'click', x: 1, y: 2 }, mac)
+    expect(a.ok).toBe(false)
+    expect(refusalText(a as never)).toBe(text)
+  })
+
   test('not a Mac: refused without touching anything', async () => {
     const a = await screenRequest(home(), { op: 'apps' }, { platform: 'linux' })
     expect(refusalText(a as never)).toBe('The screen tools work only on a Mac running Talos.app. Nothing was done.')
@@ -238,7 +264,9 @@ describe('the tools, through callTool', () => {
     expect(textOf(await callTool(ctx, 'screen_click', { x: 10, y: 20, button: 'right', count: 2 }))).toBe(
       'Clicked at 10, 20.',
     )
-    expect(textOf(await callTool(ctx, 'screen_type', { text: 'héllo' }))).toBe('Typed 5 characters.')
+    expect(textOf(await callTool(ctx, 'screen_type', { text: 'héllo' }))).toBe(
+      'Typed 5 characters and verified: the field now shows them.',
+    )
     expect(textOf(await callTool(ctx, 'screen_key', { keys: 'cmd+s' }))).toBe('Pressed cmd+s.')
     expect(textOf(await callTool(ctx, 'screen_scroll', { x: 1, y: 2, dy: -40 }))).toBe('Scrolled at 1, 2.')
     expect(textOf(await callTool(ctx, 'screen_open_app', { bundle_id: 'com.example.notes' }))).toBe(
@@ -261,13 +289,29 @@ describe('the tools, through callTool', () => {
     answer = { read_back: 'verified' }
     let r = await callTool(ctx, 'screen_type', { text: 'héllo' })
     expect(r.isError).toBeUndefined()
-    expect(textOf(r)).toBe('Typed 5 characters.')
-    for (const a of [{ read_back: 'unverified' }, {}]) {
+    expect(textOf(r)).toBe('Typed 5 characters and verified: the field now shows them.')
+    for (const a of [{ read_back: 'unverified' }, {}, { read_back: 'something newer' }]) {
       answer = a
       r = await callTool(ctx, 'screen_type', { text: 'héllo' })
       expect(r.isError).toBeUndefined()
-      expect(textOf(r)).toBe("Sent 5 characters (the field can't be read back to check them).")
+      expect(textOf(r)).toBe(
+        "Typed 5 characters, could not verify (this app's text isn't readable). It may not have landed: check with screen_shot.",
+      )
+      expect(textOf(r)).not.toMatch(/^Typed 5 characters\.$/)
     }
+    answer = { read_back: 'unverified_return' }
+    r = await callTool(ctx, 'screen_type', { text: 'ls\n' })
+    expect(r.isError).toBeUndefined()
+    expect(textOf(r)).toBe(
+      'Typed 3 characters, could not verify: the text included Return, so the field may have been submitted or cleared. Check with screen_shot.',
+    )
+    expect(textOf(r)).not.toMatch(/type again|did not land/i)
+    answer = { read_back: 'unchanged' }
+    r = await callTool(ctx, 'screen_type', { text: 'héllo' })
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toBe(
+      'Typing did not land: the field is the same after 5 characters were sent. Click into the field with screen_click, then type again, and check with screen_shot.',
+    )
     answer = { read_back: 'mismatch', field_suffix: 'llo' }
     r = await callTool(ctx, 'screen_type', { text: 'héllo' })
     expect(r.isError).toBeUndefined()

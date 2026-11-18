@@ -99,21 +99,41 @@ test('on touch the hit area is 44 by 44 and overlaps no neighbour', async ({ pag
   for (const n of [1, 2]) {
     const r = row(page, n)
     await r.scrollIntoViewIfNeeded()
-    const b = await box(r.getByRole('button', { name: 'Copy message' }))
+    await expect(r.getByRole('button', { name: 'Copy message' })).toBeVisible()
+    // every box in one synchronous read: the list may still be scrolling to its newest message, and boxes read in
+    // separate calls can come from different scroll positions (a false overlap, 22798ca); one frame is one layout
+    const m = await r.evaluate((el) => {
+      const rect = (e: Element | null) => {
+        if (!e) return null
+        const b = e.getBoundingClientRect()
+        return { x: b.x, y: b.y, width: b.width, height: b.height }
+      }
+      const copy = el.querySelector('button[aria-label="Copy message"]')
+      const time = el.querySelector('time')
+      // nothing above the time line: not the text, not the Run control, not a link
+      const line = time?.parentElement
+      const above: Element[] = []
+      for (let s = line?.previousElementSibling ?? null; s; s = s.previousElementSibling) above.unshift(s)
+      return {
+        copy: rect(copy),
+        above: above.map(rect),
+        run: ['run-button', 'run-control'].map((t) => rect(el.querySelector(`[data-testid="${t}"]`))),
+        listen: rect(el.querySelector('[data-testid="speak"]')),
+      }
+    })
+    const b = m.copy as Box
+    expect(b, 'Copy is there').not.toBeNull()
     expect(b.width).toBeGreaterThanOrEqual(44)
     expect(b.height).toBeGreaterThanOrEqual(44)
-    // nothing above the time line: not the text, not the Run control, not a link
-    const above = r.locator('time').first().locator('xpath=ancestor::div[1]/preceding-sibling::*')
-    for (let i = 0; i < (await above.count()); i++) {
-      const o = await above.nth(i).boundingBox()
-      if (o) expect(hits(b, o), `Copy hits block ${i} of row C${n}`).toBe(false)
-    }
-    for (const sel of ['run-button', 'run-control']) {
-      const o = (await r.getByTestId(sel).count()) > 0 ? await r.getByTestId(sel).first().boundingBox() : null
-      if (o) expect(hits(b, o), `Copy hits ${sel}`).toBe(false)
-    }
-    const listen = await box(r.getByTestId('speak'))
-    expect(hits(b, listen), 'Copy hits Listen').toBe(false)
+    m.above.forEach((o, i) => {
+      if (o && o.width > 0 && o.height > 0) expect(hits(b, o), `Copy hits block ${i} of row C${n}`).toBe(false)
+    })
+    m.run.forEach((o, i) => {
+      if (o && o.width > 0 && o.height > 0)
+        expect(hits(b, o), `Copy hits ${['run-button', 'run-control'][i]}`).toBe(false)
+    })
+    expect(m.listen, 'Listen is there').not.toBeNull()
+    expect(hits(b, m.listen as Box), 'Copy hits Listen').toBe(false)
   }
 })
 

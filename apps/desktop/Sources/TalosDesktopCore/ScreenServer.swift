@@ -122,7 +122,9 @@ public struct ScreenProtocol: Sendable {
         switch t.readBack {
         case .verified: body["read_back"] = "verified"
         case .mismatch(let suffix): body["read_back"] = "mismatch"; body["field_suffix"] = suffix
+        case .unchanged: body["read_back"] = "unchanged"
         case .unverified: body["read_back"] = "unverified"
+        case .unverifiedReturn: body["read_back"] = "unverified_return"
         }
         return Self.ok(id: id, body)
       case "key":
@@ -226,7 +228,7 @@ public struct ScreenProtocol: Sendable {
   }
 
   /// An app that is not on the list: measured here, so the bridge can ask the owner about exactly this app. An app that can never be
-  /// on the list (unsigned, no app id, Talos) is said so in words, with no `ask`.
+  /// on the list (unsigned, no app id) is said so in words, with no `ask`.
   func notAllowed(id: String?, app: String, subject: ScreenSubject) -> Data {
     let found: ScreenCodeLookup
     switch subject {
@@ -236,7 +238,6 @@ public struct ScreenProtocol: Sendable {
     let plain = ScreenRefusal.appNotAllowed(app: app)
     switch found {
     case .signed(let who):
-      if ScreenCore.isTalos(who.bundleID) { return Self.error(id: id, code: ScreenRefusal.talosItself.code, text: ScreenRefusal.talosItself.reason) }
       let ask = asks.record(who)
       return Self.error(id: id, code: plain.code, text: plain.reason, app: who.bundleID, extra: ["ask": ask, "app_name": who.name])
     case .unsigned(let name):

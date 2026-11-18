@@ -30,6 +30,7 @@ import {
   PushSubscriptionJson,
   parseFrame,
   routes as protocolRoutes,
+  RELAY_DESCRIPTOR_PATH,
   sha256Hex,
   ThreadId,
   verifyOwnerFrame,
@@ -62,6 +63,7 @@ import { type Conn, FrameRejected } from './hub.ts'
 import { cleanName, dispositionHeader, parseRange } from './media.ts'
 import { registerProblems } from './problems.ts'
 import { pushEndpointAllowed } from './push.ts'
+import { relayDescriptor } from './relay-descriptor.ts'
 import { type CoreRuntime, findRuntime, runtimeOf } from './runtime.ts'
 import { registerShare, shareBytesSince } from './share.ts'
 import { isInlineMime, sniffMime } from './sniff.ts'
@@ -80,7 +82,13 @@ const APP_PERMISSIONS_POLICY =
   'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=(), fullscreen=()'
 const RESERVED = /^\/(api|hook|bridge|media|ws|healthz|p|\.well-known)(\/|$)/
 
+/** The descriptor's body per relay instance, made at register(): the public route only reads it. */
+const descriptors = new WeakMap<object, string>()
+
 export function register(services: RelayServices): void {
+  // built once, at start: the id is minted here, and a value the strict schema refuses (an over-long version) stops the
+  // boot with its reason instead of answering 500 to every app later
+  descriptors.set(services, JSON.stringify(relayDescriptor(services.db, services.env)))
   // Services made by createRelayServices carry a runtime; the unit-test fakes do not, and need no timers.
   findRuntime(services)?.start()
   registerProblems(services)
@@ -132,6 +140,17 @@ routes.get('/.well-known/apple-app-site-association', (c) => {
   return c.body(JSON.stringify(doc), 200, {
     'Content-Type': 'application/json',
     'Cache-Control': 'public, max-age=300',
+  })
+})
+
+// ---- relay descriptor (BYOR) ---------------------------------------------------------------------------------------
+// Public, no auth, no CORS: the app reads it natively. min_app is not a security check (a hostile relay can lie).
+routes.get(RELAY_DESCRIPTOR_PATH, (c) => {
+  const body = descriptors.get(c.get('services'))
+  if (body === undefined) return c.json({ error: 'not_found' }, 404) // never registered: not this relay's route
+  return c.body(body, 200, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'public, max-age=60',
   })
 })
 

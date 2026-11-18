@@ -1,7 +1,7 @@
 // A fake `claude` on PATH for doctor tests, so no test ever runs the real one.
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 export type FakeClaude = {
   /** `claude plugin list --json`: a JSON string to print, or 'unsupported' to exit 2 like an older CLI. */
@@ -66,7 +66,9 @@ exit 0
 export function withoutClaude(): () => void {
   const dir = mkdtempSync(join(tmpdir(), 'nc'))
   const before = process.env.PATH
-  process.env.PATH = dir
+  // keep the rest of PATH (the doctor's own children, such as sleep, must still start); drop only the folders that hold a claude
+  const kept = (before ?? '').split(delimiter).filter((d) => d && !existsSync(join(d, 'claude')))
+  process.env.PATH = [dir, ...kept].join(delimiter)
   return () => {
     process.env.PATH = before
   }

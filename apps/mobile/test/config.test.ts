@@ -193,7 +193,7 @@ describe('capacitor config', () => {
     const body = swiftBody(plugin, '@objc func clearGrant(')
     // the keys go first, then the marked notifications, picked by the tested matcher (PushCoreTests)
     expect(body).toMatch(
-      /NativeKeyStore\.clearAll\(\)\s*removeDelivered\(\s*pick: \{ delivered in\s*PushCore\.identifiersShowingText\(/,
+      /NativeKeyStore\.clearAll\(keyId: keyId\)\s*removeDelivered\(\s*pick: \{ delivered in\s*PushCore\.identifiersShowingText\(/,
     )
     // the marker is set by what the extension delivers (RichPush.deliver; RichPushTests checks it on every opened seal)
     const ext = withoutComments(readFileSync(new URL('ios/TalosPushExtension/NotificationService.swift', ROOT), 'utf8'))

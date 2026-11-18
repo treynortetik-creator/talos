@@ -22,10 +22,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Talos uses the camera when you take a photo to attach to a message.</string>
+	<string>Talos uses the camera to scan your relay's setup code and when you take a photo to attach to a message.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Talos uses the microphone for voice messages you record.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -74,7 +76,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 </dict>
 </plist>

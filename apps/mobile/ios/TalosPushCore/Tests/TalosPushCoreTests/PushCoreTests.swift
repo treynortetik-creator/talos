@@ -198,9 +198,13 @@ final class PushCoreIosWiringTests: XCTestCase {
 
     func testSignOutDeletesEveryKeychainItemTheNotificationsUse() {
         var deleted: [String] = []
-        PushCore.deleteNotificationSecrets { deleted.append($0) }
-        XCTAssertEqual(Set(deleted), ["enc", "act", "grant"])
+        let id = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        PushCore.deleteNotificationSecrets(keyId: id) { deleted.append($0) }
+        XCTAssertEqual(Set(deleted), ["enc.\(id)", "act.\(id)", "grant.\(id)"])
         XCTAssertEqual(deleted.count, 3)
+        var legacy: [String] = []
+        PushCore.deleteLegacyNotificationSecrets { legacy.append($0) }
+        XCTAssertEqual(Set(legacy), ["enc", "act", "grant"])
     }
 
     func testSignOutTakesOnlyOpenedWordsOffTheScreen() {

@@ -17,6 +17,7 @@ import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.
 import { Problem } from './problems.ts'
 import { ApnsRegistration, ApnsStatus } from './push.ts'
 import { NativeActWire, NativeGrant, NativeGrantRevoke } from './push-rich.ts'
+import { RELAY_DESCRIPTOR_PATH, RelayDescriptor } from './relay-descriptor.ts'
 import { SetupSpec } from './setup.ts'
 import { SharePostBody, ShareScope, ShareToken } from './share.ts'
 
@@ -40,7 +41,7 @@ export type RouteAuth =
   // The bug inbox on the Talos team's relay: no cookie; a Standard Webhooks signature with one install's BUG_INBOX_SECRETS
   // entry is the credential. One route.
   | 'bug-inbox'
-export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4' | 'ORG-PAGES'
+export type RouteOwner = 'WP-N0' | 'WP1' | 'WP2' | 'WP3' | 'WP4' | 'WP8' | 'WP-V1' | 'WP-V4' | 'ORG-PAGES' | 'BYOR'
 
 // ---- shared pieces ----------------------------------------------------------------------------------------------
 
@@ -901,6 +902,15 @@ export const routes = {
     auth: 'none',
     owner: 'WP8',
     note: 'webcredentials JSON from APNS_TEAM_ID + APNS_BUNDLE_ID (WP-I6); 404 JSON when either is unset',
+  },
+  talosRelay: {
+    id: 'talosRelay',
+    method: 'GET',
+    path: RELAY_DESCRIPTOR_PATH,
+    auth: 'none',
+    owner: 'BYOR',
+    res: RelayDescriptor,
+    note: 'public descriptor {protocol, relay_version, relay_id, kind, min_app}; min_app is not a security check',
   },
 } as const satisfies Record<string, RouteDef>
 

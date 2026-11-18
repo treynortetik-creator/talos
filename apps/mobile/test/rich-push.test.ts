@@ -55,22 +55,37 @@ describe('rich notifications: native wiring', () => {
     expect(keys).toMatch(/kSecAttrAccessGroup: group/)
   })
 
-  it('a button press is done in the background against the compiled relay only, with no message text in any notification it shows', () => {
+  it('a button press is done in the background against the active relay only, with no message text in any notification it shows', () => {
     const q = read('ios/App/App/Plugins/TalosQuickAct.swift')
-    expect(q).toMatch(/CompiledRelay\.url\(\)/)
-    expect(q).toMatch(/RichPush\.actURL\(relay: relay\)/)
+    expect(q).toMatch(/SharedRelayOrigin\.currentActive\(\)/)
+    expect(q).not.toMatch(/CompiledRelay/)
+    expect(q).toMatch(/RichPush\.actURL\(relay: active\.origin\)/)
+    // the keys and grant are the active pairing's own. A press on a push from another relay is refused before any key is read, and
+    // button data without the extension's MAC before the action key or the grant is read (behaviour: TalosQuickActTests)
+    expect(q).toMatch(/NativeKeyStore\.grant\(keyId: \$0\)/)
+    const at = (needle: string) => q.indexOf(needle, q.indexOf('static func run('))
+    expect(at('pressMatchesActiveKey')).toBeGreaterThan(-1)
+    expect(at('pressMatchesActiveKey')).toBeLessThan(at('env.encKey(keyId)'))
+    expect(at('pressIsAuthentic')).toBeLessThan(at('env.grant(keyId)'))
+    expect(at('pressIsAuthentic')).toBeLessThan(at('env.actKey(keyId)'))
+    // the app is looked at again just before the frame goes out
+    expect(q.match(/env\.activeRelay\(\)/g)).toHaveLength(2)
     expect(q).not.toMatch(/userInfo\[.*(url|host|relay|navigate)/i)
     expect(q).not.toMatch(/print\(|NSLog|os_log/)
     // the Reply text is read once and handed to the signer; it is named nowhere else, so no failure message can be built from it
     expect(withoutComments(q), 'a message with a value spliced into it').not.toMatch(/"[^"\n]*\\\(/)
     const code = withoutComments(q).replace(/"[^"\n]*"/g, '""') // string literals are fixed words
     expect(code.match(/\btext\b/g)).toHaveLength(2) // `let text = ...userText` and `userText: text`
-    expect(code.match(/\buserText\b/g)).toHaveLength(2)
+    // `.userText` (read once), `userText: text` (handed to `run`), the `run` parameter, and `userText: userText` (to the signer's parser)
+    expect(code.match(/\buserText\b/g)).toHaveLength(5)
     // every notification the failure path shows takes its body from the fixed words it was called with
     expect(swiftBody(code, 'private static func fail')).toMatch(/content\.body = message\b/)
     // an Approve is checked against what the notification on the screen displayed, not against its data alone
     expect(code).toMatch(
-      /let content = response\.notification\.request\.content\s*let shown = RichPush\.Shown\(title: content\.title, subtitle: content\.subtitle, body: content\.body\)\s*guard let act = RichPush\.act\(for: action, shown: shown, userInfo: content\.userInfo/,
+      /let content = response\.notification\.request\.content\s*let shown = RichPush\.Shown\(title: content\.title, subtitle: content\.subtitle, body: content\.body\)\s*run\(action, shown: shown, userInfo: content\.userInfo/,
+    )
+    expect(swiftBody(code, 'static func run(')).toMatch(
+      /guard let act = RichPush\.act\(for: action, shown: shown, userInfo: userInfo/,
     )
     // the delegate hands these two buttons to the quick-act path before it ever reaches the page
     const plugin = read('ios/App/App/Plugins/TalosPush.swift')
@@ -92,5 +107,23 @@ describe('rich notifications: native wiring', () => {
     expect(read('ios/TalosPushShared/NativeKeyStore.swift')).toMatch(
       /grantNamesKeys\(json, encPub: keys\.encPub, actPub: keys\.actPub\)/,
     )
+    // keys are per relay: each call names the relay of the page that made it, never a value the page sends
+    for (const n of ['nativeKeys', 'storeGrant', 'clearGrant']) {
+      const body = plugin.split(new RegExp(`@objc func ${n}\\(`))[1]?.split('@objc')[0] ?? ''
+      expect(body, n).toMatch(/TalosPluginGate\.keyId\(bridge\)/)
+      expect(body, n).not.toMatch(/call\.getString\("relay/)
+    }
+  })
+
+  it('the extension opens a push with the key of the relay that sealed it and gives buttons only to the active relay', () => {
+    const svc = read('ios/TalosPushExtension/NotificationService.swift')
+    expect(svc).toMatch(/candidates: NativeKeyStore\.sealCandidates\(store: store\)/)
+    expect(svc).toMatch(/keyId: \$0\.keyId, sealKey: \$0\.key, activeKeyId: activeKeyId/)
+    // the relay list is read once and shared by both questions
+    expect(svc.match(/NativeKeyStore\.relayStore\(\)/g)).toHaveLength(1)
+    // no relay id is read out of the push itself
+    expect(svc).not.toMatch(/relay_id|relayId"\]/)
+    // the extension target links the relay list it reads the active relay from
+    expect(read('ios/App/project.yml').split('  TalosPushExtension:')[1] ?? '').toMatch(/package: TalosRelayCore/)
   })
 })

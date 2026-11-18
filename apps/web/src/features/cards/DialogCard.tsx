@@ -75,6 +75,7 @@ export function DialogCard({
       data-card-id={card.id}
       data-card-state={phase}
       data-card-kind="dialog"
+      data-talos-protected=""
       data-payload-hash={hash}
       className={cn('incised rounded-card border bg-surface p-4', tone, pulse && 'ring-2 ring-accent')}
     >

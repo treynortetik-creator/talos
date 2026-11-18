@@ -257,6 +257,7 @@ function enrollCli(env: BridgeEnv, io: CliIO, deps: CliDeps): EnrollCli {
   return {
     http: () => httpFor(env),
     relayUrl: () => needRelay(env),
+    bridgeKeyB64: async () => (await loadBridgeKey(paths(env.home))).publicKeyB64,
     bridge: () => describeBridge(bridgeLiveness(p.status, io.now(), deps.alive)),
     renderQr: (t) => renderQr(t),
     keyRefusedHint: (e) => keyRefusedHint(env, e),

@@ -2503,6 +2503,94 @@ ${script}
     expect(masks.some((m) => JSON.stringify(m) === JSON.stringify(rows))).toBe(true)
   }, 30000)
 
+  it('an fp field (the bridge key fingerprint) joins the shown link and its QR; a bad one is error link; none is as before', async () => {
+    const FP = `${'A'.repeat(42)}b`
+    const mk = (extra: Record<string, unknown>) =>
+      ev({ event: 'link', link: LINK, expires_at: '2026-11-12T20:00:00Z', ...extra })
+    const good = await drive([mk({ fp: FP }), confirm, answerPart].join('\n'))
+    expect(good.events[0]).toEqual({
+      event: 'link',
+      link: `${LINK}&fp=${FP}`,
+      host: 'relay.example.com',
+      expires_at: '2026-11-12T20:00:00Z',
+      fp: FP,
+    })
+    const rows = good.events[1]?.rows as string[]
+    const code = `import { encode } from 'uqr'; console.log(JSON.stringify(encode(process.argv[1], { ecc: 'M', boostEcc: false, border: 0, maskPattern: Number(process.argv[2]) }).data.map((x) => x.map((b) => (b ? '1' : '0')).join(''))))`
+    const masks = [...Array(8).keys()].map((m) =>
+      JSON.parse(
+        spawnSync('bun', ['-e', code, `${LINK}&fp=${FP}`, String(m)], {
+          cwd: join(ROOT, 'apps', 'bridge'),
+          encoding: 'utf8',
+        }).stdout,
+      ),
+    )
+    expect(masks.some((m) => JSON.stringify(m) === JSON.stringify(rows))).toBe(true)
+    for (const bad of [`${'A'.repeat(42)}`, `${FP}A`, `${'A'.repeat(42)}+`, 7, null, '']) {
+      const r = await drive(mk({ fp: bad }))
+      expect(r.events, String(bad)).toEqual([{ event: 'error', code: 'link' }])
+    }
+    const none = await drive([mk({}), confirm, answerPart].join('\n'))
+    expect(none.events[0]).toEqual({
+      event: 'link',
+      link: LINK,
+      host: 'relay.example.com',
+      expires_at: '2026-11-12T20:00:00Z',
+    })
+    // a warning with a code pair.py does not name is dropped, not shown
+    const warn = await drive(
+      [ev({ event: 'warning', code: 'made_up', text: 'x' }), mk({}), confirm, answerPart].join('\n'),
+    )
+    expect(warn.events.map((e) => e.event)).toEqual(['link', 'qr', 'confirm', 'answered', 'pinned'])
+  }, 60000)
+
+  it('passes the no_fp and old_relay warnings as their code alone, and still drops any other warning', async () => {
+    const link = ev({ event: 'link', link: LINK, expires_at: '2026-11-12T20:00:00Z' })
+    for (const code of ['no_fp', 'old_relay']) {
+      const r = await drive(
+        [ev({ event: 'warning', code, text: 'enroll text that is not shown' }), link, confirm, answerPart].join('\n'),
+      )
+      expect(r.events.map((e) => e.event)).toEqual(['warning', 'link', 'qr', 'confirm', 'answered', 'pinned'])
+      expect(r.events[0]).toEqual({ event: 'warning', code })
+    }
+    const other = await drive(
+      [ev({ event: 'warning', code: 'made_up', text: 'x' }), link, confirm, answerPart].join('\n'),
+    )
+    expect(other.events.map((e) => e.event)).toEqual(['link', 'qr', 'confirm', 'answered', 'pinned'])
+  }, 60000)
+
+  it('QR versions 11 and 12 (links of 214 to 287 bytes) are the very matrix the bridge encoder (uqr) makes, for every mask', () => {
+    const lens = [213, 214, 251, 252, 260, 287]
+    const py = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('pair', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(json.dumps({n: [m.qr_rows('https://r.example/' + 'a' * (n - 18), mask=k) for k in range(8)] for n in map(int, sys.argv[2:])}))`
+    const mine = JSON.parse(
+      spawnSync('python3', ['-I', '-c', py, PAIR, ...lens.map(String)], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TALOS_PAIR_TESTING: '1' },
+      }).stdout,
+    ) as Record<string, string[][]>
+    const code = `import { encode } from 'uqr'; const out = {}; for (const n of process.argv.slice(1).map(Number)) out[n] = [0,1,2,3,4,5,6,7].map((k) => encode('https://r.example/' + 'a'.repeat(n - 18), { ecc: 'M', boostEcc: false, border: 0, maskPattern: k }).data.map((x) => x.map((b) => (b ? '1' : '0')).join(''))); console.log(JSON.stringify(out))`
+    const theirs = JSON.parse(
+      spawnSync('bun', ['-e', code, ...lens.map(String)], { cwd: join(ROOT, 'apps', 'bridge'), encoding: 'utf8' })
+        .stdout,
+    ) as Record<string, string[][]>
+    for (const n of lens) expect(mine[String(n)], `${n} bytes`).toEqual(theirs[String(n)])
+    expect(mine['287']?.[0]?.length).toBe(65) // version 12
+  }, 60000)
+
+  it('a link too long for version 12-M still shows as text, with a qr event of no rows and reason too_long', async () => {
+    const long = `https://${['a', 'b', 'c', 'd', 'e'].map((c) => c.repeat(60)).join('.')}.example.com`
+    const r = await drive(
+      [ev({ event: 'link', link: `${long}/enroll#${CODE}`, expires_at: 'x' }), confirm, answerPart].join('\n'),
+      'y',
+      long,
+    )
+    expect(r.events[0]?.event).toBe('link')
+    expect(r.events[1]).toEqual({ event: 'qr', rows: [], reason: 'too_long' })
+  }, 30000)
+
   it('refuses a link to any other host, or one hiding the host behind a login: an error, and no QR', async () => {
     for (const link of [
       `https://evil.example.net/enroll#${CODE}`,

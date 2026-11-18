@@ -79,6 +79,34 @@ public enum RichPush {
         }
     }
 
+    /// One pairing's seal key, for `open(envelope:candidates:kind:cardId:)`. `keyId` is the phone-minted id of the pairing
+    /// (`PushCore.keychainAccount`), not the relay's own id.
+    public struct SealCandidate {
+        public let keyId: String
+        public let key: P256.KeyAgreement.PrivateKey
+        public let deviceId: String
+
+        public init(keyId: String, key: P256.KeyAgreement.PrivateKey, deviceId: String) {
+            self.keyId = keyId
+            self.key = key
+            self.deviceId = deviceId
+        }
+    }
+
+    /// Opens a seal with each stored pairing's key in turn. The seal opens only with the key (and device id) of the pairing that
+    /// made it, so the pairing that opened it IS the push's relay: nothing the push says about where it came from is believed.
+    /// nil when no stored pairing's key opens it.
+    public static func open(envelope: [String: Any], candidates: [SealCandidate], kind: String, cardId: String?)
+        -> (keyId: String, key: P256.KeyAgreement.PrivateKey, content: RichContent)?
+    {
+        for c in candidates {
+            if let content = open(envelope: envelope, key: c.key, deviceId: c.deviceId, kind: kind, cardId: cardId) {
+                return (c.keyId, c.key, content)
+            }
+        }
+        return nil
+    }
+
     static func content(from plain: Data) -> RichContent? {
         guard let json = try? JSONSerialization.jsonObject(with: plain) as? [String: Any],
               json["v"] as? Int == 1, let body = json["b"] as? String, let kind = json["k"] as? String else { return nil }
@@ -133,7 +161,16 @@ public enum RichPush {
     /// What the extension shows for a push Apple delivered as `inbound`, given what its seal held (nil when there was no seal
     /// or it did not open). Button data and a Reply or Approve category come only from a seal this phone opened: whatever the
     /// relay put there itself is dropped, so a push that did not open is plain, with no button that signs.
-    public static func deliver(_ inbound: Delivery, opened: RichContent?) -> Delivery {
+    ///
+    /// `keyId` and `sealKey` are the pairing whose key opened the seal and `activeKeyId` the pairing the app is on. A push from any
+    /// other pairing shows its words with no Reply or Approve and no button data, so a press can never act for a relay the app has
+    /// left. The buttons' data names the pairing (`r`) and carries a MAC (`m`) made with a key derived from the seal key
+    /// (`richMac`), which only this extension can make: a push that skipped the extension cannot forge button data a press will
+    /// accept. Without a `keyId` the buttons carry neither, and a press refuses them.
+    public static func deliver(
+        _ inbound: Delivery, opened: RichContent?, keyId: String? = nil, sealKey: P256.KeyAgreement.PrivateKey? = nil,
+        activeKeyId: String? = nil
+    ) -> Delivery {
         var out = inbound
         out.userInfo.removeValue(forKey: richKey)
         if signingCategories.contains(out.category) { out.category = "" }
@@ -148,6 +185,7 @@ public enum RichPush {
         out.body = content.body
         // Marks this notification as holding opened words, so sign-out and "fixed phrase only" can take it off the screen.
         out.userInfo[PushCore.textMarkerKey] = PushCore.textMarkerValue
+        if let keyId, keyId != activeKeyId || sealKey == nil { return out }
         if let category = category(for: content) {
             out.category = category
             // What the app needs to act on a button press, taken from inside the seal: where a Reply goes, which card an
@@ -156,6 +194,10 @@ public enum RichPush {
             if let t = content.threadId { rich["t"] = t }
             if let id = content.cardId { rich["c"] = id }
             if let h = content.payloadHash { rich["h"] = h }
+            if let keyId, let sealKey {
+                rich["r"] = keyId
+                rich["m"] = richMac(rich, key: sealKey)
+            }
             out.userInfo[richKey] = rich
         }
         return out
@@ -296,6 +338,51 @@ public enum RichPush {
             guard seen == stored else { return nil }
             return .approve(cardId: card, payloadHash: hash, shown: seen)
         }
+    }
+
+    /// True when the notification's buttons were made for the pairing the app is on now. A press on a push from another relay, or
+    /// one that names no pairing, is refused before any key is read. This only compares names: `pressIsAuthentic` is what proves
+    /// the extension made them.
+    public static func pressMatchesActiveKey(userInfo: [AnyHashable: Any], activeKeyId: String?) -> Bool {
+        guard let activeKeyId, let rich = userInfo[richKey] as? [String: String], let id = rich["r"] else { return false }
+        return id == activeKeyId
+    }
+
+    // MARK: the MAC on a notification's button data
+
+    /// The HKDF info string of the MAC key.
+    static let macInfo = "talos-rich/v1 hmac"
+    /// The button data the MAC covers, in this order. `m` itself is not covered.
+    static let macFields = ["r", "t", "c", "h", "shown"]
+
+    /// The exact bytes the MAC covers: the ASCII text `talos-rich/v1`, then for each field of `macFields` in order a line break and
+    /// `<field>=<UTF-8 byte count>:<value>` (a field that is absent counts as an empty value), all as UTF-8. The byte counts keep
+    /// one field's value from running into the next.
+    public static func richMacInput(_ rich: [String: String]) -> Data {
+        var s = "talos-rich/v1"
+        for field in macFields {
+            let value = rich[field] ?? ""
+            s += "\n\(field)=\(value.utf8.count):\(value)"
+        }
+        return Data(s.utf8)
+    }
+
+    /// HMAC-SHA256 over `richMacInput`, base64url, keyed by HKDF-SHA256(secret: the seal private key's 32 raw bytes, empty salt,
+    /// info `talos-rich/v1 hmac`, 32 bytes).
+    public static func richMac(_ rich: [String: String], key: P256.KeyAgreement.PrivateKey) -> String {
+        Base64URL.encode(Data(HMAC<SHA256>.authenticationCode(for: richMacInput(rich), using: macKey(key))))
+    }
+
+    private static func macKey(_ key: P256.KeyAgreement.PrivateKey) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: key.rawRepresentation), salt: Data(), info: Data(macInfo.utf8), outputByteCount: 32)
+    }
+
+    /// True when the button data carries a MAC made with this pairing's seal key over exactly the fields it holds. A missing or
+    /// wrong `m` (a push that never went through the extension, or button data changed after it) is false.
+    public static func pressIsAuthentic(userInfo: [AnyHashable: Any], sealKey: P256.KeyAgreement.PrivateKey) -> Bool {
+        guard let rich = userInfo[richKey] as? [String: String], let m = rich["m"], let tag = Base64URL.decode(m) else { return false }
+        return HMAC<SHA256>.isValidAuthenticationCode(tag, authenticating: richMacInput(rich), using: macKey(sealKey))
     }
 
     public enum Outcome: Equatable, Sendable {

@@ -44,6 +44,14 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # The nightly (a schedule run) posts under nightly-ci/ only, never over a commit's local-ci/* or report-ci/* (a push run's verdict
 # is final); exported for ci-local.sh. ci_ns <context> is locks.sh's (scripts/ci-runner.test.ts checks that the two agree).
 # The hostile nightly (CI_HOSTILE=1, from the workflow: its own schedule or a dispatch with hostile) posts under hostile-ci/.
+# A dispatch with nightly=nightly|hostile (CI_DISPATCH_NIGHTLY, from the workflow) is that nightly by hand, on the same path as its
+# schedule: from here on it is a schedule event (the skips, main-only guard, --full, nightly-ci/ or hostile-ci/, the alert). It is
+# remembered in CI_DISPATCH_NIGHTLY, which scripts/ci-runner/schedule.sh reads to keep a day's schedule of that kind from running twice.
+case "${GITHUB_EVENT_NAME:-}:${CI_DISPATCH_NIGHTLY:-}" in
+  workflow_dispatch:nightly) GITHUB_EVENT_NAME=schedule ;;
+  workflow_dispatch:hostile) GITHUB_EVENT_NAME=schedule CI_HOSTILE=1; export CI_HOSTILE ;;
+  *) unset CI_DISPATCH_NIGHTLY ;;
+esac
 [ "${GITHUB_EVENT_NAME:-}" != schedule ] || export CI_NIGHTLY=1
 ci_ns() { local ns=nightly-ci; if [ "${CI_HOSTILE:-}" = 1 ]; then ns=hostile-ci; elif [ "${CI_NIGHTLY:-}" != 1 ]; then printf '%s\n' "$1"; return 0; fi
   case "$1" in local-ci/*) printf '%s/%s\n' "$ns" "${1#local-ci/}" ;; ci-part/*) printf '%s/part-%s\n' "$ns" "${1#ci-part/}" ;;
@@ -196,7 +204,7 @@ ci_split_checks() {
 # ci_known_tools <list>: the tools test-parallel.ts knows (only tmux), comma-joined, from a list split on commas and spaces
 ci_known_tools() { printf '%s\n' "$1" | tr ', ' '\n\n' | grep -x tmux | sort -u | paste -sd, -; }
 ci_plan() {
-  local sha parts="" delphi="" cyclops="" hestia="" check=1 titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" t1 t2
+  local marker sha parts="" delphi="" cyclops="" hestia="" check=1 titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" t1 t2
   ci_guard || return 1
   case "${GITHUB_EVENT_NAME:-}" in
     pull_request) sha="$PR_HEAD_SHA" ;;
@@ -276,6 +284,12 @@ ci_plan() {
   fi
   # the hostile nightly runs everything on Lemnos, where its conditions are made: no part goes to another machine
   [ "${CI_HOSTILE:-}" != 1 ] || parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" check_titan="" check_wait=""
+  # a schedule on a local day a dispatched nightly of its kind already started does nothing (ci_schedule_skip, scripts/ci-runner/schedule.sh):
+  # the other machines' runners cannot see this machine's marker, so nothing is handed to them and their jobs do not run
+  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && [ -z "${CI_DISPATCH_NIGHTLY:-}" ] && . "$HERE/ci-runner/schedule.sh" &&
+    marker="$(ci_dispatch_marker "$([ "${CI_HOSTILE:-}" = 1 ] && echo hostile || echo nightly)")" && [ -e "$marker" ]; then
+    parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" check_titan="" check_wait=""
+  fi
   printf 'sha=%s\nremote_parts=%s\ndelphi=%s\ncyclops=%s\nhestia=%s\ntitan=%s\ntitan_prefix=%s\nremote_jobs=%s\nfallback=%s\nbrowser_e2e=%s\ne2e_wait=%s\nshard_tools=%s\ncheck_titan=%s\ncheck_wait=%s\n' \
     "$sha" "$parts" "$delphi" "$cyclops" "$hestia" "$titan" "$titan_prefix" "$remote_jobs" "$fallback" "$browser_e2e" "$e2e_wait" "$shard_tools" "$check_titan" "$check_wait"
 }

@@ -9,6 +9,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         configureAudioSession()
+        // Drops the single-relay notification keys and any pairing keys no stored relay owns.
+        RelayRuntime.live.sweepKeysAtLaunch()
         // Categories and the tap hand-off. This asks for nothing: permission is requested only from the Settings tap.
         TalosPushCenter.shared.install()
         // Crash and hang reports from the system wait for the page to send them (nothing leaves the phone from here).

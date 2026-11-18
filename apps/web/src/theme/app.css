@@ -52,18 +52,18 @@ a {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* ---- wordmark: TΛLOS, the lambda is Cinzel's own V flipped vertically ---- */
-.wordmark {
-  font-family: var(--font-brand); /* not --font-display: a theme (paper is Inter) may change that one */
-  font-weight: 900;
-  color: currentColor;
-  letter-spacing: 0.06em;
-  line-height: 1;
-  white-space: nowrap;
-}
-.wordmark-lambda {
-  display: inline-block;
-  transform: translateY(-0.17em) scaleY(-1); /* the flip is about the line box, not the cap height: lift it back to the baseline */
+/* ---- wordmark: TΛLOS, a vector (Wordmark.tsx); the span keeps the layout a line of text had. In the components layer,
+   so a caller's utilities (a colour on the sign-in page, a margin) still apply; the svg fills with that colour. ---- */
+@layer components {
+  .wordmark {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+  }
+  .wordmark svg {
+    display: block;
+    flex: none;
+  }
 }
 
 /* ---- mascot (8.9): a tondo, black-figure Talos in a terracotta disc with a black ring ---- */

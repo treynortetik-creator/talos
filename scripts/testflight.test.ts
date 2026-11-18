@@ -4,7 +4,7 @@
 import { spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const SCRIPT = resolve(__dirname, 'testflight.sh')
@@ -19,7 +19,9 @@ function git(cwd: string, ...args: string[]) {
   return r.stdout.trim()
 }
 
-function world() {
+const TRUST = 'apps/mobile/ios/BridgeGuard/Sources/BridgeGuard/RelayTrust.swift'
+// What RelayTrust.swift holds in the fake repo: the constant line, or null for no file at all.
+function world(trust: string | null = '    public static let verifiesTheMac = true') {
   const root = mkdtempSync(join(tmpdir(), 'tf-'))
   made.push(root)
   const origin = join(root, 'origin.git')
@@ -36,6 +38,10 @@ function world() {
   copyFileSync(SCRIPT, join(repo, 'scripts', 'testflight.sh'))
   mkdirSync(join(repo, 'apps', 'mobile', 'ios', 'App'), { recursive: true })
   writeFileSync(join(repo, 'apps', 'mobile', 'ios', 'App', 'project.yml'), 'name: App\n')
+  if (trust !== null) {
+    mkdirSync(dirname(join(repo, TRUST)), { recursive: true })
+    writeFileSync(join(repo, TRUST), `public final class RelayTrust {\n${trust}\n}\n`)
+  }
   git(repo, 'add', '-A')
   git(repo, 'commit', '-qm', 'one')
   git(repo, 'remote', 'add', 'origin', origin)
@@ -131,5 +137,32 @@ describe('testflight.sh and the relay host', () => {
     expect(r.code, r.out).toBe(0)
     const archive = w.calls().find((c) => c.startsWith('xcodebuild archive'))
     expect(archive).toContain('TALOS_RELAY_HOST=relay.example.test')
+  })
+})
+
+describe('testflight.sh and the attest guard', () => {
+  const cases: Array<[string, string | null]> = [
+    ['is false', '    public static let verifiesTheMac = false'],
+    ['is malformed', '    public static let verifiesTheMac = true // later'],
+    ['is missing', '    public static let somethingElse = true'],
+    ['has no file', null],
+  ]
+  for (const [name, trust] of cases) {
+    for (const args of [[], ['--dry-run']]) {
+      it(`refuses ${args.join(' ') || 'a real run'} when the constant ${name}, before any xcodebuild call`, () => {
+        const w = world(trust)
+        const r = w.run(args, {})
+        expect(r.code, r.out).toBe(65)
+        expect(r.out).toContain('verifiesTheMac')
+        expect(w.calls()).toEqual([])
+      })
+    }
+  }
+
+  it('proceeds in a dry run when the constant is true', () => {
+    const w = world()
+    const r = w.run(['--dry-run'], {})
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('dry run')
   })
 })

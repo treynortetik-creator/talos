@@ -19,13 +19,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HG = join(here, 'heavy-guard.sh')
 const HL = join(here, 'heavy-lock.sh')
 // macOS's own bash 3.2 where there is one, so a newer-bash-only construct goes red here
 const BASH = existsSync('/bin/bash') ? '/bin/bash' : 'bash'
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 const dirs: string[] = []
 const kids: ChildProcess[] = []
 afterEach(() => {

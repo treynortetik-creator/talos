@@ -248,6 +248,23 @@ while read -r _lref lsha rref rsha; do
   fi
 done
 [ "$ANY" = 1 ] || [ "$HANDOFF" = 1 ] || exit 0
+# The "Verified:" trailer (scripts/verified-trailer.sh, the verify skill): each commit says what was driven and where the evidence is,
+# or "none - <reason>". TALOS_VERIFIED_TRAILER=off|observe|enforce (default observe: one line to stderr and to the log for each
+# commit without it, never a refusal, whatever goes wrong inside the check). Only enforce can refuse, and nothing turns it on yet.
+VERIFIED_MODE="${TALOS_VERIFIED_TRAILER:-$(git config --get talos.verifiedTrailer 2>/dev/null)}"
+if [ "${VERIFIED_MODE:-observe}" != off ]; then
+  if [ -f scripts/verified-trailer.sh ]; then
+    printf '%s' "$PUSHES" | TALOS_VERIFIED_NOT="$REMOTE_MAIN" bash scripts/verified-trailer.sh
+    VERIFIED_RC=$?
+  else
+    echo "pre-push: scripts/verified-trailer.sh is missing, so the Verified: trailer check did not run" >&2
+    VERIFIED_RC=1
+  fi
+  if [ "$VERIFIED_RC" != 0 ] && [ "${VERIFIED_MODE:-observe}" = enforce ]; then
+    echo "pre-push: REFUSED: a commit has no Verified: trailer (above)" >&2
+    exit 1
+  fi
+fi
 personal || PERSONAL_RC=1
 if [ "$ANY" = 0 ]; then # handoff branches only: the personal-data check is all they get, and all they need here
   [ "$PERSONAL_RC" = 0 ] || { echo "pre-push: REFUSED: the personal-data check failed (above)" >&2; exit 1; }

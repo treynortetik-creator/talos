@@ -27,7 +27,7 @@ const HL = join(here, 'heavy-lock.sh')
 // HEAVY_LOCK_TIMEOUT of 1 or 2 stays as written: the test expects it to run out, or expects no wait at all
 const F = timeFactor()
 const secs = (s: number) => String(s * F)
-vi.setConfig({ testTimeout: 60_000 * F })
+vi.setConfig({ testTimeout: 60_000 * F, hookTimeout: 60_000 * F })
 const dirs: string[] = []
 const kids: ChildProcess[] = []
 // TERM first: heavy-lock.sh's trap then stops its command's own process group, which a KILL of the wrapper alone would leave

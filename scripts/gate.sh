@@ -6,6 +6,8 @@
 #   3. personal   check-no-personal on the working tree, with the maintainer's private list when this checkout or the main
 #                 checkout of the repository has one (it says so when there is none)
 #   4. size       the production file size budget (scripts/size-budget.test.ts)
+#   4b. swift     "swift build (<package>)": swift build --build-tests in each SwiftPM package a changed *.swift file or Package.swift /
+#                 Package.resolved belongs to, in the fast gate too. Not a Mac, or no swift: REFUSED (land it from a Mac)
 #   5. suites     the tests the change touches, from the changed paths against the base (see `plan_suites`), the e2e specs
 #                 among them (Playwright, one worker); --full runs every Vitest project, the whole bridge suite and every e2e
 #                 spec instead
@@ -160,7 +162,7 @@ fi
 # stays one path.
 # The Vitest projects' folders (vitest.config.ts `projects`).
 VITEST_ROOTS="packages/protocol packages/testkit packages/integrations apps/relay apps/web apps/mobile scripts"
-VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 WEB_ALL=0
+VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 WEB_ALL=0
 FOLDER_HITS=() # for --plan: which folder-listing test was picked for which folder
 # shellcheck source=scripts/gate/plan.sh
 . scripts/gate/plan.sh
@@ -220,11 +222,15 @@ IFS= read -r -d '' PLAN_CHECK_JS < scripts/gate/plan-check.cjs || true
 # --fast asks; with --full, --checks-only or inside the lock it is not a fast gate (each says what it runs)
 { [ "$FULL" = 1 ] || [ "$CHECKS_ONLY" = 1 ] || [ "$IN_LOCK" = 1 ]; } && FAST=0
 ASK_FAST="$FAST"
-if [ "$FULL" = 1 ]; then VIT_ALL=1 BUN_ALL=1 E2E_ALL=1 OLD=1 WEB_ALL=1; else
+if [ "$FULL" = 1 ]; then
+  VIT_ALL=1 BUN_ALL=1 E2E_ALL=1 OLD=1 WEB_ALL=1
+  plan_swift_all # no changed list in --full: every Swift package is built
+else
   plan_suites || refuse "planning the suites failed (exit $?): nothing runs on a plan that did not finish"
   [ "$FAST" = 0 ] || fast_plan
   plan_corepack
   plan_check
+  plan_swift # outside the second count: it reads the same CHANGED list and nothing else
 fi
 if [ "$ASK_FAST" = 1 ]; then
   if [ "$FAST" = 1 ]; then
@@ -234,7 +240,7 @@ if [ "$ASK_FAST" = 1 ]; then
     [ "$PLAN" = 0 ] && declare -F fast_fallback_log >/dev/null && fast_fallback_log # one line for the evidence (gate-fast.sh)
   fi
 fi
-if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0 COREPACK=0; fi
+if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0 COREPACK=0; fi
 [ -d e2e ] || E2E_ALL=0 # a checkout with no e2e package has no e2e to run (the hook's tests run in such a clone)
 [ -d e2e ] && [ -f scripts/old-client.sh ] || OLD=0 # nor the old-client step, nor one without its script
 [ -f apps/web/playwright.config.ts ] || { WEB_ALL=0; WEB=(); WEBKIT=(); } # nor web browser specs without the web app's Playwright config
@@ -262,6 +268,9 @@ if [ "$PLAN" = 1 ]; then
   if [ "$VIT_ALL" = 1 ]; then echo vitest-all; elif [ "${#VIT[@]}" -gt 0 ]; then echo vitest; printf '\t%s\n' "${VIT[@]}"; fi
   if [ "$VIT_ALL" = 0 ] && [ "${#VPROJ[@]}" -gt 0 ]; then echo vitest-project; printf '\t%s\n' "${VPROJ[@]}"; fi
   [ "$COREPACK" = 0 ] || echo corepack-install
+  # one step per package, its command indented below it (tests are built too: a Swift test file must compile)
+  [ "${#SWIFT_PARSE[@]}" = 0 ] || { echo "swift parse (apps/mobile/ios/App)"; printf '\t%s\n' "${SWIFT_PARSE[@]}"; }
+  for p in "${SWIFT[@]+"${SWIFT[@]}"}"; do printf 'swift build (%s)\n\tswift build --build-tests\n' "$p"; done
   if [ "$BUN_ALL" = 1 ]; then echo bun-all; elif [ "${#BUN[@]}" -gt 0 ]; then echo bun; printf '\t%s\n' "${BUN[@]}"; fi
   if [ "$E2E_ALL" = 1 ]; then echo e2e-all; elif [ "${#E2E[@]}" -gt 0 ]; then echo e2e; printf '\t%s\n' "${E2E[@]}"; fi
   [ "$OLD" = 0 ] || echo old-client
@@ -273,6 +282,13 @@ if [ "$PLAN" = 1 ]; then
   exit 0
 fi
 # ---- can it run at all ---------------------------------------------------------------------------------------------------
+# A change that touches Swift is built here (the "swift build" step below). A machine that cannot build it refuses, never skips.
+if [ "$IN_LOCK" = 0 ] && [ "$((${#SWIFT[@]} + ${#SWIFT_PARSE[@]}))" -gt 0 ]; then
+  SWIFT_WHAT="${SWIFT[*]-}"
+  [ "${#SWIFT_PARSE[@]}" = 0 ] || SWIFT_WHAT="${SWIFT_WHAT:+$SWIFT_WHAT, }the Xcode app, apps/mobile/ios/App"
+  [ "$(uname -s)" = Darwin ] || refuse "this change touches Swift ($SWIFT_WHAT) and this machine is not a Mac, so it cannot be built here: land it from a Mac"
+  { command -v swift >/dev/null 2>&1 && command -v swiftc >/dev/null 2>&1; } || refuse "this change touches Swift ($SWIFT_WHAT) and swift is not installed on this machine: install the Xcode Command Line Tools (xcode-select --install), or land it from a Mac that has Swift"
+fi
 say "time factor $TALOS_TEST_TIME_FACTOR: every test budget x$TALOS_TEST_TIME_FACTOR on this machine"
 [ "$IN_LOCK" = 0 ] && [ -f scripts/tmp-sweep.sh ] && bash scripts/tmp-sweep.sh # day-old test folders in $TMPDIR, once per gate
 command -v node >/dev/null 2>&1 || refuse "no node on PATH: the gate cannot run, so the push cannot go"
@@ -374,6 +390,33 @@ step() { # step <name> <command...>: runs it, refuses on failure
   say "$name ok ($((SECONDS - t)) s)"
 }
 
+# swift_build <package folder>: swift build --build-tests there, in a process group of its own with a time limit (GATE_SWIFT_LIMIT
+# seconds, 900 x the time factor), under the machine's desktop mutex like the Mac app's Swift test script. Without
+# Xcode the Command Line Tools keep Testing.framework outside the default search path: the same flags as test.sh.
+swift_build() {
+  local p="$1" lim="${GATE_SWIFT_LIMIT:-}" top="$PWD" F=/Library/Developer/CommandLineTools/Library/Developer/Frameworks rc
+  local flags=() lock=()
+  case "$lim" in '' | *[!0-9]* | 0) lim=$((900 * TALOS_TEST_TIME_FACTOR)) ;; esac
+  if ! xcodebuild -version >/dev/null 2>&1 && [ -d "$F" ]; then
+    flags=(-Xswiftc -F -Xswiftc "$F" -Xlinker -F -Xlinker "$F" -Xlinker -rpath -Xlinker "$F")
+  fi
+  if [ -f scripts/heavy-lock.sh ] && ! bash scripts/heavy-lock.sh held desktop; then
+    lock=(bash "$top/scripts/heavy-lock.sh" desktop "gate swift build ($p)" --)
+  fi
+  (cd "$p" && "${lock[@]+"${lock[@]}"}" perl -e '$t=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV} $SIG{ALRM}=sub{kill "TERM",-$p; sleep 5; kill "KILL",-$p; exit 142}; alarm $t; waitpid($p,0); exit($? & 127 ? 128+($? & 127) : $? >> 8)' \
+    "$lim" swift build --build-tests "${flags[@]+"${flags[@]}"}")
+  rc=$?
+  [ "$rc" != 142 ] || say "the swift build of $p was stopped after $lim s (GATE_SWIFT_LIMIT)"
+  return $rc
+}
+
+# swift_parse: swiftc -parse on each file of SWIFT_PARSE (the Xcode app's changed files); every one is tried, any failure fails
+swift_parse() {
+  local f rc=0
+  for f in "${SWIFT_PARSE[@]}"; do swiftc -parse "$f" || rc=1; done
+  return $rc
+}
+
 if [ "$IN_LOCK" = 0 ]; then
   step typecheck pnpm -s typecheck
   step lint node_modules/.bin/biome check .
@@ -393,6 +436,10 @@ if [ "$IN_LOCK" = 0 ]; then
   step size pnpm exec vitest run --project scripts scripts/size-budget.test.ts
   # a file that loses its executable bit without a commit saying so (edits over \\wsl$ did, twice: scripts/gate/exec-bits.sh)
   if [ -n "$BASE" ]; then step "exec bits" bash scripts/gate/exec-bits.sh "$BASE"; fi
+  # every Swift package the change touches must build, its tests too (the fast gate as well: nothing else here compiles Swift)
+  # the Xcode app is not a package: its changed files get a syntax check, no build (cheap, and a parse error is what a build would say first)
+  [ "${#SWIFT_PARSE[@]}" = 0 ] || step "swift parse (apps/mobile/ios/App)" swift_parse
+  for p in "${SWIFT[@]+"${SWIFT[@]}"}"; do step "swift build ($p)" swift_build "$p"; done
 fi
 
 # ---- the suites: under the machine's heavy lock ---------------------------------------------------------------------------

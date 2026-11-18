@@ -281,13 +281,24 @@ function dropControls(s: string): string {
 }
 
 /**
+ * At most `max` UTF-16 units of `s`, never ending on half of a surrogate pair (a lone surrogate is not valid JSON text: jcs
+ * refuses it, so a card or frame carrying one cannot be hashed or sent). The one cut for text that is shown or signed.
+ */
+export function clipUnits(s: string, max: number): string {
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const last = cut.charCodeAt(max - 1)
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, max - 1) : cut
+}
+
+/**
  * Neutralizes anything in `text` that could pose as our wrapper, a model control token or the channel tag.
  * Also caps the length (default 4,000 characters).
  */
 export function sanitizeExternal(text: string, maxChars = MAX_EXTERNAL_CHARS): string {
   // Cut before the patterns run, so a long stranger's text costs no more than a capped one. The margin keeps a tag or marker
   // that straddles the cut whole, so it is still found; the final cut below trims the rest.
-  let s = dropControls(text.length > maxChars * 2 + 256 ? text.slice(0, maxChars * 2 + 256) : text)
+  let s = dropControls(clipUnits(text, maxChars * 2 + 256))
   s = replaceFolded(s, MARKER_RE, MARKER_REMOVED)
   // Any remaining mention of the marker name (without the angle brackets) is rewritten too, so a half-built or
   // reassembled marker cannot survive.
@@ -296,7 +307,7 @@ export function sanitizeExternal(text: string, maxChars = MAX_EXTERNAL_CHARS): s
   s = neutralizeControlTags(s)
   // the cut can leave a tag name at the very end (`<channels…` cut to `<channel`), so the tags are looked at once more; this
   // never makes the text longer
-  return s.length > maxChars ? neutralizeControlTags(s.slice(0, maxChars)) : s
+  return s.length > maxChars ? neutralizeControlTags(clipUnits(s, maxChars)) : s
 }
 
 /**

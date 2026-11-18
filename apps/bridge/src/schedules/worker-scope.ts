@@ -1,7 +1,7 @@
 // Thread-owned schedules (docs/OPTION-C.md "Thread schedules"). A thread's own session asks main's bridge, over the hub
 // socket, to run the four Schedules tools. The hub knows which thread the connection proved (nonce + process group), so the
 // scope is that thread and nothing the request says. The rules live here and in ScheduleService; the hub only dispatches.
-import { HEARTBEAT_META_KEY, type ScheduleSnapshotT, type ScheduleT } from '@talos-app/protocol'
+import { clipUnits, HEARTBEAT_META_KEY, type ScheduleSnapshotT, type ScheduleT } from '@talos-app/protocol'
 import type { WorkerStore } from '../worker/store.ts'
 import { NOTEPAD_INPUT_MAX_CHARS } from './job-memory-run.ts'
 import { startedKey } from './kv-prune.ts'
@@ -163,8 +163,8 @@ export async function workerScheduleTool(d: WorkerRpcDeps, tool: string, args: R
       const r = await d.schedules.toolRunDone({
         runId,
         ok: args.ok,
-        summary: args.summary.slice(0, 280),
-        ...(typeof args.report === 'string' ? { report: args.report.slice(0, 64 * 1024) } : {}),
+        summary: clipUnits(args.summary, 280),
+        ...(typeof args.report === 'string' ? { report: clipUnits(args.report, 64 * 1024) } : {}),
         ...(typeof args.notepad === 'string' ? { notepad: args.notepad.slice(0, NOTEPAD_INPUT_MAX_CHARS) } : {}),
       })
       // A finished run is an answer: without this the session parking afterwards would read as "stopped before it finished",

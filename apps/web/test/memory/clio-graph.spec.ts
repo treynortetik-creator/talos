@@ -14,8 +14,8 @@ type Hooks = {
   __clioGraphFitted?: () => boolean
 }
 
-async function openGraph(page: Page) {
-  await page.goto('/memory/graph')
+async function openGraph(page: Page, query = '') {
+  await page.goto(`/memory/graph${query}`)
   await expect(page.locator('canvas')).toHaveCount(1, { timeout: 15_000 })
   await expect.poll(() => page.evaluate(() => (window as Hooks).__clioGraphCamera !== undefined)).toBe(true)
 }
@@ -192,24 +192,19 @@ async function openCanvasSpot(page: Page) {
   })
 }
 
-test('a tap or click the orbit controls take is still heard by the graph', async ({ page }, info) => {
+test('a tap or click on a note the orbit controls take still opens it', async ({ page }, info) => {
   // the controls capture each press they take to their own element: on anything but the canvas the release went past the
-  // graph library, and a tap on a note its drag check missed did nothing (pixel, CI under load, 2026-11-16)
+  // graph library, and a tap on a note its drag check missed did nothing (pixel, CI under load, 2026-11-16). With note drag
+  // off the controls take every press, so this is that path every time, not only when the drag check misses.
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await openGraph(page)
-  await settledNode(page, 0)
-  const spot = await openCanvasSpot(page)
-  expect(spot).not.toBeNull()
-  if (!spot) return
-  await page.evaluate(() => {
-    const w = window as unknown as { __ups: number }
-    w.__ups = 0
-    document.querySelector('canvas')?.addEventListener('pointerup', () => w.__ups++)
-  })
-  if (info.project.name.startsWith('iphone') || info.project.name === 'pixel')
-    await page.touchscreen.tap(spot.x, spot.y)
-  else await page.mouse.click(spot.x, spot.y)
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __ups: number }).__ups)).toBe(1)
+  await openGraph(page, '?nodedrag=off')
+  const panel = page.getByRole('complementary', { name: 'Chosen note' })
+  await expect(panel).not.toBeInViewport()
+  const { at } = await clickableNode(page)
+  if (info.project.name.startsWith('iphone') || info.project.name === 'pixel') await page.touchscreen.tap(at.x, at.y)
+  else await page.mouse.click(at.x, at.y)
+  await expect(panel).toBeInViewport()
+  await expect(panel.getByRole('heading', { level: 2 })).not.toBeEmpty()
 })
 
 const STRAYS: { name: string; send: string }[] = [

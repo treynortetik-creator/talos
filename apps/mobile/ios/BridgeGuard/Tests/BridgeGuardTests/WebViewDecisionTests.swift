@@ -10,22 +10,22 @@ final class WebViewDecisionTests: XCTestCase {
     let mediaPage = URL(string: "https://relay.example.test/media/x.html")!
 
     func testCameraAndMicAreGrantedToTheAppsOwnTopFrameOnly() {
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: page), .grant)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: page, trust: .pass), .grant)
         // an iframe of agent-written HTML on the same origin
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: false, frameOrigin: relay, pageURL: page), .deny)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: false, frameOrigin: relay, pageURL: page, trust: .pass), .deny)
         // a /media/ page
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: mediaPage), .deny)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: mediaPage, trust: .pass), .deny)
         // another origin, and no origin at all
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: other, pageURL: page), .deny)
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: nil, pageURL: page), .deny)
-        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: nil), .deny)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: other, pageURL: page, trust: .pass), .deny)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: nil, pageURL: page, trust: .pass), .deny)
+        XCTAssertEqual(guardian.devicePermission(isMainFrame: true, frameOrigin: relay, pageURL: nil, trust: .pass), .deny)
     }
 
     func testTheCookiePromptChannelIsOpenToTheTopFrameOnly() {
-        XCTAssertTrue(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: relay, pageURL: page))
-        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: false, frameOrigin: relay, pageURL: page))
-        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: relay, pageURL: mediaPage))
-        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: other, pageURL: page))
+        XCTAssertTrue(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: relay, pageURL: page, trust: .pass))
+        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: false, frameOrigin: relay, pageURL: page, trust: .pass))
+        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: relay, pageURL: mediaPage, trust: .pass))
+        XCTAssertFalse(guardian.allowsPromptChannel(isMainFrame: true, frameOrigin: other, pageURL: page, trust: .pass))
     }
 
     func testNewWindowsGoToSafariOrTheViewerAndNeverLaunchAnotherApp() {

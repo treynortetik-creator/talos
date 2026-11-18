@@ -111,6 +111,7 @@ export function PermissionCardLive(props: Props) {
       data-card-id={card.id}
       data-card-state="pending"
       data-card-kind="permission"
+      data-talos-protected=""
       data-payload-hash={hash}
       className={cn(
         'incised rounded-card border border-warn bg-surface p-4 transition-shadow duration-[var(--dur-2)] ease-talos',
@@ -304,6 +305,7 @@ function ApprovalSheet({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Content
           data-testid="approval-sheet"
+          data-talos-protected=""
           aria-describedby={undefined}
           aria-labelledby={`${titleId}-sheet`}
           // fixed to the visual viewport, above every other layer

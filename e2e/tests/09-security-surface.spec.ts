@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
 import { ROUTE_LIST } from '@talos-app/protocol'
+import { enrollCodeOf } from '../harness/enroll-link.ts'
 import { expect, openThread, sendHook, signedIn, test } from '../harness/fixtures.ts'
 import type { Stack } from '../harness/stack.ts'
 
@@ -275,7 +276,8 @@ test('logs hold no message text, tokens, codes or cookies after a full session',
   await page.waitForTimeout(800)
 
   const cookie = (await context.cookies()).find((c) => c.name === '__Host-talos_s')?.value ?? ''
-  const code = /enroll#(\S+)/.exec(stack.cli(['status']).out)?.[1]
+  const link = /\S+\/enroll#\S+/.exec(stack.cli(['status']).out)?.[0]
+  const code = link ? enrollCodeOf(link) : undefined
   const relay = stack.relayLog.join('\n')
   const bridge = stack.bridgeLog()
   for (const [name, log] of [

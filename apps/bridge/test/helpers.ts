@@ -14,7 +14,7 @@ import {
 import { Bridge, type BridgeOptions } from '../src/bridge.ts'
 import type { Clock } from '../src/clock.ts'
 import { loadEnv } from '../src/config.ts'
-import { nullLogger } from '../src/log.ts'
+import { createLogger } from '../src/log.ts'
 import type { Notification } from '../src/notify.ts'
 import { testTempDir } from './temp-dirs.ts'
 
@@ -91,7 +91,7 @@ export async function startHarness(
   })
   const bridge = await Bridge.create({
     env,
-    logger: nullLogger,
+    logger: createLogger(null, 'error', () => {}), // its own: the problem-report tap lives on the logger, and a shared one carries a stopped bridge's late error into the next test's bridge
     inbound: { settleMs: 20, maxSettleMs: 200 },
     ...(opts.clock ? { clock: opts.clock } : {}),
     ...opts.bridge,

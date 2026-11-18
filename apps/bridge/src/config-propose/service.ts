@@ -22,6 +22,7 @@ import {
   ConfigCardPayload,
   type ConfigChange,
   CUSTOM_THEMES_FEATURE,
+  clipUnits,
   configCardCandidate,
   describeChange,
   isSendKind,
@@ -74,7 +75,7 @@ export type ProposeResult = { ok: true; text: string } | { ok: false; text: stri
 export type ProposeOpts = { scope?: string; tool?: boolean }
 
 /** The result text of a saved change: what changed, then how to revert it, within the 500 characters a card result may carry. */
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+const clip = (s: string, n: number) => (s.length > n ? `${clipUnits(s, n - 1)}…` : s)
 const savedText = (changes: ConfigChange[]) =>
   `${clip(`Saved. ${changes.map(describeChange).join('; ')}`, 280)} ${clip(undoText(changes), 200)}`
 /**
@@ -137,7 +138,7 @@ export class ConfigProposals {
     const threadId = typeof args.thread_id === 'string' ? args.thread_id : undefined
     if (!threadId || !ctx.config.thread(threadId))
       return fail(`Unknown thread "${threadId ?? ''}". Valid thread ids: ${ctx.config.threadIds().join(', ')}`)
-    const reason = (typeof args.reason === 'string' ? args.reason : '').trim().slice(0, 280)
+    const reason = clipUnits((typeof args.reason === 'string' ? args.reason : '').trim(), 280)
     if (!reason) return fail('reason is required (up to 280 characters): say why you are proposing this.')
     if (opts.scope !== undefined && threadId !== opts.scope)
       return fail(

@@ -25,11 +25,31 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   private var lastRows: [String] = []
   /// Where each launch's file is written (`LaunchFile`): a 0700 folder under the Talos home.
   let launchDir: String
+  /// How tmux is run, and how a signal is sent to the server. The real ones unless a test swaps them (a fake tmux that races).
+  typealias Runner = @Sendable ([String], [String: String]?, Double) -> RunResult
+  typealias ServerSignaller = @Sendable (Int32, Int32) -> Void
+  private let runner: Runner
+  private let sendSignal: ServerSignaller
+  /// Polls in a row that found the pane dead with neither an exit status nor a signal yet. Under `lock`: start, restart and attach reset it while the poll counts.
+  private var deadUnread = 0
+  /// Polls a dead pane may show no exit status yet before the exit is reported as it is.
+  static let deadStatusPolls = 5
 
-  public init(
+  public convenience init(
     commands: TmuxCommands, launchDir: String, baseEnv: [String: String] = ProcessInfo.processInfo.environment,
     pollInterval: Double = 1
   ) {
+    self.init(
+      commands: commands, launchDir: launchDir, baseEnv: baseEnv, pollInterval: pollInterval,
+      runner: { ProcessRunner.run($0, env: $1, timeout: $2) }, sendSignal: { pid, sig in _ = kill(pid, sig) })
+  }
+
+  init(
+    commands: TmuxCommands, launchDir: String, baseEnv: [String: String], pollInterval: Double, runner: @escaping Runner,
+    sendSignal: @escaping ServerSignaller
+  ) {
+    self.runner = runner
+    self.sendSignal = sendSignal
     self.baseCommands = commands
     self.launchDir = launchDir
     self.pollInterval = pollInterval
@@ -89,7 +109,7 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   }
 
   @discardableResult
-  func tmux(_ argv: [String]) -> RunResult { ProcessRunner.run(argv, env: tmuxEnv, timeout: 10) }
+  func tmux(_ argv: [String]) -> RunResult { runner(argv, tmuxEnv, 10) }
 
   public func sessionExists() -> Bool { baseCommands.hasValidSessionName && tmux(baseCommands.hasSession()).ok }
 
@@ -210,6 +230,7 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     lock.withLock {
       _childPid = pid
       reported = false
+      deadUnread = 0
     }
     watch()
   }
@@ -231,6 +252,7 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
     lock.withLock {
       _childPid = pid
       reported = false
+      deadUnread = 0
     }
     watch()
     return true
@@ -275,11 +297,34 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
       return
     }
     if !s.dead, s.pid != pid { return }  // respawned meanwhile; the new pid is adopted by start/restart
+    if !s.dead { lock.withLock { deadUnread = 0 } }
     if s.dead {
+      // tmux marks a pane dead when its terminal closes and reads the exit status when it reaps the process. Under load the
+      // server can miss that SIGCHLD (seen on Linux, tmux 3.4): the pane then reads dead with no status and no signal, and
+      // reported as it is that is an exit with no code, which Main takes for a crash (a clean exit included). Nudge the server
+      // to reap and read again on the next poll, a bounded number of times; after that the exit is reported as before.
+      let nudge = lock.withLock { () -> Bool in
+        guard s.exitStatus == nil, s.exitSignal == nil, deadUnread < Self.deadStatusPolls else { return false }
+        deadUnread += 1
+        return true
+      }
+      if nudge {
+        nudgeServer()
+        return
+      }
+      lock.withLock { deadUnread = 0 }
       let r = tmux(commands.captureRecent(lines: 200))
       let recent = r.ok ? Self.deadPaneRows(r.out) : rows
       report(ExitInfo(pid: pid, code: s.exitSignal == nil ? s.exitStatus : nil, signal: s.exitSignal, lastRows: recent))
     }
+  }
+
+  /// SIGCHLD to our own tmux server (its pid from tmux itself, on our private socket) makes it reap exited children. Nothing
+  /// else: SIGCHLD only makes a process wait for its children. A pid that does not parse as one above 1 is never signalled.
+  private func nudgeServer() {
+    let r = tmux(baseCommands.serverPid())
+    guard r.ok, let pid = Int32(r.out.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else { return }
+    sendSignal(pid, SIGCHLD)
   }
 
   /// tmux can't say where the pane is. Its session being gone, or nothing left alive in the agent's process group, is a loss.

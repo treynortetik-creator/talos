@@ -20,9 +20,20 @@ final class SafeTerminalView: LocalProcessTerminalView {
 
   /// A click is how the owner gives a viewer the keyboard. Nothing else in the main window does it for them.
   override func mouseDown(with event: NSEvent) {
+    guard permits(event) else { return }
     window?.makeFirstResponder(self)
     super.mouseDown(with: event)
   }
+
+  // Every terminal in Talos is this view (the agent's pane, the owner's shell, the sign-in pane), and each runs what is typed into it:
+  // on-pane prompts of the agent, commands as the owner. An agent's synthetic click or key reaches none of them (`SyntheticInput`):
+  // the local monitor drops them first, both window classes that hold a terminal drop them again in `sendEvent` (SwiftTerm's key
+  // handlers cannot be overridden from here), and these overrides hold the mouse when an event comes by another road.
+  override func mouseUp(with event: NSEvent) { if permits(event) { super.mouseUp(with: event) } }
+  override func mouseDragged(with event: NSEvent) { if permits(event) { super.mouseDragged(with: event) } }
+  override func rightMouseDown(with event: NSEvent) { if permits(event) { super.rightMouseDown(with: event) } }
+  override func otherMouseDown(with event: NSEvent) { if permits(event) { super.otherMouseDown(with: event) } }
+
 }
 
 /// A plain area that paints the window colour in whichever theme is showing, so the notes drawn on it read in both.
@@ -40,6 +51,11 @@ final class WindowBackgroundView: NSView {
 /// the terminal inside still gets every other key.
 final class TerminalNSWindow: NSWindow {
   var onShortcut: (Int) -> Bool = { _ in false }
+
+  override func sendEvent(_ event: NSEvent) {
+    guard SyntheticInputGuard.admitAtTerminal(event, in: self) else { return }
+    super.sendEvent(event)
+  }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -145,6 +161,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     } else {
       window?.orderFront(nil)
     }
+    hideFromCapture(pairingItem != nil)  // the window has its number once it is ordered in
     tick()
     timer?.invalidate()
     timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -417,6 +434,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
   func tapResumeForTest() { resumeTapped() }
   var viewerSessionForTest: String? { viewer?.process.running == true ? viewerSession : nil }
   func refreshForTest() { tick() }
+  var windowForTest: NSWindow? { window }
   /// The window is a process-wide singleton: a test starts from Main with nothing carried over.
   func resetSelectionForTest() {
     if pairingItem != nil { setPairingTab(nil) }
@@ -525,8 +543,23 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     return nil
   }
 
+  /// The window that holds the sign-in pane shows a setup link and the four words, so while that tab is open no agent screenshot shows
+  /// the window (`ScreenSecretWindows`, which `ScreenCore` reads at capture time), and macOS is asked to keep it out of captures too.
+  private var hiddenNumber: UInt32?
+  func hideFromCapture(_ on: Bool) {
+    if let old = hiddenNumber { ScreenSecretWindows.set(old, hidden: false) }
+    hiddenNumber = nil
+    guard let w = window else { return }
+    w.sharingType = on ? .none : .readOnly
+    if on, w.windowNumber > 0 {
+      hiddenNumber = UInt32(w.windowNumber)
+      ScreenSecretWindows.set(UInt32(w.windowNumber), hidden: true)
+    }
+  }
+
   func setPairingTab(_ view: NSView?) {
     if window == nil { build() }
+    defer { hideFromCapture(pairingItem != nil) }
     guard let tabs else { return }
     if let old = pairingItem {
       tabs.removeTabViewItem(old)

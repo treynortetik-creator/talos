@@ -1,0 +1,908 @@
+{
+  "links": [
+    {
+      "name": "good",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "good with port",
+      "link": "https://relay.example.com:8443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com:8443"
+    },
+    {
+      "name": "good with unknown key before fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&x=1&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "unknown key ignored",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&utm=zzz",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "unknown key without equals ignored",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&flag&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "no fp is ok for the parser",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "no fp with unknown key",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&x=1",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code uppercase",
+      "link": "https://relay.example.com/enroll#0123456789ABCDEFGHJKMNPQRS&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code with hyphens",
+      "link": "https://relay.example.com/enroll#0123-4567-89ab-cdef-ghjk-mnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "space inside the code",
+      "link": "https://relay.example.com/enroll#0123 4567 89ab cdef ghjk mnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "code I read as 1",
+      "link": "https://relay.example.com/enroll#0i23456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code L read as 1",
+      "link": "https://relay.example.com/enroll#0L23456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code O read as 0",
+      "link": "https://relay.example.com/enroll#o123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code first char 7",
+      "link": "https://relay.example.com/enroll#7123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "7123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "code first char 8",
+      "link": "https://relay.example.com/enroll#8123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "code too short",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqr&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "code too long",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs0&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "code has U",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqru&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "empty code",
+      "link": "https://relay.example.com/enroll#&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "empty fragment",
+      "link": "https://relay.example.com/enroll#",
+      "ok": false,
+      "error": "no_code"
+    },
+    {
+      "name": "no fragment",
+      "link": "https://relay.example.com/enroll",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "two hashes",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs#&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "two hashes at end",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_#",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "http not https",
+      "link": "http://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "userinfo",
+      "link": "https://alex:pw@example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "userinfo name only",
+      "link": "https://alex@example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "wrong path",
+      "link": "https://relay.example.com/other#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "path with suffix",
+      "link": "https://relay.example.com/enroll/x#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "no path",
+      "link": "https://relay.example.com#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "not a url",
+      "link": "hello",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "fp too short",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp too long",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_A",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp has padding",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-=",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp has plus",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-+",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp empty",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp without value",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "fp percent-encoded value",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN%41AA",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "duplicate fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "dup_fp"
+    },
+    {
+      "name": "duplicate fp different value",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&fp=_-ONMLKJIHGFEDCBAzyxwvutsrqponmlkjihgfedcba",
+      "ok": false,
+      "error": "dup_fp"
+    },
+    {
+      "name": "near miss uppercase FP",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&FP=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "near miss Fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&Fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "space in a key leading space",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs& fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "space in a key trailing space",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp =abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "near miss encoded equals",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp%3DabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "near miss encoded f",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&%66p=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "near miss next to a good fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&FP=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "near miss encoded P",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&f%70=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "host is lowercased",
+      "link": "https://Relay.EXAMPLE.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "port 65535",
+      "link": "https://relay.example.com:65535/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com:65535"
+    },
+    {
+      "name": "stray percent in a later value hides a near miss",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&%66p=x%",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "stray percent in the value of an encoded P",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&f%50=x%",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key that cannot be decoded",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&a%=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "encoded path",
+      "link": "https://relay.example.com/%65nroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "encoded dot in host",
+      "link": "https://relay%2Eexample.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "encoded letter in host",
+      "link": "https://%72elay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "cyrillic e in host",
+      "link": "https://rеlay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "non-ascii in the fragment",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&x=é",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "non-ascii in a key",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fр=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "punycode label",
+      "link": "https://xn--rlay-3ve.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "punycode label uppercase",
+      "link": "https://XN--rlay-3ve.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "trailing dot host",
+      "link": "https://relay.example.com./enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port zero",
+      "link": "https://relay.example.com:0/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port too large",
+      "link": "https://relay.example.com:65536/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port empty",
+      "link": "https://relay.example.com:/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port not digits",
+      "link": "https://relay.example.com:80a/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "query string",
+      "link": "https://relay.example.com/enroll?x=1#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "empty query",
+      "link": "https://relay.example.com/enroll?#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "empty host",
+      "link": "https:///enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "uppercase scheme",
+      "link": "HTTPS://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "mixed case scheme",
+      "link": "Https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "ipv6 literal",
+      "link": "https://[::1]/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "ipv6 literal with port",
+      "link": "https://[::1]:8443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "label starts with hyphen",
+      "link": "https://-relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "label ends with hyphen",
+      "link": "https://relay-.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "empty label",
+      "link": "https://relay..example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "leading dot",
+      "link": "https://.relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "underscore in host",
+      "link": "https://re_lay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "label of 64 characters",
+      "link": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "host of 254 characters",
+      "link": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port with leading zero",
+      "link": "https://relay.example.com:08443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port 0443",
+      "link": "https://relay.example.com:0443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "port with plus",
+      "link": "https://relay.example.com:+443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "label of 63 characters",
+      "link": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com"
+    },
+    {
+      "name": "host of 253 characters",
+      "link": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "hyphen inside a label",
+      "link": "https://my-relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://my-relay.example.com"
+    },
+    {
+      "name": "port 443 is dropped",
+      "link": "https://relay.example.com:443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "port 8443 is kept",
+      "link": "https://relay.example.com:8443/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com:8443"
+    },
+    {
+      "name": "port 1",
+      "link": "https://relay.example.com:1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com:1"
+    },
+    {
+      "name": "ip v4 host",
+      "link": "https://192.0.2.7/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://192.0.2.7"
+    },
+    {
+      "name": "numeric host 0x7f.1",
+      "link": "https://0x7f.1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host 127.1",
+      "link": "https://127.1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host 0177.0.0.1",
+      "link": "https://0177.0.0.1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host 2130706433",
+      "link": "https://2130706433/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host hex single",
+      "link": "https://0x7f000001/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host three parts",
+      "link": "https://1.2.3/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host five parts",
+      "link": "https://1.2.3.4.5/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host octet 256",
+      "link": "https://1.2.3.256/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host leading zero octet",
+      "link": "https://1.2.3.04/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host hex last label",
+      "link": "https://10.0.0.0x1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "numeric host name ending in a number",
+      "link": "https://relay.example.123/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "dotted quad 127.0.0.1",
+      "link": "https://127.0.0.1/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://127.0.0.1"
+    },
+    {
+      "name": "dotted quad with zero octet",
+      "link": "https://10.0.0.255/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://10.0.0.255"
+    },
+    {
+      "name": "numeric label inside a name",
+      "link": "https://relay.123.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.123.example.com"
+    },
+    {
+      "name": "hex-looking label inside a name",
+      "link": "https://relay.0x7f.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.0x7f.example.com"
+    },
+    {
+      "name": "trailing newline is trimmed",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_\n",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "surrounding spaces tabs CR LF are trimmed",
+      "link": " \t\r\nhttps://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_ \t\r\n",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "BOM before the link",
+      "link": "﻿https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "NEL after the link",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "ideographic space after the link",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_　",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "long s in the host",
+      "link": "https://ſrelay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "long s in the code",
+      "link": "https://relay.example.com/enroll#ſ123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "control character in the code",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqr\u0001&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "tab inside the code",
+      "link": "https://relay.example.com/enroll#0123456789abcdefg\thjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "DEL in the link",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "empty link",
+      "link": "",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "only whitespace",
+      "link": " \n",
+      "ok": false,
+      "error": "bad_link"
+    },
+    {
+      "name": "percent in a key that decodes to a letter",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&%41bc=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "percent in a key that does not decode",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&x%=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "percent in a key, no fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&%41bc=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key fpx",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&fpx=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key fp2",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp2=abc&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key fP",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fP=abc",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key FPX",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&FPX=1",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "key f is unknown",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&f=1&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "key fx is unknown",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fx=1&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "key xfp is unknown",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&xfp=1&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "bad percent in an unknown value is never looked at",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&z=%zz&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "valid percent in an unknown value is never looked at",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&z=%41&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "empty unknown key",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&=1&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "empty segment",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    },
+    {
+      "name": "bare key fpx next to a good fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&fpx",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key FP next to a good fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&FP",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key %41 next to a good fp",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&%41",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare fp after a good fp is a duplicate",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_&fp",
+      "ok": false,
+      "error": "dup_fp"
+    },
+    {
+      "name": "bare key fpx alone",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fpx",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key FP alone",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&FP",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key %41 alone",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&%41",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key fp alone",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&fp",
+      "ok": false,
+      "error": "bad_fp"
+    },
+    {
+      "name": "bare key y is ignored",
+      "link": "https://relay.example.com/enroll#0123456789abcdefghjkmnpqrs&y&fp=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "ok": true,
+      "code": "0123456789ABCDEFGHJKMNPQRS",
+      "fp": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO-_",
+      "origin": "https://relay.example.com"
+    }
+  ]
+}

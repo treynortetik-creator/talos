@@ -208,7 +208,7 @@ describe('the first use of an app asks the owner once', () => {
     }
     const r = await typeHi(x)
     expect(r.isError).toBeFalsy()
-    expect(text(r)).toBe('Typed 2 characters.')
+    expect(text(r)).toBe('Typed 2 characters and verified: the field now shows them.')
     // the agent was never told (a bridge-handled card)
     expect(x.notes.filter((n) => n.meta?.kind === 'card_action')).toHaveLength(0)
   })
@@ -285,12 +285,26 @@ describe('what can never be asked', () => {
     expect(screenCards(x)).toHaveLength(0)
   })
 
-  test('Talos itself is never put to the owner', async () => {
+  test('Talos itself goes to the owner like any app: a normal consent card, and Allow reaches the Mac', async () => {
     const { x, mac } = await start()
-    mac.measured = { ...NOTES, bundle_id: 'app.talos.desktop', name: 'Talos' }
-    expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.talos)
-    await sleep(150)
-    expect(screenCards(x)).toHaveLength(0)
+    const TALOS = {
+      bundle_id: 'app.talos.desktop',
+      team_id: 'ABCDE12345',
+      requirement: 'identifier "app.talos.desktop" and anchor apple generic',
+      name: 'Talos',
+      signer: 'developer',
+    }
+    mac.measured = TALOS
+    expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.asked('Talos'))
+    await eventually(() => expect(screenCards(x)).toHaveLength(1))
+    const card = screenCards(x)[0] as CardT
+    expect(card.title).toBe(SCREEN_CONSENT_TEXT.title('Talos'))
+    expect(card.body).toContain('App id: app.talos.desktop')
+    expect((card.payload as { screen_allow: unknown }).screen_allow).toEqual(TALOS)
+    await x.app.resolveCard(card, 'primary', card.payload_hash)
+    await eventually(() => expect(updates(x, card.id).some((u) => u.state === 'done')).toBe(true))
+    expect(mac.proofs).toHaveLength(1)
+    expect(mac.allowed.size).toBe(1)
   })
 
   test('a relay without settings cards: the agent is told the owner could not be asked', async () => {

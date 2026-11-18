@@ -8,7 +8,14 @@ import { createFakeClient } from '../../src/lib/fakeClient.ts'
 describe('schedules seam (fakeClient)', () => {
   it('starts with an idle slice', () => {
     const c = createFakeClient()
-    expect(c.store.getState().schedules).toEqual({ snapshot: null, details: {}, status: 'idle', error: null, revs: {} })
+    expect(c.store.getState().schedules).toEqual({
+      snapshot: null,
+      details: {},
+      status: 'idle',
+      error: null,
+      revs: {},
+      cacheChecked: false,
+    })
   })
 
   it('listSchedules signs schedules.list and fills the slice from the golden-derived snapshot', async () => {

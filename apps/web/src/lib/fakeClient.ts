@@ -156,6 +156,7 @@ export function seedState(): ClientState {
         'files-sent/1',
         'memory-roots/1',
         'run/1',
+        'themes/2',
       ],
       features_at: '2026-10-28T15:00:00.000Z',
     },

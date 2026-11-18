@@ -15,8 +15,7 @@
   --ink-2: #5ab0f2;
   --ink-3: #f2f2f2;
 
-  --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* headers, empty-state titles; a theme may change it */
-  --font-brand: "Cinzel Variable", "Cinzel", Georgia, serif; /* the TΛLOS wordmark: the brand, so no theme changes it */
+  --font-display: "Cinzel Variable", "Cinzel", Georgia, serif; /* thread headers, empty-state titles */
   --font-ui: "Inter Variable", "Inter", system-ui, sans-serif; /* UI and body */
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace; /* timestamps, status pills, ids */
 

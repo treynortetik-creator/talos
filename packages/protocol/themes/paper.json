@@ -81,15 +81,5 @@
     "--figure-wave": "#7c8494",
     "--figure-focus": "#eceef2",
     "--figure-meander-ink": "#8ea6ff"
-  },
-  "radius": {
-    "--radius-card": 6,
-    "--radius-bubble": 12,
-    "--radius-button": 6
-  },
-  "fonts": {
-    "--font-display": "inter",
-    "--font-ui": "inter",
-    "--font-mono": "jetbrains-mono"
   }
 }

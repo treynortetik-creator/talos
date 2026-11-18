@@ -4,12 +4,21 @@ import { fileURLToPath } from 'node:url'
 import { expect, type Page, type Response, test } from '@playwright/test'
 import { appCsp, STOCK_THEMES } from '@talos-app/protocol'
 import { build } from 'vite'
+import { proxyFailures, proxyWithCsp } from '../helpers/csp-route.ts'
 
 const CSP = appCsp('https://talos.example.com')
 let bundle = ''
 
 // The PWA's service worker would answer pages itself, past page.route, with no policy header (and on WebKit it hides /__theme.js).
 test.use({ serviceWorkers: 'block' })
+test.beforeEach(() => {
+  proxyFailures.length = 0
+})
+test.afterEach(async ({ page }) => {
+  const failed = proxyFailures.splice(0)
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  expect(failed, 'requests the proxy could not pass on').toEqual([])
+})
 
 test.beforeAll(async () => {
   const out = await build({
@@ -50,10 +59,7 @@ async function useProductionCsp(page: Page) {
         body: bundle,
         headers: { 'content-security-policy': CSP },
       })
-    const res = await route.fetch()
-    const headers = res.headers()
-    if ((headers['content-type'] ?? '').includes('text/html')) headers['content-security-policy'] = CSP
-    await route.fulfill({ status: res.status(), headers, body: await res.body() })
+    await proxyWithCsp(route, CSP)
   })
 }
 

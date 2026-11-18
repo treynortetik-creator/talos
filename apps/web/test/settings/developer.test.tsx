@@ -76,7 +76,8 @@ describe('Developer page', () => {
     await act(async () => userEvent.click(rowSwitch('thread_fence')))
     expect(patch).toHaveBeenCalledTimes(1)
     expect(patch).toHaveBeenLastCalledWith({ dev: { thread_fence: false } })
-    expect(checked(rowSwitch('thread_fence'))).toBe('false')
+    // the save signs with WebCrypto, which act() does not wait for: on a loaded machine it lands after the click returns
+    await waitFor(() => expect(checked(rowSwitch('thread_fence'))).toBe('false'))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -96,11 +97,12 @@ describe('Developer page', () => {
     await act(async () => userEvent.click(master()))
     expect(a.patch).toHaveBeenCalledTimes(1)
     expect(a.patch).toHaveBeenLastCalledWith({ dev: { thread_fence: false } })
-    expect(checked(master())).toBe('true')
+    await waitFor(() => expect(checked(master())).toBe('true')) // the save has landed (WebCrypto signing, past act())
     expect(checked(rowSwitch('note_lookup'))).toBe('false')
     await act(async () => userEvent.click(master()))
     expect(a.patch).toHaveBeenCalledTimes(2)
     expect(a.patch).toHaveBeenLastCalledWith({ dev: { thread_fence: true } })
+    await waitFor(() => expect(checked(master())).toBe('false'))
     expect(checked(rowSwitch('note_lookup'))).toBe('false')
   })
 

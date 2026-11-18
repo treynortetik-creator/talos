@@ -4,7 +4,17 @@
 // launch rule, see writeLaunch), and the execs leave the pane pid the agent's, its own process group and session leader.
 
 import { randomBytes } from 'node:crypto'
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, rmSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import {
   type DialogKeyKind,
@@ -36,6 +46,26 @@ import {
   TmuxCommands,
   versionIsSupported,
 } from './tmux-commands.ts'
+
+/** Polls a dead pane may show no exit status yet (tmux has not reaped it) before the exit is reported as it is. */
+const DEAD_STATUS_POLLS = 5
+
+/**
+ * The pane's process is a zombie its tmux server has not reaped: the server missed that SIGCHLD (seen on Titan under load, tmux
+ * 3.4 on Ubuntu: the zombie stayed for seconds, the pane dead with no status, until some other child of the server ended). One
+ * SIGCHLD to the parent makes the server reap it, and the pane then shows the real exit status. Only for a zombie, whose parent
+ * can only be the server that started it; a SIGCHLD makes a process reap its children and nothing else. Linux reads /proc;
+ * elsewhere, or once it is reaped, there is nothing to do.
+ */
+function nudgeReaper(pid: number): void {
+  try {
+    const f = readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.split(' ') ?? []
+    const ppid = Number(f[1])
+    if (f[0] === 'Z' && Number.isInteger(ppid) && ppid > 1) process.kill(ppid, 'SIGCHLD')
+  } catch {
+    // no /proc, or the zombie was reaped meanwhile
+  }
+}
 
 export type PtyHostErrorCode = 'invalid_name' | 'already_running' | 'start_failed' | 'exited_immediately'
 
@@ -108,6 +138,8 @@ export class TmuxPtyHost implements PtyHost {
   private timer: ReturnType<typeof setInterval> | undefined
   private polling = false
   private unknownReads = 0
+  /** Polls in a row that found the pane dead with neither an exit status nor a signal yet (see pollOnce). */
+  private deadUnread = 0
   /** Bumped by every start, restart, adoption and detach: a poll begun before one never reports after it. */
   private generation = 0
   /** What the last pane lookup found: `unknown` keeps a missing pane id from reading as "gone". */
@@ -367,6 +399,7 @@ export class TmuxPtyHost implements PtyHost {
     this.started = started
     this.reported = false
     this.unknownReads = 0
+    this.deadUnread = 0
     this.watch()
     return pid
   }
@@ -385,6 +418,7 @@ export class TmuxPtyHost implements PtyHost {
     this.started = started
     this.reported = false
     this.unknownReads = 0
+    this.deadUnread = 0
     this.watch()
     return s.pid
   }
@@ -432,6 +466,14 @@ export class TmuxPtyHost implements PtyHost {
     const s = read.state
     if (!s.dead && s.pid !== pid) return // respawned meanwhile; start/restart adopt the new pid
     if (s.dead) {
+      // tmux marks the pane dead when its terminal closes and reads the exit status when it reaps the process: a dead pane
+      // can show neither a status nor a signal, for a moment, or for good when the server missed the SIGCHLD. Reported, that
+      // is an exit with no code, which Main takes for a crash (a clean exit included): nudge the server and ask again first.
+      if (s.exitStatus === null && s.exitSignal === null && this.deadUnread < DEAD_STATUS_POLLS) {
+        this.deadUnread++
+        nudgeReaper(pid)
+        return
+      }
       const r = await this.tmux(this.cmd.captureRecent(PTY_EXIT_ROWS))
       this.report(gen, {
         pid,

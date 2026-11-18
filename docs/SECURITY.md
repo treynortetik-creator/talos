@@ -186,6 +186,71 @@ The owner asks his agent to change a Talos setting and it is done; he is told at
   refused right one is not.
 - **Open.** "Lock off" now means for settings what trust mode meant; trust mode retires once the passkey step-up leaves cards.
 
+## An agent in Talos (owner ruling 2026-11-17)
+
+Talos.app can be put on the screen-control allowed list like any app (same consent card, same signature-bound entry), so an agent
+can look at, click and type in Talos's own window: open a thread, write, send. Two things are closed and have no switch:
+
+1. **Input an agent sends never answers an approval card or a permission prompt.** That covers Approve, Deny, Kill, Revise, Always
+   allow, a dialog card's options, the needs-you popup, a sheet, an alert and any button that answers one, by click, by Return or
+   Space on a focused button, and by text that holds a Return or a space.
+2. **Input an agent sends never reaches a terminal view in Talos.** Every terminal in the app is one view class (`SafeTerminalView`,
+   a SwiftTerm `TerminalView`): the agent's own pane (the embedded terminal and the Terminals window), the owner's login shell
+   (`OwnerShellPane`) and the sign-in pane. Each runs what it reads: Claude Code's on-pane prompts (trust a folder, dev channels,
+   tool prompts left at the terminal), commands as the owner, the pin confirm `y`. Agents reach their own panes through their own
+   tools, so screen-typing into a Talos terminal adds nothing legitimate. `docs/TERMINAL-PANE.md` ("No remote path to the shell")
+   stays true: no screen tool is a path to the shell either.
+
+How it holds (`SyntheticInput`, `ProtectedInputScript`, `SyntheticInputGuard`):
+
+- **Origin of every event.** Every event Talos posts for an agent carries a token in its CGEvent user data, and the system stamps it
+  with Talos's own pid. An event counts as the owner's only with none of that: a CGEvent from the hardware state, source pid 0, user
+  data 0, and no event of ours still awaiting its answer. An event with no CGEvent, or any field that cannot be read, is synthetic
+  (fail closed).
+- **Terminals.** A local event monitor drops a synthetic mouse or key event whose target is a terminal view (the first responder for
+  a key, the view under the pointer for a mouse event). `TerminalNSWindow` and `WebNSWindow` (the only windows that hold terminal
+  views) drop it again in `sendEvent`, and `SafeTerminalView` refuses the mouse events itself (SwiftTerm's key handlers cannot be
+  overridden from outside its module, so keys are held at the window).
+- **The page.** Before the window delivers a mouse press or key to its page, it tells the page who sent it (origin, event type, the
+  token, the key code). A script the app injects (its own content world; page code cannot see or forge it) cancels, ahead of every
+  handler, a click, an Enter or Space, a pointer press or a submit inside any `data-talos-protected` element unless the newest stamp
+  is a fresh human one that goes with this event: a pointer click needs a human mouse release; a keyboard-made click needs a human key
+  press or release whose Enter or Space the page has just seen as a key event; a key event needs a human stamp of its own phase and
+  key code. A human stamp is spent by the click it allowed, and a key stamp ends with its event's turn, so a click with no event
+  before it (an Accessibility press) is refused whatever stamps are fresh. To protect more elements, add the one attribute
+  (`data-talos-protected`); the one selector is `PROTECTED` in `ProtectedInputScript.swift`. The owner decided on 2026-11-17 to keep
+  this as narrow as possible: only answers to cards and permission prompts, and the terminal panes, are protected. Trust mode, the
+  Always-allowed list, Settings and the composer stay open to an agent driving Talos, so agents can test the whole interface. A
+  message an agent types in the composer is sent as the owner's, like any other input on his Mac.
+- **Native prompts.** The needs-you popup's own check (pid 0, hardware state) also refuses while an event of ours is awaiting its
+  answer; the monitor drops a synthetic event aimed at a sheet, an alert, the popup or any window while a modal session runs.
+- **The agent is told, per request.** Each posted event has its own token. The screen tool aims at Talos only when the gate found
+  Talos (the front app, or the app under the pointer) and then waits, up to two seconds, for the answers of its own tokens: the
+  window that took the event says "handled", or reports a drop against the token. A drop is `protected_prompt`; no answer in time is
+  `delivery_unverified` ("may or may not have landed"); never "sent" on a guess. For the page, the answer is asked for after the
+  event was delivered and arrives after every drop the page reported for that token. Two callers at once never read each other's
+  answers (tokens are unique). An event aimed at another app waits for nothing.
+- **A sign-in link is never in a screenshot.** While the sign-in tab is open, the Terminals window shows the setup link and the four
+  words. It is registered as a secret window (`ScreenSecretWindows`): `ScreenCore` makes it a gap in every agent screenshot, even
+  though Talos is allowed, and refuses it by id; macOS is also asked to keep it out of captures (`sharingType = .none`). The
+  window's id is registered when the tab opens and again when the window is shown.
+
+Race analysis. (1) A card that appears between the agent's look and its click: nothing is checked at look time; the check is on the
+event at delivery, so a card that is there when the event lands is protected. (2) A person's click and an agent's event arriving
+together: both are stamped in the order the window dispatches them and the page keeps only the newest stamp, so the agent's event
+never rides the person's; the person's click while one of ours awaits its answer is refused (one more click), and that lasts until
+the answer or the request's own timeout, not a fixed span. (3) A stamp that never arrives: the page holds no fresh stamp for that
+event, and refuses it. (4) The stamp and the event go to the web process over one connection in the order sent; the stamp lapses
+after 700 ms. (5) A late drop: the request waits for its own tokens' answers, so a drop reported a moment late is still its refusal,
+and a missing answer is `delivery_unverified`.
+
+What this does not close: a program running as the owner that is not the agent can move the pointer so the owner's own click lands
+on a button, as the popup's comment says. VoiceOver, Voice Control and remote-desktop events carry another pid (or no token) and are
+refused like the agent's, so on a Mac driven that way an approval is answered on the phone and a terminal is typed into by a person
+at the keyboard. Settings switches and other buttons that are not approvals are not protected (open owner question, above).
+Whether the system keeps the token in a posted event's user data all the way to the window is checked by a real run
+(`.claude/skills/verify`, Mac app route); if it did not, requests aimed at Talos would end `delivery_unverified`, never success.
+
 ## No step-up, and Always allow (owner ruling 2026-11-14)
 
 "There should be zero Face ID approvals. End of story." Only sign-in keeps the passkey; adding a device keeps its one confirm.

@@ -61,6 +61,7 @@ const SPEC_ROUTES = [
   'POST /bridge/rotate',
   'POST /bridge/bug-reports/:id/requeue',
   'POST /bridge/devices/:id/revoke',
+  'GET /.well-known/talos-relay',
   'GET /.well-known/apple-app-site-association',
   // docs/V2-FEATURES.md V1.4
   'GET /api/status',

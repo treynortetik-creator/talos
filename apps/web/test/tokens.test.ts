@@ -180,14 +180,12 @@ describe('Talos tokens', () => {
 })
 
 describe('default theme file', () => {
-  it('matches tokens.css in both modes, radii and fonts', async () => {
-    const { DEFAULT_THEME, THEME_COLOR_TOKENS, THEME_FONT_STACKS } = await import('@talos-app/protocol')
+  it('matches tokens.css in both modes', async () => {
+    const { DEFAULT_THEME, THEME_COLOR_TOKENS } = await import('@talos-app/protocol')
     for (const [mode, set] of [
       ['light', light],
       ['dark', darkMedia],
     ] as const)
       for (const name of THEME_COLOR_TOKENS) expect(DEFAULT_THEME[mode][name], `${mode} ${name}`).toBe(color(set, name))
-    for (const [name, px] of Object.entries(DEFAULT_THEME.radius)) expect(`${px}px`).toBe(primitives[name])
-    for (const [name, id] of Object.entries(DEFAULT_THEME.fonts)) expect(THEME_FONT_STACKS[id]).toBe(primitives[name])
   })
 })

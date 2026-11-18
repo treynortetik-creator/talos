@@ -1,3 +1,4 @@
+import TalosRelayCore
 import UIKit
 import XCTest
 
@@ -75,13 +76,21 @@ final class WebViewReplaceTests: XCTestCase {
     }
 
     func testANewPageClearsTheThreadTheOldOneWasShowing() throws {
+        // Paired in memory, so the guards are installed whatever relay this build was synced with.
+        let saved = TalosBridgeViewController.runtime
+        defer { TalosBridgeViewController.runtime = saved }
+        let store = RelayStore(backing: InMemoryKeychain())
+        try store.add(RelayProfile(
+            id: "r_abcdefghijklmnopqrst", origin: URL(string: "https://relay.example.test")!, kind: .self, label: "relay.example.test",
+            bridgeFp: String(repeating: "A", count: 43), deviceId: "", dataStoreId: UUID(), addedAt: Date())!)
+        TalosBridgeViewController.runtime = { RelayRuntime(store: { store }, dataStores: WebKitRelayDataStores(), allowBuildTime: false) }
         let (_, window) = try makeWindow()
         let vc = TalosBridgeViewController()
         window.rootViewController = vc
         window.makeKeyAndVisible()
         vc.loadViewIfNeeded()
         let gate = try XCTUnwrap(vc.webView?.navigationDelegate as? NavigationGate,
-                                 "no relay is configured in this build (run `pnpm --filter @talos-app/mobile cap:sync` with TALOS_RELAY_URL set)")
+                                 "the shell did not install its guards")
         let web = try XCTUnwrap(vc.webView)
         TalosPushCenter.shared.viewingThread = "general"
         gate.webView(web, didCommit: nil) // a reload, or any new document

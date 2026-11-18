@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { processStartTime } from '../apps/bridge/src/proc-identity.ts'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { ciLocalSource, cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
@@ -26,7 +27,7 @@ const base = {
 // These tests start real shells, and the check job runs them beside two other CI runs. What they prove is the order of
 // events, so no test depends on how fast the machine is: a slow run takes longer, a stuck one still fails at `until`.
 const WAIT_MS = 30_000
-vi.setConfig({ testTimeout: 4 * WAIT_MS })
+vi.setConfig({ testTimeout: scaled(4 * WAIT_MS), hookTimeout: scaled(4 * WAIT_MS) })
 
 type Bg = { child: ChildProcess; out: () => string; done: Promise<number> }
 const live: Bg[] = []

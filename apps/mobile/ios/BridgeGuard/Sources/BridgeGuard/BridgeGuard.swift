@@ -34,7 +34,7 @@ public struct Origin: Equatable, Sendable {
 }
 
 /// Decides which web content may talk to native code, and which pages must leave the shell web view.
-/// The relay origin is fixed at build time (capacitor.config.json); it is never read from page content.
+/// The relay origin is the active relay profile's (set only by the native scan); it is never read from page content.
 public struct BridgeGuard: Sendable {
     public let relay: Origin
 
@@ -49,7 +49,8 @@ public struct BridgeGuard: Sendable {
 
     /// A plugin call is delivered only when it comes from the top frame, on the relay origin, at a path outside /media/.
     /// Anything missing or unparsable is denied.
-    public func allowsPluginCall(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?) -> Bool {
+    public func allowsPluginCall(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?, trust: RelayTrustState) -> Bool {
+        guard trust.allowsNativeFeatures else { return false }
         guard isMainFrame else { return false }
         guard let frameOrigin, frameOrigin == relay else { return false }
         guard let pageURL, isRelayURL(pageURL) else { return false }
@@ -79,6 +80,41 @@ public struct BridgeGuard: Sendable {
             }
         }
         return out
+    }
+
+    // MARK: Capacitor's own plugins
+
+    /// Capacitor's cookie and HTTP plugins. The web app uses neither, and `CapacitorCookies.getCookies({url})` reads the app-wide
+    /// cookie jar for any URL, so a page on one relay could read cookies another relay's native calls left there.
+    public static let blockedPluginIds: Set<String> = ["CapacitorCookies", "CapacitorHttp"]
+
+    /// True when a bridge message must be dropped: it names a blocked plugin, or it names no plugin at all (every real plugin call
+    /// carries a `pluginId`; the shell has no Cordova plugins).
+    public static func blocksPluginCall(body: Any) -> Bool {
+        guard let dict = body as? [String: Any], let id = dict["pluginId"] as? String, !id.isEmpty else { return true }
+        return blockedPluginIds.contains(id)
+    }
+
+    /// Capacitor's cookie and HTTP channel is `prompt(JSON.stringify({type: "CapacitorCookies.set", ...}))` (native-bridge.js: the
+    /// types are `CapacitorCookies.isEnabled`, `.get`, `.set` and `CapacitorHttp`), and its handler dispatches on `type` whatever the
+    /// plugin's enabled flag says. So a prompt is blocked when it is JSON whose `type` (trimmed, any case) starts with a blocked
+    /// plugin id, when it is shaped like that channel (starts with `{`) but cannot be read as an object with a text `type`, and when
+    /// it is a bare string that starts with a blocked plugin id. The web app uses no prompt() of its own, and every prompt Capacitor
+    /// itself sends is one of those types, so nothing legitimate is lost; an ordinary text prompt is left alone.
+    public static func blocksPrompt(_ prompt: String) -> Bool {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if namesBlockedPlugin(text) { return true }
+        guard text.hasPrefix("{") else { return false }
+        guard let data = text.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let type = object["type"] as? String
+        else { return true }
+        return namesBlockedPlugin(type.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func namesBlockedPlugin(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return blockedPluginIds.contains { lowered.hasPrefix($0.lowercased()) }
     }
 
     // MARK: Sharing an attachment from the page
@@ -166,14 +202,14 @@ public struct BridgeGuard: Sendable {
 
     /// Camera, microphone and motion: only the top frame on the relay origin outside /media/ (the same test as a plugin call).
     /// An iframe of agent-written HTML, another origin or a missing origin is denied.
-    public func devicePermission(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?) -> Permission {
-        allowsPluginCall(isMainFrame: isMainFrame, frameOrigin: frameOrigin, pageURL: pageURL) ? .grant : .deny
+    public func devicePermission(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?, trust: RelayTrustState) -> Permission {
+        allowsPluginCall(isMainFrame: isMainFrame, frameOrigin: frameOrigin, pageURL: pageURL, trust: trust) ? .grant : .deny
     }
 
     /// Capacitor answers its cookie channel through `prompt()`. Only the plugin-call frame may reach it; every other frame
     /// gets the cancelled answer (nil).
-    public func allowsPromptChannel(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?) -> Bool {
-        allowsPluginCall(isMainFrame: isMainFrame, frameOrigin: frameOrigin, pageURL: pageURL)
+    public func allowsPromptChannel(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?, trust: RelayTrustState) -> Bool {
+        allowsPluginCall(isMainFrame: isMainFrame, frameOrigin: frameOrigin, pageURL: pageURL, trust: trust)
     }
 
     public enum PopupAction: Equatable, Sendable {
