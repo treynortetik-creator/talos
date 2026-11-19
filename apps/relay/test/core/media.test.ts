@@ -154,6 +154,11 @@ describe('media', () => {
       "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:",
     )
     expect(page.headers.get('content-type')).toContain('text/html')
+    // The same referrer and powerful-feature headers as /media/:id/app: the card's Open in new tab loads this URL top-level.
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(page.headers.get('permissions-policy')).toBe(
+      'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), payment=(), usb=(), serial=(), hid=(), bluetooth=(), display-capture=(), fullscreen=()',
+    )
     const png = (await (await upload(relay, PNG, { 'content-type': 'image/png' })).json()) as { media_id: string }
     expect((await get(relay, `/media/${png.media_id}/page`)).status).toBe(404)
   })

@@ -94,6 +94,9 @@ Also, where the change touches them: hostile text, size limits, checks that run 
 - **Load for timing tests comes only from `scripts/cpu-burn.sh`**
   (`bash scripts/cpu-burn.sh [--cores N] [--seconds S] -- <cmd...>`). It runs inside the heavy lock, caps itself at 600
   seconds and stops its burners on every way out. Never hand-roll a burn loop.
+- **iOS simulator: create your own** (`xcrun simctl create <name> ...`) and pass `-destination id=<udid>`. Name it after your worktree, so two builders never share one. Never boot, install
+  to or erase a shared simulator (the plain "iPhone 17 Pro") or a CI one (`talos-ci-s*`): two xcodebuild runs on one device
+  replace each other's app (red at 52805b3). Shut yours down when done.
 - **Stop only your own processes, by pid** (or by parent, `pkill -P <pid>`). Never kill by name, pattern, age or the
   command line of something you did not start. The load guard lists strays and refuses new heavy work; it never kills.
   Before you report, confirm none of your processes remain.

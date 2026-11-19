@@ -5,8 +5,7 @@ import type { AttachmentRefT, MessageT } from '@talos-app/protocol'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { formatBytes, formatDuration } from '../../lib/format.ts'
 import { cn } from '../../ui/cn.ts'
-import { pageCardsWaitForTap } from '../../ui/engine.ts'
-import { IconExpand, IconFile, IconPause, IconPlay } from '../../ui/icons.tsx'
+import { IconExpand, IconFile, IconLink, IconPause, IconPlay } from '../../ui/icons.tsx'
 import { FrameOverlay, SandboxedFrame } from '../../ui/SandboxedFrame.tsx'
 import { audioDock, type DockItem, savedPosition, useDock } from './audioDock.ts'
 import { rememberOpener } from './ImageViewer.tsx'
@@ -354,16 +353,9 @@ export function AudioPlayer({
 export function HtmlPageCard({ att }: { att: AttachmentRefT }) {
   const { state, retry, load, url } = useMediaGate(att, mediaPageUrl(att.media_id))
   const [open, setOpen] = useState(false)
-  // Chromium lets a running page pull keyboard focus without a tap, so there the inline page waits for one. Expand is a
-  // tap too, so the full-screen page always runs. iPhone and Mac (WebKit) run the inline page at once.
-  const waitForTap = useMemo(pageCardsWaitForTap, [])
-  const [armed, setArmed] = useState(false)
+  // The page runs at once on every engine (owner, 2026-11-18): the sandbox is the boundary, and on Chromium, where a page
+  // can pull keyboard focus without a tap, SandboxedFrame's focus guard hands it back and hides a page that keeps at it.
   const expandRef = useRef<HTMLButtonElement>(null)
-  const arm = useCallback(() => {
-    setArmed(true)
-    // The Run button is about to leave the page: focus goes to the card's next control, not to the page.
-    requestAnimationFrame(() => expandRef.current?.focus())
-  }, [])
   const close = useCallback(() => {
     setOpen(false)
     // Focus goes back to the button that opened the overlay.
@@ -373,32 +365,35 @@ export function HtmlPageCard({ att }: { att: AttachmentRefT }) {
     <figure className="m-0 overflow-hidden rounded-card border border-line">
       <figcaption className="flex items-center justify-between gap-2 border-b border-line bg-surface-2 py-1 pl-3 pr-1 font-mono text-xs text-text-2">
         <span className="min-w-0 truncate">{att.name}</span>
-        <button
-          ref={expandRef}
-          type="button"
-          aria-label={`Expand ${att.name} to full screen`}
-          onClick={() => setOpen(true)}
-          disabled={state !== 'ready'}
-          className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-pill px-2 text-text-2 hover:text-text disabled:opacity-50"
-        >
-          <IconExpand width={16} height={16} />
-          <span>Expand</span>
-        </button>
-      </figcaption>
-      {/* Opaque origin: no cookies, no same-origin access (5.4). The attributes are fixed in SandboxedFrame. */}
-      {state === 'ready' && waitForTap && !armed ? (
-        <div className="grid h-40 place-items-center gap-2 bg-surface p-4 text-center text-sm text-text-2">
-          <p className="m-0">This page runs its own code. It has not started.</p>
+        <div className="flex shrink-0 items-center">
+          {state === 'ready' && (
+            // Top-level safe, as in the overlay: the relay serves the page with `sandbox allow-scripts`, an opaque origin.
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open ${att.name} in a new tab`}
+              className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-pill px-2 text-text-2 hover:text-text"
+            >
+              <IconLink width={16} height={16} />
+              <span className="hidden sm:inline">Open in new tab</span>
+            </a>
+          )}
           <button
+            ref={expandRef}
             type="button"
-            aria-label={`Run ${att.name}`}
-            onClick={arm}
-            className="min-h-11 rounded-pill border border-line px-4 text-text hover:bg-surface-2"
+            aria-label={`Expand ${att.name} to full screen`}
+            onClick={() => setOpen(true)}
+            disabled={state !== 'ready'}
+            className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-pill px-2 text-text-2 hover:text-text disabled:opacity-50"
           >
-            Run page
+            <IconExpand width={16} height={16} />
+            <span>Expand</span>
           </button>
         </div>
-      ) : state === 'ready' ? (
+      </figcaption>
+      {/* Opaque origin: no cookies, no same-origin access (5.4). The attributes are fixed in SandboxedFrame. */}
+      {state === 'ready' ? (
         <SandboxedFrame title={att.name} src={url} loading="lazy" className="block h-80 w-full bg-surface" />
       ) : (
         <div className="grid h-40 place-items-center bg-surface p-4 text-sm text-text-2">

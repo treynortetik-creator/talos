@@ -120,6 +120,13 @@ export function createTestAuth(opts: TestAuthOptions = {}): AuthContract {
     },
     sessionPinned: (session) =>
       !session?.sessionId.endsWith(UNPINNED) || (session.deviceId !== null && pinnedLater.has(session.deviceId)),
+    // the test auth's "paired phone": a session header whose device is pinned
+    peekPairedSession: (c) => {
+      const v = c.req.header(TEST_SESSION_HEADER)
+      if (!v || v === 'none') return false
+      const s = sessionOf(v, c.req.header(TEST_UNPINNED_HEADER))
+      return !s.sessionId.endsWith(UNPINNED) || (s.deviceId !== null && pinnedLater.has(s.deviceId))
+    },
     rateLimit: () => async (_c, next) => next(),
     getSession: (c) => sessions.get(c.req.raw) ?? null,
   }

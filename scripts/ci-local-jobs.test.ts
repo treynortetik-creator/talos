@@ -698,10 +698,9 @@ exit 0`
           [pass('bridge-shard-1', 'delphi'), pass('vitest', 'delphi'), refused('bridge-shard-2', 'cyclops')],
           ['delphi\tcompleted', `cyclops\t${job}`],
         )
-        const t0 = Date.now()
-        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], env(ALL_REMOTE, '60'))
+        // an hour's wait: a run that waited would hit the test's own timeout, whatever the load
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], env(ALL_REMOTE, '3600'))
         expect(await run.done, run.out()).toBe(0)
-        expect(Date.now() - t0).toBeLessThan(45_000) // well under the 60 s wait
         expect(rest(r)).toEqual([expect.stringMatching(/--skip test\/schedules\/ --shard 2\/2 /)])
         expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*shard 2 here/)])
       })

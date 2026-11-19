@@ -246,6 +246,7 @@ extension ScreenCore {
   func send(
     _ request: ScreenInputRequest, allowed: ScreenAllowed, events given: [ScreenInputEvent]? = nil
   ) throws(ScreenRefusal) -> (posted: Int, front: ScreenApp?) {
+    if isLocked() { throw .screenLocked }  // before anything is worked out; each event's gate checks the front app too
     if case .key(let text) = request { try checkKey(text) }
     let events: [ScreenInputEvent]
     if let given { events = given } else { events = try self.events(for: request) }
@@ -373,8 +374,11 @@ extension ScreenCore {
 
   @discardableResult
   func gate(_ e: ScreenInputEvent, _ allowed: ScreenAllowed, keyText: String? = nil, touched: (ScreenApp) -> Void = { _ in }) throws(ScreenRefusal) -> ScreenApp {
+    // before each event, so a lock that comes down mid-typing stops the rest
+    let current = apps.frontmost()
+    try refuseIfLocked(front: current)
     guard permissions.accessibility() else { throw .accessibilityNotGranted }
-    guard let front = apps.frontmost() else { throw .noFrontmostApp }
+    guard let front = current else { throw .noFrontmostApp }
     guard allowed.allows(bundleID: front.bundleID, pid: front.pid) else {
       throw .appNotAllowed(app: front.bundleID ?? front.name, subject: .running(pid: front.pid))
     }

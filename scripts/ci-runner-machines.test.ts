@@ -8,6 +8,7 @@ import { tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { copyCiLocalParts, copyRunnerMainQueue, systemPathWithout } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 
@@ -1296,6 +1297,105 @@ exit 0`,
     const s = setup()
     for (const bad of [{ CI_REMOTE_DEADLINE: 'HOME[$(id)]' }, { CI_FALLBACK_POLL: 'soon' }, { CI_FALLBACK_POLL: '0' }])
       expect(s.run('fallback', env(s, bad)).code, JSON.stringify(bad)).toBe(1)
+  })
+
+  describe('CI_DECLINE_JOBS: a job this machine never takes back', () => {
+    // a gh that also writes down every status posted
+    const ghPosting = `case "$*" in
+  *"-X POST"*) echo "$*" >> "$HOME/../posts" ;;
+  *"/statuses?"*) cat "$HOME/../rows" 2>/dev/null ;;
+  *"/jobs"*) cat "$HOME/../jobs" 2>/dev/null ;;
+esac
+exit 0`
+    const posts = (s: { T: string }) => (existsSync(join(s.T, 'posts')) ? readFileSync(join(s.T, 'posts'), 'utf8') : '')
+    const dec = (s: { real: string }, extra: Record<string, string> = {}) =>
+      env(s, { CI_FALLBACK: 'titan:image', CI_DECLINE_JOBS: 'image', ...extra })
+
+    it('the owner answered: nothing run, nothing posted', () => {
+      const s = setup({ gh: ghPosting })
+      s.rows([`local-ci/image\tsuccess\t${ATTEMPT}titan\tpassed on titan`])
+      s.jobs(['titan\tcompleted'])
+      const r = s.run('fallback', dec(s))
+      expect(r.code, r.err).toBe(0)
+      expect(s.called()).toBe('')
+      expect(posts(s)).toBe('')
+    })
+
+    it('no answer after the deadline: an error says why, and ci-local.sh is not run for it', () => {
+      const s = setup({ gh: ghPosting })
+      s.jobs(['titan\tin_progress'])
+      const r = s.run('fallback', dec(s, { CI_REMOTE_DEADLINE: '0', CI_RUN_STARTED: '2000-01-01T00:00:00Z' }))
+      expect(r.code, r.err).toBe(0)
+      expect(s.called()).toBe('')
+      expect(posts(s)).toContain('state=error')
+      expect(posts(s)).toContain('context=local-ci/image')
+      expect(posts(s)).toContain('not run: this machine declines image (CI_DECLINE_JOBS) and titan did not answer')
+      expect(r.out).toContain('declined here')
+    })
+
+    it('the error post itself fails: ::error:: and a nonzero step, never a quiet green', () => {
+      const s = setup({
+        gh: `case "$*" in *"-X POST"*) echo "unexpected end of JSON input" >&2; exit 1 ;; *"/jobs"*) cat "$HOME/../jobs" 2>/dev/null ;; esac\nexit 0`,
+      })
+      s.jobs(['titan\tin_progress'])
+      const r = s.run('fallback', dec(s, { CI_REMOTE_DEADLINE: '0', CI_RUN_STARTED: '2000-01-01T00:00:00Z' }))
+      expect(r.code, r.err).toBe(1)
+      expect(r.err).toContain('::error::ci-runner: fallback: could not post the error for local-ci/image')
+    })
+
+    it('its machine never picked it up: the same error at once', () => {
+      const s = setup({ gh: ghPosting })
+      s.jobs(['titan\tqueued'])
+      expect(s.run('fallback', dec(s)).code).toBe(0)
+      expect(s.called()).toBe('')
+      expect(posts(s)).toContain('context=local-ci/image')
+    })
+
+    it(
+      'still working on its machine before the deadline: nothing posted over it (the loop waits)',
+      () => {
+        const s = setup({
+          gh: `case "$*" in
+  *"-X POST"*) echo "$*" >> "$HOME/../posts" ;;
+  *"/statuses?"*) n=$(cat "$HOME/n" 2>/dev/null || echo 0); echo $((n + 1)) > "$HOME/n"
+    if [ "$n" -ge 2 ]; then printf 'local-ci/image\\tsuccess\\t${ATTEMPT}titan\\n'; fi ;;
+  *"/jobs"*) printf 'titan\\tin_progress\\n' ;;
+esac
+exit 0`,
+        })
+        const started = new Date().toISOString().slice(0, 19) + 'Z'
+        const r = s.run('fallback', dec(s, { CI_REMOTE_DEADLINE: '600', CI_RUN_STARTED: started }))
+        expect(r.code, r.err).toBe(0)
+        expect(s.called()).toBe('')
+        expect(posts(s)).toBe('')
+      },
+      scaled(30_000),
+    )
+
+    it('only the declined job is held back: another unanswered job is still taken', () => {
+      const s = setup({ gh: ghPosting })
+      s.jobs(['titan\tcompleted'])
+      expect(s.run('fallback', dec(s, { CI_FALLBACK: 'titan:image,browser' })).code).toBe(0)
+      expect(s.called()).toContain('--jobs browser\n')
+      expect(posts(s)).toContain('context=local-ci/image')
+      expect(posts(s)).not.toContain('context=local-ci/browser')
+    })
+
+    it('a job not declined: taken as today, nothing posted', () => {
+      const s = setup({ gh: ghPosting })
+      s.jobs(['titan\tcompleted'])
+      expect(s.run('fallback', dec(s, { CI_DECLINE_JOBS: 'mobile' })).code).toBe(0)
+      expect(s.called()).toContain('--jobs image\n')
+      expect(posts(s)).toBe('')
+    })
+
+    it('a malformed or unknown CI_DECLINE_JOBS is refused before any read', () => {
+      const s = setup({ gh: ghPosting })
+      for (const bad of ['image,', ',image', 'image,,browser', 'image;x', 'nope', 'IMAGE', 'image browser'])
+        expect(s.run('fallback', dec(s, { CI_DECLINE_JOBS: bad })).code, bad).toBe(1)
+      expect(s.called()).toBe('')
+      expect(posts(s)).toBe('')
+    })
   })
 
   it('a malformed CI_FALLBACK is refused', () => {

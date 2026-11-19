@@ -50,6 +50,8 @@ public enum ScreenAllowProofCheck {
     case binding
     /// The owner removed this very approval in Settings.
     case removed
+    /// The app is the lock screen or a system security prompt (`ScreenDenied`): never allowed, whatever was signed.
+    case denied
   }
 
   /// `nowMs` nil: no time check (an entry read back from the file stays good after a day).
@@ -72,6 +74,7 @@ public enum ScreenAllowProofCheck {
     guard signed["payload_hash"] as? String == "sha256:" + hash, let b = object(p.binding), b["kind"] as? String == "config",
       b["id"] as? String == cardId, let payload = b["payload"] as? [String: Any], let id = identity(payload)
     else { return .failure(.binding) }
+    if ScreenDenied.contains(id.bundleID) { return .failure(.denied) }
     return .success(id)
   }
 
@@ -125,6 +128,7 @@ public final class ScreenAllowStore: ScreenAllowListProvider, @unchecked Sendabl
 
     public var text: String {
       switch self {
+      case .proof(.denied): return "That app is part of the Mac's lock screen or its security prompts, so it is never put on the allowed list."
       case .proof(.removed): return "The owner removed or replaced that approval since; it is not used again."
       case .proof(.time): return "The approval came too late to use. Use the app again to ask the owner."
       case .proof(let s): return "The approval did not check out on this Mac (\(s.rawValue)), so nothing was allowed."

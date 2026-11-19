@@ -3,9 +3,10 @@ run-name: "Web bundle: production deploy seen"
 
 # The trigger for web-bundle.yml, which saves the deployed web bundle (docs/OLD-CLIENT.md). A deployment_status run is tied
 # to no branch ref, so the Actions cache refuses it ("Event Validation Error"), and the cache is what carries the bundle
-# from web-bundle.yml's read-only build to its publish job (the artifact quota is account-wide and full). So this run only
-# notices a successful production deploy; web-bundle.yml runs on its completion (workflow_run, on main's ref, where the
-# cache works) and builds the sha this run carries as its head sha. No token, no checkout, no code of the repository.
+# from web-bundle.yml's read-only build to its publish job (the artifact quota is account-wide and full). A workflow_run run
+# gets the cache read-only, so that does not work either (4bfe3054: 'Unable to reserve cache'). So this run notices a
+# successful production deploy and starts web-bundle.yml by workflow_dispatch on main (a dispatch made with this run's token
+# does start a run, and gets a writable cache). Its only token right is actions: write; no checkout, no code of the repo.
 on:
   deployment_status:
 
@@ -16,12 +17,17 @@ jobs:
     if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions:
+      actions: write # start web-bundle.yml (workflow_dispatch); nothing else
     env:
       SHA: ${{ github.event.deployment.sha }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: A successful production deploy of a commit
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "not a commit sha"; exit 1; }
-          echo "production deploy of ${SHA:0:8}: web-bundle.yml saves its bundle"
+          gh workflow run web-bundle.yml --ref main -f sha="$SHA" </dev/null
+          echo "production deploy of ${SHA:0:8}: web-bundle.yml started to save its bundle"

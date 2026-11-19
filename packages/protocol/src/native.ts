@@ -4,11 +4,11 @@
 // the shell validates what it receives from the page. Shells cannot do passkeys in a web view; they sign in with the
 // one-time setup code (`POST /api/auth/enroll/session`, docs/SPEC.md 5.3).
 //
-//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder · shell_pane · shell_pane_close · capture_ack
-//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · folder_picked · capture_drop
+//   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder · shell_pane · shell_pane_close · run_witness · capture_ack
+//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · run_result · folder_picked · capture_drop
 import { z } from 'zod'
 import { normalizeEnrollCode } from './enroll.ts'
-import { ThreadId } from './ids.ts'
+import { MsgId, ThreadId } from './ids.ts'
 
 export const NATIVE_SHELL_API = 1
 export const NATIVE_FEATURES_MAX = 32
@@ -198,6 +198,18 @@ export const NativeShellPane = msg('shell_pane', {
 })
 /** The owner closed the Terminal pane of this thread: its shells end. Opening the pane again starts a new shell. */
 export const NativeShellPaneClose = msg('shell_pane_close', { thread_id: ThreadId })
+/**
+ * The page is sending a Run for the Terminal pane (`run_where: 'pane'`, run.ts RUN_PANE_FEATURE): the Mac app records a witness
+ * of THIS message, bound to the script's sha256 (hex of the UTF-8 script as the bridge hands it over), only if a real human
+ * click or Return reached its window within RUN_PANE_CLICK_MS; a JS call alone records nothing. A pane Run the bridge hands
+ * over runs only with a fresh, unused witness for its id and script hash, so a Run signed on a phone or a browser (never
+ * witnessed here) is refused. Carries no script text and nothing the shell reads: the shell still gets only what the app writes.
+ */
+export const NativeRunWitness = msg('run_witness', {
+  thread_id: ThreadId,
+  client_msg_id: MsgId,
+  script_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+})
 
 /**
  * The page's answer to `capture_drop`. ok: the image is in the composer as a pending attachment (it may still be uploading),
@@ -225,6 +237,7 @@ export const WEB_TO_NATIVE = {
   pick_folder: NativePickFolder,
   shell_pane: NativeShellPane,
   shell_pane_close: NativeShellPaneClose,
+  run_witness: NativeRunWitness,
   capture_ack: NativeCaptureAck,
 } as const
 export const WebToNative = z.discriminatedUnion('type', [
@@ -243,6 +256,7 @@ export const WebToNative = z.discriminatedUnion('type', [
   NativePickFolder,
   NativeShellPane,
   NativeShellPaneClose,
+  NativeRunWitness,
   NativeCaptureAck,
 ])
 export type WebToNativeT = z.infer<typeof WebToNative>
@@ -365,6 +379,25 @@ export const NativeTerminalResumeResult = msg('terminal_resume_result', {
 /** The owner pressed Ctrl+1 to Ctrl+9 with the Mac's terminal holding the keyboard: the shell switched the tab and says which. */
 export const NativeTerminalSelect = msg('terminal_select', { session: TerminalSessionId })
 
+/** Why a pane Run did not run, as the Mac app says it: the click was not witnessed, it waited too long, the shell did not start, the pane was busy, the app closed, or the script broke the app's own rules (control, bidi or zero-width characters, empty, no final newline, over 4000 characters). */
+export const RUN_RESULT_REASONS = [
+  'no_witness',
+  'expired',
+  'not_started',
+  'pane_busy',
+  'app_closed',
+  'bad_script',
+] as const
+/**
+ * What became of a pane Run (`run_witness`), keyed by its message id: ok when the Mac app wrote it into the owner's shell, else
+ * a fixed reason. No text: the page never learns what the shell did, only whether the Run went in.
+ */
+export const NativeRunResult = msg('run_result', {
+  client_msg_id: MsgId,
+  ok: z.boolean(),
+  reason: z.enum(RUN_RESULT_REASONS).optional(),
+})
+
 /**
  * The answer to `pick_folder`: the absolute path the owner chose, or null when they cancelled. The page saves it through the
  * same checked thread patch as a typed path, so the Mac (bridge) still decides whether it may be used.
@@ -409,6 +442,7 @@ export const NATIVE_TO_WEB = {
   terminal_sessions: NativeTerminalSessions,
   terminal_resume_result: NativeTerminalResumeResult,
   terminal_select: NativeTerminalSelect,
+  run_result: NativeRunResult,
   folder_picked: NativeFolderPicked,
   capture_drop: NativeCaptureDrop,
 } as const
@@ -423,6 +457,7 @@ export const NativeToWeb = z.discriminatedUnion('type', [
   NativeTerminalSessions,
   NativeTerminalResumeResult,
   NativeTerminalSelect,
+  NativeRunResult,
   NativeFolderPicked,
   NativeCaptureDrop,
 ])

@@ -1,8 +1,8 @@
 // Hostile pages in the real production bundle, against the testkit relay, on loopback only. The attack: a page keeps
 // pulling keyboard focus into its own input on a timer, so what the owner types into the composer goes to the page.
-// Chromium lets a sandboxed frame do that without a tap; WebKit (iPhone, Mac shell) does not. Two guards:
-//   - an HTML page card waits for a tap before it runs, on Chromium engines only (WebKit stays instant);
-//   - a focus guard on every sandboxed frame hands focus back to the composer when a frame grabs it right after host input.
+// Chromium lets a sandboxed frame do that without a tap; WebKit (iPhone, Mac shell) does not. The guard: a focus guard on
+// every sandboxed frame hands focus back to the composer when a frame grabs it right after host input, and hides a frame
+// that keeps at it. HTML page cards run at once on every engine (no Run tap since 2026-11-18), so it is the only one.
 import { createHash } from 'node:crypto'
 import AxeBuilder from '@axe-core/playwright'
 import type { Locator, Page } from '@playwright/test'
@@ -127,66 +127,58 @@ async function guardKeepsTheTyping(page: Page) {
 }
 
 test.describe('HTML page card', () => {
-  test('Chromium: the page does not run until the owner taps, so it cannot take the typing', async ({
-    page,
-    context,
-    harness,
-    browserName,
-  }) => {
-    test.skip(browserName !== 'chromium', 'WebKit runs page cards at once (see the next test)')
-    await listen(page)
-    const pageFetches: string[] = []
-    page.on('request', (r) => {
-      // The card probes the file with a fetch; only a frame navigation would run the page.
-      if (r.resourceType() === 'document' && /\/media\/[^/]+\/page/.test(r.url())) pageFetches.push(r.url())
-    })
-    await openSignedIn(harness, page, context)
-    harness.relay.sendToApps(
-      agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', HOSTILE)] }),
-    )
-    const run = page.getByRole('button', { name: 'Run report.html' })
-    await expect(run).toBeVisible()
-    await expect(page.locator('iframe[title="report.html"]')).toHaveCount(0)
-
-    await ownerTypes(page, SECRET)
-    expect(await typed(page)).toBe(SECRET)
-    expect(await stolen(page)).toEqual([])
-    expect(await ran(page)).toBe(0)
-    expect(pageFetches).toEqual([])
-  })
-
-  test('Chromium: after the tap the page runs, and the focus guard still keeps the typing', async ({
-    page,
-    context,
-    harness,
-    browserName,
-  }) => {
-    test.skip(browserName !== 'chromium', 'WebKit runs page cards at once (see the next test)')
+  // No Run page tap since 2026-11-18 (the owner: "They want to see the HTML file, or they wouldn't have asked for it"): the
+  // page runs at once on every engine, and on Chromium the focus guard is the one thing between a page and the typing.
+  test('every engine: the page runs at once, with no Run button', async ({ page, context, harness }) => {
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(
-      agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', HOSTILE)] }),
+      agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', QUIET)] }),
     )
-    await page.getByRole('button', { name: 'Run report.html' }).click()
-    const frame = page.locator('iframe[title="report.html"]')
-    await expect(frame).toBeVisible()
+    await expect(page.locator('iframe[title="report.html"]')).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
-    // The Run button is gone and the frame took focus on its own: that is a page the owner chose to run.
     await expect(page.getByRole('button', { name: 'Run report.html' })).toHaveCount(0)
-
-    await guardKeepsTheTyping(page)
+    await expect(page.getByText('has not started')).toHaveCount(0)
   })
 
-  test('WebKit: the page runs at once, with no Run button', async ({ page, context, harness, browserName }) => {
-    test.skip(browserName !== 'webkit', 'Chromium engines wait for a tap (see the first test)')
+  test('Chromium: a page that steals focus runs with no tap, and the guard holds it within three keys', async ({
+    page,
+    context,
+    harness,
+    browserName,
+  }) => {
+    test.skip(browserName !== 'chromium', 'only Chromium lets a frame take focus unprompted')
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(
       agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', HOSTILE)] }),
     )
     await expect(page.locator('iframe[title="report.html"]')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Run report.html' })).toHaveCount(0)
     await expect.poll(() => ran(page)).toBe(1)
+
+    await guardKeepsTheTyping(page)
+  })
+
+  test('Chromium: a page card that arrives while the owner types, and steals the instant it runs, is held within three keys', async ({
+    page,
+    context,
+    harness,
+    browserName,
+  }) => {
+    test.skip(browserName !== 'chromium', 'only Chromium lets a frame take focus unprompted')
+    await listen(page)
+    await openSignedIn(harness, page, context)
+    await composer(page).click()
+    await page.keyboard.type('hello ', { delay: 50 })
+    harness.relay.sendToApps(
+      agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', INSTANT)] }),
+    )
+    // No click on the composer after the card arrives: the owner just keeps typing.
+    await page.keyboard.type('my secret note', { delay: 220 })
+    await expect(page.getByTestId('frame-held')).toBeVisible()
+    const leaked = (await stolen(page)).length
+    expect(leaked, 'keys that reached the page before it was held').toBeLessThanOrEqual(3)
+    expect((await typed(page)).length + leaked).toBe('hello my secret note'.length)
   })
 })
 
@@ -219,7 +211,6 @@ test.describe('a page that behaves', () => {
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'quiet.html', QUIET)] }))
-    await page.getByRole('button', { name: 'Run quiet.html' }).click()
     const frame = page.locator('iframe[title="quiet.html"]')
     await expect(frame).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -248,7 +239,6 @@ test.describe('a real touch tap into a frame', () => {
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'quiet.html', QUIET)] }))
-    await page.getByRole('button', { name: 'Run quiet.html' }).tap()
     const frame = page.locator('iframe[title="quiet.html"]')
     await expect(frame).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -267,35 +257,32 @@ test.describe('a real touch tap into a frame', () => {
 })
 
 for (const scheme of ['light', 'dark'] as const) {
-  test(`Run button: keyboard reachable, focus lands on Expand, accessible in ${scheme}`, async ({
+  test(`card controls: Open in new tab and Expand are 44 tall, on screen, accessible in ${scheme}`, async ({
     page,
     context,
     harness,
-    browserName,
   }) => {
-    test.skip(browserName !== 'chromium', 'WebKit has no Run button')
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' })
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(
       agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', QUIET)] }),
     )
-    const run = page.getByRole('button', { name: 'Run report.html' })
-    await expect(run).toBeVisible()
-    const box = await run.boundingBox()
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
+    await expect(page.locator('iframe[title="report.html"]')).toBeVisible()
     const vp = page.viewportSize()
-    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(vp?.width ?? 0)
+    for (const c of [
+      page.getByRole('link', { name: 'Open report.html in a new tab' }),
+      page.getByRole('button', { name: 'Expand report.html to full screen' }),
+    ]) {
+      const box = await c.boundingBox()
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
+      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(vp?.width ?? 0)
+    }
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze()
     expect(
       results.violations
         .filter((v) => v.impact === 'serious' || v.impact === 'critical')
         .map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`),
     ).toEqual([])
-
-    await run.focus()
-    await page.keyboard.press('Enter')
-    await expect(page.locator('iframe[title="report.html"]')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Expand report.html to full screen' })).toBeFocused()
   })
 }
 
@@ -338,7 +325,6 @@ test.describe('the focus guard against the ways round it', () => {
     harness.relay.sendToApps(
       agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'report.html', HOSTILE)] }),
     )
-    await page.getByRole('button', { name: 'Run report.html' }).click()
     const frame = page.locator('iframe[title="report.html"]')
     await expect(frame).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -460,7 +446,6 @@ test.describe('the focus guard against the ways round it', () => {
     await openSignedIn(harness, page, context)
     // A quiet page card is the frame the pointer rests over first.
     harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'quiet.html', QUIET)] }))
-    await page.getByRole('button', { name: 'Run quiet.html' }).click()
     const quiet = page.locator('iframe[title="quiet.html"]')
     await expect(quiet).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -505,7 +490,6 @@ test.describe('the focus guard against the ways round it', () => {
     harness.relay.sendToApps(
       agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'steal.html', STEAL_ON_GO)] }),
     )
-    await page.getByRole('button', { name: 'Run steal.html' }).click()
     const view = page.locator('iframe[title="steal.html"]')
     await expect(view).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -546,7 +530,6 @@ test.describe('the focus guard against the ways round it', () => {
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'quiet.html', QUIET)] }))
-    await page.getByRole('button', { name: 'Run quiet.html' }).click()
     const frame = page.locator('iframe[title="quiet.html"]')
     await expect(frame).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)
@@ -641,7 +624,6 @@ i.focus(); setInterval(() => i.focus(), 30) })</script></body>`,
     await listen(page)
     await openSignedIn(harness, page, context)
     harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [htmlAttachment(harness, 'quiet.html', QUIET)] }))
-    await page.getByRole('button', { name: 'Run quiet.html' }).click()
     const frame = page.locator('iframe[title="quiet.html"]')
     await expect(frame).toBeVisible()
     await expect.poll(() => ran(page)).toBe(1)

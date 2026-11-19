@@ -63,9 +63,17 @@ trailer_of() {
   git log -1 --format=%B "$1" 2>/dev/null | git interpret-trailers --parse 2>/dev/null | sed -n 's/^[Vv]erified:[[:space:]]*//p' | tail -n 1
 }
 
+abs_path() { # abs_path <value>: names an absolute home or machine path (cite <root>/<sha>/ instead; the personal check refuses /Users/...)
+  case "$1" in
+    */Users/* | */home/* | */private/* | */tmp/* | */var/folders/*) return 0 ;;
+  esac
+  return 1
+}
+
 valid() { # valid <value>: evidence text, or "none" + a dash + a reason
   local v="$1"
   [ -n "$v" ] || return 1
+  abs_path "$v" && return 1
   case "$v" in
     none | None | NONE) return 1 ;;
     none[[:space:]]* | None[[:space:]]* | NONE[[:space:]]*)
@@ -106,6 +114,7 @@ while read -r sha base; do
       SHOWN=$((SHOWN + 1))
       subject="$(git log -1 --format=%s "$c" 2>/dev/null)"
       if [ -z "$v" ]; then note "commit ${c:0:9} has no Verified: trailer (${subject:0:70})"
+      elif abs_path "$v"; then note "commit ${c:0:9} has a Verified: trailer naming an absolute path; cite <root>/<sha>/ instead"
       else note "commit ${c:0:9} has an unusable Verified: trailer \"${v:0:60}\" (\"none\" needs a dash and a reason)"; fi
     fi
   done

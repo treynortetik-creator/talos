@@ -27,6 +27,7 @@ import {
 } from '@talos-app/protocol'
 import type { Proc } from '../../src/supervisor/bg-work.ts'
 import { LoginEnvCache } from '../../src/supervisor/login-env.ts'
+import { restored } from '../../src/supervisor/owed-pointer.ts'
 import { stripEscapes } from '../../src/supervisor/screen.ts'
 import { parseCapture } from '../../src/supervisor/tmux-commands.ts'
 import {
@@ -1097,6 +1098,64 @@ describe('what a worker’s pane tells the owner (P3d3, part 4b-i)', () => {
       why: 'line_still_in_box',
     })
     expect(x.audit.filter(([e, f]) => e === 'worker_pointer_held' && f?.why === 'enter_uncertain')).toHaveLength(1)
+  })
+  /** workers.json's record of the thread, read back the way a next supervisor would. */
+  const diskRecord = (x: ReturnType<typeof setup>) =>
+    JSON.parse(readFileSync(workersJsonPath(x.home), 'utf8')).threads.trip as Record<string, unknown>
+  it('an app gone right after the Enter does not type the line again: the file says done before the check reads the pane', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    const h = x.host()
+    // the crash: the file as it is when the Enter's check reads the pane, before the tick's end
+    let crashed: Record<string, unknown> | null = null
+    const read = h.visibleRowsEscaped.bind(h)
+    h.visibleRowsEscaped = async () => {
+      if (h.submitted.length > 0 && crashed === null) crashed = diskRecord(x)
+      return read()
+    }
+    wake(x)
+    await x.tick()
+    await x.tick()
+    expect(h.submitted).toEqual([WORKER_POINTER_TEXT])
+    expect(crashed).not.toBeNull()
+    expect(crashed).not.toHaveProperty('pointer_owed_until')
+    expect(crashed).not.toHaveProperty('enter_owed')
+    // the relaunch reads nothing owed, so nothing is typed onto the empty box
+    expect(restored(crashed ?? {}).pending).toBe(false)
+  })
+  it('an app gone right after the Enter keeps the running turn: the file has its start and conversation, and the relaunch reads it busy', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    const h = x.host()
+    let crashed: Record<string, unknown> | null = null
+    const read = h.visibleRowsEscaped.bind(h)
+    h.visibleRowsEscaped = async () => {
+      if (h.submitted.length > 0 && crashed === null) crashed = diskRecord(x)
+      return read()
+    }
+    wake(x)
+    await x.tick()
+    await x.tick()
+    const rec = crashed as Record<string, unknown> | null
+    expect(rec?.turn_started_at).toBe(x.m.entry('trip')?.turn_started_at) // the relaunch's turnSeenBusy reads it
+    expect(rec?.turn_started_at).toBeTruthy()
+    expect(rec?.turn_session).toBe(x.m.entry('trip')?.session_id)
+  })
+  it('a flagged Enter is on disk at once, before anything else of that tick runs', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    const h = x.host()
+    h.sendEnterKey = async () => 'sent' as const // the line stays in the box: something else took the key
+    let atAudit: Record<string, unknown> | null = null
+    const push = x.audit.push.bind(x.audit)
+    x.audit.push = (...e) => {
+      if (e[0][0] === 'enter_may_have_answered' && atAudit === null) atAudit = diskRecord(x)
+      return push(...e)
+    }
+    wake(x)
+    await x.tick()
+    await x.tick()
+    expect(atAudit).toMatchObject({ enter_uncertain: true })
   })
   it('a pointer held by a pane with no input box until its claim deadline: one line then', async () => {
     const x = setup({ threads: NAMED })

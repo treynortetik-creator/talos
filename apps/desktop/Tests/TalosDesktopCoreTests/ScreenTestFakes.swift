@@ -300,6 +300,7 @@ enum Fx {
   ) -> ScreenCore {
     var c = ScreenCore(capture: capture, input: input, apps: apps, permissions: permissions, flight: flight, maxLongEdge: maxLongEdge)
     c.deliveryTimeout = 0.2
+    c.isLocked = { false }  // never the real session: a test that wants a locked Mac sets its own
     c.secretWindows = { [] }
     c.pause = { _ in }  // a test that checks the waits sets its own recorder; none sleeps
     return c

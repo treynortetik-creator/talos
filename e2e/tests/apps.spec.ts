@@ -6,7 +6,17 @@ import type { Page } from '@playwright/test'
 // lines, and a real browser. Only the model is scripted.
 import { appFrame, expectedAppCsp, frameByTitle, startApps, talosCode, tapView, viewRequest } from '../harness/apps.ts'
 import { enrollDevice, expect, openThread, test } from '../harness/fixtures.ts'
+import { hostileClockMs } from '../harness/hostile.ts'
 import { pinBrowserClock } from '../harness/schedules.ts'
+
+// The hostile nightly shifts every JavaScript clock but not file times. The bridge ages captures (CAPTURE_TTL_MS, the oversize
+// rule: apps/bridge/src/apps/captures.ts pruneCaptures) and corrupt pending files by FILE mtime, against its own, shifted,
+// Date, so every capture looks 30 days old and is pruned. (Claims age by claimed_at, which is shifted, and are not the reason.)
+// In production one clock serves both, so this file is skipped there.
+test.skip(
+  hostileClockMs() !== 0,
+  'file times are not shifted by the hostile clock; the bridge ages captures and corrupt pending files by file time',
+)
 
 const CLOCK = { name: 'clock', kind: 'clock', label: 'Server clock' } as const
 

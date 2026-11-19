@@ -261,6 +261,21 @@ const unsigned: Record<string, Record<string, unknown>> = {
   },
   'device.pinned': { ...env('device.pinned', 53), device_id: deviceId, ok: true },
   'device.revoked': { ...env('device.revoked', 54), device_id: deviceId },
+  'attest.request': { ...env('attest.request', 200), nonce: 'A'.repeat(43) },
+  'attest.response': {
+    ...env('attest.response', 201),
+    ref: ulid(200),
+    pubkey: 'B'.repeat(43),
+    sig: 'C'.repeat(86),
+    chain: [
+      {
+        relay_id: 'r_abcdefghijklmnopqrst',
+        old_pubkey: 'B'.repeat(43),
+        new_pubkey: 'D'.repeat(43),
+        sig: 'C'.repeat(86),
+      },
+    ],
+  },
 }
 
 const signedSrc: Record<string, Record<string, unknown>> = {

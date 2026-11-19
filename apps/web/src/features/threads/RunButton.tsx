@@ -9,21 +9,25 @@
 //     state alone. Once that tap is no longer waiting to send, Run again offers a fresh tap (a new signed message, so a new
 //     Run: owner, 2026-11-15). The Mac runs each tap once (a replay is consumed by its message id) and refuses a block over a
 //     week old with a plain line.
-import { RUN_FEATURE, threadSessionMode } from '@talos-app/protocol'
+import { RUN_FEATURE, RUN_PANE_FEATURE, type RUN_RESULT_REASONS, threadSessionMode } from '@talos-app/protocol'
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { NotSentError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { useConnectionMeta } from '../../lib/connectionMeta.ts'
+import { getShell } from '../../lib/native/shell.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { cn } from '../../ui/cn.ts'
 import { revealHidden } from '../cards/util.ts'
+import { openPane } from '../panes/panesStore.ts'
+import { shellPaneHere } from '../panes/TerminalSlot.tsx'
 import { type RunBlock, runBlocks, runText } from './runBlock.ts'
+import { useRunResults } from './runResults.ts'
 
 /** Which message the blocks belong to. */
 export type RunContext = { threadId: string; messageId: string }
 
 /** `index` is the block's place among the message's code blocks (fenced and indented, in order), as `runBlocks` counts them. */
-type Slot = { el: HTMLElement; block: RunBlock; index: number }
+type Slot = { el: HTMLElement; icon: HTMLElement; block: RunBlock; index: number }
 
 const BUTTON = 'min-h-11 rounded-button border border-line bg-surface px-4 text-sm font-semibold text-text'
 
@@ -50,25 +54,71 @@ export function useRunSlots(box: RefObject<HTMLElement | null>, html: string, te
         b = { ...block, runnable: false, blocked: "This block doesn't match its source, so Run is off." }
       // Nothing is cut off or scrolled away: the whole script wraps inside the block.
       pre.classList.add('run-block')
+      // The icon sits in the block's top-right corner, in the pre but never in the code element (its text is the source the
+      // check above compared); the status line and questions go under the block.
+      const icon = document.createElement('div')
+      icon.className = 'run-icon-slot'
+      pre.append(icon)
       const el = document.createElement('div')
       pre.after(el)
-      made.push({ el, block: b, index: i })
+      made.push({ el, icon, block: b, index: i })
     })
     setSlots(made)
     return () => {
-      for (const s of made) s.el.remove()
+      for (const s of made) {
+        s.el.remove()
+        s.icon.remove()
+      }
       setSlots([])
     }
   }, [html, run?.messageId])
-  return slots.map((s) => createPortal(<RunControl block={s.block} index={s.index} run={run as RunContext} />, s.el))
+  return slots.map((s) => (
+    <RunControl key={s.index} block={s.block} index={s.index} run={run as RunContext} slot={s.el} icon={s.icon} />
+  ))
 }
 
 /** How long Run again takes no tap after the tap before it went: longer than a double click. */
 export const RUN_AGAIN_SETTLE_MS = 1000
+/** How long a pane Run's line waits for the Mac app's result before it points at the thread instead. */
+export const RUN_RESULT_WAIT_MS = 30_000
 
-function RunControl({ block, index, run }: { block: RunBlock; index: number; run: RunContext }) {
+/** Lowercase hex SHA-256 of the UTF-8 bytes: the only thing about the script that goes to the Mac app (run_witness). */
+async function sha256Hex(text: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+const NOT_CONNECTED = "Your Mac isn't connected; Run in Terminal needs it."
+/** Plain words for why the Mac app did not run a pane Run. */
+const REFUSED: Record<(typeof RUN_RESULT_REASONS)[number], string> = {
+  no_witness: "the click wasn't confirmed",
+  expired: 'it waited too long',
+  not_started: "Terminal didn't start",
+  pane_busy: 'Terminal is busy',
+  app_closed: 'Talos was closed',
+  // the app's own script rules (control, bidi or zero-width characters, empty, no final newline, too long)
+  bad_script: "Terminal refuses this script's characters or size",
+}
+
+function RunControl({
+  block,
+  index,
+  run,
+  slot,
+  icon,
+}: {
+  block: RunBlock
+  index: number
+  run: RunContext
+  slot: HTMLElement
+  icon: HTMLElement
+}) {
   const client = useTalosClient()
   const feature = useFeature(RUN_FEATURE)
+  // Pane mode needs both ends: a Mac that LISTS run-pane/1 (a Mac that is only briefly away still lists it, so the button does
+  // not change under the owner), and this page inside the Mac app with its Terminal pane.
+  const paneFeature = useFeature(RUN_PANE_FEATURE)
+  const pane = paneFeature !== 'off' && shellPaneHere()
   const sentText = block.runnable ? runText(block.script, block.lang) : null
   const dedicated = useTalos((s) => (s.config ? threadSessionMode(s.config, run.threadId) === 'dedicated' : false))
   // This tap's own message, once there is one. Held here only: it is gone with the screen.
@@ -83,6 +133,20 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<'sent' | 'queued' | 'held_unpinned' | null>(null)
   const [error, setError] = useState(false)
+  // The Mac app did not take the click witness: the Mac refuses an unwitnessed pane Run, so nothing ran.
+  const [unwitnessed, setUnwitnessed] = useState(false)
+  // A pane Run is never queued: with the Mac or the connection away the tap sends nothing.
+  const [notConnected, setNotConnected] = useState(false)
+  // What the Mac app said became of this tap's pane Run (by its message id).
+  const macResult = useRunResults((st) => (sentId === null ? undefined : st.byId[sentId]))
+  // A pane Run the bridge refuses itself (too old, a reset history) never reaches the app, so no result comes: after
+  // RUN_RESULT_WAIT_MS the line stops waiting and points at the thread, where the bridge's refusal is.
+  const [noAnswerFor, setNoAnswerFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (sentId === null || macResult) return
+    const t = setTimeout(() => setNoAnswerFor(sentId), RUN_RESULT_WAIT_MS)
+    return () => clearTimeout(t)
+  }, [sentId, macResult])
   const inFlight = useRef(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
   // Run again takes the place where Run was: for a moment it takes no tap, so the second click of a double click lands on
@@ -101,37 +165,68 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
     if (asked) cancelRef.current?.focus()
   }, [asked])
 
+  const under = (node: React.ReactNode) => createPortal(node, slot)
   if (!block.runnable || sentText === null)
-    return (
+    return under(
       <p data-testid="run-blocked" className="m-0 mb-2 text-xs text-text-2">
         {block.blocked}
-      </p>
+      </p>,
     )
   if (feature === 'off') return null // a Mac that does not list run/1 would take the words for plain text
-  if (dedicated)
-    return (
+  // A thread with its own session takes no agent Run; a pane Run involves no agent, so the Mac accepts it there.
+  if (dedicated && !pane)
+    return under(
       <p data-testid="run-blocked" className="m-0 mb-2 text-xs text-text-2">
         This thread has its own session, so Run isn't available here.
-      </p>
+      </p>,
     )
 
   const send = async () => {
+    if (pane && paneFeature !== 'on') {
+      setAsked(false)
+      setNotConnected(true) // the Mac is away: nothing is sent, nothing opens
+      return
+    }
     if (inFlight.current) return // one message per tap, however fast the taps come (two can land before the screen redraws)
     inFlight.current = true
     setBusy(true)
     setAsked(false)
     setError(false)
+    setUnwitnessed(false)
+    setNotConnected(false)
     try {
+      let hash = ''
+      if (pane) {
+        openPane(run.threadId, 'terminal') // layout only: the pane opens beside the thread
+        hash = await sha256Hex(block.script) // before the send, so the witness follows it with nothing in between
+      }
       const r = await client.sendMessage({
         threadId: run.threadId,
         text: sentText,
         intent: 'run',
         runBlock: { message_id: run.messageId, index },
+        ...(pane ? { runWhere: 'pane' as const, requireLive: true } : {}),
       })
+      if (pane && r.state !== 'sent') {
+        // Refused up front when it can be (requireLive); this is the race after that. It cannot be called back from here, but
+        // with no witness the Mac app refuses it if it ever goes out.
+        setNotConnected(true)
+        return
+      }
       setSentId(r.clientMsgId)
       setResult(r.state)
-    } catch {
-      setError(true) // nothing was queued: the Run never left
+      if (pane) {
+        const ok = getShell()?.bridge.send({
+          type: 'run_witness',
+          thread_id: run.threadId,
+          client_msg_id: r.clientMsgId,
+          script_sha256: hash,
+        })
+        if (!ok) setUnwitnessed(true)
+      }
+    } catch (e) {
+      if (pane && e instanceof NotSentError) setNotConnected(true)
+      else setError(true) // nothing was queued: the Run never left
     } finally {
       setBusy(false)
       inFlight.current = false
@@ -140,77 +235,94 @@ function RunControl({ block, index, run }: { block: RunBlock; index: number; run
 
   let status: string | null = null
   if (busy) status = 'Sending…'
+  else if (notConnected) status = NOT_CONNECTED
   else if (sentId !== null) {
-    if (failed) status = "Didn't send. See your message below."
-    else if (dropped && !queued)
-      status = "This did not reach your Mac, and it's no longer waiting. See your message below."
-    else if (result === 'held_unpinned') status = 'Queued. It sends once your Mac approves this device.'
-    else if (queued || result === 'queued') status = 'Queued. It sends when you are back online.'
-    else status = 'Sent to your Mac. The thread below says whether it ran or was refused.'
+    if (unwitnessed) status = "Couldn't confirm the click in Talos; nothing ran."
+    else if (failed) status = "Didn't send. See your message below."
+    else if (dropped && !queued) status = "Didn't reach your Mac. See your message below."
+    else if (result === 'held_unpinned') status = 'Queued · sends once your Mac approves this device'
+    else if (queued || result === 'queued') status = "Queued · sends when you're back online"
+    else if (!pane) status = 'Sent · the agent runs it'
+    else if (macResult?.ok)
+      status = 'Ran in Terminal' // a reason beside ok is ignored: ok means it went in
+    else if (macResult) status = `Didn't run in Terminal${macResult.reason ? ` (${REFUSED[macResult.reason]})` : ''}`
+    else if (noAnswerFor === sentId) status = 'No answer from Terminal; see the thread.'
+    else status = 'Sent · waiting for Terminal'
   }
   // A fresh tap once this one has left (or failed); never while it still waits to send, so two Runs never pile up offline.
   const waiting = sentId !== null && !failed && (queued || result === 'held_unpinned')
   const showButton = !busy && !asked && !waiting
 
+  const label = pane ? 'Run in Terminal' : 'Run'
+  const bad = unwitnessed || failed || (dropped && !queued) || (pane && macResult?.ok === false)
+
   return (
-    <div data-testid="run-control" className="mb-2 flex flex-col gap-1">
-      {!block.oneTap && (
-        <p data-testid="run-note" className="m-0 text-xs text-text-2">
-          This script has characters beyond plain ASCII (look-alike letters, special spaces, accents), so Run asks
-          twice.
-        </p>
-      )}
-      {status && (
-        <p
-          role="status"
-          data-testid="run-status"
-          className={cn('m-0 text-sm', failed || (dropped && !queued) ? 'text-danger' : 'text-text-2')}
-        >
-          {status}
-        </p>
-      )}
-      {asked && (
-        <fieldset
-          aria-label="Confirm Run"
-          className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"
-          onKeyDown={(e) => e.key === 'Escape' && setAsked(false)}
-        >
-          <span className="text-sm">Run it?</span>
-          {/* Cancel first: it sits where the Run button was, so a second quick tap lands on Cancel, and Yes is beside it, never under it. */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              ref={cancelRef}
-              type="button"
-              data-testid="run-cancel"
-              className={BUTTON}
-              onClick={() => setAsked(false)}
-            >
-              Cancel
-            </button>
-            <button type="button" data-testid="run-confirm" className={BUTTON} onClick={() => void send()}>
-              Yes, run it
-            </button>
-          </div>
-        </fieldset>
-      )}
-      {showButton && (
-        <div className="flex flex-wrap items-center gap-2">
+    <>
+      {showButton &&
+        createPortal(
           <button
             type="button"
             data-testid="run-button"
-            className={BUTTON}
+            aria-label={sentId !== null && !error ? 'Run again' : label}
+            title={sentId !== null && !error ? 'Run again' : label}
+            className="grid h-11 w-11 place-items-center rounded-button border border-line bg-surface text-text disabled:opacity-50"
             disabled={!settled}
             onClick={() => (block.oneTap ? void send() : setAsked(true))}
           >
-            {error ? 'Try again' : sentId !== null ? 'Run again' : 'Run'}
-          </button>
-          {error && (
-            <span role="alert" className="text-sm text-danger">
-              Couldn't send.
-            </span>
+            <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16">
+              <path d="M4 2.5v11l9-5.5z" fill="currentColor" />
+            </svg>
+          </button>,
+          icon,
+        )}
+      {under(
+        <div data-testid="run-control" className="mb-2 flex flex-col gap-1">
+          {!block.oneTap && (
+            <p data-testid="run-note" className="m-0 text-xs text-text-2">
+              This script has characters beyond plain ASCII (look-alike letters, special spaces, accents), so Run asks
+              twice.
+            </p>
           )}
-        </div>
+          {status && (
+            <p
+              role="status"
+              data-testid="run-status"
+              className={cn('m-0 text-xs', bad ? 'text-danger' : 'text-text-2')}
+            >
+              {status}
+            </p>
+          )}
+          {error && !busy && (
+            <p role="alert" className="m-0 text-xs text-danger">
+              Couldn't send.
+            </p>
+          )}
+          {asked && (
+            <fieldset
+              aria-label="Confirm Run"
+              className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"
+              onKeyDown={(e) => e.key === 'Escape' && setAsked(false)}
+            >
+              <span className="text-sm">Run it?</span>
+              {/* Cancel first: a second quick tap on the icon's place lands on Cancel, and Yes is beside it, never under it. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  ref={cancelRef}
+                  type="button"
+                  data-testid="run-cancel"
+                  className={BUTTON}
+                  onClick={() => setAsked(false)}
+                >
+                  Cancel
+                </button>
+                <button type="button" data-testid="run-confirm" className={BUTTON} onClick={() => void send()}>
+                  Yes, run it
+                </button>
+              </div>
+            </fieldset>
+          )}
+        </div>,
       )}
-    </div>
+    </>
   )
 }

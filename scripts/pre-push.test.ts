@@ -664,7 +664,7 @@ describe('pre-push hook: the Verified: trailer', () => {
   it('a real trailer and "none - reason" (hyphen or em dash) pass without a line; a bare "none" is logged', () => {
     const r = setup()
     r.install()
-    commit(r, 'one\n\nVerified: web fake mode, themes all; evidence /home/alex/evidence/abc1234/', 'a')
+    commit(r, 'one\n\nVerified: web fake mode, themes all; evidence <root>/abc1234/', 'a')
     commit(r, 'two\n\nVerified: none \u2014 docs only, nothing to drive', 'b')
     commit(r, 'three\n\nVerified: none - a rename the compiler checks', 'c')
     const ok = r.push()

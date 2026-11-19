@@ -13,14 +13,21 @@ import XCTest
 final class RelayActiveOriginTests: XCTestCase {
     private let id = "r_abcdefghijklmnopqrst"
     private var savedRuntime: (@MainActor () -> RelayRuntime)!
+    private var savedAttester: (@MainActor () -> AttestRunning)!
+    /// Every paired controller here is checked by this stub (a pass), never by the network.
+    private let attester = StubAttester(.verdict(.pass))
 
     override func setUp() {
         super.setUp()
         savedRuntime = TalosBridgeViewController.runtime
+        savedAttester = TalosBridgeViewController.attester
+        let stub = attester
+        TalosBridgeViewController.attester = { stub }
     }
 
     override func tearDown() {
         TalosBridgeViewController.runtime = savedRuntime
+        TalosBridgeViewController.attester = savedAttester
         super.tearDown()
     }
 
@@ -47,6 +54,9 @@ final class RelayActiveOriginTests: XCTestCase {
         window.rootViewController = controller
         window.makeKeyAndVisible()
         controller.loadViewIfNeeded()
+        // The first Mac check answers (a stub: a pass) before the page counts as verified.
+        let until = Date(timeIntervalSinceNow: 3)
+        while let trust = controller.relayContext?.trust, !trust.settled, Date() < until { spin(0.02) }
         return controller
     }
 
@@ -89,16 +99,32 @@ final class RelayActiveOriginTests: XCTestCase {
         let controller = shown(window)
         defer { window.isHidden = true }
         let web = try XCTUnwrap(controller.webView)
-        web.loadHTMLString("<html></html>", baseURL: URL(string: "https://mine.example.com/threads"))
-        spin()
-        XCTAssertEqual(web.url?.host, "mine.example.com")
-        XCTAssertTrue(TalosPluginGate.allows(controller.bridge), "the profile's own page")
-        web.loadHTMLString("<html></html>", baseURL: URL(string: "https://mine.example.com/media/x.html"))
-        spin()
-        XCTAssertFalse(TalosPluginGate.allows(controller.bridge), "/media/ is never allowed")
-        web.loadHTMLString("<html></html>", baseURL: URL(string: "https://elsewhere.example.com/threads"))
-        spin()
-        XCTAssertFalse(TalosPluginGate.allows(controller.bridge), "another origin is refused")
+        let recorder = try XCTUnwrap(NavigationRecorder.attach(to: controller))
+        let threads = URL(string: "https://mine.example.com/threads")!
+
+        // The profile's own page really loads, and the gate allows it where a page-driven call would see it.
+        let own = recorder.load(web, threads.absoluteString)
+        XCTAssertFalse(own.timedOut, "the navigation never ended")
+        XCTAssertEqual(own.policy, .allow)
+        XCTAssertEqual(own.committedURL, threads)
+        XCTAssertEqual(own.gateAtCommit, true, "the profile's own page, at didCommit")
+        XCTAssertEqual(own.finalURL, threads)
+        XCTAssertTrue(own.gateAtEnd, "the profile's own page, once loaded")
+
+        // A main-frame request for /media/ or another origin is routed out (the media viewer, Safari) and cancelled: the web view
+        // stays on /threads. If a page ever did load there, the gate must refuse it where a call would see it, at didCommit and after.
+        for (url, what) in [("https://mine.example.com/media/x.html", "/media/"), ("https://elsewhere.example.com/threads", "another origin")] {
+            let out = recorder.load(web, url)
+            XCTAssertFalse(out.timedOut, "\(what): the navigation never ended")
+            if out.loaded {
+                XCTAssertEqual(out.gateAtCommit, false, "\(what) is never allowed at didCommit")
+                XCTAssertFalse(out.gateAtEnd, "\(what) is never allowed once loaded")
+            }
+            XCTAssertEqual(out.policy, .cancel, "\(what) is cancelled, not loaded")
+            XCTAssertNil(out.committedURL, "\(what) never commits")
+            XCTAssertEqual(out.finalURL, threads, "\(what): the web view stays on the profile's page")
+            XCTAssertTrue(out.gateAtEnd, "the page still shown is /threads, which the gate allows")
+        }
     }
 
     func testNothingPairedShowsTheFirstRunScreenAndLoadsNoPage() throws {
@@ -166,8 +192,8 @@ final class RelayActiveOriginTests: XCTestCase {
         let controller = shown(window)
         defer { window.isHidden = true }
         let web = try XCTUnwrap(controller.webView)
-        web.loadHTMLString("<html></html>", baseURL: URL(string: "https://mine.example.com/threads"))
-        spin()
+        let recorder = try XCTUnwrap(NavigationRecorder.attach(to: controller))
+        XCTAssertFalse(recorder.load(web, "https://mine.example.com/threads").timedOut, "the navigation never ended")
         XCTAssertTrue(TalosPluginGate.allows(controller.bridge), "the root controller's own page")
         window.rootViewController = UIViewController()
         XCTAssertFalse(TalosPluginGate.allows(controller.bridge), "a controller that left the window (a relay switch) is refused")
@@ -237,5 +263,100 @@ final class RelayActiveOriginTests: XCTestCase {
         defer { window.isHidden = true }
         XCTAssertEqual(second.relayContext?.active.origin.absoluteString, "https://scanned.example.com")
         XCTAssertFalse(second.isShowingFirstRun)
+    }
+}
+
+/// Stands in front of the shell's NavigationGate (everything it does not record goes straight to the gate) and keeps what a
+/// real page-driven plugin call would see: the policy the gate gave the main-frame request, the URL and the plugin gate's answer
+/// at didCommit, and the same when the navigation ended (finished, failed, or cancelled by the policy).
+/// `WKWebView.url` flips to the requested URL as soon as a load is asked for and flips back if the request is cancelled, so
+/// reading it after a fixed wait, or as soon as it shows the new URL, says nothing about a page that really loaded.
+@MainActor
+final class NavigationRecorder: NSObject, WKNavigationDelegate {
+    struct Outcome {
+        var policy: WKNavigationActionPolicy?
+        var committedURL: URL?
+        var gateAtCommit: Bool?
+        var finalURL: URL?
+        var gateAtEnd = false
+        var timedOut = false
+        var loaded: Bool { committedURL != nil }
+    }
+
+    private let gate: NavigationGate
+    private let bridge: CAPBridgeProtocol?
+    private var policy: WKNavigationActionPolicy?
+    private var committedURL: URL?
+    private var gateAtCommit: Bool?
+    private var ended = false
+
+    private init(gate: NavigationGate, bridge: CAPBridgeProtocol?) {
+        self.gate = gate
+        self.bridge = bridge
+    }
+
+    private static var key = 0
+
+    /// Puts a recorder in front of the web view's gate once; asking again returns the same one.
+    static func attach(to controller: TalosBridgeViewController) -> NavigationRecorder? {
+        guard let web = controller.webView else { return nil }
+        if let existing = web.navigationDelegate as? NavigationRecorder { return existing }
+        guard let gate = web.navigationDelegate as? NavigationGate else { return nil }
+        let recorder = NavigationRecorder(gate: gate, bridge: controller.bridge)
+        web.navigationDelegate = recorder
+        objc_setAssociatedObject(web, &NavigationRecorder.key, recorder, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)   // the delegate is weak
+        return recorder
+    }
+
+    /// Asks for a page under `url` and runs the run loop until that navigation has settled, or 30 s pass. Settled is: the page
+    /// committed (what a page-driven call sees from then on; a cold simulator can take many seconds more to report didFinish), or
+    /// it finished or failed, or the policy cancelled it and the web view stopped loading (its url flips back to the old page then).
+    func load(_ web: WKWebView, _ url: String) -> Outcome {
+        policy = nil
+        committedURL = nil
+        gateAtCommit = nil
+        ended = false
+        web.loadHTMLString("<html></html>", baseURL: URL(string: url))
+        let until = Date(timeIntervalSinceNow: 30)
+        func settled() -> Bool { ended && (committedURL != nil || !web.isLoading) }
+        while !settled(), Date() < until { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+        return Outcome(policy: policy, committedURL: committedURL, gateAtCommit: gateAtCommit, finalURL: web.url,
+                       gateAtEnd: TalosPluginGate.allows(bridge), timedOut: !settled())
+    }
+
+    override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || gate.responds(to: selector) }
+    override func forwardingTarget(for selector: Selector!) -> Any? { gate.responds(to: selector) ? gate : super.forwardingTarget(for: selector) }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        gate.webView(webView, decidePolicyFor: navigationAction) { [weak self] decision in
+            if navigationAction.targetFrame?.isMainFrame ?? true, navigationAction.request.url?.scheme != "about" {
+                self?.policy = decision
+                if decision == .cancel { self?.ended = true }
+            }
+            decisionHandler(decision)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        committedURL = webView.url
+        gateAtCommit = TalosPluginGate.allows(bridge)
+        ended = true
+        gate.webView(webView, didCommit: navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        ended = true
+        gate.webView(webView, didFinish: navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        ended = true
+        (gate as WKNavigationDelegate).webView?(webView, didFail: navigation, withError: error)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        ended = true
+        (gate as WKNavigationDelegate).webView?(webView, didFailProvisionalNavigation: navigation, withError: error)
     }
 }

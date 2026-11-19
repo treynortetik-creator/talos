@@ -77,6 +77,12 @@ export type RelayClientOptions = {
 }
 
 export class RelayClient {
+  /**
+   * A phone's `attest.request` (BYOR phase 4), asked of the relay while the phone's HTTP call waits. The answer, if any, goes
+   * out as a plain frame on the socket the request ARRIVED on, and only while that is still the live one: it is never
+   * queued or retried, so a request that outlived its socket is simply not answered. Set once, before the first dial.
+   */
+  onAttest?: (req: { id: string; nonce: string }) => Promise<Record<string, unknown> | null>
   private ws: WebSocket | null = null
   private attempt = 0
   /** Until this time (clock ms) a relay restart (close 1012) is being waited out: redials use a short fixed delay. 0 = none. */
@@ -442,7 +448,22 @@ export class RelayClient {
       return
     }
     if (frame.type === 'pong' || frame.type === 'ready' || frame.type === 'challenge') return
+    if (frame.type === 'attest.request') {
+      void this.answerAttest(ws, frame)
+      return
+    }
     this.o.events.onFrame(raw, frame)
+  }
+
+  private async answerAttest(ws: WebSocket, req: { id: string; nonce: string }) {
+    if (!this.onAttest) return
+    try {
+      const out = await this.onAttest({ id: req.id, nonce: req.nonce })
+      if (!out || ws !== this.ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify(out))
+    } catch (e) {
+      this.o.log.warn('attest request failed', { error: (e as Error).message })
+    }
   }
 
   private startPing(pingMs: number) {

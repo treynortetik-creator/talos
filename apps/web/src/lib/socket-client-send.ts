@@ -1,7 +1,7 @@
 // The client methods that send, retry and discard messages.
 
 import { newId } from '@talos-app/protocol'
-import { TalosClientError, type VoiceAskArgs } from './client.ts'
+import { NotSentError, TalosClientError, type VoiceAskArgs } from './client.ts'
 import { MAX_MESSAGE_CHARS, overFrameLimit } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { PendingVoice, SocketClient } from './socket-types.ts'
@@ -85,13 +85,15 @@ export function createClientSend(
       listeners.set(type, s)
       return () => void s.delete(listener as never)
     },
-    async sendMessage({ threadId, text, attachments = [], replyTo, intent, runBlock }) {
+    async sendMessage({ threadId, text, attachments = [], replyTo, intent, runBlock, runWhere, requireLive }) {
       // Checked before anything is stored: a retry of a message the protocol can never accept would fail forever.
       if (text.length > MAX_MESSAGE_CHARS)
         throw new TalosClientError(
           'too_large',
           `That message is ${text.length.toLocaleString('en-US')} characters. The limit is ${MAX_MESSAGE_CHARS.toLocaleString('en-US')}.`,
         )
+      if (requireLive && !(store.getState().devicePinned && c.canSend()))
+        throw new NotSentError('mac_offline', "You're offline.")
       const clientMsgId = newId('m')
       const owned = attachments.map(c.ownerAttachment)
       c.upsertMessage({
@@ -110,6 +112,7 @@ export function createClientSend(
       if (replyTo) fields.reply_to = replyTo
       if (intent) fields.intent = intent
       if (runBlock) fields.run_block = runBlock
+      if (runWhere) fields.run_where = runWhere
       try {
         return await c.enqueue('message', threadId, clientMsgId, fields)
       } catch (e) {

@@ -23,6 +23,7 @@
 		22EA259C746448CE46436139 /* RelayRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C7AD04D0C8DF00061FCD1C8 /* RelayRuntimeTests.swift */; };
 		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
 		2A1F63D5078FF9312A0D14CB /* ReconnectNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */; };
+		2FC4E7C57D1088BD801844E9 /* AttestCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76B95ED99D931CBC5414A67 /* AttestCoordinator.swift */; };
 		3177E917A3D7077B896465DD /* TalosRelayCore in Frameworks */ = {isa = PBXBuildFile; productRef = DEB10332EE6F8C56235D8D83 /* TalosRelayCore */; };
 		35BD895BE3DCF16E0C717AD5 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
 		3ADAB4B2470A531DAC1D3760 /* TalosQuickAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E244550EE6C5966F3E211ED /* TalosQuickAct.swift */; };
@@ -37,6 +38,7 @@
 		58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FDCDCD29A7C84F740D263FC /* TalosShare.swift */; };
 		5E04533C01261A377D816DB8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 8776CD2CC1249496A6F18C86 /* config.xml */; };
 		634BE19467CDE6085A5AEAD0 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C7E8435443363F64146DB0F /* FirstRunView.swift */; };
+		65F1EE0160AFC67DA275B29F /* AttestTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E9B8248F7949BCD5AC8751 /* AttestTestSupport.swift */; };
 		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
 		73784838AFD29BD30F587CE2 /* ShareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5234E389CA1D307F6DB335 /* ShareView.swift */; };
 		76D62AC129AAAD4B9F4DD90B /* TalosPluginGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471A8C9169042696FD40141A /* TalosPluginGate.swift */; };
@@ -44,17 +46,23 @@
 		7E5DA9DE999762268A797904 /* TalosRelayCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8BA7959634F4CD4EADD25790 /* TalosRelayCore */; };
 		81138B00431411BE1EF97D97 /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 68ED4E8FE0185474B6E8E85B /* capacitor.config.json */; };
 		88182210BD876CA2544859F5 /* TalosPushExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 441A3BD7070BE74658DC1469 /* TalosPushExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		88FF8CF055455A2D685BBC32 /* AddRelayCameraPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04064453654B695E2DC8CFE6 /* AddRelayCameraPreviewTests.swift */; };
 		8B4A61B613827B073FBB8AB9 /* CompiledRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8675814FAF64984E33686 /* CompiledRelay.swift */; };
+		936FB91EAD36E8A254329DBA /* RelayTrustControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E8619E91AE014B6009AD34 /* RelayTrustControllerTests.swift */; };
 		93820AFB0F413E2D1C8F583D /* TalosPushCore in Frameworks */ = {isa = PBXBuildFile; productRef = E608AFD233F8F2970D6247E3 /* TalosPushCore */; };
 		95C38BB4FB56187972591E16 /* BridgeGuard in Frameworks */ = {isa = PBXBuildFile; productRef = 1647F7D58578464A3DFBFABD /* BridgeGuard */; };
 		95D14867FFF071722164A29F /* NativeKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076C04980F436BC6BD16B38C /* NativeKeyStore.swift */; };
 		964C752F52C50D0DA03BAA47 /* TalosShareCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44F0627F1A0034ECF154A285 /* TalosShareCore */; };
 		9850C61F20A4F9892AB42CB8 /* SharedRelayOriginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F5B176E8E0DC0F796492AB8 /* SharedRelayOriginTests.swift */; };
+		9AE8D0124CFCDC2BA6C0C90C /* AttestCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED11D168C3C74686F12B7AF /* AttestCoordinatorTests.swift */; };
 		A17935AD1E5773660D35E339 /* DebugAddRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A3C16B7596A68AD0E89973C /* DebugAddRelay.swift */; };
 		A31EF66B6DF698C31B87CE63 /* ShareModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B3288FBC9BE0BA38026B618 /* ShareModel.swift */; };
 		A9B0B4B2A529B7950FE5CDB3 /* TalosPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA566E4C10699729F30E7729 /* TalosPush.swift */; };
 		AEAC0371A4440D0E92423210 /* AddRelayViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C2CF160D3C1F8AA4DDA351E /* AddRelayViewController.swift */; };
 		B222B4241F9CCC801BD09990 /* TalosCrash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A879D7486EC440EB48D3F5 /* TalosCrash.swift */; };
+		B43C86564E5FEB89D32DE944 /* WebViewGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDFF71D5C34A7D023467F881 /* WebViewGuards.swift */; };
+		C0B76BE3FA10E522FCABD227 /* AttestRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E696F345D8758B77BA16F3 /* AttestRunner.swift */; };
+		C5C57C6CF312691AE3B729B8 /* TrustViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA52C182E161A842DA8CB55 /* TrustViews.swift */; };
 		C784E38E198F2E6658588FB4 /* NativeKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076C04980F436BC6BD16B38C /* NativeKeyStore.swift */; };
 		CB6DB47DEDAC365A41D39101 /* TalosSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F35E443305EFA7993A07F2B0 /* TalosSnapshot.swift */; };
 		CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */; };
@@ -118,14 +126,18 @@
 /* Begin PBXFileReference section */
 		00974E067C806B76249CC31E /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewLivenessTests.swift; sourceTree = "<group>"; };
+		04064453654B695E2DC8CFE6 /* AddRelayCameraPreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddRelayCameraPreviewTests.swift; sourceTree = "<group>"; };
 		076C04980F436BC6BD16B38C /* NativeKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyStore.swift; sourceTree = "<group>"; };
+		0ED11D168C3C74686F12B7AF /* AttestCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestCoordinatorTests.swift; sourceTree = "<group>"; };
 		1A3C16B7596A68AD0E89973C /* DebugAddRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugAddRelay.swift; sourceTree = "<group>"; };
 		1C7AD04D0C8DF00061FCD1C8 /* RelayRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRuntimeTests.swift; sourceTree = "<group>"; };
 		1F5B176E8E0DC0F796492AB8 /* SharedRelayOriginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedRelayOriginTests.swift; sourceTree = "<group>"; };
+		22E696F345D8758B77BA16F3 /* AttestRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestRunner.swift; sourceTree = "<group>"; };
 		2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewRevival.swift; sourceTree = "<group>"; };
 		2C7E8435443363F64146DB0F /* FirstRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunView.swift; sourceTree = "<group>"; };
 		2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosBridgeViewController.swift; sourceTree = "<group>"; };
 		32B2FAF7C67ADF13E887BEB6 /* TalosRelayCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosRelayCore; path = ../TalosRelayCore; sourceTree = SOURCE_ROOT; };
+		3AA52C182E161A842DA8CB55 /* TrustViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustViews.swift; sourceTree = "<group>"; };
 		3B3288FBC9BE0BA38026B618 /* ShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareModel.swift; sourceTree = "<group>"; };
 		3C2CF160D3C1F8AA4DDA351E /* AddRelayViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddRelayViewController.swift; sourceTree = "<group>"; };
 		3C5D293CEE6CDA55F3D5EB46 /* WebViewRevivalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewRevivalTests.swift; sourceTree = "<group>"; };
@@ -146,6 +158,7 @@
 		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
 		76989E05CECAD7B8B3C424A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		77E9B8248F7949BCD5AC8751 /* AttestTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestTestSupport.swift; sourceTree = "<group>"; };
 		77F070B46A94D035DD2F7165 /* AppUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E5BBB12596EE01767A6151A /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; name = public; path = App/public; sourceTree = SOURCE_ROOT; };
 		8776CD2CC1249496A6F18C86 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
@@ -160,12 +173,15 @@
 		A9CDDDC47163CCD1A6F601C4 /* TalosCrashCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosCrashCore; path = ../TalosCrashCore; sourceTree = SOURCE_ROOT; };
 		AE6E4C88747F36CBCB6433BC /* TalosRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosRelay.swift; sourceTree = "<group>"; };
 		B1F8675814FAF64984E33686 /* CompiledRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompiledRelay.swift; sourceTree = "<group>"; };
+		B76B95ED99D931CBC5414A67 /* AttestCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestCoordinator.swift; sourceTree = "<group>"; };
+		C4E8619E91AE014B6009AD34 /* RelayTrustControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayTrustControllerTests.swift; sourceTree = "<group>"; };
 		C691ED57DB8EB87AED73F189 /* RelayRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRuntime.swift; sourceTree = "<group>"; };
 		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFB356DF0401F842E4EACA65 /* TalosAudioCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TalosAudioCore; path = ../TalosAudioCore; sourceTree = SOURCE_ROOT; };
 		D163170C704202077DDEE6E5 /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
 		D6795445F49DC0C5A08BCBDA /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		EDFF71D5C34A7D023467F881 /* WebViewGuards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewGuards.swift; sourceTree = "<group>"; };
 		F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectNoticeTests.swift; sourceTree = "<group>"; };
 		F13EA46D65C6DD380E027527 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		F35E443305EFA7993A07F2B0 /* TalosSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalosSnapshot.swift; sourceTree = "<group>"; };
@@ -249,6 +265,7 @@
 				7E5BBB12596EE01767A6151A /* public */,
 				ED2016878D44EAA9692D059F /* SceneDelegate.swift */,
 				2E59561450E59E8689D6B17B /* TalosBridgeViewController.swift */,
+				EDFF71D5C34A7D023467F881 /* WebViewGuards.swift */,
 				2AED4980BFD0B4C68EF89852 /* WebViewRevival.swift */,
 				23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */,
 				77DC4614F7D5E4C3289AA3F8 /* Plugins */,
@@ -278,11 +295,15 @@
 		67E6ABD228D08FA903D459A3 /* AppTests */ = {
 			isa = PBXGroup;
 			children = (
+				04064453654B695E2DC8CFE6 /* AddRelayCameraPreviewTests.swift */,
 				99AA528B67DF11E0B6DA051F /* AddRelayFlowTests.swift */,
+				0ED11D168C3C74686F12B7AF /* AttestCoordinatorTests.swift */,
+				77E9B8248F7949BCD5AC8751 /* AttestTestSupport.swift */,
 				912C05722891585DB67B1AB9 /* NativeKeyStoreTests.swift */,
 				F0B2CE5D71E93E7CD05D7A73 /* ReconnectNoticeTests.swift */,
 				536D94BA8F8109D1FBE3E7F6 /* RelayActiveOriginTests.swift */,
 				1C7AD04D0C8DF00061FCD1C8 /* RelayRuntimeTests.swift */,
+				C4E8619E91AE014B6009AD34 /* RelayTrustControllerTests.swift */,
 				1F5B176E8E0DC0F796492AB8 /* SharedRelayOriginTests.swift */,
 				51B5FD5EAB393CAD9BE1446C /* TalosQuickActTests.swift */,
 				0287AD5FBA2FF6B3F8D3DB49 /* WebViewLivenessTests.swift */,
@@ -350,9 +371,12 @@
 			children = (
 				8FA8BAAFCA68A0DA1F297C77 /* AddRelayFlow.swift */,
 				3C2CF160D3C1F8AA4DDA351E /* AddRelayViewController.swift */,
+				B76B95ED99D931CBC5414A67 /* AttestCoordinator.swift */,
+				22E696F345D8758B77BA16F3 /* AttestRunner.swift */,
 				1A3C16B7596A68AD0E89973C /* DebugAddRelay.swift */,
 				2C7E8435443363F64146DB0F /* FirstRunView.swift */,
 				C691ED57DB8EB87AED73F189 /* RelayRuntime.swift */,
+				3AA52C182E161A842DA8CB55 /* TrustViews.swift */,
 			);
 			path = Relay;
 			sourceTree = "<group>";
@@ -585,6 +609,8 @@
 				131DFA40AC8B7308CB240EEB /* AddRelayFlow.swift in Sources */,
 				AEAC0371A4440D0E92423210 /* AddRelayViewController.swift in Sources */,
 				E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */,
+				2FC4E7C57D1088BD801844E9 /* AttestCoordinator.swift in Sources */,
+				C0B76BE3FA10E522FCABD227 /* AttestRunner.swift in Sources */,
 				8B4A61B613827B073FBB8AB9 /* CompiledRelay.swift in Sources */,
 				A17935AD1E5773660D35E339 /* DebugAddRelay.swift in Sources */,
 				634BE19467CDE6085A5AEAD0 /* FirstRunView.swift in Sources */,
@@ -604,6 +630,8 @@
 				06EBADAC62AB2321CDCCAE63 /* TalosRelay.swift in Sources */,
 				58D8EB777AABC0F494EE6FB0 /* TalosShare.swift in Sources */,
 				CB6DB47DEDAC365A41D39101 /* TalosSnapshot.swift in Sources */,
+				C5C57C6CF312691AE3B729B8 /* TrustViews.swift in Sources */,
+				B43C86564E5FEB89D32DE944 /* WebViewGuards.swift in Sources */,
 				3F7B410C57B835DB46996D40 /* WebViewRevival.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -612,11 +640,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				88FF8CF055455A2D685BBC32 /* AddRelayCameraPreviewTests.swift in Sources */,
 				05188159079AF15935EC7ABA /* AddRelayFlowTests.swift in Sources */,
+				9AE8D0124CFCDC2BA6C0C90C /* AttestCoordinatorTests.swift in Sources */,
+				65F1EE0160AFC67DA275B29F /* AttestTestSupport.swift in Sources */,
 				CF04BCB5897EE830F6D15FF6 /* NativeKeyStoreTests.swift in Sources */,
 				2A1F63D5078FF9312A0D14CB /* ReconnectNoticeTests.swift in Sources */,
 				EE8DAC6E793517F730FE49B5 /* RelayActiveOriginTests.swift in Sources */,
 				22EA259C746448CE46436139 /* RelayRuntimeTests.swift in Sources */,
+				936FB91EAD36E8A254329DBA /* RelayTrustControllerTests.swift in Sources */,
 				9850C61F20A4F9892AB42CB8 /* SharedRelayOriginTests.swift in Sources */,
 				1B762FB1BC9F1F36075053F1 /* TalosQuickActTests.swift in Sources */,
 				E393FD467E02DDB600817ABC /* WebViewLivenessTests.swift in Sources */,

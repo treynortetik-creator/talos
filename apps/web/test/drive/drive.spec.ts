@@ -123,8 +123,10 @@ test('the Settings toggle sends one signed config.patch for now + 2 h', async ({
   const p = await patches(page)
   expect(p).toHaveLength(1)
   const until = Date.parse((p[0] as { voice_notes: { driving_until: string } }).voice_notes.driving_until)
-  expect(until - Date.now()).toBeGreaterThan(2 * 3600_000 - 60_000)
-  expect(until - Date.now()).toBeLessThanOrEqual(2 * 3600_000 + 1000)
+  // the bound is the page's own clock: in the hostile nightly this process's Date is shifted and a fake-mode page's is not
+  const pageNow = await page.evaluate(() => Date.now())
+  expect(until - pageNow).toBeGreaterThan(2 * 3600_000 - 60_000)
+  expect(until - pageNow).toBeLessThanOrEqual(2 * 3600_000 + 1000)
   await sw.click()
   await expect(sw).not.toBeChecked()
   expect((await patches(page))[1]).toEqual({ voice_notes: { driving_until: null } })

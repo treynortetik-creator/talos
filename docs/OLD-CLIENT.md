@@ -7,13 +7,14 @@ the bridge's hello is tested against the bundle that is live now, before it ship
 ## The saved bundles
 
 - **Who saves them:** `.github/workflows/web-bundle.yml`, after every successful production deploy of talos-app. Railway
-  posts a GitHub `deployment_status` per deploy; `web-bundle-deploy.yml` only notices the successful production one, and
-  `web-bundle.yml` runs on its completion (`workflow_run`, on main's ref: a `deployment_status` run has no ref, and the
-  Actions cache that carries the bundle between its jobs refuses it). It builds `apps/web` at the deployed sha exactly as
-  `apps/relay/Dockerfile` does, with the deploy's short sha as the version, as on Railway. A missed one can be saved by
-  hand: `gh workflow run web-bundle.yml -f sha=<deployed sha>`, only for the live one (the newest successful production
-  deploy). A rollback to a commit older than this workflow change (2026-11-17) is not saved: that commit's own workflow
-  files run, and they had no working save; save it by hand once it is live.
+  posts a GitHub `deployment_status` per deploy; `web-bundle-deploy.yml` notices the successful production one and starts
+  `web-bundle.yml` by `workflow_dispatch` on main with the deployed sha. Neither a `deployment_status` run (no ref) nor a
+  `workflow_run` run (read-only cache) can carry the bundle between its jobs through the Actions cache, which is how it
+  goes (the artifact quota is full). It builds `apps/web` at that sha exactly as `apps/relay/Dockerfile` does, with the
+  deploy's short sha as the version, as on Railway, and only for the live deploy (the newest successful production one).
+  A missed one can be saved by hand the same way: `gh workflow run web-bundle.yml -f sha=<deployed sha>`. A rollback to a
+  commit older than this workflow (2026-11-18) is not saved by itself: that commit's own workflow files run; save it by
+  hand once it is live.
 - **Seen when it fails:** its `report` job posts the commit status `web-bundle/save` on the deployed commit, success or
   failure, with a link to the run. From 2026-11-16 to 11-17 the publish step failed on every deploy and nothing said so.
 - **Where:** a prerelease named `web-bundle-<sha8>`, never marked latest. It holds two files: `web-bundle.tar.gz` (the

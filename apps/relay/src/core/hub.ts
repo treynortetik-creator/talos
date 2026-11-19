@@ -108,7 +108,7 @@ export class Hub implements Bus {
   readonly ephemeral: EphemeralRouter
   /** MCP Apps request routing (core/apps.ts): app.request to the bridge, app.response back to the asking socket. */
   readonly appRouter: AppRouter
-  private bridgeFeatures: BridgeFeatures
+  readonly bridgeFeatures: BridgeFeatures
   private twoStageBridge = false
   private schedules: ScheduleRouter
   private chatCtx: ChatCtx
@@ -212,7 +212,7 @@ export class Hub implements Bus {
         const cfg = this.cfg()
         return isQuiet(new Date(this.d.clock.now()), cfg.quiet_window, cfg.timezone)
       },
-      track: (h) => this.track(h),
+      track: (h) => void this.timers.add(h),
       requests: this.ephemeral,
     })
 
@@ -237,6 +237,7 @@ export class Hub implements Bus {
       enqueueRow: (stamped, ttlMs) => this.enqueueRow(stamped, ttlMs),
       afterEnqueue: (stamped) => this.afterEnqueue(stamped),
       cardTimers: this.cardTimers,
+      isStopped: () => this.stopped,
       expireCard: (card) => cardsFrames.expireCard.call(this.cardsCtx, card),
       agentConfig: () => this.agentConfig(),
       nativeApproveCard: (body) => this.nativeApproveCard(body),
@@ -294,7 +295,7 @@ export class Hub implements Bus {
       ephemeral: this.ephemeral,
       appRouter: this.appRouter,
       isStopped: () => this.stopped,
-      track: (h) => this.track(h),
+      track: (h) => void this.timers.add(h),
       sendApp: (a, frame) => this.sendApp(a, frame),
       appError: (a, code, message, ref) => this.appError(a, code, message, ref),
       refreshPairing: (a) => this.refreshPairing(a),
@@ -325,7 +326,7 @@ export class Hub implements Bus {
       d,
       bridgeFeatures: this.bridgeFeatures,
       isStopped: () => this.stopped,
-      track: (h) => this.track(h),
+      track: (h) => void this.timers.add(h),
       getBridge: () => this.bridge,
       setBridge: (b) => {
         this.bridge = b
@@ -374,7 +375,10 @@ export class Hub implements Bus {
       addedInheritedThread: (frame) => this.addedInheritedThread(frame),
       rollbackRejectedResolve: (frame) => this.rollbackRejectedResolve(frame),
       noteTwoStageBridge: () => this.noteTwoStageBridge(),
-      startQueuedTimer: (seq, type) => this.status.startQueuedTimer(seq, type),
+      // a stopped hub still takes the ack (so nothing is redelivered) but arms nothing: no one would clear the timer
+      startQueuedTimer: (seq, type) => {
+        if (!this.stopped) this.status.startQueuedTimer(seq, type)
+      },
       clearQueuedTimer: (msgId) => this.status.clearQueuedTimer(msgId),
       clearThreadQueued: (threadId) => this.status.clearThreadQueued(threadId),
       clearDerivedQueued: (threadId) => this.status.clearDerivedQueued(threadId),
@@ -385,6 +389,7 @@ export class Hub implements Bus {
 
   start(): void {
     this.stopped = false
+    this.schedules.start()
     this.armPing()
     this.armResend()
     for (const c of this.d.store.allPendingCards())
@@ -422,10 +427,6 @@ export class Hub implements Bus {
         if (cardId && needsYouRefused(res)) markNeedsYouOwed(this.d.store, cardId, this.d.clock.now())
       })
       .catch((e) => this.d.log.error({ err: errName(e), template: intent.template }, 'push failed'))
-  }
-
-  private track(h: unknown) {
-    this.timers.add(h)
   }
 
   agentConfig() {
@@ -475,8 +476,7 @@ export class Hub implements Bus {
   ): Promise<void> {
     const full = this.complete(frame)
     if (opts.durable && opts.once) {
-      // The seen id is written with the event, so a caller that retries after the frame committed (its own bookkeeping
-      // failed, or the process died first) finds the key and sends nothing: one stored frame, one live fan-out.
+      // The seen id is written with the event, so a retry after the frame committed finds the key and sends nothing.
       const store = this.d.store
       const once = opts.once
       const stamped = store.db.transaction((): StoredFrame | null => {

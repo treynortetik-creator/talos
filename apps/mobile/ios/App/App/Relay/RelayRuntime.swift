@@ -22,12 +22,20 @@ protocol RelayDataStoreAccess {
 struct WebKitRelayDataStores: RelayDataStoreAccess {
     func identifiers() async -> [UUID] { await WKWebsiteDataStore.allDataStoreIdentifiers }
     func remove(_ id: UUID) async -> Bool {
+        // Removing the store deletes what is on disk; cookies and caches a live network session still holds in memory stay
+        // readable by a store of the same id until the app restarts, so the data is emptied first.
+        await Self.empty(id)
         do {
             try await WKWebsiteDataStore.remove(forIdentifier: id)
             return true
         } catch {
             return false
         }
+    }
+
+    private static func empty(_ id: UUID) async {
+        let store = WKWebsiteDataStore(forIdentifier: id)
+        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
 
     func clearDefault() async {
@@ -168,10 +176,18 @@ final class RelayContext {
         URL(string: "\(origin.absoluteString)/enroll#\(code)")
     }
 
-    init?(active: ActiveRelay?, trust: RelayTrust = RelayTrust()) {
+    /// A paired relay starts `.unverified(.checking)`: it reaches `.pass` only when an attest passes. The one page that is no paired
+    /// relay (a development build's compiled-in address, never in a release build) has no key to check and starts `.pass`.
+    init?(active: ActiveRelay?, trust: RelayTrust? = nil) {
         guard let active, let guardian = BridgeGuard(relayURL: active.origin) else { return nil }
         self.active = active
         self.guardian = guardian
-        self.trust = trust
+        if let trust {
+            self.trust = trust
+        } else if let profile = active.profile {
+            self.trust = RelayTrust(.unverified(lastVerified: profile.lastVerifiedAt, reason: .checking), lastVerified: profile.lastVerifiedAt)
+        } else {
+            self.trust = RelayTrust(.pass, hasWindow: false)
+        }
     }
 }

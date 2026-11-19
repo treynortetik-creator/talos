@@ -1783,6 +1783,59 @@ describe("launch.py: the owner's approval of how Talos starts Claude (Hestia's c
   })
 })
 
+describe("signin.py's failure ids, the only part of a sign-in failure the tray logs (Pantheon, 2026-11-18)", () => {
+  it('every failure names an id from WHY, and the tray knows exactly the same ids', () => {
+    const py = readFileSync(join(ROOT, 'apps', 'windows', 'distro', 'signin.py'), 'utf8')
+    const why = /^WHY = \{([^}]*)\}/m.exec(py)?.[1]
+    const ids = [...(why ?? '').matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort()
+    expect(ids.length).toBe(12)
+    // every fail( call starts with a quoted id from the set, or spreads one from KNOWN_FAILURES and OTHER_FAILURE
+    const calls = [...py.matchAll(/\bfail\((\*?)("([a-z_]+)"|next)/g)]
+    expect(calls.length).toBeGreaterThan(8)
+    for (const c of calls) if (c[3]) expect(ids, c[0]).toContain(c[3])
+    for (const m of py.matchAll(/^\s+"([a-z_]+)", "[A-Z]/gm)) expect(ids).toContain(m[1])
+    expect(ids).toContain(/^OTHER_FAILURE = \("([a-z_]+)"/m.exec(py)?.[1])
+    // every fail( call is one of the three checked forms; a call like fail(var, ...) is not (Opus review, 2026-11-18)
+    const all = [...py.matchAll(/(?<!def )\bfail\((?=(.{0,140}))/g)].map((m) => `fail(${m[1]}`)
+    const NEXT = 'fail(*next(((why, words) for pat, why, words in KNOWN_FAILURES if pat.search(value)), OTHER_FAILURE))'
+    for (const c of all) {
+      const ok =
+        /^fail\("[a-z_]+",/.test(c) || c.startsWith(NEXT) || c.startsWith('fail(OTHER_FAILURE[0], OTHER_FAILURE[1])')
+      expect(ok, c).toBe(true)
+    }
+    // every id in WHY is used by some failure path: a fail("<id>") literal, a KNOWN_FAILURES entry or OTHER_FAILURE
+    const used = new Set<string>([
+      ...calls.flatMap((c) => (c[3] ? [c[3]] : [])),
+      ...[...py.matchAll(/^\s+"([a-z_]+)", "[A-Z]/gm)].map((m) => m[1]),
+      /^OTHER_FAILURE = \("([a-z_]+)"/m.exec(py)?.[1] ?? '',
+    ])
+    for (const id of ids) expect(used.has(id), `${id} is in WHY but no failure path uses it`).toBe(true)
+    const ps = readFileSync(join(ROOT, 'apps', 'windows', 'TalosWin.ps1'), 'utf8')
+    const list = /\$script:TalosSignInWhy = @\(([^)]*)\)/.exec(ps)?.[1] ?? ''
+    expect([...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()).toEqual(ids)
+  })
+
+  it("pair.py's error codes, the only part of a pairing error the tray logs, equal the tray's list (Pantheon, 2026-11-18)", () => {
+    const py = readFileSync(join(ROOT, 'apps', 'windows', 'distro', 'pair.py'), 'utf8')
+    const set = /^ERROR_CODES = \{([^}]*)\}/m.exec(py)?.[1] ?? ''
+    const own = [...py.matchAll(/\{"event": "error", "code": "([^"]+)"\}/g)].map((m) => m[1])
+    const codes = [...new Set([...[...set.matchAll(/"([^"]+)"/g)].map((m) => m[1]), ...own])].sort()
+    expect(codes.length).toBe(9)
+    const ps = readFileSync(join(ROOT, 'apps', 'windows', 'TalosWin.ps1'), 'utf8')
+    const list = /\$script:TalosPairErrorCodes = @\(([^)]*)\)/.exec(ps)?.[1] ?? ''
+    expect([...list.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort()).toEqual(codes)
+  })
+
+  it('an unexpected exception in main() ends as the fixed "other" failure, not a bare traceback', () => {
+    const py = readFileSync(join(ROOT, 'apps', 'windows', 'distro', 'signin.py'), 'utf8')
+    expect(py.slice(py.indexOf('if __name__ == "__main__":'))).toMatch(/run\(\)/)
+    const block = py.slice(py.indexOf('def run():'))
+    expect(block).toMatch(/except Exception:/)
+    expect(block).toMatch(/fail\(OTHER_FAILURE\[0\], OTHER_FAILURE\[1\]\)/)
+    expect(block).not.toMatch(/except\s*:|BaseException/)
+  })
+})
+
 describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on f3575ba1)', () => {
   const SIGNIN = join(ROOT, 'apps', 'windows', 'distro', 'signin.py')
   const py = spawnSync('python3', ['-c', 'import pty'], { encoding: 'utf8' }).status === 0
@@ -1815,10 +1868,23 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
     )
     return f
   }
-  const drive = (ending: string, extra: Record<string, string> = {}) =>
-    new Promise<{ events: { event: string; url?: string; message?: string }[]; raw: string; home: string }>((res) => {
+  // wrap: python source that runs in place of signin.py, given its path as argv[1] (null: run signin.py itself)
+  const drive = (ending: string, extra: Record<string, string> = {}, wrap: string | null = null) =>
+    new Promise<{
+      events: { event: string; url?: string; message?: string }[]
+      raw: string
+      home: string
+      code: number | null
+      err: string
+    }>((res) => {
       const home = mkdtempSync(join(tmpdir(), 'talos-signin-'))
-      const p = spawn('python3', ['-I', SIGNIN], {
+      const argv = ['-I', SIGNIN]
+      if (wrap !== null) {
+        const w = join(home, 'wrap.py')
+        writeFileSync(w, wrap)
+        argv.splice(1, 0, w)
+      }
+      const p = spawn('python3', argv, {
         env: {
           PATH: process.env.PATH ?? '/usr/bin:/bin',
           TALOS_SIGNIN_USER: me,
@@ -1828,6 +1894,10 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
         },
       })
       let raw = ''
+      let err = ''
+      p.stderr.on('data', (b: Buffer) => {
+        err += b.toString()
+      })
       p.stdout.on('data', (b: Buffer) => {
         raw += b.toString()
         if (raw.includes('"event":"code"') && !raw.includes('#sent')) {
@@ -1835,16 +1905,49 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
           p.stdin.write('goodcode#state123\n')
         }
       })
-      p.on('close', () => {
+      p.on('close', (code) => {
         raw = raw.replace('#sent', '')
         const events = raw
           .split('\n')
           .filter((l) => l.startsWith('{'))
           .map((l) => JSON.parse(l))
-        res({ events, raw, home })
+        res({ events, raw, home, code, err })
       })
     })
   const token = (home: string) => join(home, '.config', 'talos', 'app', 'claude-oauth-token')
+
+  it.skipIf(!py)(
+    'once signed_in is said, a cleanup that raises changes nothing: no second event, exit 0 (Opus review, 2026-11-18)',
+    async () => {
+      // loads signin.py as a module, makes end_child raise an OSError, then runs what __main__ runs
+      const wrap = [
+        'import importlib.util, sys',
+        'spec = importlib.util.spec_from_file_location("signin_under_test", sys.argv[1])',
+        'm = importlib.util.module_from_spec(spec)',
+        'spec.loader.exec_module(m)',
+        'said = []',
+        'real_say, real_end = m.say, m.end_child',
+        'def say(event, **kw):',
+        '    said.append(event)',
+        '    real_say(event, **kw)',
+        'def boom(pid):',
+        '    real_end(pid)',
+        '    if "signed_in" in said:',
+        '        raise OSError("cleanup broke")',
+        'm.say, m.end_child = say, boom',
+        'm.run()',
+        '',
+      ].join('\n')
+      const r = await drive('split', {}, wrap)
+      expect(r.events.map((e) => e.event)).toEqual(['url', 'code', 'signed_in'])
+      expect(r.code).toBe(0)
+      // nothing follows the signed_in line on stdout; the cleanup failure went to stderr
+      expect(r.raw.trim().endsWith('{"event":"signed_in"}')).toBe(true)
+      expect(r.err).toContain('OSError: cleanup broke')
+      expect(readFileSync(token(r.home), 'utf8')).toBe(`${TOKEN}\n`)
+    },
+    20000,
+  )
 
   it.skipIf(!py)(
     'a link and a token each split across reads are taken whole, and only once something ends them',
@@ -1886,12 +1989,14 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
       const bad = await drive('bad')
       expect(bad.events.at(-1)).toEqual({
         event: 'error',
+        why: 'not_accepted',
         message: expect.stringContaining('did not accept that code'),
       })
       expect(bad.raw).not.toContain('OAuth error')
       expect(bad.raw).not.toContain('sk-ant')
       const other = await drive('other')
       expect(other.events.at(-1)?.message).toBe('Claude Code could not sign you in. Try again in a minute.')
+      expect(other.events.at(-1)?.why).toBe('other')
       expect(other.raw).not.toContain('tell nobody')
     },
     30000,
@@ -1906,7 +2011,11 @@ describe('signin.py, run for real against a stand-in claude (Fable R1-2, R1-8 on
       const t0 = Date.now()
       const r = await drive('rejected')
       expect(Date.now() - t0).toBeLessThan(15000)
-      expect(r.events.at(-1)).toEqual({ event: 'error', message: expect.stringContaining('did not accept that code') })
+      expect(r.events.at(-1)).toEqual({
+        event: 'error',
+        why: 'not_accepted',
+        message: expect.stringContaining('did not accept that code'),
+      })
       // "expired" is in Claude Code's sentence too, as one guess of several: it is not taken as the answer
       expect(r.events.at(-1)?.message).not.toContain('had expired')
       expect(r.raw).not.toContain('OAuth error')

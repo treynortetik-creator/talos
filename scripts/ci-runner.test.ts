@@ -2980,10 +2980,13 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
     const withOf = (s: Record<string, unknown> | undefined) => (s?.with ?? {}) as Record<string, unknown>
     expect(uploads(jobs)).toEqual([]) // the artifact storage quota is account-wide and was full: no workflow artifact
     expect(JSON.stringify(jobs)).not.toMatch(/upload-artifact|download-artifact|gh run download/)
-    // a deployment_status run has no branch ref and the cache refuses it: web-bundle-deploy.yml only sees the deploy, and
-    // this workflow runs on its completion (main's ref) or by hand, for a sha resolve finds a successful production deploy of
+    // a deployment_status run has no branch ref (the cache refuses it) and a workflow_run run gets the cache read-only
+    // (4bfe3054): web-bundle-deploy.yml sees the deploy and starts this workflow by workflow_dispatch, its only trigger
     const deployPath = join(root, '.github/workflows/web-bundle-deploy.yml')
-    const deploy = wf(deployPath)
+    const deploy = wf(deployPath) as Record<
+      string,
+      { if?: string; permissions?: Record<string, string>; steps: Record<string, unknown>[] }
+    >
     const deployText = readFileSync(deployPath, 'utf8')
     expect(deployText).toMatch(/^on:\n {2}deployment_status:\n/m)
     expect(deployText).toMatch(/^permissions: \{\}$/m)
@@ -2991,27 +2994,16 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
     expect(deploy.seen?.if).toBe(
       "github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'talos-app / production'",
     )
-    expect(JSON.stringify(deploy)).not.toMatch(/checkout|pnpm|cache|gh /)
+    expect(deploy.seen?.permissions).toEqual({ actions: 'write' })
+    expect(JSON.stringify(deploy.seen?.steps)).toContain('gh workflow run web-bundle.yml --ref main -f sha=\\"$SHA\\"')
+    expect(JSON.stringify(deploy)).not.toMatch(/checkout|pnpm|cache/) // no code of the repository where the token is
     const text = readFileSync(join(root, '.github/workflows/web-bundle.yml'), 'utf8')
-    expect(text).toContain('workflows: ["Web bundle: production deploy seen"]')
+    expect(text).toMatch(/^on:\n {2}workflow_dispatch:\n/m)
+    expect(text).not.toMatch(/^ {2}(workflow_run|deployment_status):/m) // no other trigger
     expect(text).not.toMatch(/github\.event\.deployment\b/)
-    expect(String(jobs.resolve?.if)).toContain("github.event.workflow_run.conclusion == 'success'")
-    expect(String(jobs.resolve?.if)).toContain("github.event.workflow_run.event == 'deployment_status'")
-    expect(String(jobs.resolve?.if)).toContain(
-      "github.event.workflow_run.path == '.github/workflows/web-bundle-deploy.yml'",
-    )
-    expect(String(jobs.resolve?.if)).toContain(
-      'github.event.workflow_run.head_repository.full_name == github.repository',
-    )
-    // a skipped no-op run must not share the group, where a newer pending run cancels the older pending one (a real save)
-    expect(text).toContain("format('web-bundle-noop-{0}', github.run_id)")
-    const group = /group: >-\n((?: {4}.*\n)+)/.exec(text)?.[1] ?? ''
-    for (const c of [
-      "github.event.workflow_run.event == 'deployment_status'",
-      'github.event.workflow_run.head_repository.full_name == github.repository',
-    ])
-      expect(group, c).toContain(c)
-    // by hand, only the live deploy: a rolled-back sha would become the "newest" bundle
+    expect(jobs.resolve?.if).toBeUndefined()
+    expect(text).toMatch(/^concurrency:\n {2}group: web-bundle\n/m)
+    // only the live deploy: a rolled-back sha would become the "newest" bundle
     expect(JSON.stringify(jobs.resolve)).toContain('is not the live production deploy')
     expect((jobs.resolve as { permissions?: Record<string, string> }).permissions).toEqual({ deployments: 'read' })
     expect(JSON.stringify(jobs.resolve)).toContain('has no successful production deploy')
@@ -3022,11 +3014,31 @@ describe('artifact uploads: small, kept a day, never a red job', () => {
       permissions?: Record<string, string>
       steps: Record<string, unknown>[]
     }
-    expect(report.if).toBe("always() && needs.resolve.result == 'success'")
+    expect(report.if).toBe('always()') // a resolve that fails (API, not live) is said too
     expect(report.needs).toEqual(['resolve', 'build', 'publish', 'specs'])
     expect(report.permissions).toEqual({ statuses: 'write' })
     expect(JSON.stringify(report.steps)).toContain('context=web-bundle/save')
     expect(JSON.stringify(report.steps)).not.toMatch(/checkout|pnpm|bun /)
+    // the status is success only when every job succeeded: run the step's own shell with a stand-in gh, per outcome
+    const say = String(report.steps.find((st) => String(st.run ?? '').includes('context=web-bundle/save'))?.run)
+    const bin = mkdtempSync(join(tmpdir(), 'wbs-'))
+    writeFileSync(join(bin, 'gh'), '#!/bin/bash\nprintf "%s\\n" "$@" > "$GH_ARGS"\n', { mode: 0o755 })
+    const stateFor = (o: Record<string, string>) => {
+      const args = join(bin, 'args')
+      const r = spawnSync('bash', ['-c', say], {
+        encoding: 'utf8',
+        env: { PATH: `${bin}:/usr/bin:/bin`, GH_ARGS: args, SHA: 'a'.repeat(40), GH_REPO: 'o/r', URL: 'u', ...o },
+      })
+      expect(r.status, r.stderr).toBe(0)
+      return readFileSync(args, 'utf8')
+        .split('\n')
+        .find((l) => l.startsWith('state='))
+    }
+    const ok = { RESOLVE: 'success', BUILD: 'success', PUBLISH: 'success', SPECS: 'success' }
+    expect(stateFor(ok)).toBe('state=success')
+    for (const k of Object.keys(ok))
+      for (const bad of ['failure', 'cancelled', 'skipped'])
+        expect(stateFor({ ...ok, [k]: bad }), `${k} ${bad}`).toBe('state=failure')
     const save = usesOf('build', 'actions/cache/save@')
     expect(save.length).toBe(1)
     expect(String(save[0]?.uses)).toMatch(/^actions\/cache\/save@[0-9a-f]{40}$/)

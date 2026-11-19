@@ -168,6 +168,10 @@ export interface TalosClient {
     intent?: 'what_did_i_miss' | 'run'
     /** With `intent: 'run'`: the block the tap is for (protocol `RunBlockRef`). The Mac runs each tap once (by its message id). */
     runBlock?: { message_id: string; index: number }
+    /** With `intent: 'run'` and a Mac that lists run-pane/1: run it in the Terminal pane (signed as `run_where`). */
+    runWhere?: 'pane'
+    /** Refuse (`NotSentError`, `mac_offline`) before anything is stored when the message could only be queued: a pane Run is never queued. */
+    requireLive?: boolean
   }): Promise<SendResult>
   sendVoiceNote(args: { threadId: string; attachment: AttachmentRefT }): Promise<SendResult>
   /** Signs and sends a `voice.ask` (the owner speaking through the voice model; side effects only via a card). */

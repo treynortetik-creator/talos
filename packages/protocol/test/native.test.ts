@@ -46,6 +46,12 @@ const ok = {
   pick_folder: { type: 'pick_folder', req: 'r12', start: '/Users/alex/Projects' },
   shell_pane: { type: 'shell_pane', thread_id: 'trip', rect: { x: 760, y: 420, width: 520, height: 360 } },
   shell_pane_close: { type: 'shell_pane_close', thread_id: 'trip' },
+  run_witness: {
+    type: 'run_witness',
+    thread_id: 'trip',
+    client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V4',
+    script_sha256: 'b'.repeat(64),
+  },
   capture_ack: { type: 'capture_ack', req: 'r12', ok: true },
 } as const
 
@@ -292,6 +298,20 @@ describe('terminal_sessions (shell -> page)', () => {
   })
 })
 
+describe('run_result', () => {
+  const r = { type: 'run_result', client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V3', ok: true }
+  it('is native -> web only: an ok result, or a refusal with one of the known reasons', () => {
+    expect(NativeToWeb.safeParse(r).success).toBe(true)
+    for (const reason of ['no_witness', 'expired', 'not_started', 'pane_busy', 'app_closed', 'bad_script'])
+      expect(NativeToWeb.safeParse({ ...r, ok: false, reason }).success, reason).toBe(true)
+    expect(WebToNative.safeParse(r).success).toBe(false)
+  })
+  it('refuses text, an unknown reason, a hostile id and a non-boolean ok', () => {
+    for (const bad of [{ text: 'ls' }, { reason: 'because' }, { client_msg_id: '../x' }, { ok: 'yes' }, { extra: 1 }])
+      expect(NativeToWeb.safeParse({ ...r, ...bad }).success, JSON.stringify(bad)).toBe(false)
+  })
+})
+
 describe('native -> web bridge messages', () => {
   const good = {
     navigate: { type: 'navigate', path: '/t/general' },
@@ -317,6 +337,7 @@ describe('native -> web bridge messages', () => {
     },
     terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'trip', outcome: 'asked' },
     terminal_select: { type: 'terminal_select', session: 'trip' },
+    run_result: { type: 'run_result', client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V3', ok: false, reason: 'expired' },
     folder_picked: { type: 'folder_picked', req: 'r12', path: '/Users/alex/Projects' },
     capture_drop: {
       type: 'capture_drop',

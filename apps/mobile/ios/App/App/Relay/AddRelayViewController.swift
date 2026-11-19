@@ -4,7 +4,8 @@ import UIKit
 
 /// The native "Add your relay" sheet (BYOR 3.2): scan the setup QR, check the relay, confirm the HOST, save. The only way a link
 /// gets in is `handle(link:)`, called by the camera scan here (or by the DEBUG hook, compiled out of Release). A saved relay becomes
-/// the active one: Done puts a new web view controller in the window, built from it. This sheet does not pin or run device/verify.
+/// the active one: Done puts a new web view controller in the window, built from it. Nothing is saved unless the Mac passes an attest
+/// against the QR's key first (`AddRelayFlow.prepare`). This sheet does not run device/verify.
 final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
     private let flow: AddRelayFlow
     private let runtime: RelayRuntime
@@ -13,9 +14,13 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
 
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "talos.addrelay.camera")
-    private var preview: AVCaptureVideoPreviewLayer?
     private let content = UIStackView()
-    private let cameraHolder = UIView()
+    /// The camera box. Its backing layer is the video layer, so the picture always fills it, however layout is ordered.
+    let cameraBox = CameraPreviewView()
+    /// What the camera permission says now, and how to ask for it. The real ones by default; the tests set their own so they do not
+    /// depend on what a simulator was once granted or denied.
+    var cameraStatus: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }
+    var requestCameraAccess: (@escaping (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .video, completionHandler: $0) }
 
     init(flow: AddRelayFlow, runtime: RelayRuntime) {
         self.flow = flow
@@ -29,9 +34,10 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
     /// The real flow: https fetch, the Keychain list in the app's shared access group.
     static func present(from host: UIViewController) {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-        var flow = AddRelayFlow(fetcher: URLSessionDescriptorFetcher(), appVersion: version)
+        let attester = TalosBridgeViewController.attester()
+        var flow = AddRelayFlow(fetcher: URLSessionDescriptorFetcher(), attester: attester, appVersion: version)
         #if DEBUG
-        if let stub = DebugAddRelay.stub() { flow = AddRelayFlow(fetcher: stub, appVersion: version) }
+        if let stub = DebugAddRelay.stub() { flow = AddRelayFlow(fetcher: stub, attester: attester, appVersion: version) }
         #endif
         let vc = AddRelayViewController(flow: flow, runtime: TalosBridgeViewController.runtime())
         host.present(vc, animated: true)
@@ -56,11 +62,6 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
         showScanner()
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        preview?.frame = cameraHolder.bounds
-    }
-
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopCamera()
@@ -73,25 +74,25 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
         content.addArrangedSubview(label(title, style: .title2, weight: .semibold))
     }
 
-    private func showScanner() {
+    func showScanner() {
         handled = false
         pending = nil
         reset(title: "Add your relay")
         content.addArrangedSubview(label("On your Mac, open Terminal and run talos-app enroll --label phone. Then scan the QR code it prints.", style: .body, color: .secondaryLabel))
-        cameraHolder.backgroundColor = .secondarySystemBackground
-        cameraHolder.layer.cornerRadius = 16
-        cameraHolder.clipsToBounds = true
-        if !cameraHolder.constraints.contains(where: { $0.firstAttribute == .height }) {
-            cameraHolder.heightAnchor.constraint(equalToConstant: 320).isActive = true
+        cameraBox.backgroundColor = .secondarySystemBackground
+        cameraBox.layer.cornerRadius = 16
+        cameraBox.clipsToBounds = true
+        if !cameraBox.constraints.contains(where: { $0.firstAttribute == .height }) {
+            cameraBox.heightAnchor.constraint(equalToConstant: 320).isActive = true
         }
-        content.addArrangedSubview(cameraHolder)
+        content.addArrangedSubview(cameraBox)
         content.addArrangedSubview(button("Cancel", primary: false) { [weak self] in self?.dismiss(animated: true) })
         startCamera()
     }
 
     private func showChecking() {
         stopCamera()
-        reset(title: "Checking the relay")
+        reset(title: "Checking your Mac")
         let spinner = UIActivityIndicatorView(style: .large)
         spinner.startAnimating()
         content.addArrangedSubview(spinner)
@@ -181,10 +182,10 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
     // MARK: Camera
 
     private func startCamera() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        switch cameraStatus() {
         case .authorized: configureCamera()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { ok in
+            requestCameraAccess { ok in
                 DispatchQueue.main.async {
                     // The sheet may have been closed while the prompt was up: then start nothing.
                     guard self.viewIfLoaded?.window != nil else { return }
@@ -200,32 +201,35 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
     }
 
     private func configureCamera() {
-        guard preview == nil else { return sessionQueue.async { self.session.startRunning() } }
+        guard cameraBox.previewLayer.session == nil else { return sessionQueue.async { self.session.startRunning() } }
         guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else {
+            guard cameraBox.subviews.isEmpty else { return }
             let note = label("No camera is available on this device.", style: .callout, color: .secondaryLabel)
             note.textAlignment = .center
             note.translatesAutoresizingMaskIntoConstraints = false
-            cameraHolder.addSubview(note)
+            cameraBox.addSubview(note)
             NSLayoutConstraint.activate([
-                note.centerYAnchor.constraint(equalTo: cameraHolder.centerYAnchor),
-                note.leadingAnchor.constraint(equalTo: cameraHolder.leadingAnchor, constant: 16),
-                note.trailingAnchor.constraint(equalTo: cameraHolder.trailingAnchor, constant: -16),
+                note.centerYAnchor.constraint(equalTo: cameraBox.centerYAnchor),
+                note.leadingAnchor.constraint(equalTo: cameraBox.leadingAnchor, constant: 16),
+                note.trailingAnchor.constraint(equalTo: cameraBox.trailingAnchor, constant: -16),
             ])
             return
         }
-        session.addInput(input)
         let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else { return }
+        session.addInput(input)
+        guard session.canAddOutput(output) else { return session.removeInput(input) }
         session.addOutput(output)
         output.setMetadataObjectsDelegate(self, queue: .main)
         output.metadataObjectTypes = [.qr]
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = cameraHolder.bounds
-        cameraHolder.layer.addSublayer(layer)
-        preview = layer
+        attachSession()
+        cameraBox.followRotation(of: device)
         sessionQueue.async { self.session.startRunning() }
+    }
+
+    func attachSession() {
+        cameraBox.previewLayer.session = session
+        cameraBox.previewLayer.videoGravity = .resizeAspectFill
     }
 
     private func stopCamera() {
@@ -256,5 +260,34 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
         let b = UIButton(configuration: config, primaryAction: UIAction { _ in action() })
         b.accessibilityIdentifier = "addrelay." + title.lowercased().replacingOccurrences(of: " ", with: "-")
         return b
+    }
+}
+
+/// A view whose backing layer is the camera preview layer: the picture takes the view's size by itself, with no frame code.
+final class CameraPreviewView: UIView {
+    override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
+
+    /// Keeps the picture upright as the phone turns (the sheet allows landscape): the angle iOS gives for a level horizon goes onto the
+    /// preview's connection, now and on every change.
+    func followRotation(of device: AVCaptureDevice) {
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+        rotationCoordinator = coordinator
+        applyRotation(coordinator.videoRotationAngleForHorizonLevelPreview)
+        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview) { [weak self] c, _ in
+            let angle = c.videoRotationAngleForHorizonLevelPreview
+            DispatchQueue.main.async { self?.applyRotation(angle) }
+        }
+    }
+
+    /// False when the preview has no connection yet or does not support that angle (then nothing changes).
+    @discardableResult
+    func applyRotation(_ angle: CGFloat) -> Bool {
+        guard let connection = previewLayer.connection, connection.isVideoRotationAngleSupported(angle) else { return false }
+        connection.videoRotationAngle = angle
+        return true
     }
 }

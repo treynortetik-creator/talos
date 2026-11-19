@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// The HTML page card on a Chromium engine: no iframe (so no script) until the owner taps Run page; on WebKit the frame is
-// there at once. Expand is a tap, so the full-screen page runs either way. Real component, real media gate (fetch stubbed).
+// The HTML page card runs its page at once on every engine (owner, 2026-11-18: no Run page tap): the sandboxed frame is
+// there with no tap on Chromium and on WebKit, and Expand opens the full-screen page. Real component, real media gate (fetch
+// stubbed). On Chromium the focus guard is what keeps the typing (frame-focus-guard tests, relay/frame-guards.spec.ts).
 import { type AttachmentRefT, newId } from '@talos-app/protocol'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -47,33 +48,45 @@ async function show() {
   })
 }
 
-describe('HtmlPageCard waits for a tap on Chromium only', () => {
-  it('Chromium: a Run button and no iframe; the tap mounts the sandboxed frame and focus lands on Expand', async () => {
-    ua(CHROME)
-    await show()
-    expect(document.querySelector('iframe')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Run report.html' }))
-    const frame = document.querySelector('iframe')
-    expect(frame?.getAttribute('src')).toBe(`/media/${att.media_id}/page?c=2`)
-    expect(frame?.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(screen.queryByRole('button', { name: 'Run report.html' })).toBeNull()
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 10))
-    })
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Expand report.html/ }))
-  })
+describe('HtmlPageCard runs the page at once, on every engine', () => {
+  it.each([
+    ['Chromium', CHROME],
+    ['WebKit', SAFARI],
+  ])(
+    '%s: the sandboxed frame is there with no tap, and there is no Run button or "not started" notice',
+    async (_n, agent) => {
+      ua(agent)
+      await show()
+      const frame = document.querySelector('iframe')
+      expect(frame?.getAttribute('src')).toBe(`/media/${att.media_id}/page?c=2`)
+      expect(frame?.getAttribute('sandbox')).toBe('allow-scripts')
+      expect(screen.queryByRole('button', { name: 'Run report.html' })).toBeNull()
+      expect(screen.queryByText(/has not started/)).toBeNull()
+    },
+  )
 
-  it('Chromium: Expand is a tap, so the full-screen page runs without Run', async () => {
+  it('Chromium: Expand opens the full-screen page', async () => {
     ua(CHROME)
     await show()
     fireEvent.click(screen.getByRole('button', { name: /Expand report.html/ }))
     expect(screen.getByTitle('report.html (full screen)')).toBeTruthy()
   })
+})
 
-  it('WebKit: the frame is there at once and there is no Run button', async () => {
-    ua(SAFARI)
+describe('Open in new tab sits on the card, beside Expand, without expanding', () => {
+  it.each([
+    ['Chromium', CHROME],
+    ['WebKit', SAFARI],
+  ])('%s: the link is there at once, to the same sandboxed page, opened with no opener', async (_name, agent) => {
+    ua(agent)
     await show()
-    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(`/media/${att.media_id}/page?c=2`)
-    expect(screen.queryByRole('button', { name: 'Run report.html' })).toBeNull()
+    const link = screen.getByRole('link', { name: 'Open report.html in a new tab' })
+    expect(link.getAttribute('href')).toBe(`/media/${att.media_id}/page?c=2`)
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    // in the caption, next to Expand, before the page is expanded
+    const expand = screen.getByRole('button', { name: 'Expand report.html to full screen' })
+    expect(link.closest('figcaption')).toBe(expand.closest('figcaption'))
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 })

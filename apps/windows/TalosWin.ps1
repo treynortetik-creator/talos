@@ -736,6 +736,67 @@ function Format-TalosLaunchChange([string]$Json) {
   }
 }
 
+# signin.py's failure ids (its WHY set; a test holds the two equal): the only part of a sign-in failure the log keeps
+$script:TalosSignInWhy = @('no_user', 'no_claude', 'no_link', 'code_wait', 'not_a_code', 'no_answer', 'unreadable', 'not_saved',
+  'offline', 'not_accepted', 'expired', 'other')
+
+# The list entry that equals $x character for character, or $null. PowerShell's -ccontains is case-sensitive but not
+# ordinal (a soft hyphen inside "link" still matches), and the line returns the entry, never the input (Pantheon, 2026-11-18).
+function Find-TalosLogWord([string[]]$List, [string]$x) {
+  foreach ($w in $List) { if ([string]::Equals($w, $x, [StringComparison]::Ordinal)) { return $w } }
+  return $null
+}
+
+# What the tray log says for one sign-in event: the event's name, and for an error which fixed failure it was. Never the
+# code, the link or any sentence: an id that is not on the list is logged as "unknown" (Pantheon, 2026-11-18).
+function Format-TalosSignInLogLine($e) {
+  # only signin.py's own event names are logged; any other name is "unknown"
+  $ev = Find-TalosLogWord @('url', 'code', 'signed_in', 'error') "$($e.event)"
+  if (-not $ev) { return 'unknown' }
+  if ($ev -ne 'error') { return $ev }
+  $why = Find-TalosLogWord $script:TalosSignInWhy "$($e.why)"
+  if ($why) { return "error ($why)" }
+  return 'error (unknown)'
+}
+
+# pair.py's error codes for the log: its ERROR_CODES, the three it sends itself (not-ready, enroll, link), and the ones
+# Get-TalosPairText names
+$script:TalosPairErrorCodes = @('usage', 'key_refused', 'relay', 'no_relay', 'bad_words', 'internal', 'not-ready', 'enroll', 'link')
+
+# What the tray log says for one "Pair a phone" event: pair.py's own event name, and for an error which fixed code it was.
+# Never the link, the code, the words or any sentence: anything else is logged as "unknown" (Pantheon, 2026-11-18).
+function Format-TalosPairLogLine($e) {
+  # only pair.py's own event names are logged; any other name is "unknown"
+  $ev = Find-TalosLogWord @('link', 'qr', 'confirm', 'answered', 'pinned', 'not_pinned', 'used', 'expired', 'error', 'warning') "$($e.event)"
+  if (-not $ev) { return 'unknown' }
+  if ($ev -ne 'error') { return $ev }
+  $code = Find-TalosLogWord $script:TalosPairErrorCodes "$($e.code)"
+  if ($code) { return "error ($code)" }
+  return 'error (unknown)'
+}
+
+# root's fixed words, from talos-wsl.sh (restart, restore) and kit.py (kit-update); the only words the root-verb log keeps
+$script:TalosRootWords = @('restored', 'restarted', 'not-approved', 'nothing-saved', 'nothing-to-do', 'not-isolated', 'failed',
+  'not-root', 'kit-updated', 'kit-policy-updated', 'kit-current', 'kit-no-release', 'kit-bad-release', 'kit-version-taken',
+  'kit-policy-foreign', 'kit-unsafe-path', 'kit-busy')
+
+# What the tray log says for a root verb's output: each word root knows, once and in the list's order, then one "unknown" if
+# any other word came, so no link, code or letter of wsl.exe's own text reaches the log (Pantheon, 2026-11-18).
+function Format-TalosRootVerbLogLine([string]$Out) {
+  $words = @(("$Out" -replace "`0", '') -split '\s+' | Where-Object { $_ })
+  $seen = @{}
+  $unknown = $false
+  foreach ($t in $words) {
+    $w = Find-TalosLogWord $script:TalosRootWords $t
+    if ($w) { $seen[$w] = $true } else { $unknown = $true }
+  }
+  # each known word at most once, in the list's own order (not the input's), then one "unknown" if any word was not root's:
+  # the line is never longer than the list plus one, and the distro chooses neither count nor order (Opus review, 2026-11-18)
+  $line = @($script:TalosRootWords | Where-Object { $seen[$_] })
+  if ($unknown) { $line += 'unknown' }
+  return ($line -join ' ')
+}
+
 <#
   What "Pair a phone" says for each event pair.py passes on (talos-app enroll --json, Cyclops's contract in docs/bridge.md),
   in plain words: $null for an event that only changes the picture (qr). Fields were already checked and cleaned by pair.py
@@ -1006,6 +1067,26 @@ function Restore-TalosWslInterop {
   $ErrorActionPreference = 'Continue'
   & $script:WslExe --system -u root --exec /bin/sh -c '[ -e /proc/sys/fs/binfmt_misc/WSLInterop ] || echo :WSLInterop:M::MZ::/init:P > /proc/sys/fs/binfmt_misc/register; test -e /proc/sys/fs/binfmt_misc/WSLInterop' 2>&1 | Out-Null
   return ($LASTEXITCODE -eq 0)
+}
+
+# One line into a small log (the last 200 lines), and it never throws. The tray calls it from timer ticks, where an
+# exception ends the whole tray with the .NET crash dialog (found on Titan, 2026-11-18: another process held the log open and
+# Set-Content threw "being used by another process"). A line that cannot be written now is kept (at most 50 per log, the
+# oldest dropped) and written with the next one that can; if the process ends first, it is lost, which is fine for a log.
+function Write-TalosLogLine([string]$Path, [string]$Line) {
+  try {
+    if (-not $script:TalosLogPending) { $script:TalosLogPending = @{} }
+    if (-not $script:TalosLogPending.ContainsKey($Path)) { $script:TalosLogPending[$Path] = New-Object Collections.Generic.List[string] }
+    $pending = $script:TalosLogPending[$Path]
+    $pending.Add($Line)
+    while ($pending.Count -gt 50) { $pending.RemoveAt(0) }
+    $old = @()
+    if (Test-Path -LiteralPath $Path) { $old = @(Get-Content -LiteralPath $Path -Tail 199 -ErrorAction Stop) }
+    $all = @($old + $pending.ToArray())
+    if ($all.Count -gt 200) { $all = @($all[($all.Count - 200)..($all.Count - 1)]) }
+    Set-Content -LiteralPath $Path -Value $all -Encoding UTF8 -ErrorAction Stop
+    $pending.Clear()
+  } catch { }
 }
 
 # whether this distro is one Talos made (R1-7)

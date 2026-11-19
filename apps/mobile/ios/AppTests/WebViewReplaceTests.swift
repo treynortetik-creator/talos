@@ -52,7 +52,8 @@ final class WebViewReplaceTests: XCTestCase {
 
         delegate.replaceBridgeViewController()
         XCTAssertTrue(window.rootViewController === first, "the swap waits until the sheet is closed")
-        spin()
+        let until = Date(timeIntervalSinceNow: 10)
+        while window.rootViewController === first, Date() < until { spin(0.02) }
         XCTAssertTrue(window.rootViewController is TalosBridgeViewController)
         XCTAssertFalse(window.rootViewController === first, "the swap happened after the sheet was closed")
         XCTAssertNil(first.presentedViewController, "nothing is left on the old controller")
@@ -78,7 +79,10 @@ final class WebViewReplaceTests: XCTestCase {
     func testANewPageClearsTheThreadTheOldOneWasShowing() throws {
         // Paired in memory, so the guards are installed whatever relay this build was synced with.
         let saved = TalosBridgeViewController.runtime
-        defer { TalosBridgeViewController.runtime = saved }
+        let savedAttester = TalosBridgeViewController.attester
+        let stub = StubAttester(.verdict(.pass))
+        TalosBridgeViewController.attester = { stub }
+        defer { TalosBridgeViewController.runtime = saved; TalosBridgeViewController.attester = savedAttester }
         let store = RelayStore(backing: InMemoryKeychain())
         try store.add(RelayProfile(
             id: "r_abcdefghijklmnopqrst", origin: URL(string: "https://relay.example.test")!, kind: .self, label: "relay.example.test",

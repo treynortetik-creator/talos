@@ -23,7 +23,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -40,9 +40,12 @@ const asRoot = process.getuid?.() === 0
 const TMP = realpathSync(tmpdir())
 
 const dirs: string[] = []
-afterAll(() => {
+// Each test's folders go as soon as it ends: two tests build 10,000 and 20,000 names to hit kit.py's limits, and removing every
+// test's tree in one afterAll ran past the hook budget on a loaded machine. Only the sealed vendor copy (0555 folders) needs
+// write access back first, so chmod walks that one folder, not the big trees.
+afterEach(() => {
   for (const d of dirs.splice(0)) {
-    spawnSync('chmod', ['-R', 'u+w', d])
+    spawnSync('chmod', ['-R', 'u+w', join(d, 'opt')])
     rmSync(d, { recursive: true, force: true })
   }
 })

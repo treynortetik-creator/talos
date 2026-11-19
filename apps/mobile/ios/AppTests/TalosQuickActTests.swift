@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 import XCTest
 @testable import TalosPushCore
+import BridgeGuard
+import TalosRelayCore
 
 @testable import App
 
@@ -36,6 +38,11 @@ final class TalosQuickActTests: XCTestCase {
         var posts: [(url: URL, body: Data)] = []
         var failures: [String] = []
         var finished = 0
+        /// The pairings the trust check refuses (a failed pairing, or one not verified in the last 24 hours). Anything else is allowed.
+        var untrusted: Set<String> = []
+        /// When set, each look at the trust answers the next value (the last one repeats): a fail that lands in the middle of a press.
+        var trustScript: [Bool]?
+        var trustLooks = 0
 
         func env() -> TalosQuickAct.Env {
             TalosQuickAct.Env(
@@ -48,6 +55,11 @@ final class TalosQuickActTests: XCTestCase {
                 grant: { [unowned self] id in keyReads.append("grant.\(id)"); return grants[id] },
                 post: { [unowned self] url, body, reply in posts.append((url, body)); reply(200, nil) },
                 fail: { [unowned self] message, done in failures.append(message); done() },
+                trusted: { [unowned self] id in
+                    defer { trustLooks += 1 }
+                    if let trustScript { return trustScript[min(trustLooks, trustScript.count - 1)] }
+                    return !untrusted.contains(id)
+                },
                 now: { Date(timeIntervalSince1970: 1_800_000_000) },
                 startBackgroundTask: { _ in {} },
                 retryLater: { $0() })
@@ -87,6 +99,48 @@ final class TalosQuickActTests: XCTestCase {
         XCTAssertEqual(frame["type"] as? String, "native.act")
         XCTAssertEqual(frame["device_id"] as? String, "dev-\(keyA)")
         XCTAssertEqual(rig.finished, 1)
+    }
+
+    func testAPressOnAFailedOrUnverifiedForADayPairingReadsNoKeySendsNothingAndSaysSo() {
+        let rig = Rig()
+        let keys = pair(rig, keyA)
+        rig.active = [(keyA, originA)]
+        rig.untrusted = [keyA]
+        press(rig, buttonData(keyA, sealedWith: keys))
+        XCTAssertEqual(rig.keyReads, [], "no Keychain read at all")
+        XCTAssertTrue(rig.posts.isEmpty, "and nothing sent")
+        XCTAssertEqual(rig.failures, ["Talos can't confirm your Mac. Open Talos."])
+        XCTAssertEqual(rig.finished, 1)
+    }
+
+    func testAFailThatLandsWhileThePressIsBeingSignedStopsItBeforeThePost() {
+        let rig = Rig()
+        let keys = pair(rig, keyA)
+        rig.active = [(keyA, originA)]
+        rig.trustScript = [true, false]   // trusted at the start of the press, failed by the time it is signed
+        press(rig, buttonData(keyA, sealedWith: keys))
+        XCTAssertTrue(rig.posts.isEmpty, "nothing is sent")
+        XCTAssertEqual(rig.failures, ["Talos can't confirm your Mac. Open Talos."])
+        XCTAssertEqual(rig.trustLooks, 2, "looked at the start and again just before the post")
+        XCTAssertEqual(rig.finished, 1)
+    }
+
+    func testTheTrustFactsQuickActReadsComeFromTheActivePairingsOwnProfile() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func profile(key: String, verified: Date?, failed: Bool = false) -> RelayProfile {
+            RelayProfile(id: "r_abcdefghijklmnopqrst", origin: originA, kind: .self, label: "a", bridgeFp: String(repeating: "A", count: 43),
+                         deviceId: "", dataStoreId: UUID(uuidString: key)!, addedAt: now, lastVerifiedAt: verified, attestFailed: failed)!
+        }
+        let fresh = now.addingTimeInterval(-3600)
+        XCTAssertTrue(TalosQuickAct.trusts(profile: profile(key: keyA, verified: fresh), keyId: keyA, now: now))
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyA, verified: fresh, failed: true), keyId: keyA, now: now), "failed")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyA, verified: now.addingTimeInterval(-25 * 3600)), keyId: keyA, now: now), "25 hours")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyA, verified: now.addingTimeInterval(-24 * 3600)), keyId: keyA, now: now), "exactly 24 hours")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyA, verified: nil), keyId: keyA, now: now), "never verified")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyA, verified: now.addingTimeInterval(60)), keyId: keyA, now: now), "a future time")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: profile(key: keyB, verified: fresh), keyId: keyA, now: now), "another pairing's facts never count")
+        XCTAssertFalse(TalosQuickAct.trusts(profile: nil, keyId: keyA, now: now), "no stored pairing")
+        XCTAssertEqual(RelayProfile.trustWindow, RelayTrust.hardBlockAfter, "the screen and the button use the same 24 hours")
     }
 
     func testAPressOnAnotherRelaysNotificationReadsNoKeyAndSendsNothing() {

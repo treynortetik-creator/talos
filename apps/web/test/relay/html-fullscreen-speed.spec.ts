@@ -43,10 +43,6 @@ test('HTML card expands to a full-viewport overlay; Escape and Close dismiss; fo
     'text/html',
   )
   harness.relay.sendToApps(agentReply({ text: 'Here.', attachments: [a] }))
-  // Chromium waits for a tap before an inline page runs; WebKit runs it at once.
-  await page.locator('iframe[title="report.html"], button[aria-label="Run report.html"]').first().waitFor()
-  const run = page.getByRole('button', { name: 'Run report.html' })
-  if (await run.count()) await run.click()
   await expect(page.locator('iframe[title="report.html"]')).toBeVisible()
   const expand = page.getByRole('button', { name: 'Expand report.html to full screen' })
   await expect(page.getByRole('dialog')).toHaveCount(0)

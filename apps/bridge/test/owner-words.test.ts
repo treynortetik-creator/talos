@@ -114,6 +114,7 @@ const MAC_ONLY_FILES = new Set([
   'screen-consent.ts',
   'tools/screen.ts',
   'apps/keychain.ts', // the macOS Keychain
+  'pane-run.ts', // Run in Terminal: the terminal pane exists only in the Mac app, so every refusal there is about the Mac
 ])
 /** What a non-Mac sentence must not say (Fable: macOS and System Settings too, not only "Mac"). */
 const MAC_WORDS = /\bMac\b|\bmacOS\b|System Settings/

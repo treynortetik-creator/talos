@@ -762,6 +762,43 @@
         "additionalProperties": false
       }
     },
+    "run_witness": {
+      "sample": {
+        "type": "run_witness",
+        "thread_id": "general",
+        "client_msg_id": "m_01JBF3V7Q8K2M4N6P8R0S1T2V4",
+        "script_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "run_witness"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "client_msg_id": {
+            "type": "string",
+            "pattern": "^m_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "script_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "client_msg_id",
+          "script_sha256"
+        ],
+        "additionalProperties": false
+      }
+    },
     "capture_ack": {
       "sample": {
         "type": "capture_ack",
@@ -1156,6 +1193,48 @@
         "required": [
           "type",
           "session"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "run_result": {
+      "sample": {
+        "type": "run_result",
+        "client_msg_id": "m_01JBF3V7Q8K2M4N6P8R0S1T2V3",
+        "ok": false,
+        "reason": "expired"
+      },
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "run_result"
+          },
+          "client_msg_id": {
+            "type": "string",
+            "pattern": "^m_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_witness",
+              "expired",
+              "not_started",
+              "pane_busy",
+              "app_closed",
+              "bad_script"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "client_msg_id",
+          "ok"
         ],
         "additionalProperties": false
       }

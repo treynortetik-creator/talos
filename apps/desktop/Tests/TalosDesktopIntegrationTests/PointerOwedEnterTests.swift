@@ -116,6 +116,53 @@ struct PointerOwedEnterTests {
     #expect(r.typedLines.count == 1, "\(r.typedLines)")
   }
 
+  /// The app goes between the Enter and the end of that tick: the Enter went out, so the file must already say nothing is owed. It used
+  /// to be written at the tick's end, and the relaunch read an empty box as "the owner cleared it" and typed the line a second time.
+  /// The tick is held where it stands (the shim's `afterEnter`), the file is copied as it is then, and that copy is what the next
+  /// copy of the app finds.
+  @Test func anAppGoneRightAfterTheEnterDoesNotTypeTheLineAgain() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    r.firstCopy("crash", tmux: shim).startTicking()
+    try r.fault("capture-pane", "afterEnter")
+    try r.wake("trip")
+    #expect(r.wait(20) { FileManager.default.fileExists(atPath: r.faultDir + "/blocked") }, "the Enter never went: \(r.why("trip"))")
+    #expect(r.wait(5) { r.typedLines.count == 1 }, "\(r.typedLines)")
+    let atTheMoment = FileManager.default.contents(atPath: r.talosHome + "/workers.json")
+    #expect(r.owed().until == nil && r.owed().enter == nil, "the Enter went out and the file still owes the pointer: \(r.owed())")
+    r.clearFault("capture-pane")  // the held tick ends, and the first copy goes
+    r.appGone("crash")
+    try #require(atTheMoment).write(to: URL(fileURLWithPath: r.talosHome + "/workers.json"))
+    _ = r.comeBack(tmux: shim)
+    r.ticksPass(5)
+    #expect(r.typedLines.count == 1, "the line was typed again after the relaunch: \(r.typedLines)")
+    #expect(r.emptyEnters.isEmpty, "\(r.emptyEnters)")
+  }
+
+  /// The other crash point: the line is typed and the Enter has not gone. The relaunch finds our line in the box, and it is
+  /// entered, once.
+  @Test func anAppGoneBetweenTheTextAndTheEnterEntersTheLineOnce() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    r.firstCopy("crash", tmux: shim).startTicking()
+    try r.fault("Enter", "hold")
+    try r.wake("trip")
+    #expect(r.wait(10) { r.up("trip") && r.screen().contains(PointerTyper.text) }, "\(r.why("trip"))")
+    #expect(r.wait(5) { r.owed().enter == true })
+    r.appGone("crash")
+    r.clearFault("Enter")
+    _ = r.comeBack(tmux: shim)
+    #expect(r.wait(10) { r.typedLines.count == 1 }, "the line never went in: \(r.typedLines) \(r.screen())")
+    r.ticksPass(5)
+    #expect(r.typedLines == [line], "\(r.typedLines)")
+    #expect(r.emptyEnters.isEmpty, "\(r.emptyEnters)")
+    #expect(r.screen().components(separatedBy: "Talos:").count - 1 == 0, "the line is still in the box: \(r.screen())")
+  }
+
   /// The same-tick catch: the screen draws the text we just typed late. An empty box right after our own typing is a screen that has
   /// not caught up, not a line that is gone: it is never typed twice (that would read as the owner's draft and be held for good).
   @Test func aLineTheScreenDrawsLateIsNotTypedTwice() throws {
@@ -239,6 +286,29 @@ struct PointerOwedEnterTests {
     c.jump(PointerTyper.claimDeadlineCold + 30)
     #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
     #expect(r.swallowed("Enter") == 1)
+  }
+
+  /// The Enter check flags the Enter on the queue, between ticks: the flag is in `workers.json` at once, not at the next tick's end. No
+  /// timer here (only the ticks this test drives), so nothing else can write the file after the flag; an app gone at that point must
+  /// find the hold, or the notice and the cleanup at the deadline are lost.
+  @Test func aFlaggedEnterIsInTheFileAtOnceNotAtTheNextTick() throws {
+    let r = try WorkerRig(scenario: scenario)
+    defer { r.teardown() }
+    r.echoBox()
+    let shim = try r.faultShim()
+    let c = OwedClock()
+    let m = r.manager(tmux: shim, readyTimeout: WorkerRig.owedReadyTimeout, now: { c.now })
+    m.tune { $0.auditLogPath = r.root + "/audit.log" }
+    try r.fault("Enter", "swallow")
+    try r.wake("trip")
+    #expect(r.wait(30) { m.tickOnce(); return r.swallowed("Enter") == 1 }, "the Enter never went: \(r.why("trip"))")
+    #expect(r.wait(10) { r.fileOnDisk?.threads["trip"]?.enter_uncertain == true }, "flagged in memory only, no tick has written it: \(r.owed())")
+    r.appGone("crash")
+    let back = r.comeBack(clock: c, tmux: shim)
+    #expect(r.wait(10) { back.needsYou()["trip"] == WorkerNotice.enterUncertainKind }, "\(back.needsYou())")
+    c.jump(PointerTyper.claimDeadlineCold + 30)
+    #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
+    #expect(r.swallowed("Enter") == 1, "entered again: \(r.swallowed("Enter"))")
   }
 
   /// The same, with the hold's wait longer than the claim deadline: at the deadline the hub has given the message to main, so the pointer

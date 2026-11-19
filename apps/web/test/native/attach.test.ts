@@ -6,6 +6,7 @@ import { useSession } from '../../src/features/auth/session.ts'
 import { attachShell } from '../../src/features/native/attach.ts'
 import { startNativeNotify } from '../../src/features/native/notify.ts'
 import { useTerminalSessions } from '../../src/features/terminal/sessions.ts'
+import { useRunResults } from '../../src/features/threads/runResults.ts'
 import { initialClientState, type TalosClient } from '../../src/lib/client.ts'
 import { createShellBridge } from '../../src/lib/native/bridge.ts'
 import { installShell, type Shell } from '../../src/lib/native/shell.ts'
@@ -282,5 +283,40 @@ describe("the Terminal screen's messages from the Mac", () => {
     useSession.setState({ status: 'authed' })
     expect(t.bridge.receive({ ...sessions, items: [...sessions.items, { id: '=agent', name: 'x' }] })).toBe(true)
     expect(useTerminalSessions.getState().items?.map((i) => i.id)).toEqual(['main'])
+  })
+})
+
+describe('run_result from the Mac app', () => {
+  const ok = { type: 'run_result', client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V3', ok: true }
+  beforeEach(() => useRunResults.getState().reset())
+
+  it('is refused before sign-in and stored nowhere', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    expect(t.bridge.receive(ok)).toBe(false)
+    expect(useRunResults.getState().byId).toEqual({})
+  })
+  it('signed in, it is kept by message id, with its reason; a bad one (text, unknown reason) is refused', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    useSession.setState({ status: 'authed' })
+    expect(t.bridge.receive(ok)).toBe(true)
+    expect(
+      t.bridge.receive({ ...ok, client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V4', ok: false, reason: 'expired' }),
+    ).toBe(true)
+    expect(useRunResults.getState().byId).toEqual({
+      m_01JBF3V7Q8K2M4N6P8R0S1T2V3: { ok: true },
+      m_01JBF3V7Q8K2M4N6P8R0S1T2V4: { ok: false, reason: 'expired' },
+    })
+    expect(t.bridge.receive({ ...ok, text: 'ls' })).toBe(false)
+    expect(t.bridge.receive({ ...ok, ok: false, reason: 'because' })).toBe(false)
+  })
+  it('signing out drops what it kept', () => {
+    const t = setup(true)
+    attachShell(t.shell, t.client)
+    useSession.setState({ status: 'authed' })
+    t.bridge.receive(ok)
+    useSession.setState({ status: 'anon' })
+    expect(useRunResults.getState().byId).toEqual({})
   })
 })

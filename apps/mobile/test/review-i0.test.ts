@@ -7,7 +7,9 @@ import { swiftBody, withoutComments } from './swift-source'
 const ROOT = new URL('..', import.meta.url)
 const read = (p: string) => readFileSync(new URL(p, ROOT), 'utf8')
 const gate = () => {
-  const src = withoutComments(read('ios/App/App/TalosBridgeViewController.swift'))
+  const src = withoutComments(
+    read('ios/App/App/TalosBridgeViewController.swift') + read('ios/App/App/WebViewGuards.swift'),
+  )
   const start = src.indexOf('final class NavigationGate')
   expect(start, 'NavigationGate exists').toBeGreaterThan(-1)
   return src.slice(start)

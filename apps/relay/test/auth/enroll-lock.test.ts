@@ -119,3 +119,30 @@ describe('pickLockoutKey', () => {
     expect(pickLockoutKey({ hops: 2, remote: '10.0.0.1', realIp: 'nope' })).toBeNull()
   })
 })
+
+// Which proxy header the harness's DEFAULT hops make the relay trust for the lockout. Browser e2e once sent only
+// X-Forwarded-For and the lockout never counted; nothing at unit level pinned that. No hops override anywhere below.
+describe('the lockout header under the harness default hops', () => {
+  const options = (h: Awaited<ReturnType<typeof makeHarness>>, codeAuth: string, headers: Record<string, string>) =>
+    h.post('/api/auth/enroll/options', { code_auth: codeAuth }, undefined, headers)
+  const failures = (h: Awaited<ReturnType<typeof makeHarness>>) =>
+    h.fake.db.prepare('select count(*) from auth_enroll_failures').pluck().get()
+
+  it('X-Real-IP is what the lockout keys on: five misses lock that address, not its neighbour', async () => {
+    const h = await makeHarness()
+    const real = await newCode(h)
+    await missFrom(h, { 'X-Real-IP': '198.51.100.7' }, 5)
+    expect((await options(h, real.codeAuth, { 'X-Real-IP': '198.51.100.7' })).status).toBe(429)
+    expect((await options(h, real.codeAuth, { 'X-Real-IP': '198.51.100.8' })).status).toBe(200)
+  })
+
+  it('X-Forwarded-For alone is not trusted for the lockout: its misses are keyed on nothing', async () => {
+    const h = await makeHarness()
+    const real = await newCode(h)
+    await missFrom(h, { 'X-Forwarded-For': '198.51.100.9' }, 5)
+    // pickLockoutKey returns null for hops > 0 without a valid X-Real-IP (the socket peer is not used either), so no
+    // miss is recorded under any key: there is no shared socket-address key that got locked instead.
+    expect(failures(h)).toBe(0)
+    expect((await options(h, real.codeAuth, { 'X-Real-IP': '198.51.100.9' })).status).toBe(200)
+  })
+})

@@ -22,13 +22,31 @@ function Log([string]$m) {
   Set-Content -Path $log -Value ($old + $line) -Encoding UTF8
 }
 
+function Test-GamingPause([string]$File) {
+  # true only for a paused.json that parses and says complete:true (a whole pause: variables off, runners stopped). A file that
+  # is missing, unreadable or incomplete means hold: a failed pause leaves the runners up, and after a reboot the distro must
+  # start so they come back with their variables still on.
+  try {
+    $j = Get-Content -LiteralPath $File -Raw -ErrorAction Stop | ConvertFrom-Json
+    return ($null -ne $j -and $j.complete -eq $true)
+  } catch { return $false }
+}
+
 $created = $false
 $mutex = New-Object Threading.Mutex($true, "Local\TalosCIKeepAlive-$Distro", [ref]$created)
 if (-not $created) { exit 0 }
 Log "keep-alive started for $Distro"
 $wait = 5
 try {
+  $held = $true
   while ($true) {
+    # the gaming switch (ci-switch.ps1) is on while a complete paused.json exists: the distro is not held, so WSL can free its memory
+    if (Test-GamingPause (Join-Path $dir 'paused.json')) {
+      if ($held) { Log 'paused for gaming (paused.json): not holding the distro'; $held = $false }
+      Start-Sleep -Seconds 30
+      continue
+    }
+    if (-not $held) { Log 'the pause is over: holding the distro again'; $held = $true; $wait = 5 }
     $start = Get-Date
     $said = (& $wsl -d $Distro --exec /bin/sleep infinity 2>&1 | ForEach-Object { "$_" -replace "`0", '' }) -join ' '
     $code = $LASTEXITCODE

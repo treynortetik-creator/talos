@@ -9,6 +9,21 @@ import { INVISIBLE_OR_BIDI } from './permission.ts'
 /** A Mac that lists this accepts `intent: 'run'`; the app shows no Run button, and sends none, without it. */
 export const RUN_FEATURE = 'run/1'
 
+/**
+ * A Mac that lists this runs a Run sent with `run_where: 'pane'` in the owner's Terminal pane in the Mac app (owner,
+ * 2026-11-18: one click, the pane opens beside the thread and runs it). The bridge consumes it like any Run (parseRun,
+ * run_block, age, once per message id), then hands {thread_id, script, client_msg_id} to the Mac app over the Mac-local channel and never to
+ * the agent; the app writes it only if a real human click or key reached its window within RUN_PANE_CLICK_MS, so a Run signed
+ * on a phone, a browser, or by a script in the page without the owner's click is refused there (docs/TERMINAL-PANE.md).
+ */
+export const RUN_PANE_FEATURE = 'run-pane/1'
+/** How recent the owner's real click in the Mac app's window must be when a pane Run arrives there. */
+export const RUN_PANE_CLICK_MS = 2000
+
+/** Whether a message is a Run for the Terminal pane: `run_where: 'pane'` counts only on a Run (`intent: 'run'`). */
+export const isPaneRun = (f: { intent?: string; run_where?: string }): boolean =>
+  f.intent === 'run' && f.run_where === 'pane'
+
 /** First line of a Run message. Text that merely says this, without the signed intent, is only text. */
 export const RUN_PREFIX = 'Run exactly this:'
 

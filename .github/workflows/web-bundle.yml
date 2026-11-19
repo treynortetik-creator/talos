@@ -5,7 +5,7 @@ run-name: Save the deployed web bundle
 # deployed sha exactly as apps/relay/Dockerfile does and save it as a prerelease (never latest) named web-bundle-<sha8>.
 # It holds only the built files and manifest.json (sha, version, deployed_at, file hashes): no source maps, no environment,
 # no host. The newest 3 are kept, newest by when they were published, so a redeploy of an older sha (a rollback) is saved
-# again and becomes the newest (a sha from 2026-11-17 on: an older one has no web-bundle-deploy.yml to start it). The
+# again and becomes the newest (a sha from 2026-11-18 on: an older one has no web-bundle-deploy.yml that starts this). The
 # gate's old-client step (scripts/old-client.sh) runs today's relay and bridge against the newest one.
 #
 # Three jobs, so no code from the repository or its dependencies ever runs where the write token is:
@@ -14,16 +14,14 @@ run-name: Save the deployed web bundle
 #            delete the cache entry (actions: write): the release is the copy old-client.sh reads. The cache, not a workflow
 #            artifact, carries the files between the jobs: the artifact storage quota is account-wide and was full on 2026-11-14
 #   specs    read-only token: the old-client specs on the new bundle with its own relay (a red is about the specs)
-#   report   statuses: write: posts `web-bundle/save` on the deployed commit, success or failure, so a broken save is seen
+#   report   statuses: write: posts `web-bundle/save` on the deployed commit: success only when every job succeeded (a red
+#            old-client spec included), else failure, so a broken save or a broken old client is seen
 #            (publish failed silently from 2026-11-16 to 11-17 and old-client went on testing an older bundle)
-# Triggered when web-bundle-deploy.yml has seen a successful production deploy (workflow_run; its head sha is the deployed
-# sha): a deployment_status run has no branch ref and the cache refuses it, while this run is on main's. Or by hand
-# (workflow_dispatch) for a sha that has a successful production deploy (resolve checks), to save a bundle a failed run
-# missed. Never by a pull request. Only build saves to the cache, and only a commit on main (its check comes first).
+# Started by web-bundle-deploy.yml when it sees a successful production deploy (workflow_dispatch with the deployed sha: a
+# deployment_status run has no ref and a workflow_run run gets the cache read-only, so neither can carry the bundle), or by
+# hand the same way for a deploy a failed run missed. resolve takes only the live production deploy. Never by a pull request.
+# Only build saves to the cache, and only a commit on main (its check comes first).
 on:
-  workflow_run:
-    workflows: ["Web bundle: production deploy seen"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       sha:
@@ -32,26 +30,14 @@ on:
 
 permissions: {}
 
-# Only a real save (the same test as resolve's) shares the group: GitHub keeps one pending run per group and a newer one cancels it, and every other
-# deployment event (in_progress, inactive, other services) makes a run that skips everything; in one shared group those
-# cancelled a pending save before it posted anything
+# One save at a time; a newer pending one replaces an older pending one, which is no longer the live deploy anyway
 concurrency:
-  group: >-
-    ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' &&
-    github.event.workflow_run.event == 'deployment_status' &&
-    github.event.workflow_run.path == '.github/workflows/web-bundle-deploy.yml' &&
-    github.event.workflow_run.head_repository.full_name == github.repository)) &&
-    'web-bundle' || format('web-bundle-noop-{0}', github.run_id) }}
+  group: web-bundle
   cancel-in-progress: false
 
 jobs:
   # The sha and when it was deployed, from GitHub's own deployment record: the newest successful production deploy of it.
   resolve:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'deployment_status' &&
-      github.event.workflow_run.path == '.github/workflows/web-bundle-deploy.yml' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -60,8 +46,7 @@ jobs:
       sha: ${{ steps.r.outputs.sha }}
       deployed_at: ${{ steps.r.outputs.deployed_at }}
     env:
-      SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
-      EVENT: ${{ github.event_name }}
+      SHA: ${{ inputs.sha }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -77,17 +62,15 @@ jobs:
             if [ -n "$t" ] && [[ "$t" > "$at" ]]; then at="$t"; fi
           done
           [ -n "$at" ] || { echo "${SHA:0:8} has no successful production deploy"; exit 1; }
-          # by hand, only what is live: the newest successful production deploy must be this sha, or the saved "newest"
-          # bundle would be one no phone loads (and keep-3 could delete the live one)
-          if [ "$EVENT" = workflow_dispatch ]; then
-            live=""
-            live_at=""
-            for row in $(gh api "repos/$GH_REPO/deployments?environment=talos-app%20%2F%20production&per_page=100" --jq '.[] | "\(.id),\(.sha)"'); do
-              t="$(gh api "repos/$GH_REPO/deployments/${row%%,*}/statuses?per_page=100" --jq '[.[] | select(.state == "success") | .created_at] | max // empty')"
-              if [ -n "$t" ] && [[ "$t" > "$live_at" ]]; then live_at="$t"; live="${row#*,}"; fi
-            done
-            [ "$live" = "$SHA" ] || { echo "${SHA:0:8} is not the live production deploy (${live:0:8} is): not saved"; exit 1; }
-          fi
+          # only what is live: the newest successful production deploy must be this sha, or the saved "newest" bundle would
+          # be one no phone loads (and keep-3 could delete the live one)
+          live=""
+          live_at=""
+          for row in $(gh api "repos/$GH_REPO/deployments?environment=talos-app%20%2F%20production&per_page=100" --jq '.[] | "\(.id),\(.sha)"'); do
+            t="$(gh api "repos/$GH_REPO/deployments/${row%%,*}/statuses?per_page=100" --jq '[.[] | select(.state == "success") | .created_at] | max // empty')"
+            if [ -n "$t" ] && [[ "$t" > "$live_at" ]]; then live_at="$t"; live="${row#*,}"; fi
+          done
+          [ "$live" = "$SHA" ] || { echo "${SHA:0:8} is not the live production deploy (${live:0:8} is): not saved"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$at" >> "$GITHUB_OUTPUT"
           echo "${SHA:0:8} deployed at $at"
@@ -246,13 +229,14 @@ jobs:
 
   report:
     needs: [resolve, build, publish, specs]
-    if: always() && needs.resolve.result == 'success'
+    if: always() # resolve failing (the GitHub API, or not the live deploy) is said too
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       statuses: write # post web-bundle/save on the deployed commit (no code of the repository runs in this job)
     env:
-      SHA: ${{ needs.resolve.outputs.sha }}
+      SHA: ${{ inputs.sha }}
+      RESOLVE: ${{ needs.resolve.result }}
       BUILD: ${{ needs.build.result }}
       PUBLISH: ${{ needs.publish.result }}
       SPECS: ${{ needs.specs.result }}
@@ -265,9 +249,10 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "not a commit sha"; exit 1; }
+          # success only when every job did: a red old-client spec is a red status, never a footnote in a green one
           state=failure
-          [ "$PUBLISH" = success ] && state=success
-          desc="web-bundle-${SHA:0:8}: build $BUILD, publish $PUBLISH, old-client specs $SPECS"
+          [ "$RESOLVE" = success ] && [ "$BUILD" = success ] && [ "$PUBLISH" = success ] && [ "$SPECS" = success ] && state=success
+          desc="web-bundle-${SHA:0:8}: resolve $RESOLVE, build $BUILD, publish $PUBLISH, old-client specs $SPECS"
           gh api -X POST "repos/$GH_REPO/statuses/$SHA" -f state="$state" -f context=web-bundle/save \
             -f description="$desc" -f target_url="$URL" </dev/null >/dev/null
           echo "$state: $desc"

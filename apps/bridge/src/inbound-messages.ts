@@ -90,7 +90,7 @@ export const messagesFrames = {
     if (!ctx.config.thread(f.thread_id))
       return this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
     const thread = threadRef(ctx, f.thread_id)
-    if (f.intent === 'run') return this.onRun(it, f, thread)
+    if (f.intent === 'run' || f.run_where !== undefined) return this.onRun(it, f, thread)
     const { files, notes, refMeta } = await this.messageExtras(f)
     const prev = ctx.store.kvGet('last_owner_ts')
     const replyTo = this.replyContext(f)

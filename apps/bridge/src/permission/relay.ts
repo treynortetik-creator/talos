@@ -86,13 +86,16 @@ export type PreCheck =
 
 export type ResolveOutcome = { ok: true } | { ok: false; code: ErrorCodeT; reason: string }
 
+/** A relay card that can stand in for a hook's. `sent` settles once the send is over: true when it went, false when it threw. */
+type RelayNote = { tool: string; json: string; at: number; sent: Promise<boolean> }
+
 export class PermissionRelay {
   private readonly ids = new OpenPermissionIds()
   private readonly pending = new Map<string, Pending>()
   /** Hook cards still waiting: cardId -> settle (false when the hook is already known to be gone). */
   private readonly hookWaiters = new Map<string, (d: HookDecision) => boolean>()
   private hookInFlight = 0
-  private recentRelay: { tool: string; json: string; at: number }[] = []
+  private recentRelay: RelayNote[] = []
   private sessionPids = new Set<number>()
   private readonly graceWake = new Set<() => void>()
   private hookGraceMs = HOOK_RELAY_GRACE_MS
@@ -242,24 +245,31 @@ export class PermissionRelay {
       assertFrameFits(frame)
       ctx.ledger.create(card)
       this.pending.set(card.id, { card, requestId: request.request_id })
+      // only a relay card that offers Allow AND shows the whole call can stand in for a hook's: the hook renders the call whole
+      // from the raw input, so where Claude Code's preview is cut or masked, the hook's card is the one that shows all of it.
+      // It is noted BEFORE the send: a send can take far longer than the hook's grace, and the hook must find its twin meanwhile.
+      const stands =
+        permissionCardAllowsPrimary(card) &&
+        (card.warning === undefined || PERMISSION_OTHER_CHANNEL_NOTE.test(card.warning)) &&
+        permissionHiddenReasons(request).length === 0
+      const note = stands ? this.noteRelayRequest(request.tool_name, request.input_preview) : undefined
       try {
         await ctx.transport.sendDurable(frame)
       } catch (e) {
         // the app will never see it: nothing may answer it, and the prompt stays open at the Mac
+        // a hook that already took the twin sees `sent` false and raises its own card; otherwise no hook may take it later
+        if (note) {
+          this.recentRelay = this.recentRelay.filter((r) => r !== note.entry)
+          note.settle(false)
+        }
         this.drop(card.id, request.request_id)
         ctx.ledger.expire(card.id)
         throw e
       }
+      // a relay card dropped while its send was out (closed, expired) answers nothing, so it never stands in for the hook's
+      note?.settle(this.pending.has(card.id))
       ctx.expiry?.sync()
       this.explainCard(card.id, explainRequestOf(request.tool_name, request.input_preview, request.description))
-      // only a relay card that offers Allow AND shows the whole call can stand in for a hook's: the hook renders the call whole
-      // from the raw input, so where Claude Code's preview is cut or masked, the hook's card is the one that shows all of it
-      if (
-        permissionCardAllowsPrimary(card) &&
-        (card.warning === undefined || PERMISSION_OTHER_CHANNEL_NOTE.test(card.warning)) &&
-        permissionHiddenReasons(request).length === 0
-      )
-        this.noteRelayRequest(request.tool_name, request.input_preview)
     } catch (e) {
       if (requestId && !cardId) this.ids.close(requestId)
       ctx.log.warn('permission_request not turned into a card', { error: (e as Error).message })
@@ -436,9 +446,15 @@ export class PermissionRelay {
 
   private noteRelayRequest(tool: string, preview: string) {
     const now = this.ctx.clock.now()
+    let settle: (sent: boolean) => void = () => {}
+    const sent = new Promise<boolean>((resolve) => {
+      settle = resolve
+    })
+    const entry: RelayNote = { tool, json: normPreview(preview), at: now, sent }
     this.recentRelay = this.recentRelay.filter((r) => now - r.at < RECENT_RELAY_MS).slice(-49)
-    this.recentRelay.push({ tool, json: normPreview(preview), at: now })
+    this.recentRelay.push(entry)
     for (const wake of [...this.graceWake]) wake()
+    return { entry, settle }
   }
 
   /**
@@ -446,33 +462,46 @@ export class PermissionRelay {
    * once whitespace is folded. A preview Claude Code cut or reshaped is NOT a twin: a second card is a nuisance, a missing one
    * leaves the owner with a prompt on the Mac and nothing on the phone.
    */
-  private takeRelayTwin(tool: string, json: string): boolean {
+  private takeRelayTwin(tool: string, json: string): RelayNote | undefined {
     const now = this.ctx.clock.now()
     this.recentRelay = this.recentRelay.filter((r) => now - r.at < RECENT_RELAY_MS)
     const want = normPreview(json)
     const i = this.recentRelay.findIndex((r) => r.tool === tool && r.json === want)
-    if (i < 0) return false
-    this.recentRelay.splice(i, 1)
-    return true
+    if (i < 0) return undefined
+    return this.recentRelay.splice(i, 1)[0]
   }
 
-  private waitForRelayTwin(tool: string, json: string, signal: AbortSignal): Promise<boolean> {
-    if (this.takeRelayTwin(tool, json)) return Promise.resolve(true)
-    return new Promise<boolean>((resolve) => {
+  private waitForRelayTwin(tool: string, json: string, signal: AbortSignal): Promise<RelayNote | undefined> {
+    const first = this.takeRelayTwin(tool, json)
+    if (first) return Promise.resolve(first)
+    return new Promise<RelayNote | undefined>((resolve) => {
       let timer: unknown
-      const end = (v: boolean) => {
+      const end = (v: RelayNote | undefined) => {
         this.graceWake.delete(check)
         this.ctx.clock.clearTimeout(timer)
         signal.removeEventListener('abort', onAbort)
         resolve(v)
       }
       const check = () => {
-        if (this.takeRelayTwin(tool, json)) end(true)
+        const twin = this.takeRelayTwin(tool, json)
+        if (twin) end(twin)
       }
-      const onAbort = () => end(false)
+      const onAbort = () => end(undefined)
       this.graceWake.add(check)
       signal.addEventListener('abort', onAbort, { once: true })
-      timer = this.ctx.clock.setTimeout(() => end(false), this.hookGraceMs)
+      timer = this.ctx.clock.setTimeout(() => end(undefined), this.hookGraceMs)
+    })
+  }
+
+  private awaitSent(sent: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false)
+    return new Promise<boolean>((resolve) => {
+      const onAbort = () => resolve(false)
+      signal.addEventListener('abort', onAbort, { once: true })
+      void sent.then((ok) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(ok)
+      })
     })
   }
 
@@ -516,8 +545,14 @@ export class PermissionRelay {
     // channel too. A twin means the relay card answers it; a second card would be a double.
     const mainSession = req.thread === undefined && req.pid !== undefined && this.sessionPids.has(req.pid)
     const relayMayCarry = mainSession && this.enabled
-    if (relayMayCarry && (await this.waitForRelayTwin(req.tool_name, call.json, signal)))
-      return none('relay_carries_it')
+    let twinSent = false
+    if (relayMayCarry) {
+      const twin = await this.waitForRelayTwin(req.tool_name, call.json, signal)
+      // the relay card is noted before its send: the twin only carries the prompt once that send went. Held no longer than the
+      // send itself (sendDurable's own bounds) or this hook's abort, whichever comes first; a failed send means no twin
+      if (twin) twinSent = await this.awaitSent(twin.sent, signal)
+    }
+    if (twinSent) return none('relay_carries_it')
     if (signal.aborted) return none('hook_gone')
     if (!this.hookEnabled) return none('relay_off')
     const requestId = this.mintRequestId()

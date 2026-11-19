@@ -30,9 +30,7 @@ const countFullscreen = (page: Page) =>
 
 async function expand(page: Page, harness: Harness) {
   harness.relay.sendToApps(agentReply({ text: 'Here it is', attachments: [htmlAtt(harness, 'audit.html', LONG)] }))
-  await page.locator('iframe[title="audit.html"], button[aria-label="Run audit.html"]').first().waitFor()
-  const run = page.getByRole('button', { name: 'Run audit.html' })
-  if (await run.count()) await run.click()
+  await expect(page.locator('iframe[title="audit.html"]')).toBeVisible()
   await page.getByRole('button', { name: 'Expand audit.html to full screen' }).click()
   await expect(page.getByRole('dialog', { name: 'audit.html' })).toBeVisible()
 }

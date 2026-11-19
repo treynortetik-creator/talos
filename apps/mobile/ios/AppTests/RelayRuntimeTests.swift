@@ -45,7 +45,14 @@ final class RelayRuntimeTests: XCTestCase {
 
     private func freshDefaults() -> UserDefaults { UserDefaults(suiteName: "relay-runtime-tests-\(UUID().uuidString)")! }
 
-    private func pending(_ p: RelayProfile) -> PendingRelay { PendingRelay(profile: p, note: nil, code: "01234567890123456789012345") }
+    /// What the Add-relay flow does after a passing attest: the profile carries the pass time.
+    private func stamped(_ p: RelayProfile) -> RelayProfile {
+        var q = p
+        q.lastVerifiedAt = Date(timeIntervalSince1970: 2000)
+        return q
+    }
+
+    private func pending(_ p: RelayProfile) -> PendingRelay { PendingRelay(profile: stamped(p), note: nil, code: "01234567890123456789012345", verifiedAt: Date(timeIntervalSince1970: 2000)) }
 
     // MARK: One source of truth
 
@@ -59,10 +66,20 @@ final class RelayRuntimeTests: XCTestCase {
         XCTAssertFalse(ctx.guardian.isRelayURL(URL(string: "https://build.example.com/threads")!))
     }
 
-    func testANewContextStartsAtPass() throws {
+    func testAPairedContextStartsUnverifiedAndOnlyAPassMakesItPass() throws {
         let store = RelayStore(backing: InMemoryKeychain())
-        try store.add(profile(idA, host: "mine.example.com"))
+        var paired = profile(idA, host: "mine.example.com")
+        paired.lastVerifiedAt = Date().addingTimeInterval(-60)
+        try store.add(paired)
         let active = try XCTUnwrap(runtime(store, FakeStores(existing: [])).active(buildTimeURL: nil))
+        let ctx = try XCTUnwrap(RelayContext(active: active))
+        guard case .unverified(_, .checking) = ctx.trust.state else { return XCTFail("\(ctx.trust.state)") }
+        XCTAssertFalse(ctx.trust.settled)
+        XCTAssertFalse(ctx.trust.allowsPageLoad, "nothing loads before the first check answers")
+    }
+
+    func testThePageThatIsNoPairedRelayHasNoKeyToCheckAndStartsAtPass() throws {
+        let active = try XCTUnwrap(ActiveRelay.resolve(store: nil, buildTimeURL: URL(string: "https://build.example.com")!, allowBuildTime: true))
         XCTAssertEqual(try XCTUnwrap(RelayContext(active: active)).trust.state, .pass)
     }
 
@@ -340,20 +357,23 @@ final class RelayRuntimeTests: XCTestCase {
         _ = await real.remove(b)
     }
 
-    func testTheRealStoreRemovalDeletesTheStore() async throws {
+    /// Removing a store deletes what is on disk, but a cookie a live network session holds in memory stayed readable through a
+    /// store of the same id, so the runtime empties the store first. WebKit may refuse a removal asked for right away ("in use"; the
+    /// runtime keeps that id pending), and its list of store ids can show an id again after a successful removal (a late write
+    /// from the store just emptied; the launch sweep removes such an orphan), so neither is asserted here: only that the data is
+    /// gone whichever answer the first call gets.
+    func testTheRealStoreRemovalEmptiesTheDataWhateverWebKitAnswers() async throws {
         let id = UUID()
+        try await Self.setCookie(inStoreFor: id)   // the store object is gone again when this returns
+        let real = WebKitRelayDataStores()
+        _ = await real.remove(id)
+        let reborn = await WKWebsiteDataStore(forIdentifier: id).httpCookieStore.allCookies()
+        XCTAssertEqual(reborn, [], "the data is emptied even when WebKit refused to delete the store")
+        _ = await real.remove(id)
+    }
+
+    private static func setCookie(inStoreFor id: UUID) async throws {
         let cookie = try XCTUnwrap(HTTPCookie(properties: [.domain: "a.example.com", .path: "/", .name: "k", .value: "v", .secure: "TRUE"]))
         await WKWebsiteDataStore(forIdentifier: id).httpCookieStore.setCookie(cookie)
-        let real = WebKitRelayDataStores()
-        // WebKit refuses while the store object above is still alive, which is why the sweep tries again later.
-        var removed = false
-        for _ in 0..<50 where !removed {
-            removed = await real.remove(id)
-            if !removed { try await Task.sleep(nanoseconds: 100_000_000) }
-        }
-        XCTAssertTrue(removed)
-        let reborn = await WKWebsiteDataStore(forIdentifier: id).httpCookieStore.allCookies()
-        XCTAssertEqual(reborn, [], "a removed relay's cookies are gone")
-        _ = await real.remove(id)
     }
 }

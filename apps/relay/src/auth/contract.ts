@@ -66,6 +66,12 @@ export interface AuthContract {
    * ignore it. Test implementations may omit it (never limited).
    */
   takeRate?(c: Context<AppEnv>, name: string, key?: string): { ok: true } | { ok: false; retryAfterS: number }
+  /**
+   * True when the request carries a live session cookie of a device the Mac pinned and the owner has not revoked. A pure read:
+   * no sliding expiry, no Set-Cookie, no last-used stamp, no cached session, nothing ended (BYOR phase 4, the attest route's
+   * bucket). Test implementations may omit it (false).
+   */
+  peekPairedSession?(c: Context<AppEnv>): boolean
   /** The session the guards attached, or null. */
   getSession(c: Context<AppEnv>): Session | null
   /**
@@ -140,6 +146,7 @@ export const takeRate = (
   name: string,
   key?: string,
 ): { ok: true } | { ok: false; retryAfterS: number } => impl.takeRate?.(c, name, key) ?? { ok: true }
+export const peekPairedSession = (c: Context<AppEnv>): boolean => impl.peekPairedSession?.(c) ?? false
 export const getSession: AuthContract['getSession'] = (c) => impl.getSession(c)
 export const sessionPinned = (session: Session | null): boolean => impl.sessionPinned?.(session) ?? true
 export const sessionEndReason = (session: Session | null): string | null => impl.sessionEndReason?.(session) ?? null

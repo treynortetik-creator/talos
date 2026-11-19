@@ -231,59 +231,123 @@ describe('ci_tmux_ok: the desktop job needs the tmux the desktop tests look for'
   })
 })
 
-describe('ci_ios_sim_dest: the simulator the app tests run on', () => {
-  // The runner's real shape: "iPhone 17 Pro" only under an older runtime, a newer runtime without it (the run that failed).
-  const listing = (rows: string[]) => `== Devices ==\n${rows.join('\n')}\n`
-  const OLD =
-    '-- iOS 26.3 --\n    iPhone 17 Pro (AAAAAAAA-0000-4000-8000-000000000001) (Shutdown) \n    iPad Air (AAAAAAAA-0000-4000-8000-000000000009) (Shutdown) '
-  const NEW = '-- iOS 27.2 --\n    iPhone 18 Pro (BBBBBBBB-0000-4000-8000-000000000002) (Booted) '
-  const dest = (out: string, env: Record<string, string> = {}) => {
+describe('ci_ios_sim_dest: the runner slot has its own simulator', () => {
+  // A fake xcrun: it serves a device listing and a runtime listing, records every call, and answers `simctl create` with a fixed id.
+  // Nothing here reaches a real simulator.
+  const CREATED = 'CCCCCCCC-0000-4000-8000-000000000003'
+  const runtimes = (rows: { id: string; version: string; types: string[] }[]) =>
+    JSON.stringify({
+      runtimes: rows.map((r) => ({
+        identifier: r.id,
+        version: r.version,
+        isAvailable: true,
+        supportedDeviceTypes: r.types.map((n) => ({ name: n, identifier: `type.${n.replace(/ /g, '-')}` })),
+      })),
+    })
+  const IOS27 = {
+    id: 'com.apple.CoreSimulator.SimRuntime.iOS-27-2',
+    version: '27.2',
+    types: ['iPhone 17', 'iPhone 18', 'iPad Air'],
+  }
+  const IOS26 = {
+    id: 'com.apple.CoreSimulator.SimRuntime.iOS-26-3',
+    version: '26.3',
+    types: ['iPhone 17 Pro', 'iPhone 17'],
+  }
+  const row = (name: string, udid: string) => ({ name, udid, isAvailable: true })
+  const run = (devices: ReturnType<typeof row>[], rts: string, env: Record<string, string> = {}) => {
     const b = mkdtempSync(join(tmpdir(), 'cis-'))
     dirs.push(b)
-    writeFileSync(join(b, 'out'), out)
-    writeFileSync(join(b, 'xcrun'), `#!/bin/bash\ncat "${join(b, 'out')}"\n`)
+    const calls = join(b, 'calls')
+    writeFileSync(
+      join(b, 'devices'),
+      JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-3': devices } }),
+    )
+    writeFileSync(join(b, 'runtimes'), rts)
+    writeFileSync(
+      join(b, 'xcrun'),
+      `#!/bin/bash\necho "xcrun $*" >> "${calls}"\ncase "$1 $2 $3" in\n"simctl list -j") [ -n "$HANG" ] && exec sleep 600; [ -n "$FAIL_DEVICES" ] && { echo "boom"; exit 1; }; cat "${join(b, 'devices')}" ;;\n"simctl list runtimes") [ -n "$FAIL_RUNTIMES" ] && { echo "boom"; exit 1; }; cat "${join(b, 'runtimes')}" ;;\n"simctl create "*) [ -n "$CREATE_FAIL" ] && { echo "create refused" >&2; exit 1; }; echo "$CREATE_OUT" ;;\nesac\nexit 0\n`,
+    )
     chmodSync(join(b, 'xcrun'), 0o755)
-    return spawnSync('bash', ['-c', `. "${script}"\nci_ios_sim_dest`], {
-      env: { ...cleanEnv(), PATH: `${b}:${process.env.PATH}`, ...env },
+    const r = spawnSync('bash', ['-c', `. "${script}"\nCI_SLOT=${env.CI_SLOT ?? 1}\nci_ios_sim_dest`], {
+      env: { ...cleanEnv(), PATH: `${b}:${process.env.PATH}`, CREATE_OUT: CREATED, ...env },
       encoding: 'utf8',
-    }).stdout.trim()
+    })
+    const seen = existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []
+    return { dest: r.stdout.trim(), err: r.stderr, seen }
   }
-  it('names the device by id, never by a name that may exist on one runtime only', () => {
-    expect(dest(listing([OLD]))).toBe('platform=iOS Simulator,id=AAAAAAAA-0000-4000-8000-000000000001')
-  })
-  it('prefers a booted iPhone, and never picks an iPad', () => {
-    expect(dest(listing([OLD, NEW]))).toBe('platform=iOS Simulator,id=BBBBBBBB-0000-4000-8000-000000000002')
-    expect(dest(listing(['-- iOS 27.2 --\n    iPad Air (AAAAAAAA-0000-4000-8000-000000000009) (Booted) ']))).toBe('')
-  })
-  it('prints nothing when there is no iPhone, and TALOS_IOS_SIM wins when set', () => {
-    expect(dest(listing([]))).toBe('')
-    expect(dest(listing([OLD]), { TALOS_IOS_SIM: 'Test Phone' })).toBe('platform=iOS Simulator,name=Test Phone')
-  })
-})
+  const ID1 = 'AAAAAAAA-0000-4000-8000-000000000001'
+  const ID2 = 'BBBBBBBB-0000-4000-8000-000000000002'
+  const SHARED = row('iPhone 17 Pro', 'DDDDDDDD-0000-4000-8000-000000000004')
+  const only = (seen: string[], sub: string) => seen.filter((c) => c.includes(sub))
+  const mutating = (seen: string[]) => seen.filter((c) => /boot|shutdown|erase|install/.test(c))
 
-describe('ci_ios_sim_dest: a name with parentheses', () => {
-  const dest = (out: string) => {
-    const b = mkdtempSync(join(tmpdir(), 'cis-'))
-    dirs.push(b)
-    writeFileSync(join(b, 'out'), out)
-    writeFileSync(join(b, 'xcrun'), `#!/bin/bash\ncat "${join(b, 'out')}"\n`)
-    chmodSync(join(b, 'xcrun'), 0o755)
-    return spawnSync('bash', ['-c', `. "${script}"\nci_ios_sim_dest`], {
-      env: { ...cleanEnv(), PATH: `${b}:${process.env.PATH}` },
-      encoding: 'utf8',
-    }).stdout.trim()
-  }
-  it('finds an iPhone whose own name has a bracket in it, with the whole row read from its end', () => {
-    const row = (name: string, id: string, state: string) => `    ${name} (${id}) (${state}) `
-    const SE = row('iPhone SE (3rd generation)', 'AAAAAAAA-0000-4000-8000-000000000005', 'Shutdown')
-    expect(dest(`== Devices ==\n-- iOS 26.3 --\n${SE}\n`)).toBe(
-      'platform=iOS Simulator,id=AAAAAAAA-0000-4000-8000-000000000005',
+  it('uses the slot simulator that exists, by id, and touches no other device', () => {
+    const r = run([SHARED, row('talos-ci-s1', ID1)], runtimes([IOS26]), { CI_SLOT: '1' })
+    expect(r.dest).toBe(`platform=iOS Simulator,id=${ID1}`)
+    expect(r.err).toContain('talos-ci-s1')
+    expect(only(r.seen, 'create')).toEqual([])
+    expect(mutating(r.seen)).toEqual([])
+  })
+  it('creates a missing one on the newest runtime and its newest plain iPhone type, then uses it', () => {
+    const r = run([SHARED], runtimes([IOS26, IOS27]), { CI_SLOT: '2' })
+    expect(r.dest).toBe(`platform=iOS Simulator,id=${CREATED}`)
+    expect(only(r.seen, 'create')).toEqual([`xcrun simctl create talos-ci-s2 type.iPhone-18 ${IOS27.id}`])
+    expect(r.err).toContain('talos-ci-s2')
+    expect(mutating(r.seen)).toEqual([])
+  })
+  it('gives a different slot a different simulator', () => {
+    const devices = [row('talos-ci-s1', ID1), row('talos-ci-s2', ID2)]
+    expect(run(devices, runtimes([IOS26]), { CI_SLOT: '1' }).dest).toBe(`platform=iOS Simulator,id=${ID1}`)
+    expect(run(devices, runtimes([IOS26]), { CI_SLOT: '2' }).dest).toBe(`platform=iOS Simulator,id=${ID2}`)
+    // a name that only starts the same is not the same slot
+    expect(run([row('talos-ci-s10', ID2)], runtimes([IOS26]), { CI_SLOT: '1' }).dest).toBe(
+      `platform=iOS Simulator,id=${CREATED}`,
     )
-    // and it still prefers a booted one over it
-    const booted = row('iPhone 17', 'BBBBBBBB-0000-4000-8000-000000000001', 'Booted')
-    expect(dest(`== Devices ==\n-- iOS 26.3 --\n${SE}\n${booted}\n`)).toBe(
-      'platform=iOS Simulator,id=BBBBBBBB-0000-4000-8000-000000000001',
-    )
+  })
+  it('TALOS_IOS_SIM set by hand wins and nothing is listed or created', () => {
+    const r = run([row('talos-ci-s1', ID1)], runtimes([IOS26]), { CI_SLOT: '1', TALOS_IOS_SIM: 'Test Phone' })
+    expect(r.dest).toBe('platform=iOS Simulator,name=Test Phone')
+    expect(r.seen).toEqual([])
+  })
+  it('fails clearly, creating nothing, when no iOS runtime has an iPhone type', () => {
+    for (const rts of [runtimes([]), runtimes([{ ...IOS26, types: ['iPad Air'] }]), '']) {
+      const r = run([SHARED], rts, { CI_SLOT: '1' })
+      expect(r.dest).toBe('')
+      expect(r.err).toContain('no iOS runtime')
+      expect(only(r.seen, 'create')).toEqual([])
+    }
+  })
+  it('a failed or timed-out device listing makes nothing: it is not "missing"', () => {
+    const failed = run([SHARED], runtimes([IOS26]), { CI_SLOT: '1', FAIL_DEVICES: '1' })
+    expect(failed.dest).toBe('')
+    expect(failed.err).toContain('could not list the simulators')
+    expect(only(failed.seen, 'create')).toEqual([])
+    const hung = run([SHARED], runtimes([IOS26]), { CI_SLOT: '1', CI_SIMCTL_LIMIT: '1', HANG: '1' })
+    expect(hung.dest).toBe('')
+    expect(only(hung.seen, 'create')).toEqual([])
+  })
+  it('a failed runtime listing says so, and is not "no iOS runtime"', () => {
+    const r = run([SHARED], '', { CI_SLOT: '1', FAIL_RUNTIMES: '1' })
+    expect(r.dest).toBe('')
+    expect(r.err).toContain('could not list the simulator runtimes')
+    expect(r.err).not.toContain('no iOS runtime')
+    expect(only(r.seen, 'create')).toEqual([])
+  })
+  it("a create that fails or answers with anything but a UDID gives no device, and simctl's reason reaches stderr", () => {
+    const failed = run([SHARED], runtimes([IOS26]), { CI_SLOT: '1', CREATE_FAIL: '1' })
+    expect(failed.dest).toBe('')
+    expect(failed.err).toContain('create refused')
+    expect(failed.err).toContain('could not create the simulator talos-ci-s1')
+    for (const junk of [
+      'ci-local: stopped after 120s, the time limit',
+      'not-a-udid',
+      'cccccccc-0000-4000-8000-000000000003',
+    ]) {
+      const r = run([SHARED], runtimes([IOS26]), { CI_SLOT: '1', CREATE_OUT: junk })
+      expect(r.dest, junk).toBe('')
+      expect(r.err).toContain('could not create the simulator')
+    }
   })
 })
 
@@ -476,14 +540,14 @@ describe('ci_ios_test: the app tests on a simulator that may still be settling',
     expect(r.rc).toBe(0)
     expect(r.out.trim()).toBe('')
   })
-  it('a simulator step that hangs everywhere still ends before a run waiting for the suites mutex gives up', () => {
-    // The mobile job holds the machine-wide suites mutex through these calls. A waiter gives up after CI_LOCK_TIMEOUT, so the
-    // worst case must be under it. Per ci_ios_test: the listing that picks the device and the one that checks it, two shutdowns
-    // (before the Busy retry, at the end) = 4 calls on CI_SIMCTL_LIMIT; a boot wait and a test run, each done twice (the
-    // retry) = 4 on CI_XCODE_TEST_LIMIT. The call sites are counted too, so a new limited call cannot be added unnoticed: the two
-    // listings and the one shutdown function that the retry, the end and a cancel all call (a cancel is not a wait for the mutex).
+  it('a simulator step that hangs everywhere still ends before a run waiting for the desktop mutex gives up', () => {
+    // The mobile job holds the machine-wide desktop mutex through these calls. A waiter gives up after CI_LOCK_TIMEOUT, so the
+    // worst case must be under it. Per ci_ios_test: the device listing, the runtime listing and the create of ci_ios_sim_dest, the listing that checks it, two shutdowns
+    // (before the Busy retry, at the end) = 6 calls on CI_SIMCTL_LIMIT; a boot wait and a test run, each done twice (the
+    // retry) = 4 on CI_XCODE_TEST_LIMIT. The call sites are counted too, so a new limited call cannot be added unnoticed: the three calls in ci_ios_sim_dest,
+    // the check listing and the one shutdown function that the retry, the end and a cancel all call (a cancel is not a wait for the mutex).
     const text = ciLocalSource() // ci-local.sh and the parts it sources
-    expect(text.match(/ci_with_limit "\$CI_SIMCTL_LIMIT"/g)).toHaveLength(3)
+    expect(text.match(/ci_with_limit "\$CI_SIMCTL_LIMIT"/g)).toHaveLength(5)
     expect(text.match(/ci_with_limit "\$CI_XCODE_TEST_LIMIT"/g)).toHaveLength(2)
     // The 4 shutdowns/listings above assume ci_ios_test calls ci_ios_off exactly twice (the Busy retry and the end), and that the
     // cancel handler's one call is the only other. Any further ci_ios_off call, anywhere, adds time the sum does not cover.
@@ -504,7 +568,7 @@ describe('ci_ios_test: the app tests on a simulator that may still be settling',
     )
     const [simctl, xcode, lock] = r.stdout.trim().split(' ').map(Number) as [number, number, number]
     expect(lock).toBe(3600)
-    expect(4 * simctl + 4 * xcode).toBeLessThan(lock)
+    expect(6 * simctl + 4 * xcode).toBeLessThan(lock)
   })
   it('the listing that picks the simulator is limited too', () => {
     const b = mkdtempSync(join(tmpdir(), 'cis-'))

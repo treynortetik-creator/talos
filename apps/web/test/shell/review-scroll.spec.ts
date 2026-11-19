@@ -197,10 +197,6 @@ test.describe('1. no shell view overflows the document (desktop 1280x800, 1440x9
           harness.relay.sendToApps(
             agentReply({ text: `Page ${i}`, attachments: [htmlAtt(harness, `r${i}.html`, tall)] }),
           )
-        // Chromium waits for a tap before an inline page runs; WebKit runs it at once.
-        await page.locator('iframe[title="r5.html"], button[aria-label="Run r5.html"]').first().waitFor()
-        const run = page.getByRole('button', { name: 'Run r5.html' })
-        if (await run.count()) await run.click()
         await expect(page.locator('iframe[title="r5.html"]')).toBeVisible()
         expect(page.viewportSize()).toEqual(size)
         await expectLocked(page, `html inline ${at}`)

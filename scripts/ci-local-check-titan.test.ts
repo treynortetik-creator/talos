@@ -383,10 +383,9 @@ describe('check with CI_CHECK_PART: the macOS subset here, Titan folded in, toda
     const r = repo()
     r.set('rows', [partNotTested])
     r.set('jobs', ['check-titan\tin_progress'])
-    const t0 = Date.now()
-    const run = r.start(checkRun, on)
+    // An hour's wait: a run that waited instead of taking it back at once would hit the test's own timeout, whatever the load.
+    const run = r.start(checkRun, { ...on, CI_CHECK_WAIT: '3600' })
     expect(await run.done, run.out()).toBe(0)
-    expect(Date.now() - t0).toBeLessThan(25_000) // not the 30 s wait
     expect(checkSteps(r)).toEqual(want)
     expect(subset(r)).toEqual(MACOS)
     expect(r.posts('local-ci/check')).toEqual([

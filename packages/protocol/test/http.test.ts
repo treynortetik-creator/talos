@@ -62,6 +62,7 @@ const SPEC_ROUTES = [
   'POST /bridge/bug-reports/:id/requeue',
   'POST /bridge/devices/:id/revoke',
   'GET /.well-known/talos-relay',
+  'POST /api/bridge/attest',
   'GET /.well-known/apple-app-site-association',
   // docs/V2-FEATURES.md V1.4
   'GET /api/status',
@@ -111,6 +112,7 @@ describe('http route table', () => {
       '/api/auth/enroll/session',
       '/api/auth/login/options',
       '/api/auth/login/verify',
+      '/api/bridge/attest', // public: a phone asks before it has any session (BYOR phase 4)
     ])
     // The v2 share bearer has its own auth mode, for exactly one route (docs/V2-FEATURES.md V1.4)
     const bearer: Record<string, string> = {

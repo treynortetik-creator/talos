@@ -7,6 +7,8 @@ public enum AppMenuSpec {
     case about, settings, hide, hideOthers, showAll, quit
     case showTalos, showTerminal, quickCompose, companionToggle, signIn, signOut, setupChecklist, permissions
     case help
+    /// View > Reload: the web view of the frontmost Talos window loads its current page again. Never a session, never a terminal pane.
+    case reload
     /// Responder-chain window commands (Cmd-W, Cmd-M): SwiftUI's own menu had them, so ours must.
     case closeWindow, minimize
   }
@@ -46,6 +48,10 @@ public enum AppMenuSpec {
       Item(.quit, "Quit Talos", key: "q"),
     ])
 
+  /// Reload is for picking up a new relay or web build without quitting: a quit drops every session the app owns. Cmd-R is free in
+  /// the page (its keymap has no KeyR chord) and is one of the app's own menu shortcuts, so `screen_key` accepts "cmd+r".
+  public static let viewMenu = Menu(title: "View", items: [Item(.reload, "Reload", key: "r")])
+
   public static let windowMenu = Menu(
     title: "Window",
     items: [
@@ -63,7 +69,7 @@ public enum AppMenuSpec {
 
   public static let helpMenu = Menu(title: "Help", items: [Item(.help, "Talos Help", key: "?")])
 
-  public static var all: [Menu] { [talosMenu, windowMenu, helpMenu] }
+  public static var all: [Menu] { [talosMenu, viewMenu, windowMenu, helpMenu] }
 
   /// Every action the spec offers.
   public static var actions: Set<Action> { Set(all.flatMap { $0.items.compactMap { $0?.action } }) }

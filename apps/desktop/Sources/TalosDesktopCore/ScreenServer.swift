@@ -7,7 +7,7 @@ public protocol ScreenService: Sendable {
   func input(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int
   /// Types text and reads the field back.
   func type(_ text: String, allowed: ScreenAllowed) throws(ScreenRefusal) -> (events: Int, readBack: ScreenCore.ReadBack)
-  func listApps() -> [ScreenApp]
+  func listApps() throws(ScreenRefusal) -> [ScreenApp]
   func open(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal)
 }
 
@@ -28,10 +28,21 @@ extension ScreenCore: ScreenService {
   public func input(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int {
     try perform(request, allowed: allowed)
   }
-  public func listApps() -> [ScreenApp] { runningApps() }
+  public func listApps() throws(ScreenRefusal) -> [ScreenApp] {
+    try refuseIfLocked()
+    return runningApps()
+  }
   public func open(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal) {
     try await openApp(bundleID: bundleID, allowed: allowed)
   }
+}
+
+/// What the socket's `pane_status` and `pane_run` ask of the app (PaneRun.swift): the app's run channel for the owner's own shell pane.
+/// The app implements it (`ShellRunChannel`); the answer to a run is always a `PaneRunAnswer`, never a throw.
+public protocol PaneRunService: Sendable {
+  /// Whether the channel is installed and answering. No side effect.
+  func ready() async -> Bool
+  func run(_ request: PaneRunRequest) async -> PaneRunAnswer
 }
 
 /// Where the allow list comes from (`ScreenAllowStore`, the owner's signed approvals). Read-only here.
@@ -78,11 +89,14 @@ public struct ScreenProtocol: Sendable {
   let asks: ScreenAskBook
   /// Where an owner's approval is written; nil: `allow` is refused (no store in this process).
   let store: ScreenAllowStore?
+  /// The run channel for the owner's own shell pane; nil: `pane_status` and `pane_run` answer `pane_unavailable`.
+  let paneRun: (any PaneRunService)?
 
   public init(
     service: any ScreenService, allowList: any ScreenAllowListProvider, signing: any ScreenCodeSigning,
-    asks: ScreenAskBook = ScreenAskBook(), store: ScreenAllowStore? = nil
+    asks: ScreenAskBook = ScreenAskBook(), store: ScreenAllowStore? = nil, paneRun: (any PaneRunService)? = nil
   ) {
+    self.paneRun = paneRun
     self.service = service
     self.allowList = allowList
     self.signing = signing
@@ -136,7 +150,8 @@ public struct ScreenProtocol: Sendable {
         let n = try service.input(.scroll(at: try Self.point(obj), dx: dx, dy: dy), allowed: allowed)
         return Self.ok(id: id, ["events": n])
       case "apps":
-        let apps: [[String: Any]] = service.listApps().map { a in
+        let running = try service.listApps()
+        let apps: [[String: Any]] = running.map { a in
           var o: [String: Any] = ["name": a.name, "pid": Int(a.pid), "allowed": allowed.allows(bundleID: a.bundleID, pid: a.pid)]
           if let b = a.bundleID { o["bundle_id"] = b }
           return o
@@ -166,6 +181,17 @@ public struct ScreenProtocol: Sendable {
         case .success(let app): return Self.ok(id: id, ["bundle_id": app.bundleID, "name": app.name])
         case .failure(let e): return Self.error(id: id, code: ServerCode.allowRefused, text: e.text)
         }
+      case "pane_status":
+        guard let paneRun, await paneRun.ready() else { return Self.paneUnavailable(id) }
+        return Self.ok(id: id, [:])
+      case "pane_run":
+        guard let paneRun else { return Self.paneUnavailable(id) }
+        let parsed = PaneRunRequest.parse(obj)
+        guard let request = parsed.request else {
+          return Self.error(id: id, code: "bad_request", text: parsed.problem ?? "the request is not a pane run")
+        }
+        let a = await paneRun.run(request)
+        return a.ok ? Self.ok(id: id, [:]) : Self.error(id: id, code: a.code, text: a.text)
       case let op:
         return Self.error(id: id, code: ServerCode.unknownOp, text: "No screen operation \"\(String((op ?? "").prefix(40)))\".")
       }
@@ -175,6 +201,10 @@ public struct ScreenProtocol: Sendable {
     } catch {
       return Self.error(id: id, code: ScreenRefusal.badRequest("").code, text: ScreenRefusal.detail(error))
     }
+  }
+
+  static func paneUnavailable(_ id: String?) -> Data {
+    error(id: id, code: "pane_unavailable", text: "this Talos.app has no way to run a script in the terminal pane right now")
   }
 
   static func area(_ v: Any?) throws(ScreenRefusal) -> ScreenArea {
@@ -238,6 +268,12 @@ public struct ScreenProtocol: Sendable {
     let plain = ScreenRefusal.appNotAllowed(app: app)
     switch found {
     case .signed(let who):
+      // the lock screen and the system's password prompts are never offered to the owner: no ask id, so the bridge makes no card
+      if ScreenDenied.contains(who.bundleID) || ScreenDenied.contains(app) {
+        let r = ScreenRefusal.appNotAllowable(
+          app: app, why: "\(Self.clip(who.name)) is part of the Mac's lock screen or its security prompts, so Talos never lets an agent use it.")
+        return Self.error(id: id, code: r.code, text: r.reason, app: app)
+      }
       let ask = asks.record(who)
       return Self.error(id: id, code: plain.code, text: plain.reason, app: who.bundleID, extra: ["ask": ask, "app_name": who.name])
     case .unsigned(let name):

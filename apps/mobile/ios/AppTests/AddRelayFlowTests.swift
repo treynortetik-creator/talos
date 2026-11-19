@@ -9,6 +9,17 @@ final class AddRelayFlowTests: XCTestCase {
     private let code = "01234567890123456789012345"
     private let rid = "r_abcdefghijklmnopqrst"
 
+    /// A non-isolated attester for the flow (the flow is a plain struct): records what it was asked.
+    final class StubAttestRunner: AttestRunning, @unchecked Sendable {
+        var outcome: AttestOutcome
+        private(set) var calls: [(origin: URL, relayID: String, pinnedFP: String, cookie: String?, context: BridgeAttest.Context)] = []
+        init(_ o: AttestOutcome) { outcome = o }
+        func run(origin: URL, relayID: String, pinnedFP: String, cookie: String?, context: BridgeAttest.Context) async -> AttestOutcome {
+            calls.append((origin, relayID, pinnedFP, cookie, context))
+            return outcome
+        }
+    }
+
     private struct Stub: DescriptorFetching {
         var result: Result<RelayDescriptor, DescriptorFetchError>
         var seen: ((URL) -> Void)?
@@ -20,8 +31,9 @@ final class AddRelayFlowTests: XCTestCase {
         return try JSONDecoder().decode(RelayDescriptor.self, from: Data(json.utf8))
     }
 
-    private func flow(_ r: Result<RelayDescriptor, DescriptorFetchError>, version: String = "1.0") -> AddRelayFlow {
-        AddRelayFlow(fetcher: Stub(result: r), appVersion: version, now: { Date(timeIntervalSince1970: 1000) },
+    private func flow(_ r: Result<RelayDescriptor, DescriptorFetchError>, version: String = "1.0",
+                      attest: AttestRunning = StubAttestRunner(.verdict(.pass))) -> AddRelayFlow {
+        AddRelayFlow(fetcher: Stub(result: r), attester: attest, appVersion: version, now: { Date(timeIntervalSince1970: 1000) },
                      newDataStoreId: { UUID(uuidString: "00000000-0000-0000-0000-000000000001")! })
     }
 
@@ -35,6 +47,8 @@ final class AddRelayFlowTests: XCTestCase {
         XCTAssertEqual(p.profile.bridgeFp, fp)
         XCTAssertEqual(p.profile.dataStoreId.uuidString, "00000000-0000-0000-0000-000000000001")
         XCTAssertEqual(p.profile.addedAt, Date(timeIntervalSince1970: 1000))
+        XCTAssertEqual(p.profile.lastVerifiedAt, Date(timeIntervalSince1970: 1000), "the profile carries the time of the passing attest")
+        XCTAssertEqual(p.verifiedAt, Date(timeIntervalSince1970: 1000))
         XCTAssertNil(p.note)
         XCTAssertEqual(p.code, code, "the scanned code is kept in memory for the page's enroll step")
     }
@@ -65,7 +79,7 @@ final class AddRelayFlowTests: XCTestCase {
 
     func testNoPinNeverFetches() async {
         var fetched = false
-        let f = AddRelayFlow(fetcher: Stub(result: .failure(.network), seen: { _ in fetched = true }), appVersion: "1.0")
+        let f = AddRelayFlow(fetcher: Stub(result: .failure(.network), seen: { _ in fetched = true }), attester: StubAttestRunner(.verdict(.pass)), appVersion: "1.0")
         _ = await f.prepare(link: "https://relay.example.com/enroll#\(code)")
         XCTAssertFalse(fetched)
     }
@@ -111,5 +125,75 @@ final class AddRelayFlowTests: XCTestCase {
         XCTAssertEqual(pulled, 101)
         let ok = try? await URLSessionDescriptorFetcher.readCapped(AsyncStream<UInt8> { c in c.yield(7); c.finish() }, cap: 100)
         XCTAssertEqual(ok, Data([7]))
+    }
+
+    // MARK: BYOR phase 4b: the Mac must pass an attest against the QR's key before anything is saved or the code is sent
+
+    func testPairingChecksTheMacAgainstTheQrKeyWithNoCookieAndTheDescriptorsRelayId() async throws {
+        let attest = StubAttestRunner(.verdict(.pass))
+        _ = try await flow(.success(descriptor()), attest: attest).prepare(link: "https://Relay.Example.com:8443/enroll#\(code)&fp=\(fp)").get()
+        let call = try XCTUnwrap(attest.calls.first)
+        XCTAssertEqual(attest.calls.count, 1)
+        XCTAssertEqual(call.origin.absoluteString, "https://relay.example.com:8443")
+        XCTAssertEqual(call.pinnedFP, fp, "against the fingerprint in the QR, never one the relay told us")
+        XCTAssertEqual(call.relayID, rid)
+        XCTAssertNil(call.cookie, "no session cookie at pairing")
+        XCTAssertEqual(call.context, .pair, "a key change at pairing is a fail, not a re-pin")
+    }
+
+    func testPairingRefusesWithoutAPassForEveryOutcome() async throws {
+        let outcomes: [AttestOutcome] = [
+            .unreachable(.network), .unreachable(.macOffline), .unreachable(.unsupported), .unreachable(.macTimeout),
+            .unreachable(.rateLimited), .unreachable(.badAnswer),
+            .verdict(.fail(.badShape)), .verdict(.fail(.badKey)), .verdict(.fail(.badSig)), .verdict(.fail(.badChain)),
+            .verdict(.fail(.wrongFP)), .verdict(.fail(.repinAtPair)),
+            .verdict(.repin(newFP: String(repeating: "B", count: 43))),
+        ]
+        for o in outcomes {
+            let r = await flow(.success(try descriptor()), attest: StubAttestRunner(o)).prepare(link: "https://relay.example.com/enroll#\(code)&fp=\(fp)")
+            guard case let .failure(e) = r else { return XCTFail("\(o) must not give a PendingRelay") }
+            switch (o, e) {
+            case (.unreachable, .macUnreachable), (.verdict, .notYourMac): break
+            default: XCTFail("\(o) gave \(e)")
+            }
+            XCTAssertFalse(e.message.isEmpty)
+        }
+    }
+
+    func testEachRefusalHasItsOwnWordsAndSaysNothingWasSaved() {
+        let host = "relay.example.com"
+        let all: [AddRelayError] = [
+            .macUnreachable(host: host, why: .macOffline), .macUnreachable(host: host, why: .unsupported),
+            .macUnreachable(host: host, why: .macTimeout), .macUnreachable(host: host, why: .rateLimited),
+            .macUnreachable(host: host, why: .network), .notYourMac(host: host),
+        ]
+        XCTAssertEqual(Set(all.map(\.message)).count, 6)
+        for e in all { XCTAssertTrue(e.message.contains("Nothing was saved"), e.message) }
+        XCTAssertTrue(AddRelayError.macUnreachable(host: host, why: .unsupported).message.contains("update talos-app"))
+    }
+
+    func testTheAttestRunsOnlyAfterTheDescriptorAndNeverForABadLink() async {
+        let attest = StubAttestRunner(.verdict(.pass))
+        _ = await flow(.failure(.network), attest: attest).prepare(link: "https://relay.example.com/enroll#\(code)&fp=\(fp)")
+        _ = await flow(.success(try! descriptor()), attest: attest).prepare(link: "https://relay.example.com/enroll#\(code)")
+        _ = await flow(.success(try! descriptor()), attest: attest).prepare(link: "http://relay.example.com/enroll#\(code)&fp=\(fp)")
+        XCTAssertTrue(attest.calls.isEmpty, "no descriptor, no pin or a bad link: the Mac is never asked")
+    }
+
+    func testSaveRefusesAPendingRelayThatHasNoPass() async throws {
+        let good = try await flow(.success(descriptor())).prepare(link: "https://relay.example.com/enroll#\(code)&fp=\(fp)").get()
+        var unstamped = good.profile
+        unstamped.lastVerifiedAt = nil
+        let store = RelayStore(backing: InMemoryKeychain())
+        XCTAssertThrowsError(try AddRelayFlow.save(PendingRelay(profile: unstamped, note: nil, code: code, verifiedAt: good.verifiedAt), in: store))
+        var other = good.profile
+        other.lastVerifiedAt = Date(timeIntervalSince1970: 5)
+        XCTAssertThrowsError(try AddRelayFlow.save(PendingRelay(profile: other, note: nil, code: code, verifiedAt: good.verifiedAt), in: store))
+        XCTAssertEqual(try store.list(), [], "a failed re-pair must never reach add(), which replaces the whole list")
+    }
+
+    func testTheRealTransportRefusesPlainHttp() async {
+        let r = await URLSessionAttestTransport().post(url: URL(string: "http://relay.example.com/api/bridge/attest")!, body: Data(), cookie: nil, timeout: 1)
+        XCTAssertEqual(r, .failed)
     }
 }

@@ -9,6 +9,7 @@ import { ActionRuleAsks } from './action-rule-asks.ts'
 import { defaultKeychainRunner, ServerSecrets } from './apps/keychain.ts'
 import { AppService } from './apps/service.ts'
 import { pruneAttachmentRetries } from './attachment-retry.ts'
+import { attestHandler } from './attest.ts'
 import { backfillCardRows, tellOwnerHistoryKeptAside } from './bridge-housekeeping.ts'
 import type { BridgeOptions } from './bridge-options.ts'
 import { BugContextService } from './bug-context/service.ts'
@@ -54,6 +55,7 @@ import { memoryRootsFor } from './memory/roots.ts'
 import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
+import { withPaneRun } from './pane-run.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
 import { RelayClient } from './relay-client.ts'
@@ -100,8 +102,7 @@ const PRUNE_EVERY_MS = 6 * 3600_000
 /**
  * How long stop() waits for hand-overs already under way to finish their books before it closes the store. A hand-over still
  * unresolved after this (an agent channel that answers slowly) is not lost: its seen and consumed writes are skipped cleanly
- * once the store is closed (inbound.ts), so the relay's replay gives it to the next bridge, which redelivers it to its agent.
- * That can be a duplicate of a message the old agent already has (nothing de-dupes it on the agent's side), never a loss.
+ * once the store is closed (inbound.ts), so the relay's replay gives it to the next bridge: a duplicate at worst, never a loss.
  */
 const INBOUND_SETTLE_CAP_MS = 1000
 /** How long stop() waits for a `read_inbound` response that is still being written (under lifecycle.ts's 4 s force-exit). */
@@ -444,7 +445,7 @@ export class Bridge {
         loadKeys: () => this.loadKeyCandidates(),
         client: { name: BRIDGE_CLIENT_NAME, version: BRIDGE_VERSION },
         // read at each hello: search/memory/health appear once their services are installed (docs/V2-FEATURES.md V1)
-        features: () => bridgeFeatures(this.ctx),
+        features: () => bridgeFeatures(withPaneRun(this.ctx, () => void this.client?.restartNow({ keepKey: true }))),
         agentConfigRev: () => this.ctx.config.config.rev,
         clock: this.clock,
         log: this.log,
@@ -601,6 +602,7 @@ export class Bridge {
     if (!this.client) return
     if (!this.ctx.env.relayUrl) throw new Error('TALOS_APP_RELAY_URL is not set')
     assertSecureRelayUrl(this.ctx.env.relayUrl)
+    this.client.onAttest ??= attestHandler(() => this.keyRef, this.ctx.env.relayUrl, this.paths, this.clock)
     this.prune()
     backfillCardRows(this.ctx)
     this.ctx.permission.sweepStale()

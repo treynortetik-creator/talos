@@ -158,6 +158,12 @@ extension SafeTerminalView {
   }
 }
 
+/// Notification observers that end with their owner.
+final class ObserverBag: @unchecked Sendable {
+  var tokens: [NSObjectProtocol] = []
+  deinit { for t in tokens { NotificationCenter.default.removeObserver(t) } }
+}
+
 /// The Talos window. Every key event passes `intercept` first, so a key the page's own screen owns (Ctrl+1 … Ctrl+9 on the Terminal
 /// screen, typed into the embedded terminal) never reaches the terminal, which would send it to the session as a control byte.
 /// The hook decides narrowly and returns false for everything else, which then goes the usual way.
@@ -168,8 +174,88 @@ final class WebNSWindow: NSWindow {
   /// Called after an event of ours (it has a token) was delivered, for the events a request waits on.
   var answer: ((Int64) -> Void)?
 
+  /// When a person last clicked (the release) or pressed Return or Space in this window, while it was the key window. Written by
+  /// `sendEvent` below and nowhere else, from an event's own origin (`SyntheticInput`); `private`, so no message, page script or other
+  /// code can set it. The run channel spends it with `takeHumanActivation()`: one click or key vouches for one thing.
+  private var activation = HumanActivation()
+  /// The clock the stamp is taken on: monotonic, and it counts sleep. Tests move it (`setActivationClockForTest`).
+  private var activationClock: () -> Double = Monotonic.now
+  /// When the app last became active or this window last became key, on `activationClock`: a press this soon after is the click that brought
+  /// the window forward, not a person pressing a button in it (`PaneRun.activationSettleSeconds`). Written by the two notifications below.
+  private var lastBroughtForwardAt: Double?
+  private let observers = ObserverBag()
+
+  override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+    super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
+    let nc = NotificationCenter.default
+    let note: (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.lastBroughtForwardAt = self?.activationClock() } }
+    observers.tokens = [
+      nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil, using: note),
+      nc.addObserver(forName: NSWindow.didBecomeKeyNotification, object: self, queue: nil, using: note),
+    ]
+  }
+
+  /// Whether the mouse press that is down now began in the key window. The click that only brings this window to the front does not
+  /// count: it was not aimed at anything in the window.
+  private var pressBeganInKeyWindow = false
+
+  /// Return, the numeric pad's Enter and Space: the keys that press a focused button.
+  private static let activationKeys: Set<UInt16> = [36, 76, 49]
+
+  /// Spends the stamp: true when a person's click or Return/Space reached this window no more than `PaneRun.clickSeconds` ago and no
+  /// earlier call has used it.
+  func takeHumanActivation() -> Bool { activation.take(now: activationClock()) }
+
+  #if DEBUG
+    private var keyOverride: (() -> Bool)?
+    func setActivationClockForTest(_ c: @escaping () -> Double) { activationClock = c }
+    func setActivationKeyForTest(_ k: @escaping () -> Bool) { keyOverride = k }
+  #endif
+
+  private func isKeyForActivation() -> Bool {
+    #if DEBUG
+      if let k = keyOverride { return k() }
+    #endif
+    return isKeyWindow
+  }
+
+  /// Whether the event is aimed at the page: for a key, the first responder is the web view (or inside it); for a mouse event, the view
+  /// under the pointer is. The native terminal pane and its tab strip are laid over the web view and do not count: Return in a shell is
+  /// not a person pressing Run.
+  private func isAimedAtThePage(_ event: NSEvent) -> Bool {
+    guard let content = contentView else { return false }
+    var v: NSView? = event.type == .keyDown ? firstResponder as? NSView : content.superview?.hitTest(event.locationInWindow)
+    while let x = v {
+      if x is TerminalView || x is WindowBackgroundView { return false }
+      if x === content { return true }
+      v = x.superview
+    }
+    return false
+  }
+
+  private func noteHumanActivation(_ event: NSEvent) {
+    guard SyntheticInputGuard.origin(of: event) == .human, isAimedAtThePage(event) else {
+      if event.type == .leftMouseDown || event.type == .leftMouseUp { pressBeganInKeyWindow = false }
+      return
+    }
+    switch event.type {
+    case .leftMouseDown:
+      // in a window that is key, and that did not become key (or whose app did not become active) a moment ago
+      let settled = lastBroughtForwardAt.map { activationClock() - $0 > PaneRun.activationSettleSeconds } ?? true
+      pressBeganInKeyWindow = isKeyForActivation() && settled
+    case .leftMouseUp:
+      let counts = pressBeganInKeyWindow
+      pressBeganInKeyWindow = false
+      if counts { activation.record(at: activationClock()) }
+    case .keyDown:
+      if !event.isARepeat, Self.activationKeys.contains(event.keyCode), isKeyForActivation() { activation.record(at: activationClock()) }
+    default: break
+    }
+  }
+
   override func sendEvent(_ event: NSEvent) {
     guard SyntheticInputGuard.admitAtTerminal(event, in: self) else { return }
+    noteHumanActivation(event)
     if event.type == .keyDown, intercept?(event) == true { return }
     // The page learns who sent the event first; with no way to tell, the page is told "synthetic" (fail closed).
     let t = SyntheticInputGuard.token(of: event)

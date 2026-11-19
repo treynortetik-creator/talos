@@ -1082,3 +1082,168 @@ Describe "Check Talos: WSL can't look the server up while Windows is online" {
     (Get-TalosDoctorFix $rows $true).Kind | Should Be 'relay-key'
   }
 }
+
+Describe "Sign in to Claude: the tray log names which failure, never the code or a link (Pantheon, 2026-11-18)" {
+  It "logs an event by name, and an error by signin.py's fixed id" {
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'url'; url = 'https://claude.ai/x?code=secret' }) | Should Be 'url'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'error'; why = 'no_answer'; message = 'The code was sent...' }) | Should Be 'error (no_answer)'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'error'; why = 'not_accepted' }) | Should Be 'error (not_accepted)'
+  }
+  It "logs anything off the list as unknown: nothing else from the event reaches the log" {
+    foreach ($w in @('sk-ant-oat01-abc', 'NO_ANSWER', 'no_answer extra', '', $null)) {
+      Format-TalosSignInLogLine ([pscustomobject]@{ event = 'error'; why = $w; message = 'x' }) | Should Be 'error (unknown)'
+    }
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'er<r>or https://x' }) | Should Be 'unknown'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'URL' }) | Should Be 'unknown'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = "signed_in$([char]0x212A)" }) | Should Be 'unknown'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = "$([char]0x212A)ode" }) | Should Be 'unknown'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'signed_in' }) | Should Be 'signed_in'
+  }
+  It "logs a name with a soft hyphen inside as unknown: the line holds the list's entry, never the input" {
+    $sh = [char]0x00AD
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = "si${sh}gned_in" }) | Should BeExactly 'unknown'
+    Format-TalosSignInLogLine ([pscustomobject]@{ event = 'error'; why = "no_${sh}answer" }) | Should BeExactly 'error (unknown)'
+  }
+}
+
+Describe "Pair a phone: the tray log names the event, never the link, the code or text the distro chose (Pantheon, 2026-11-18)" {
+  It "logs each of pair.py's events as itself" {
+    foreach ($n in @('link', 'qr', 'confirm', 'answered', 'pinned', 'not_pinned', 'used', 'expired', 'warning')) {
+      Format-TalosPairLogLine ([pscustomobject]@{ event = $n; url = 'https://x.example/?code=secret' }) | Should BeExactly $n
+    }
+    Format-TalosPairLogLine ([pscustomobject]@{ event = 'error' }) | Should BeExactly 'error (unknown)'
+  }
+  It "logs anything off the list as unknown" {
+    foreach ($n in @('LINK', 'link ', 'https://x.example/?code=secret', $null, "lin$([char]0x212A)", '', 'link qr', 'rm -rf')) {
+      Format-TalosPairLogLine ([pscustomobject]@{ event = $n }) | Should BeExactly 'unknown'
+    }
+    Format-TalosPairLogLine ([pscustomobject]@{ event = @('link', 'qr') }) | Should BeExactly 'unknown'
+    Format-TalosPairLogLine ([pscustomobject]@{ event = [pscustomobject]@{ a = 1 } }) | Should BeExactly 'unknown'
+    Format-TalosPairLogLine $null | Should BeExactly 'unknown'
+  }
+  It "logs an error with a code pair.py or the window's text knows as 'error (<code>)'" {
+    foreach ($c in @('usage', 'key_refused', 'relay', 'no_relay', 'bad_words', 'internal', 'not-ready', 'enroll', 'link')) {
+      Format-TalosPairLogLine ([pscustomobject]@{ event = 'error'; code = $c; message = 'x' }) | Should BeExactly "error ($c)"
+    }
+  }
+  It "logs a name or code with a soft hyphen inside as unknown: the line holds the list's entry, never the input" {
+    $sh = [char]0x00AD
+    Format-TalosPairLogLine ([pscustomobject]@{ event = "li${sh}nk" }) | Should BeExactly 'unknown'
+    Format-TalosPairLogLine ([pscustomobject]@{ event = 'error'; code = "key_${sh}refused" }) | Should BeExactly 'error (unknown)'
+  }
+  It "logs an error with any other code, or a URL, as 'error (unknown)'" {
+    foreach ($c in @('https://x.example/?code=secret', 'RELAY', 'relay ', 'no_fp', $null, "relay$([char]0x212A)")) {
+      Format-TalosPairLogLine ([pscustomobject]@{ event = 'error'; code = $c }) | Should BeExactly 'error (unknown)'
+    }
+  }
+}
+
+Describe "Root verb window: the tray log keeps only root's own words (Pantheon, 2026-11-18)" {
+  It "keeps root's normal words and joins lines with a space" {
+    Format-TalosRootVerbLogLine "restored`nrestarted" | Should BeExactly 'restored restarted'
+    foreach ($w in @('restarted', 'restored', 'not-approved', 'nothing-saved', 'nothing-to-do', 'not-isolated', 'failed')) {
+      Format-TalosRootVerbLogLine "$w`r`n" | Should BeExactly $w
+    }
+  }
+  It "keeps kit-update's words" {
+    foreach ($w in @('kit-updated', 'kit-policy-updated', 'kit-current', 'kit-no-release', 'kit-bad-release', 'kit-version-taken', 'kit-policy-foreign', 'kit-unsafe-path', 'kit-busy', 'not-root')) {
+      Format-TalosRootVerbLogLine $w | Should BeExactly $w
+    }
+  }
+  It "logs words root does not know as one unknown, after the known words" {
+    Format-TalosRootVerbLogLine 'RESTARTED https://x.example/Code' | Should BeExactly 'unknown'
+    Format-TalosRootVerbLogLine "restored`nwsl: Error code: Wsl/Service" | Should BeExactly 'restored unknown'
+    Format-TalosRootVerbLogLine 'restored junk1 junk2 restarted junk3' | Should BeExactly 'restored restarted unknown'
+    Format-TalosRootVerbLogLine '' | Should BeExactly ''
+  }
+  It "logs each known word once and in the list's order, whatever the distro sends" {
+    Format-TalosRootVerbLogLine ((1..40 | ForEach-Object { 'restored' }) -join ' ') | Should BeExactly 'restored'
+    Format-TalosRootVerbLogLine 'restarted restored' | Should BeExactly 'restored restarted'
+    Format-TalosRootVerbLogLine 'restored junk restored' | Should BeExactly 'restored unknown'
+    Format-TalosRootVerbLogLine "restored`nnot-approved" | Should BeExactly 'restored not-approved'
+  }
+  It "logs a word with the Kelvin sign or a soft hyphen as unknown" {
+    Format-TalosRootVerbLogLine "restart$([char]0x212A)ed" | Should BeExactly 'unknown'
+    Format-TalosRootVerbLogLine "$([char]0x212A)" | Should BeExactly 'unknown'
+    Format-TalosRootVerbLogLine "rest$([char]0x00AD)ored" | Should BeExactly 'unknown'
+  }
+}
+
+Describe "the tray log never throws (found on Titan, 2026-11-18: a log held open killed the tray from a timer tick)" {
+  $dir = Join-Path $env:TEMP ('talos-pester-log-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $tray = Join-Path $here '..\tray.ps1'
+  It 'drops nothing for good: a log held open is left unchanged, then gets the lines once it is free' {
+    $p = Join-Path $dir 'held.log'
+    Write-TalosLogLine $p 'a'
+    $h = [IO.File]::Open($p, 'Open', 'ReadWrite', 'None')
+    try {
+      { Write-TalosLogLine $p 'b' } | Should Not Throw
+      { Write-TalosLogLine $p 'c' } | Should Not Throw
+    } finally { $h.Dispose() }
+    @(Get-Content -LiteralPath $p) -join ',' | Should BeExactly 'a'
+    Write-TalosLogLine $p 'd'
+    @(Get-Content -LiteralPath $p) -join ',' | Should BeExactly 'a,b,c,d'
+  }
+  It 'does not throw when the folder is missing, and writes the lines once it exists' {
+    $q = Join-Path $dir 'later\x.log'
+    { Write-TalosLogLine $q 'one' } | Should Not Throw
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'later') | Out-Null
+    Write-TalosLogLine $q 'two'
+    @(Get-Content -LiteralPath $q) -join ',' | Should BeExactly 'one,two'
+  }
+  It 'keeps at most 50 lines it could not write (the newest), and the last 200 in the file' {
+    $q = Join-Path $dir 'bound\y.log'
+    1..60 | ForEach-Object { Write-TalosLogLine $q "n$_" }
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'bound') | Out-Null
+    Write-TalosLogLine $q 'n61'
+    $got = @(Get-Content -LiteralPath $q)
+    $got.Count | Should Be 50
+    $got[0] | Should BeExactly 'n12'
+    $got[49] | Should BeExactly 'n61'
+    $r = Join-Path $dir 'rot.log'
+    1..250 | ForEach-Object { Write-TalosLogLine $r "m$_" }
+    $got = @(Get-Content -LiteralPath $r)
+    $got.Count | Should Be 200
+    $got[0] | Should BeExactly 'm51'
+    $got[199] | Should BeExactly 'm250'
+  }
+  It 'the tray logs through it, and sets the unhandled-exception guard before the first NotifyIcon exists' {
+    $src = [IO.File]::ReadAllText($tray)
+    $src | Should Match 'Write-TalosLogLine \$log \$line'
+    $src | Should Match 'SetUnhandledExceptionMode\(\[Windows\.Forms\.UnhandledExceptionMode\]::CatchException\)'
+    $src | Should Match 'add_ThreadException'
+    $at = $src.IndexOf('SetUnhandledExceptionMode(')
+    $at | Should BeGreaterThan 0
+    $at | Should BeLessThan $src.IndexOf('$ni = New-Object Windows.Forms.NotifyIcon')
+    # no control of any kind is made at the top level (an unindented line) before the guard
+    $before = @($src.Substring(0, $at) -split "`r?`n" | Where-Object { $_ -match '^\S' -and $_ -match 'New-Object\s+(System\.)?Windows\.Forms\.' })
+    $before.Count | Should Be 0
+    # and the same lines are found after it, so this check does look at the right kind of line
+    @($src.Substring($at) -split "`r?`n" | Where-Object { $_ -match '^\S' -and $_ -match 'New-Object\s+(System\.)?Windows\.Forms\.' }).Count | Should BeGreaterThan 3
+  }
+  It 'Show-Status writes the icon once per run (and only when it changed), and "not known" only in its catch' {
+    $src = [IO.File]::ReadAllText($tray)
+    $m = [regex]::Match($src, '(?s)\nfunction Show-Status\(.*?\n\}\r?\n')
+    $m.Success | Should Be $true
+    $body = $m.Value
+    $catchAt = $body.IndexOf('} catch {')
+    $catchAt | Should BeGreaterThan 0
+    $main = $body.Substring(0, $catchAt)
+    $inCatch = $body.Substring($catchAt)
+    $body | Should Not Match '\$ni\.Icon\s*='
+    ([regex]::Matches($main, 'Set-TrayIcon ')).Count | Should Be 1
+    $main | Should Not Match "Set-TrayIcon 'grey'"
+    $main | Should Not Match 'Set-TrayEnabled \$(pair|sessions) \$false'
+    $inCatch | Should Match "Set-TrayIcon 'grey'"
+    # no plain write of an icon or an enabled flag anywhere else but the three helpers
+    $src | Should Match 'function Set-TrayIcon\(\[string\]\$Colour\) \{\r?\n  if \(\$state\.iconColour -ne \$Colour\)'
+    ([regex]::Matches($src, '\$ni\.Icon\s*=')).Count | Should Be 2
+  }
+  It 'keepalive.ps1 logs without throwing too' {
+    $k = [IO.File]::ReadAllText((Join-Path $here '..\keepalive.ps1'))
+    $k | Should Not Match 'Set-Content -Path \$log'
+    $k | Should Match 'Set-Content -LiteralPath \$log .* -ErrorAction Stop\r?\n  \} catch \{ \}'
+  }
+  Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+}

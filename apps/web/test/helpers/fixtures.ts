@@ -1,5 +1,6 @@
 import { test as base } from '@playwright/test'
 import { type Harness, startHarness } from './harness.ts'
+import { shiftBrowserClock } from './hostile.ts'
 
 /** `harness` is a fresh relay-backed server per test; `baseURL` points at it. */
 export const test = base.extend<{ harness: Harness }>({
@@ -15,6 +16,7 @@ export const test = base.extend<{ harness: Harness }>({
   // a drop of the link or the Mac is said at once here (the app waits 30 s for an owner: lib/linkShown.ts), so the specs
   // that wait for an offline banner need no long wait
   context: async ({ context }, use) => {
+    await shiftBrowserClock(context)
     await context.addInitScript(() => {
       ;(window as unknown as { __talosLinkGraceMs: number }).__talosLinkGraceMs = 0
     })

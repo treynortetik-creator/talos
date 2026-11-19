@@ -51,6 +51,34 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = next
     }
 
+    /// The owner chose Remove on a trust banner or screen: the relay leaves the phone's list (with its keys and data store), a fresh
+    /// controller with nothing paired takes the window, and the native Add-relay sheet opens on it. When the removal fails nothing
+    /// changes and the owner is told.
+    @MainActor
+    func removeRelayThenAdd(id: String, presentSheet: @MainActor (UIViewController) -> Void = { AddRelayViewController.present(from: $0) }) async {
+        guard let window else { return }
+        let old = window.rootViewController as? TalosBridgeViewController
+        do {
+            // The old page's web view still holds its data store here, so WebKit may refuse to delete it: the runtime then parks it
+            // as a pending removal, and the retry after `old.retire()` (the next sweep) empties the store again before deleting it.
+            try await TalosBridgeViewController.runtime().remove(id: id)
+        } catch {
+            let alert = UIAlertController(
+                title: "Couldn't remove this relay", message: "Talos could not change this phone's relay list. Nothing was removed.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            (old ?? window.rootViewController)?.present(alert, animated: true)
+            return
+        }
+        old?.retire()
+        clearRelayBoundState()
+        TalosAudioPlugin.resetSession()
+        TalosPushCenter.shared.resetForRelaySwitch()
+        let next = TalosBridgeViewController()
+        window.rootViewController = next
+        next.loadViewIfNeeded()
+        presentSheet(next)
+    }
+
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
     }

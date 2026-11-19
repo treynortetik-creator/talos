@@ -267,7 +267,6 @@ extension WorkerManager {
     // again (`scheduleEnterCheck`). Flagged: the pointer is owed again, held, and never entered a second time. Only an Enter known to be
     // sent: one whose send timed out may not have gone, and is counted as sent as before (never a second). The later reads are
     // scheduled on this queue, never slept for: a sleep here would hold every thread's tick
-    if enter == .sent { scheduleEnterCheck(id, pre: seen, until: r.owed.until) }
     rt[id]?.enterOwed = false
     rt[id]?.pendingPointer = false
     hold = .none
@@ -276,6 +275,12 @@ extension WorkerManager {
     let typedInto = rt[id]?.entry.session_id
     rt[id]?.entry.turn_session = typedInto  // this conversation has had a turn (`Entry.hadTurn`)
     dirty = true
+    // The Enter went out: the file says so now, before the check's pane read (which can wait up to a call's timeout) and before the
+    // tick's end. A relaunch in between used to find the pointer still owed with an empty box, read that as the owner clearing it, and
+    // type the line a second time. If the check later flags the Enter, `enterCheckDue` writes the file again at that moment; until then
+    // a flag found after a crash is not in the file, and the relaunch sees a delivered pointer.
+    writeFile()
+    if enter == .sent { scheduleEnterCheck(id, pre: seen, until: r.owed.until) }
     emit(.pointer(thread: id))
     return true
   }
@@ -392,6 +397,7 @@ extension WorkerManager {
     }
     sendNotice(id, \.enterHold, kind: WorkerNotice.enterUncertainKind, text: WorkerNotice.enterUncertainLine())
     dirty = true
+    writeFile()  // this runs between ticks: a quit before the next tick's write would lose the hold, its notice and its cleanup at the deadline
   }
 
   /// Whether the pane is in a tmux mode (copy mode, after the owner scrolled back): nil when that cannot be read, whether tmux failed,

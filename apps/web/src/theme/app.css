@@ -198,10 +198,20 @@ a {
   padding-top: 44px;
 }
 .prose-talos pre.run-block {
+  position: relative;
+  /* room on the right for the Run icon, and for its 44px box under the Copy band: the icon adds no row */
+  padding-right: 56px;
+  min-height: 88px;
   /* a script that can be run is shown whole: it wraps, it never scrolls away */
   overflow-x: visible;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.run-icon-slot {
+  /* the first code line's row (below the Copy band), at the block's right edge */
+  position: absolute;
+  top: 44px;
+  right: 4px;
 }
 .prose-talos pre code {
   background: none;

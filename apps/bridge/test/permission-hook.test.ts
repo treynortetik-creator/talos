@@ -1385,3 +1385,142 @@ describe('the hook hears the card at once, not after its send settles', () => {
     }
   })
 })
+
+describe('a slow relay card send never makes the hook raise a second card', () => {
+  const relayParams = (input: string) => ({
+    request_id: 'abcde',
+    tool_name: 'Bash',
+    description: 'Run it',
+    input_preview: input,
+  })
+  const git = { command: 'git push origin main' }
+  const main = { pid: SESSION_PID, cwd: '/srv/proj' }
+  const GIT_PREVIEW = '{"command": "git push origin main"}'
+  const SLOW_MS = 400 // well past the 150 ms grace this file's bridge runs with
+
+  /** Holds the channel relay's card.create (request id abcde) until the test releases or fails it; the hook's own cards pass. */
+  function holdRelaySend(x: Harness) {
+    const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
+    const real = t.sendDurable
+    let release: () => void = () => {}
+    let fail: () => void = () => {}
+    t.sendDurable = function (this: unknown, f: unknown) {
+      const fr = f as { type: string; card?: { kind: string; payload?: { request_id?: string } } }
+      if (fr.type !== 'card.create' || fr.card?.kind !== 'permission' || fr.card.payload?.request_id !== 'abcde')
+        return real.call(this, f)
+      return new Promise((res, rej) => {
+        release = () => real.call(this, f).then(res, rej)
+        fail = () => rej(new Error('relay down'))
+      })
+    }
+    return { release: () => release(), fail: () => fail() }
+  }
+  /** A hook wait long enough that a lost answer shows as a hang, not as a timeout answer. */
+  const longWait = (x: Harness) => x.bridge.ctx.permission.setHookTimings({ maxWaitMs: 60_000 })
+  const raced = <T>(p: Promise<T>, ms = 3_000) =>
+    Promise.race([p, sleep(ms).then(() => 'still waiting' as const)]) as Promise<T | 'still waiting'>
+
+  test('(a) slow send, then success: the hook raises no card and returns relay_carries_it once the send goes', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const sending = x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    const call = rawCall(x.home, permLine(main, git))
+    await sleep(SLOW_MS)
+    expect(permissionCards(x)).toHaveLength(0) // the relay's card is held; the hook has not made one of its own
+    expect(await raced(call.result, 100)).toBe('still waiting')
+    hold.release()
+    await sending
+    expect(await raced(call.result)).toMatchObject({ decision: 'none', reason: 'relay_carries_it' })
+    expect(permissionCards(x)).toHaveLength(1)
+  })
+
+  test('(b) slow send, then failure: the hook that took the twin raises its own card and the owner answer reaches it', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const sending = x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    const call = rawCall(x.home, permLine(main, git))
+    await sleep(SLOW_MS)
+    hold.fail()
+    await sending
+    const card = await hookCard(x)
+    expect(permissionCards(x)).toHaveLength(1)
+    await approve(x, card)
+    expect(await raced(call.result)).toMatchObject({ decision: 'allow' })
+  })
+
+  test('(c) the send fails before any hook arrives: a later hook finds no twin and raises its own card', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const sending = x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    hold.fail()
+    await sending
+    const call = rawCall(x.home, permLine(main, git))
+    const card = await hookCard(x)
+    await approve(x, card)
+    expect(await raced(call.result)).toMatchObject({ decision: 'allow' })
+  })
+
+  test('(d) a fast send: one card, and the hook says relay_carries_it', async () => {
+    const x = await start()
+    longWait(x)
+    await x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    expect(await raced(rawCall(x.home, permLine(main, git)).result)).toMatchObject({
+      decision: 'none',
+      reason: 'relay_carries_it',
+    })
+    await sleep(100)
+    expect(permissionCards(x)).toHaveLength(1)
+  })
+
+  test('(e) a relay card that cannot stand in (part of the call hidden) is no twin even while its send is held', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const masked = relayParams('{"command": "git push origin main", "token": "[REDACTED]"}')
+    const sending = x.bridge.ctx.permission.onRequest(masked)
+    const call = rawCall(x.home, permLine(main, { command: 'git push origin main', token: '[REDACTED]' }))
+    const card = await hookCard(x)
+    await approve(x, card)
+    expect(await raced(call.result)).toMatchObject({ decision: 'allow' })
+    hold.release()
+    await sending
+  })
+
+  test('the relay card is dropped (onCardGone) while its send is out: it never stands in, the hook raises its own card', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const sending = x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    const call = rawCall(x.home, permLine(main, git))
+    await sleep(SLOW_MS) // the hook took the twin and waits on the send
+    const relayRow = x.bridge.ctx.ledger.list('pending').find((r) => r.binding.kind === 'permission')
+    expect(relayRow).toBeDefined()
+    x.bridge.ctx.permission.onCardGone(relayRow?.id ?? '')
+    hold.release()
+    await sending
+    const card = await hookCard(x)
+    await approve(x, card)
+    expect(await raced(call.result)).toMatchObject({ decision: 'allow' })
+  })
+
+  test('a hook that leaves while waiting on the send returns hook_gone, and the relay card is still sent once', async () => {
+    const x = await start()
+    longWait(x)
+    const hold = holdRelaySend(x)
+    const sending = x.bridge.ctx.permission.onRequest(relayParams(GIT_PREVIEW))
+    const ctl = new AbortController()
+    const hook = x.bridge.ctx.permission.onHookRequest(
+      { tool_name: 'Bash', tool_input: git, pid: SESSION_PID, cwd: '/srv/proj' } as never,
+      ctl.signal,
+    )
+    await sleep(SLOW_MS) // past the grace: the hook holds the twin and waits on the send
+    ctl.abort()
+    expect(await raced(hook)).toMatchObject({ decision: 'none', reason: 'hook_gone' })
+    hold.release()
+    await sending
+    expect(permissionCards(x)).toHaveLength(1)
+  })
+})

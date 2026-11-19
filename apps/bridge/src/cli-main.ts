@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { DeviceId, type Frame, HookDigestFrame, isIanaZone, signRotation } from '@talos-app/protocol'
+import { certifyRotation, rotationsProblem } from './attest.ts'
 import { Bridge } from './bridge.ts'
 import { launchEnv } from './claude-env.ts'
 import { checkCodex, runCodex } from './codex.ts'
@@ -13,10 +14,17 @@ import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
 import { cmdEnroll, type EnrollCli } from './enroll-cli.ts'
 import { cmdEvents } from './events.ts'
-import { ensureDir, readJsonFile, writeFileAtomic, writeJsonAtomic } from './fsutil.ts'
+import { ensureDir, readJsonFile, removeFile, writeFileAtomic, writeJsonAtomic } from './fsutil.ts'
 import { withGuardsSettings } from './guards/install.ts'
 import { openHistory } from './history-store.ts'
-import { commitRotation, ensureBridgeKey, loadBridgeKey, loadKeyFile, prepareRotation } from './keys.ts'
+import {
+  commitRotation,
+  ensureBridgeKey,
+  type KeyMaterial,
+  loadBridgeKey,
+  loadKeyFile,
+  prepareRotation,
+} from './keys.ts'
 import { formatLogLine, tailLines } from './log-tail.ts'
 import { installMcp, mcpEntry, mcpProtectedRoots, readMcpEntry } from './mcp-config.ts'
 import { hookDigestNotification } from './notify.ts'
@@ -153,7 +161,7 @@ export async function keyRefusedHint(env: BridgeEnv, e?: RelayHttpError, localNo
   }
   const key = await loadKeyFile(paths(env.home).bridgeKey).catch(() => undefined)
   const line = key ? `BRIDGE_PUBKEY=${key.publicKeyB64}` : 'BRIDGE_PUBKEY=<run: talos-app init>'
-  return `The relay turned away ${say({ mac: "this Mac's", linux: "this computer's" })} key. Most likely fix: in Railway open your relay service, set the variable ${line} and press Deploy (if you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it). If that line is already there, check ${say({ mac: "this Mac's", linux: "this computer's" })} date and time is set to automatic: the relay also answers 401 when the clock is more than 2 minutes off.`
+  return `The relay turned away ${say({ mac: "this Mac's", linux: "this computer's" })} key. Most likely fix: in Railway open your relay service, set the variable ${line} and press Deploy (if you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it). Phones paired before going back to an older key have to pair again. If that line is already there, check ${say({ mac: "this Mac's", linux: "this computer's" })} date and time is set to automatic: the relay also answers 401 when the clock is more than 2 minutes off.`
 }
 
 export type RelayAuth = { ok: true } | { ok: false; refused: boolean; message: string }
@@ -319,9 +327,38 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
   const p = paths(env.home)
   const http = await httpFor(env)
   const nowS = Math.floor(io.now() / 1000)
+  // Before anything changes: a rotation certificate names the relay (BYOR phase 4). A 404 is an older relay, which has no BYOR
+  // phone to tell; a descriptor that cannot be read is NOT that, so the rotation does not start.
+  const desc = await http.descriptor()
+  if (desc.kind === 'unavailable')
+    throw new CliError(
+      "could not read the relay's descriptor (/.well-known/talos-relay), which a rotation certificate for your phones needs. bridge.key is unchanged; try again when the relay is reachable.",
+    )
+  const relayId = desc.kind === 'found' ? desc.descriptor.relay_id : undefined
+  const damaged = relayId ? rotationsProblem(p.bridgeRotations) : null
+  if (damaged)
+    throw new CliError(
+      `${damaged}. Fix or move it, then run rotate again. bridge.key is unchanged and nothing was sent.`,
+    )
+  const certify = async (from: KeyMaterial, to: string) => {
+    if (!relayId) return
+    try {
+      await certifyRotation(p, relayId, from, to)
+    } catch (e) {
+      throw new CliError(
+        `could not write the rotation certificate (${(e as Error).message}). bridge.key is unchanged; try again.`,
+      )
+    }
+  }
   const switched = (keyId: string, newPubkey: string) => {
     io.out(
       `rotated; new key id ${keyId}. The live bridge reconnects with it on its own; the old key stays valid at the relay for 5 minutes.`,
+    )
+    io.out(
+      say({
+        mac: 'Phones paired with this Mac will ask you to confirm the new key.',
+        linux: 'Phones paired with this computer will ask you to confirm the new key.',
+      }),
     )
     // The relay keeps the rotated key in its database, but its BRIDGE_PUBKEY variable on Railway still holds the OLD one.
     // If the volume is ever lost or restored, the relay falls back to that variable and trusts a dead key (audit D58).
@@ -370,6 +407,7 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
     }
     const kept = leftover
     try {
+      await certify(current, leftover.publicKeyB64) // already in the file when the earlier try wrote it: not repeated
       const res = await new RelayHttp(needRelay(env), () => kept).rotate(body)
       return await commit(res.key_id, leftover.publicKeyB64)
     } catch (e) {
@@ -382,6 +420,12 @@ async function cmdRotate(env: BridgeEnv, args: string[], io: CliIO) {
     }
   }
   const prepared = await prepareRotation(p, nowS)
+  try {
+    await certify(current, prepared.newPubkey) // before the relay call: the answer right after the switch carries it
+  } catch (e) {
+    removeFile(p.bridgeKeyNext) // the key just made was never offered to the relay; a leftover would be checked next time
+    throw e
+  }
   let res: { key_id: string }
   try {
     res = await http.rotate({ new_pubkey: prepared.newPubkey, sig_new: prepared.sigNew, ts: prepared.ts })
@@ -537,6 +581,7 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
     )
     io.out(`BRIDGE_PUBKEY=${key.publicKeyB64}`)
     io.out('If you have run `talos-app rotate`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it.')
+    io.out('Phones paired before going back to an older key have to pair again.')
   }
   if (checks.some((c) => c.level === 'FAIL')) throw new CliError('doctor found problems')
 }

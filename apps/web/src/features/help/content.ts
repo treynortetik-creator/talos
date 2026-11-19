@@ -314,6 +314,7 @@ export const HELP_SECTIONS: Section[] = [
               },
               { keys: '⌘T', what: 'Show Talos', when: 'Same as above.' },
               { keys: '⌘N', what: 'Quick compose…', when: 'Same as above.' },
+              { keys: '⌘R', what: 'Reload', when: 'Same as above.' },
               { keys: '⌘W', what: 'Close', when: 'Same as above.' },
               { keys: '⌘M', what: 'Minimize', when: 'Same as above.' },
               { keys: '⌘H', what: 'Hide Talos', when: 'Same as above.' },

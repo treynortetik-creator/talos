@@ -26,9 +26,41 @@ $tool = '/opt/talos-wsl/talos-wsl.sh'
 function Log([string]$m) {
   # a small log, the keep-alive's: the last 200 lines
   $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'), $m
-  $old = @()
-  if (Test-Path $log) { $old = @(Get-Content $log -Tail 199) }
-  Set-Content -Path $log -Value ($old + $line) -Encoding UTF8
+  # never throws (found on Titan, 2026-11-18: a log held open by another process killed the tray from a timer tick)
+  Write-TalosLogLine $log $line
+}
+
+# The last defence (found on Titan, 2026-11-18): an exception that escapes a timer tick or a click handler is logged and the
+# tray carries on, instead of the .NET "unhandled exception" dialog ending it. It must be set before the first form or
+# NotifyIcon exists (the icons above are bitmaps only), so it stays above the NotifyIcon made below.
+# The same error is logged at most once a minute (a timer that fails every 200 ms, or two that fail in turn, must not fill
+# the log); after a minute it is logged again, so the same error hours later is not missed.
+$script:caught = @{}
+function Write-TrayError([string]$Said) {
+  try {
+    $now = Get-Date
+    if ($script:caught.Count -gt 50) {
+      foreach ($k in @($script:caught.Keys)) { if (($now - $script:caught[$k]).TotalSeconds -ge 60) { $script:caught.Remove($k) } }
+    }
+    if ($script:caught.ContainsKey($Said) -and ($now - $script:caught[$Said]).TotalSeconds -lt 60) { return }
+    $script:caught[$Said] = $now
+    Log $Said
+  } catch { }
+}
+try {
+  [Windows.Forms.Application]::SetUnhandledExceptionMode([Windows.Forms.UnhandledExceptionMode]::CatchException)
+  [Windows.Forms.Application]::add_ThreadException({
+      param($sender, $e)
+      try { Write-TrayError "tray: an error in a handler was caught; the tray carries on ($($e.Exception.GetType().Name): $($e.Exception.Message))" } catch { }
+    })
+} catch { Log "tray: could not set the unhandled-exception guard ($($_.Exception.Message))" }
+
+# One step of a handler, run so that a failure is logged (once a minute at most) and never leaves the handler: the timers and menu
+# items below call their steps through it, one by one, so a step that keeps failing cannot stop the others.
+function Invoke-TrayStep([string]$What, [scriptblock]$Body) {
+  try { & $Body } catch {
+    try { Write-TrayError "tray: $What failed ($($_.Exception.GetType().Name): $($_.Exception.Message))" } catch { }
+  }
 }
 
 # the same lock as keepalive.ps1: one of the two per distro
@@ -97,7 +129,7 @@ $ni.ContextMenuStrip = $menu
 $ni.Visible = $true
 
 # ---- the keep-alive: one `hold` at a time, started again with a backoff --------------------------------------------------
-$state = @{ hold = $null; err = $null; started = $null; next = Get-Date; wait = 5; told = $false; quitting = $false; shown = ''; lastTick = $null }
+$state = @{ hold = $null; err = $null; started = $null; next = Get-Date; wait = 5; told = $false; quitting = $false; shown = ''; lastTick = $null; iconColour = 'grey' }
 
 function Start-Hold {
   $state.err = Join-Path $env:TEMP "talos-hold-$Distro-$PID.txt"
@@ -124,9 +156,12 @@ function Start-Hold {
 # knows why her phone went quiet (a laptop with its lid closed, most often).
 function Watch-Sleep {
   $now = Get-Date
-  if ($state.lastTick -and ($now - $state.lastTick).TotalSeconds -gt 90) {
-    $from = $state.lastTick.ToString('HH:mm'); $to = $now.ToString('HH:mm')
-    Log "this PC was asleep from $($state.lastTick.ToString('s')) to $($now.ToString('s')); Talos was offline"
+  # lastTick moves first: a balloon that throws must not make every tick say "asleep" again
+  $last = $state.lastTick
+  $state.lastTick = $now
+  if ($last -and ($now - $last).TotalSeconds -gt 90) {
+    $from = $last.ToString('HH:mm'); $to = $now.ToString('HH:mm')
+    Log "this PC was asleep from $($last.ToString('s')) to $($now.ToString('s')); Talos was offline"
     $lineSleep.Text = "Asleep: Talos was offline from $from to $to"
     $lineSleep.Visible = $true
     $ni.BalloonTipTitle = 'This PC was asleep'
@@ -134,7 +169,6 @@ function Watch-Sleep {
     $ni.BalloonTipIcon = [Windows.Forms.ToolTipIcon]::Info
     $ni.ShowBalloonTip(10000)
   }
-  $state.lastTick = $now
 }
 
 function Watch-Hold {
@@ -144,6 +178,10 @@ function Watch-Hold {
     return
   }
   if (-not $state.hold.HasExited) { return }
+  # whatever fails below, the finally lets go of the dead hold, so the next tick starts a new one (not "holding" for ever)
+  $ran = 0
+  $refused = @()
+  try {
   $ran = [int]((Get-Date) - $state.started).TotalSeconds
   $said = @()
   if (Test-Path -LiteralPath $state.err) { $said = @(Get-Content -LiteralPath $state.err | ForEach-Object { "$_" -replace "`0", '' }) }
@@ -162,11 +200,14 @@ function Watch-Hold {
     Log "the $Distro distro let go after ${ran}s (exit $($state.hold.ExitCode)); starting it again in $($state.wait)s"
     $lineHold.Text = "Keep-alive: the distro let go; again in $($state.wait) s"
   }
-  $state.hold = $null
-  $state.next = (Get-Date).AddSeconds($state.wait)
-  # at most 30 s between tries, back to 5 s once it held; a hold that lasted and ended without a refusal ends a refusal
-  # streak, so the next refusal is told again
-  if ($ran -lt 60) { $state.wait = [Math]::Min($state.wait * 2, 30) } else { $state.wait = 5; if ($refused.Count -eq 0) { $state.told = $false } }
+  } finally {
+    $state.hold = $null
+    $state.next = (Get-Date).AddSeconds($state.wait)
+    # at most 30 s between tries, back to 5 s once it held; a hold that lasted and ended without a refusal ends a refusal
+    # streak, so the next refusal is told again
+    if ($ran -lt 60) { $state.wait = [Math]::Min($state.wait * 2, 30) } else { $state.wait = 5; if ($refused.Count -eq 0) { $state.told = $false } }
+    if ($lineHold.Text -eq 'Keep-alive: holding the distro') { $lineHold.Text = "Keep-alive: starting it again in $($state.wait) s" }
+  }
 }
 
 # ---- the status, every 30 s ----------------------------------------------------------------------------------------------
@@ -218,33 +259,59 @@ function Receive-Status {
   if (-not $state.quitting) { Show-Status $text }
 }
 
+# These write to the UI only when the value differs from what is showing: every icon write redraws the taskbar (a green dot
+# must not blink every 30 s), and a menu item switched off and on again can close a list that is open under it.
+function Set-TrayIcon([string]$Colour) {
+  if ($state.iconColour -ne $Colour) { $ni.Icon = $icons[$Colour]; $state.iconColour = $Colour }
+}
+function Set-TrayText($Item, [string]$Text) { if ($Item.Text -ne $Text) { $Item.Text = $Text } }
+function Set-TrayEnabled($Item, [bool]$On) { if ($Item.Enabled -ne $On) { $Item.Enabled = $On } }
+
 function Show-Status([string]$text) {
-  $v = Get-TalosTrayView $text
-  # signed out, or the token expired or was revoked: the supervisor says main=signin, and the menu offers the sign-in
-  $signIn.Text = if ($v.Main -eq 'signin') { 'Sign in to Claude...' } else { 'Sign in to Claude again...' }
-  # from root's own check (status launch=pending), never from talos's files (Fable R3-5 on a44344c2)
-  $approve.Visible = ($v.Launch -eq 'pending')
-  # pairing only while the dot is green: a phone paired with no live bridge is left half-enrolled (Pantheon, 2026-11-12)
-  $pairItem = Get-TalosPairItem $v
-  $pair.Enabled = $pairItem.Enabled; $pair.Text = $pairItem.Text
-  $sessionsItem = Get-TalosSessionsItem $v
-  $sessions.Enabled = $sessionsItem.Enabled; $sessions.Text = $sessionsItem.Text
-  $startItem.Text = if ($v.Supervisor -in 'active', 'activating', 'reloading') { 'Restart Talos...' } else { 'Start Talos' }
-  $lineWindows.Text = switch ($v.Isolated) {
-    'yes' { 'Cut off from Windows: yes' }
-    'no' { 'Cut off from Windows: NO (Talos is being stopped)' }
-    default { 'Cut off from Windows: not known (the distro did not answer)' }
+  try {
+    # the whole view is worked out first, with no write to the UI, so a failure here changes nothing on screen
+    $v = Get-TalosTrayView $text
+    $pairItem = Get-TalosPairItem $v
+    $sessionsItem = Get-TalosSessionsItem $v
+    # signed out, or the token expired or was revoked: the supervisor says main=signin, and the menu offers the sign-in
+    $signInText = if ($v.Main -eq 'signin') { 'Sign in to Claude...' } else { 'Sign in to Claude again...' }
+    $startText = if ($v.Supervisor -in 'active', 'activating', 'reloading') { 'Restart Talos...' } else { 'Start Talos' }
+    $windowsText = switch ($v.Isolated) {
+      'yes' { 'Cut off from Windows: yes' }
+      'no' { 'Cut off from Windows: NO (Talos is being stopped)' }
+      default { 'Cut off from Windows: not known (the distro did not answer)' }
+    }
+    $one = (($text -replace "`0", '') -split "`r?`n" | Where-Object { $_.Trim() }) -join ' '
+    $tip = "Talos: $($v.Words)"
+    if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 63) }
+    $colour = "$($v.Colour)"
+    if (-not $icons.ContainsKey($colour)) { throw "no icon for the colour '$colour'" }
+
+    # then applied once. from root's own check (status launch=pending), never from talos's files (Fable R3-5 on a44344c2)
+    Set-TrayText $signIn $signInText
+    $approve.Visible = ($v.Launch -eq 'pending')
+    # pairing only while the dot is green: a phone paired with no live bridge is left half-enrolled (Pantheon, 2026-11-12)
+    Set-TrayText $pair $pairItem.Text; Set-TrayEnabled $pair ([bool]$pairItem.Enabled)
+    Set-TrayText $sessions $sessionsItem.Text; Set-TrayEnabled $sessions ([bool]$sessionsItem.Enabled)
+    Set-TrayText $startItem $startText
+    Set-TrayText $lineWindows $windowsText
+    Set-TrayText $lineTalos "Talos: $($v.Words)"
+    # each change of what it shows goes in the log too, so "what did the tray say, and when" has an answer
+    if ("$colour $($v.Words)" -ne $state.shown) {
+      Log "tray: $colour, Talos $($v.Words) ($(if ($one) { $one } else { 'no answer' }))"
+      $state.shown = "$colour $($v.Words)"
+    }
+    if ($ni.Text -ne $tip) { $ni.Text = $tip }
+    Set-TrayIcon $colour
+  } catch {
+    # a view that could not be worked out or shown is "not known", never the green and "yes" of an older status
+    try {
+      Set-TrayIcon 'grey'
+      Set-TrayText $lineWindows 'Cut off from Windows: not known (the distro did not answer)'
+      Set-TrayEnabled $pair $false; Set-TrayEnabled $sessions $false
+    } catch { }
+    throw
   }
-  $ni.Icon = $icons[$v.Colour]
-  $one = (($text -replace "`0", '') -split "`r?`n" | Where-Object { $_.Trim() }) -join ' '
-  # each change of what it shows goes in the log too, so "what did the tray say, and when" has an answer
-  if ("$($v.Colour) $($v.Words)" -ne $state.shown) {
-    Log "tray: $($v.Colour), Talos $($v.Words) ($(if ($one) { $one } else { 'no answer' }))"
-    $state.shown = "$($v.Colour) $($v.Words)"
-  }
-  $lineTalos.Text = "Talos: $($v.Words)"
-  $tip = "Talos: $($v.Words)"
-  $ni.Text = if ($tip.Length -gt 63) { $tip.Substring(0, 63) } else { $tip }
 }
 
 # ---- keeping the PC awake on AC power (Setup's checkbox, on by default) -----------------------------------------------------
@@ -331,7 +398,8 @@ function Show-SignIn {
         $raw = ($raw -replace "`0", '').Trim()
         if (-not $raw.StartsWith('{')) { continue }
         try { $e = $raw | ConvertFrom-Json } catch { continue }
-        Log "sign-in: $($e.event)"
+        # which failure, by signin.py's fixed id only (never a code, a link or its sentence; Pantheon, 2026-11-18)
+        Log "sign-in: $(Format-TalosSignInLogLine $e)"
         switch ("$($e.event)") {
           'url' {
             # only a link to Claude's own sign-in pages is ever opened
@@ -380,7 +448,7 @@ function Show-SignIn {
   $t.Start()
   [void]$f.ShowDialog()
 }
-$signIn.add_Click({ Show-SignIn })
+$signIn.add_Click({ Invoke-TrayStep 'the sign-in window' { Show-SignIn } })
 
 # ---- "Approve this change" (Fable R2-4 on c9a60023) ----------------------------------------------------------------------
 # Root works out how Talos starts Claude (launch-check) and this shows it, old -> new; a click approves exactly what was shown
@@ -434,7 +502,7 @@ function Show-Approve {
   $no.add_Click({ $f.Close() })
   [void]$f.ShowDialog()
 }
-$approve.add_Click({ Show-Approve })
+$approve.add_Click({ Invoke-TrayStep 'the approval window' { Show-Approve } })
 
 # ---- "Pair a phone" ------------------------------------------------------------------------------------------------------
 # A window over `talos-wsl.sh pair` (pair.py in the distro, running `talos-app enroll --json` in its own pty). It shows the
@@ -510,7 +578,7 @@ function Show-Pair {
         try { $e = $raw | ConvertFrom-Json } catch { continue }
         # once it has ended (Paired, Not paired, expired, stopped), nothing more is shown (Fable R6-5)
         if ($s.done) { continue }
-        Log "pair: $($e.event)"
+        Log "pair: $(Format-TalosPairLogLine $e)"
         $text = Get-TalosPairText $e
         if ($text) { $msg.Text = $text }
         if ("$($e.event)" -eq 'warning') { $s.warn = $text }
@@ -586,7 +654,7 @@ function Show-Pair {
   $t.Start()
   [void]$f.ShowDialog()
 }
-$pair.add_Click({ Show-Pair })
+$pair.add_Click({ Invoke-TrayStep 'the pairing window' { Show-Pair } })
 
 # ---- "Open a thread's session" -------------------------------------------------------------------------------------------
 # The list, read as talos through the isolation gate, off the menu's own thread (Fable on 3b046779: a wait here froze the
@@ -643,7 +711,7 @@ $threadTimer.add_Tick({
     }
     $threadTimer.Stop()
     $threadRead.ps.Dispose(); $threadRead.ps = $null
-    Show-SessionsMenu $json
+    Invoke-TrayStep 'showing the thread list' { Show-SessionsMenu $json }
   })
 function Show-SessionsMenu($json) {
   $sessions.DropDownItems.Clear()
@@ -673,7 +741,7 @@ function Open-ThreadSession([string]$Id) {
     Log "tray: could not open the session of thread ${Id}: $($_.Exception.Message)"
   }
 }
-$sessions.add_DropDownOpening({ Start-SessionsRead })
+$sessions.add_DropDownOpening({ Invoke-TrayStep 'reading the thread list' { Start-SessionsRead } })
 
 # ---- "Start Talos" / "Restart Talos" and "Restore last good setup" ---------------------------------------------------------
 # Root's own verbs (talos-wsl.sh restart / restore), run as a process of their own behind a small window, so the menu never
@@ -716,7 +784,7 @@ function Start-TalosRootVerb([string]$Verb, [string]$Title, [string]$Busy) {
       $out = ''
       if ($s.out.Wait(2000)) { $out = "$($s.out.Result)" }
       $msg.Text = Get-TalosRecoveryText $Verb $out
-      Log "$($Verb): $((@($out -split "`r?`n" | Where-Object { $_.Trim() }) -join ' ') -replace '[^a-z \-]', '')"
+      Log "$($Verb): $(Format-TalosRootVerbLogLine $out)"
       $close.Enabled = $true
       Start-Status
     })
@@ -736,16 +804,16 @@ $startItem.add_Click({
       if ($a -ne [Windows.Forms.DialogResult]::Yes) { return }
     }
     $state.restarted = Get-Date # Check Talos closes its window only when a restart really ran (not on No)
-    Start-TalosRootVerb 'restart' $startItem.Text.TrimEnd('.') 'Starting Talos...'
+    Invoke-TrayStep 'the restart window' { Start-TalosRootVerb 'restart' $startItem.Text.TrimEnd('.') 'Starting Talos...' }
   })
 $restoreItem.add_Click({
     $a = [Windows.Forms.MessageBox]::Show("Restore last good setup?`n`nThis puts back the agent's Claude Code settings from the last time Talos started cleanly (recent changes to them are undone), then restarts Talos.",
       'Talos', [Windows.Forms.MessageBoxButtons]::YesNo, [Windows.Forms.MessageBoxIcon]::Question)
     if ($a -ne [Windows.Forms.DialogResult]::Yes) { return }
-    Start-TalosRootVerb 'restore' 'Restore last good setup' 'Putting back the last good setup...'
+    Invoke-TrayStep 'the restore window' { Start-TalosRootVerb 'restore' 'Restore last good setup' 'Putting back the last good setup...' }
   })
 
-$kitItem.add_Click({ Start-TalosRootVerb 'kit-update' 'Update the kit' 'Updating the kit...' })
+$kitItem.add_Click({ Invoke-TrayStep 'the kit update window' { Start-TalosRootVerb 'kit-update' 'Update the kit' 'Updating the kit...' } })
 
 # ---- "Check Talos" ---------------------------------------------------------------------------------------------------------
 # doctor --json read off the window's thread (a runspace, like the thread list), at most 64 KB, given up at 100 s; the window
@@ -899,9 +967,9 @@ function Show-Check {
   $t.Start()
   [void]$f.ShowDialog()
 }
-$checkItem.add_Click({ Show-Check })
+$checkItem.add_Click({ Invoke-TrayStep 'the check window' { Show-Check } })
 
-$openLog.add_Click({ Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') -ArgumentList "`"$dir`"" })
+$openLog.add_Click({ Invoke-TrayStep 'opening the log folder' { Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') -ArgumentList "`"$dir`"" } })
 $quit.add_Click({
     $a = [Windows.Forms.MessageBox]::Show(
       "Quit the Talos tray?`n`nTalos stops once Windows lets its distro ($Distro) go, usually within a minute. It starts again at your next sign-in, or when you run the tray again.",
@@ -909,17 +977,24 @@ $quit.add_Click({
     if ($a -ne [Windows.Forms.DialogResult]::Yes) { return }
     $state.quitting = $true
     Log "the tray was quit; the $Distro distro is no longer held"
-    if ($state.hold -and -not $state.hold.HasExited) { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $state.hold.Id 2>&1 | Out-Null }
+    Invoke-TrayStep 'stopping the hold' { if ($state.hold -and -not $state.hold.HasExited) { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $state.hold.Id 2>&1 | Out-Null } }
     $ni.Visible = $false
     [Windows.Forms.Application]::Exit()
   })
 
 $holdTimer = New-Object Windows.Forms.Timer
 $holdTimer.Interval = 2000
-$holdTimer.add_Tick({ Watch-Sleep; Watch-Hold; Receive-Status })
+$holdTimer.add_Tick({
+    Invoke-TrayStep 'the sleep check' { Watch-Sleep }
+    Invoke-TrayStep 'the keep-alive check' { Watch-Hold }
+    Invoke-TrayStep 'reading the status' { Receive-Status }
+  })
 $statusTimer = New-Object Windows.Forms.Timer
 $statusTimer.Interval = 30000
-$statusTimer.add_Tick({ Start-Status; Update-StayAwake })
+$statusTimer.add_Tick({
+    Invoke-TrayStep 'asking for the status' { Start-Status }
+    Invoke-TrayStep 'the stay-awake setting' { Update-StayAwake }
+  })
 
 Log "tray started for $Distro"
 try {
@@ -929,7 +1004,11 @@ try {
   # the first status a moment after the hold starts the distro, not 30 s later
   $first = New-Object Windows.Forms.Timer
   $first.Interval = 3000
-  $first.add_Tick({ $first.Stop(); Start-Status; Update-StayAwake })
+  $first.add_Tick({
+      $first.Stop()
+      Invoke-TrayStep 'asking for the first status' { Start-Status }
+      Invoke-TrayStep 'the stay-awake setting' { Update-StayAwake }
+    })
   $first.Start()
   [Windows.Forms.Application]::Run()
 } finally {

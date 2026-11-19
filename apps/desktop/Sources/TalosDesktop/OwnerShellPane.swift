@@ -57,6 +57,10 @@ final class OwnerShellPane: NSObject, LocalProcessTerminalViewDelegate {
     let folder: String
     let title: String
     let started = Date()
+    /// How much this shell has printed lately (a count and a time, never bytes): `runScript` reads it to see that the shell answered.
+    fileprivate let pulse = OutputPulse()
+    /// One `runScript` at a time in this shell.
+    fileprivate let gate = AsyncGate()
     fileprivate init(id: Int, view: SafeTerminalView, folder: String, title: String) {
       self.id = id
       self.view = view
@@ -182,6 +186,59 @@ final class OwnerShellPane: NSObject, LocalProcessTerminalViewDelegate {
     hide()
   }
 
+  // MARK: the one entry for a script (ShellRunChannel)
+
+  /// Puts a Run's script into the selected shell of the thread whose pane is on screen. Takes a `Ticket`, which only `ShellRunChannel` can
+  /// make, and only after the owner's own click vouched for this exact Run, so this is the single way into a shell's input other than the
+  /// owner's own keys and paste. It writes only when the shell is at its line editor: its process runs and has had a moment to start, the
+  /// terminal's foreground process group is the shell's own, and the shell has turned on bracketed paste. Otherwise nothing is written
+  /// (`.wait`: not yet, the channel asks again for a few seconds). When it is, whatever is on the shell's line (a half-typed command, an
+  /// open `for`) is discarded first with Ctrl+C, and the script goes only once the shell has answered it and is back at its prompt, as
+  /// one bracketed paste and one Return: never appended to someone else's line.
+  func runScript(_ ticket: ShellRunChannel.Ticket, deadline: Double, now: @escaping () -> Double) async -> ShellRunChannel.Step {
+    guard showing == ticket.thread, container.superview != nil, threads[ticket.thread] != nil else { return .wait(.noPane) }
+    guard let tab = selectedTab(ticket.thread) else { return .wait(.noShell) }
+    let v = tab.view
+    // one Run at a time in a shell: a second waits for the first to be done with the line
+    await tab.gate.lock()
+    defer { tab.gate.unlock() }
+    noteEntered()
+    defer { noteLeft() }
+    guard showing == ticket.thread, selectedTab(ticket.thread) === tab else { return .wait(.noPane) }
+    guard atLineEditor(tab) else { return .wait(started(tab) ? .busy : .noShell) }
+    // nothing is written after the Run's budget: a Run the bridge has stopped waiting for must not run
+    guard now() < deadline else { return .refused(.busy) }
+    // discard the line (and any continuation), then wait for the shell to take it: output since, quiet, line editor back
+    let before = tab.pulse.state.count
+    put([0x03], in: v)
+    let clearEnd = min(now() + PaneRun.clearWaitSeconds, deadline)
+    while true {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+      guard showing == ticket.thread, selectedTab(ticket.thread) === tab else { return .refused(.noPane) }
+      let pulse = tab.pulse.state
+      if pulse.count > before, Monotonic.now() - pulse.lastAt >= PaneRun.promptQuietSeconds, atLineEditor(tab) { break }
+      if now() >= clearEnd { return .refused(.busy) }  // it did not come back to its prompt: nothing more is written
+    }
+    guard now() < deadline else { return .refused(.busy) }
+    put(PaneRun.bytes(script: ticket.script), in: v)
+    return .wrote
+  }
+
+  private func started(_ tab: Tab) -> Bool {
+    guard let p = tab.view.process, p.running, p.shellPid > 1 else { return false }
+    return Date().timeIntervalSince(tab.started) >= PaneRun.shellStartSeconds
+  }
+
+  /// Started, the terminal's foreground process group is the shell's own (if that cannot be read, it is not known to be), and the shell has
+  /// bracketed paste on: a shell at its line editor. A startup profile still running, a `read`, a `vared`, a running program are not.
+  private func atLineEditor(_ tab: Tab) -> Bool {
+    guard started(tab), let p = tab.view.process, tcgetpgrp(p.childfd) == p.shellPid else { return false }
+    return tab.view.terminalStateSnapshot().bracketedPasteMode  // only this one flag is read
+  }
+
+  /// The one write to a shell in the app that is not the owner's own keys.
+  private func put(_ bytes: [UInt8], in v: SafeTerminalView) { v.send(data: bytes[...]); noteWrite(bytes) }
+
   // MARK: what only the owner can do (clicks on the native strip)
 
   @objc private func plusPressed(_ sender: Any?) {
@@ -242,6 +299,7 @@ final class OwnerShellPane: NSObject, LocalProcessTerminalViewDelegate {
     shells.started += 1
     let tab = Tab(id: nextTab, view: v, folder: folder, title: ShellPane.tabTitle(folder: folder, number: shells.started))
     nextTab += 1
+    v.setProcessOutputHandler { [pulse = tab.pulse] in pulse.tick() }
     shells.tabs.append(tab)
     shells.selected = tab.id
     threads[thread] = shells
@@ -377,6 +435,23 @@ final class OwnerShellPane: NSObject, LocalProcessTerminalViewDelegate {
   /// How many shells did not go on the hangup and had to be killed.
   private(set) var forcedKillsForTest = 0
 
+  #if DEBUG
+    /// What `runScript` wrote and how many ran at once: tests only.
+    private(set) var writesForTest: [[UInt8]] = []
+    private(set) var maxRunsInFlightForTest = 0
+    private var runsInFlight = 0
+    private func noteWrite(_ b: [UInt8]) { writesForTest.append(b) }
+    private func noteEntered() {
+      runsInFlight += 1
+      maxRunsInFlightForTest = max(maxRunsInFlightForTest, runsInFlight)
+    }
+    private func noteLeft() { runsInFlight -= 1 }
+  #else
+    private func noteWrite(_ b: [UInt8]) {}
+    private func noteEntered() {}
+    private func noteLeft() {}
+  #endif
+
   // MARK: tests. Not in the app that ships: a release build has no way from outside this file to a shell's view.
   #if DEBUG
     var noteTextForTest: String? { note.isHidden ? nil : note.stringValue }
@@ -397,4 +472,21 @@ final class OwnerShellPane: NSObject, LocalProcessTerminalViewDelegate {
       tabPressed(b)
     }
   #endif
+}
+
+/// A first-come lock for async work on the main actor: `lock()` returns when the caller holds it; `unlock()` hands it to the next in line.
+@MainActor
+final class AsyncGate {
+  private var held = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  func lock() async {
+    if !held {
+      held = true
+      return
+    }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+  func unlock() {
+    if waiters.isEmpty { held = false } else { waiters.removeFirst().resume() }
+  }
 }

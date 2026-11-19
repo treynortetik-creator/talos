@@ -37,6 +37,25 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// before the view loads and kept in memory only.
     var firstPage: URL?
     private var firstRunView: FirstRunView?
+    /// Runs this relay's attests and writes the result into `relayContext.trust` (BYOR phase 4b). nil for a page that is no paired relay.
+    private(set) var attestCoordinator: AttestCoordinator?
+    /// Who runs the attests. Only a DEBUG build (the tests) can replace it; a release build always makes the real one.
+    #if DEBUG
+    static var attester: @MainActor () -> AttestRunning = { LiveAttester() }
+    #else
+    static let attester: @MainActor () -> AttestRunning = { LiveAttester() }
+    #endif
+    private let repinPrompt = RepinPrompt()
+    private var trustBanner: TrustBannerView?
+    private var trustBlock: TrustBlockView?
+    private var attestTimer: Timer?
+    /// Fires once at last-verified + 24 h so the block screen shows on time even when no check runs (a check that cannot answer is not needed for it).
+    private var hardBlockTimer: Timer?
+    /// `<origin>/enroll#<code>` waits here until the first attest has answered: the code goes to the page only after a pass.
+    private var pendingFirstPage: URL?
+    private var launchLoadDone = false
+    /// For tests: the address the last `loadRelay` asked the web view for.
+    private(set) var lastRelayLoad: URL?
     private var pathMonitor: NWPathMonitor?
     private var launchWatchdog: Timer?
     private var revival: WebViewRevival?
@@ -79,6 +98,10 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         pathMonitor = nil
         launchWatchdog?.invalidate()
         launchWatchdog = nil
+        attestTimer?.invalidate()
+        attestTimer = nil
+        hardBlockTimer?.invalidate()
+        hardBlockTimer = nil
     }
 
     override func viewDidLoad() {
@@ -106,7 +129,10 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             showFirstRun()
         } else if let page = firstPage {
             firstPage = nil
-            if guardian?.isRelayURL(page) == true { loadRelay(startingAt: page) }
+            if guardian?.isRelayURL(page) == true {
+                // Nothing loads before the first attest has answered (BYOR phase 4b): the code goes only to a relay that just passed.
+                if attestCoordinator == nil { loadRelay(startingAt: page) } else { pendingFirstPage = page }
+            }
         }
     }
 
@@ -255,6 +281,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
                 TalosAudioPlugin.resetSession()
                 TalosPushCenter.shared.pageLeft()
             },
+            pageLoadAllowed: { [weak trust] in trust?.allowsPageLoad ?? false },
             retry: { [weak self] in self?.retryIfNeeded(tapped: true) },
             processDied: { [weak self] in self?.webProcessDied() },
             didCommit: { [weak self] in self?.pageDidCommit() },
@@ -287,7 +314,11 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             reload: { [weak self] in self?.loadRelay(keepingRoute: true, recovering: true) },
             rebuild: { [weak self] in self?.rebuildWebView() })
         startRetryTriggers()
-        startLaunchWatchdog()
+        if let profile = context.active.profile {
+            startAttests(profile: profile, context: context)
+        } else {
+            startLaunchWatchdog()
+        }
     }
 
     // MARK: First run
@@ -309,6 +340,195 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// For tests: whether the native first-run screen is up.
     var isShowingFirstRun: Bool { firstRunView?.superview != nil && firstRunView?.isHidden == false }
 
+    // MARK: Mac check (BYOR phase 4b, docs/specs/BYOR-phase4-frame.md sections 4 to 7)
+
+    /// The relay starts unverified. A check runs at launch before anything loads, on foreground, on a network change, on a timer while
+    /// in front, and when the page asks (`TalosRelay.recheck`). The result decides whether the page loads and what native code may do.
+    private func startAttests(profile: RelayProfile, context: RelayContext) {
+        let store = webView?.configuration.websiteDataStore.httpCookieStore
+        let coordinator = AttestCoordinator(
+            profile: profile, trust: context.trust, runner: TalosBridgeViewController.attester(),
+            cookie: { [weak store] in
+                guard let store else { return nil }
+                return await PairedSessionCookie.header(store: store, origin: profile.origin)
+            },
+            store: { TalosBridgeViewController.runtime().store() },
+            confirmRepin: { [weak self] host, _ in
+                guard let self else { return .decline }
+                return await self.repinPrompt.ask(host: host) { self.topPresenter() }
+            },
+            changed: { [weak self] in self?.trustChanged() },
+            remove: { [weak self] in self?.removeRelay() })
+        attestCoordinator = coordinator
+        attestTimer = Timer.scheduledTimer(withTimeInterval: AttestSchedule.timerInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if UIApplication.shared.applicationState == .active { self?.runAttest(.timer) }
+            }
+        }
+        // The launch spinner covers the wait; the offline page cannot show in the middle of the check, because the watchdog starts
+        // only when the page load does (loadRelay).
+        runAttest(.launch)
+    }
+
+    private func runAttest(_ trigger: AttestCoordinator.Trigger) {
+        guard let coordinator = attestCoordinator else { return }
+        Task { @MainActor in await coordinator.run(trigger) }
+    }
+
+    /// An attest has answered (any answer): show what the trust state says, and run the first load once.
+    private func trustChanged() {
+        guard let trust = relayContext?.trust, trust.settled else { return }
+        if !launchLoadDone {
+            launchLoadDone = true
+            let page = pendingFirstPage
+            pendingFirstPage = nil
+            // The setup code goes only to a relay that has just passed; unverified loads the ordinary start page, read-only.
+            loadRelay(startingAt: trust.state == .pass ? page : nil)
+        }
+        refreshTrustUI()
+    }
+
+    private var trustBlockedBefore = false
+
+    /// Banner for unverified, full-screen native screen (no page) for failed and hard-block. Leaving a block brings the page back.
+    func refreshTrustUI() {
+        guard let trust = relayContext?.trust, trust.settled else { return }
+        let host = relayContext?.active.profile?.label ?? ""
+        let now = Date()
+        let state = trust.state
+        switch state {
+        case .pass:
+            removeBanner(); removeBlock()
+        case let .unverified(lastVerified, reason):
+            removeBlock()
+            showBanner(TrustWords.banner(lastVerified: lastVerified, reason: reason, host: host, now: now))
+        case let .failed(reason):
+            removeBanner()
+            showBlock(title: TrustWords.failTitle, text: TrustWords.failBody(host: host), retry: false)
+            CAPLog.print("Talos: this relay failed the Mac check (\(reason))")
+        case let .hardBlock(lastVerified):
+            removeBanner()
+            showBlock(title: TrustWords.blockTitle, text: TrustWords.blockBody(lastVerified: lastVerified, host: host, now: now), retry: true)
+        }
+        if !state.allowsNativeFeatures { stopMediaCapture() }
+        let blocked = !state.loadsPage
+        if blocked, !trustBlockedBefore { clearPage() }
+        if !blocked, trustBlockedBefore { loadRelay() }
+        trustBlockedBefore = blocked
+        trustBanner?.retry.isEnabled = true
+        scheduleHardBlockRefresh(trust)
+    }
+
+    private func scheduleHardBlockRefresh(_ trust: RelayTrust) {
+        hardBlockTimer?.invalidate()
+        hardBlockTimer = nil
+        guard let delay = RelayTrust.secondsUntilHardBlock(lastVerified: trust.lastVerifiedAt, now: Date()) else { return }
+        hardBlockTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshTrustUI() }
+        }
+    }
+
+    /// For tests: what the native trust surfaces show.
+    var isShowingTrustBanner: Bool { trustBanner?.superview != nil }
+    var trustBannerText: String? { trustBanner?.message.text }
+    var isShowingTrustBlock: Bool { trustBlock?.superview != nil }
+    var trustBlockIsFail: Bool { trustBlock?.accessibilityIdentifier == "trust.fail" }
+    var isRepinPromptShowing: Bool { repinPrompt.isShowing }
+    var repinPromptForTests: RepinPrompt { repinPrompt }
+    /// For tests: how many times the page's camera and microphone were ended because the relay was not verified.
+    private(set) var mediaCaptureStops = 0
+    /// For tests: the launch watchdog is counting.
+    var isLaunchWatchdogRunning: Bool { launchWatchdog?.isValid == true }
+
+    private func showBanner(_ text: String) {
+        launchSpinner.stopAnimating()
+        if trustBanner == nil {
+            let banner = TrustBannerView(onRetry: { [weak self] in self?.retryTapped() }, onRemove: { [weak self] in self?.removeRelay() })
+            banner.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(banner)
+            NSLayoutConstraint.activate([
+                banner.topAnchor.constraint(equalTo: view.topAnchor),
+                banner.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                banner.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            ])
+            trustBanner = banner
+        }
+        if trustBanner?.message.text != text { UIAccessibility.post(notification: .announcement, argument: text) }
+        trustBanner?.message.text = text
+        if let banner = trustBanner { view.bringSubviewToFront(banner) }
+        applyBannerInset()
+    }
+
+    private func removeBanner() {
+        trustBanner?.removeFromSuperview()
+        trustBanner = nil
+        applyBannerInset()
+    }
+
+    /// The banner sits over the top of the web view, so the page is moved down by its height: the page's own header and links stay
+    /// reachable under it (the page is read-only, not hidden).
+    private func applyBannerInset() {
+        guard let scroll = webView?.scrollView else { return }
+        view.layoutIfNeeded()
+        let top = trustBanner?.frame.height ?? 0
+        guard scroll.contentInset.top != top else { return }
+        let wasAtTop = scroll.contentOffset.y <= -scroll.contentInset.top + 1
+        scroll.contentInset.top = top
+        scroll.verticalScrollIndicatorInsets.top = top
+        if wasAtTop { scroll.contentOffset.y = -top }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if trustBanner != nil { applyBannerInset() }
+    }
+
+    private func showBlock(title: String, text: String, retry: Bool) {
+        launchSpinner.stopAnimating()
+        launchWatchdog?.invalidate()
+        launchWatchdog = nil
+        removeBlock()
+        let block = TrustBlockView(
+            title: title, text: text, onRetry: retry ? { [weak self] in self?.retryTapped() } : nil, onRemove: { [weak self] in self?.removeRelay() })
+        block.frame = view.bounds
+        block.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(block)
+        trustBlock = block
+    }
+
+    private func removeBlock() {
+        trustBlock?.removeFromSuperview()
+        trustBlock = nil
+    }
+
+    /// WebKit keeps a camera or microphone grant that the delegate gave while the relay was verified, and does not ask the delegate again for
+    /// the same page, so leaving `.pass` must end what the page holds (found in the simulator run, BYOR-phase4-frame.md risk 9).
+    private func stopMediaCapture() {
+        mediaCaptureStops += 1
+        webView?.setCameraCaptureState(.none, completionHandler: nil)
+        webView?.setMicrophoneCaptureState(.none, completionHandler: nil)
+    }
+
+    /// The page goes: nothing of the relay stays in the web view under a block screen.
+    private func clearPage() {
+        webView?.stopLoading()
+        webView?.loadHTMLString("", baseURL: nil)
+        relayPageFinished = false
+        showingFallback = false
+    }
+
+    private func retryTapped() {
+        trustBanner?.retry.isEnabled = false
+        runAttest(.retry)
+    }
+
+    /// Remove goes straight to the native Add-relay sheet (the phone's list loses this relay first).
+    private func removeRelay() {
+        guard let profile = relayContext?.active.profile,
+              let scene = view.window?.windowScene?.delegate as? SceneDelegate, scene.window?.rootViewController === self else { return }
+        Task { @MainActor in await scene.removeRelayThenAdd(id: profile.id) }
+    }
+
     // MARK: Retry and launch fallback (audit D3, D49)
 
     /// Reload the relay when the web view is not showing a relay page: offline page, blank view, nothing loaded.
@@ -323,11 +543,12 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// that is on a relay page (not /media/) is loaded where it was, so a process that died does not take the owner back to the start.
     /// `recovering`: the page was lost (not the owner's own retry), so "Reconnecting…" covers the view until a page finishes.
     private func loadRelay(keepingRoute: Bool = false, recovering: Bool = false, startingAt: URL? = nil) {
-        guard let relayURL, let webView else { return }
+        guard let relayURL, let webView, relayContext?.trust.allowsPageLoad ?? true else { return }
         var target = startingAt ?? relayURL
         if keepingRoute, let current = webView.url, guardian?.isRelayURL(current) == true, !BridgeGuard.isMediaPath(current) {
             target = current
         }
+        lastRelayLoad = target
         relayPageFinished = false
         relayPageCommitted = false
         showingFallback = false
@@ -361,6 +582,8 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     /// This controller is being replaced: stop everything that could still act for it and let go of its web view, so the old web
     /// view (and with it the stuck web process) is not kept alive by a message handler or a delegate.
     func retire() {
+        attestCoordinator?.stop()
+        repinPrompt.cancel()
         stopWatching()
         guard let webView else { return }
         webView.stopLoading()
@@ -380,6 +603,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
                 self?.resumeLaunchWatchdog()
                 self?.retryIfNeeded()
                 self?.revival?.appDidForeground()
+                self?.runAttest(.foreground)
             }
         }
         // Leaving the front voids a check that is still waiting for an answer. In the background the launch watchdog stops too.
@@ -394,7 +618,10 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             guard path.status == .satisfied else { return }
-            DispatchQueue.main.async { self?.retryIfNeeded() }
+            DispatchQueue.main.async {
+                self?.retryIfNeeded()
+                self?.runAttest(.network)
+            }
         }
         monitor.start(queue: DispatchQueue(label: "app.talos.shell.path"))
         pathMonitor = monitor
@@ -531,356 +758,5 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     private func openInSafari(_ url: URL) {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
         topPresenter().present(SFSafariViewController(url: url), animated: true)
-    }
-}
-
-/// The "Reconnecting…" cover: the brand background (so nothing black shows through), a spinner and one line of text.
-final class ReconnectNoticeView: UIView {
-    static let text = "Reconnecting…"
-    private let spinner = UIActivityIndicatorView(style: .large)
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let ink = UIColor(red: 0xF3 / 255, green: 0xE6 / 255, blue: 0xCF / 255, alpha: 1)
-        backgroundColor = UIColor(red: 0x14 / 255, green: 0x11 / 255, blue: 0x10 / 255, alpha: 1)
-        spinner.color = ink
-        label.text = Self.text
-        label.textColor = ink
-        label.font = .preferredFont(forTextStyle: .body)
-        label.adjustsFontForContentSizeCategory = true
-        label.textAlignment = .center
-        label.numberOfLines = 0
-        let stack = UIStackView(arrangedSubviews: [spinner, label])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 16
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
-        ])
-        isAccessibilityElement = true
-        accessibilityLabel = Self.text
-        accessibilityTraits = .updatesFrequently
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not built from a storyboard") }
-
-    func start() { spinner.startAnimating() }
-    func stop() { spinner.stopAnimating() }
-}
-
-/// Receives `talosShareMedia {path, name, mime}` from the page. Same gate as plugin calls (top frame, relay origin, a page outside
-/// /media/), then the path must be exactly `/media/<id>`; the URL is built from the active relay origin, never from the page.
-final class ShareMediaMessageHandler: NSObject, WKScriptMessageHandler {
-    static let name = "talosShareMedia"
-    private let guardian: BridgeGuard
-    let trust: RelayTrust
-    private let share: (URL, String) -> Void
-
-    init(guardian: BridgeGuard, trust: RelayTrust, share: @escaping (URL, String) -> Void) {
-        self.guardian = guardian
-        self.trust = trust
-        self.share = share
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        let frame = message.frameInfo
-        let o = frame.securityOrigin
-        let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
-        let page = message.webView?.url ?? frame.request.url
-        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page, trust: trust.state),
-              let body = message.body as? [String: Any],
-              let path = body["path"] as? String,
-              let url = guardian.shareMediaURL(path: path)
-        else {
-            CAPLog.print("Talos bridge guard: dropped a share request")
-            return
-        }
-        share(url, BridgeGuard.shareFileName(body["name"] as? String ?? ""))
-    }
-}
-
-/// Downloads one relay file to a temp folder. Cookies are copied from the web view's store (only those that apply to this URL),
-/// redirects are refused (a relay file is never a redirect), and a non-200 answer is an error.
-enum MediaFetcher {
-    struct Failure: Error { let status: Int? }
-    private final class NoRedirect: NSObject, URLSessionTaskDelegate {
-        func urlSession(_ s: URLSession, task: URLSessionTask, willPerformHTTPRedirection r: HTTPURLResponse,
-                        newRequest: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-    }
-
-    static func fetch(url: URL, name: String, cookies: [HTTPCookie], into folder: URL) async throws -> URL {
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        for (k, v) in HTTPCookie.requestHeaderFields(with: cookies.filter { cookieApplies($0, to: url) }) { request.setValue(v, forHTTPHeaderField: k) }
-        let config = URLSessionConfiguration.ephemeral
-        config.httpShouldSetCookies = false
-        config.timeoutIntervalForResource = 300
-        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        let (tmp, response) = try await session.download(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            try? FileManager.default.removeItem(at: tmp)
-            throw Failure(status: (response as? HTTPURLResponse)?.statusCode)
-        }
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let dest = folder.appendingPathComponent(name, isDirectory: false)
-            try FileManager.default.moveItem(at: tmp, to: dest)
-            return dest
-        } catch {
-            // The download file would otherwise sit in the temp folder until the system clears it.
-            try? FileManager.default.removeItem(at: tmp)
-            throw error
-        }
-    }
-
-    private static func cookieApplies(_ c: HTTPCookie, to url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return false }
-        let d = c.domain.lowercased()
-        let hostMatch = d.hasPrefix(".") ? (host == String(d.dropFirst()) || host.hasSuffix(d)) : host == d
-        return hostMatch && (!c.isSecure || url.scheme == "https")
-    }
-
-    static func message(for error: Error) -> String {
-        if let f = error as? Failure, f.status == 410 || f.status == 404 {
-            return "This file expired from the relay. Ask the agent to resend it."
-        }
-        return "Check your connection and try again."
-    }
-}
-
-/// Forwards "bridge" messages to Capacitor's handler only when the guard allows them.
-final class GuardedMessageHandler: NSObject, WKScriptMessageHandler {
-    private let inner: WKScriptMessageHandler
-    private let guardian: BridgeGuard
-    let trust: RelayTrust
-    private var dropped = 0
-
-    init(inner: WKScriptMessageHandler, guardian: BridgeGuard, trust: RelayTrust) {
-        self.inner = inner
-        self.guardian = guardian
-        self.trust = trust
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        // Capacitor's own cookie and HTTP plugins are never reachable (BridgeGuard.blockedPluginIds).
-        guard !BridgeGuard.blocksPluginCall(body: message.body) else {
-            dropped += 1
-            CAPLog.print("Talos bridge guard: dropped call #\(dropped) to a blocked plugin")
-            return
-        }
-        let frame = message.frameInfo
-        let o = frame.securityOrigin
-        let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
-        // The top frame's URL decides the path; frameInfo.request is the fallback.
-        let page = message.webView?.url ?? frame.request.url
-        guard guardian.allowsPluginCall(isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: page, trust: trust.state) else {
-            dropped += 1
-            let who = origin.map { "\($0.scheme)://\($0.host)" } ?? "unknown origin"
-            CAPLog.print("Talos bridge guard: dropped call #\(dropped) from \(who)")
-            return
-        }
-        inner.userContentController(userContentController, didReceive: message)
-    }
-}
-
-/// Sits in front of Capacitor's WKNavigationDelegate / WKUIDelegate. It owns every decision that could hand control to
-/// untrusted content (navigation, popups, the prompt() cookie channel, camera/mic) and forwards the rest, including
-/// delegate methods added by later Capacitor versions, to the original handler.
-final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
-    private let inner: NSObject
-    private let guardian: BridgeGuard
-    let trust: RelayTrust
-    private let openInSafari: (URL) -> Void
-    private let showMedia: (URL) -> Void
-    private let pageDidReset: () -> Void
-    private let retry: () -> Void
-    private let processDied: () -> Void
-    private let didCommit: () -> Void
-    private let didFinish: () -> Void
-
-    init(
-        inner: NSObject, guardian: BridgeGuard, trust: RelayTrust,
-        openInSafari: @escaping (URL) -> Void, showMedia: @escaping (URL) -> Void,
-        pageDidReset: @escaping () -> Void = {},
-        retry: @escaping () -> Void = {},
-        processDied: @escaping () -> Void = {},
-        didCommit: @escaping () -> Void = {},
-        didFinish: @escaping () -> Void = {}
-    ) {
-        self.inner = inner
-        self.guardian = guardian
-        self.trust = trust
-        self.openInSafari = openInSafari
-        self.showMedia = showMedia
-        self.pageDidReset = pageDidReset
-        self.retry = retry
-        self.processDied = processDied
-        self.didCommit = didCommit
-        self.didFinish = didFinish
-    }
-
-    override func responds(to aSelector: Selector!) -> Bool {
-        super.responds(to: aSelector) || inner.responds(to: aSelector)
-    }
-
-    override func forwardingTarget(for aSelector: Selector!) -> Any? {
-        inner.responds(to: aSelector) ? inner : super.forwardingTarget(for: aSelector)
-    }
-
-    /// Top frame, relay origin, outside /media/: the same predicate that gates the bridge.
-    private func trusted(_ frame: WKFrameInfo, _ webView: WKWebView) -> Bool {
-        let o = frame.securityOrigin
-        let origin = o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port)
-        return guardian.allowsPluginCall(
-            isMainFrame: frame.isMainFrame, frameOrigin: origin, pageURL: webView.url ?? frame.request.url, trust: trust.state)
-    }
-
-    private func frameParts(_ frame: WKFrameInfo, _ webView: WKWebView) -> (Bool, Origin?, URL?) {
-        let o = frame.securityOrigin
-        return (frame.isMainFrame, o.host.isEmpty ? nil : Origin(scheme: o.protocol, host: o.host, port: o.port),
-                webView.url ?? frame.request.url)
-    }
-
-    private func promptChannelAllowed(_ frame: WKFrameInfo, _ webView: WKWebView) -> Bool {
-        let p = frameParts(frame, webView)
-        return guardian.allowsPromptChannel(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2, trust: trust.state)
-    }
-
-    private func devicePermission(_ frame: WKFrameInfo, _ webView: WKWebView) -> BridgeGuard.Permission {
-        let p = frameParts(frame, webView)
-        return guardian.devicePermission(isMainFrame: p.0, frameOrigin: p.1, pageURL: p.2, trust: trust.state)
-    }
-
-    private func route(_ url: URL) {
-        if guardian.isRelayMedia(url) { showMedia(url) } else { openInSafari(url) }
-    }
-
-    // MARK: Navigation
-
-    func webView(
-        _ webView: WKWebView,
-        decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-    ) {
-        // The offline page's "Try again" is a talos-retry:// link: handled here, never loaded (audit D3).
-        if let url = navigationAction.request.url, BridgeGuard.isRetryURL(url) {
-            if guardian.allowsRetry(url: url, isMainFrame: navigationAction.sourceFrame.isMainFrame, currentURL: webView.url) {
-                retry()
-            }
-            decisionHandler(.cancel)
-            return
-        }
-        if let url = navigationAction.request.url,
-           guardian.shouldOpenInSafari(
-               url: url,
-               isNewWindow: navigationAction.targetFrame == nil,
-               isMainFrameTarget: navigationAction.targetFrame?.isMainFrame ?? true
-           ) {
-            route(url)
-            decisionHandler(.cancel)
-            return
-        }
-        guard let ui = inner as? WKNavigationDelegate else { return decisionHandler(.allow) }
-        ui.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
-    }
-
-    /// A relay page that answers with a server error is a failed load, not a loaded page: it is cancelled, WebKit reports the
-    /// load as failed and Capacitor shows the offline page, so the retries (tap, network return, foreground) apply. If that
-    /// ever does not happen, the launch watchdog still falls to the offline page, since no relay page finished.
-    func webView(
-        _ webView: WKWebView,
-        decidePolicyFor navigationResponse: WKNavigationResponse,
-        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
-    ) {
-        if navigationResponse.isForMainFrame, let url = navigationResponse.response.url, guardian.isRelayURL(url),
-           BridgeGuard.isFailedPageLoad(statusCode: (navigationResponse.response as? HTTPURLResponse)?.statusCode) {
-            return decisionHandler(.cancel)
-        }
-        (inner as? WKNavigationDelegate)?.webView?(webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler)
-            ?? decisionHandler(.allow)
-    }
-
-    // MARK: The page went away: a new document committed (reload, navigation) or the web process died. Whatever audio it
-    // had asked for is over, so the session is released (TalosAudio idle).
-
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        pageDidReset()
-        didCommit()
-        (inner as? WKNavigationDelegate)?.webView?(webView, didCommit: navigation)
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        didFinish()
-        (inner as? WKNavigationDelegate)?.webView?(webView, didFinish: navigation)
-    }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        pageDidReset()
-        // Capacitor resets its bridge and calls reload(); the shell's own watched load follows and replaces that reload.
-        (inner as? WKNavigationDelegate)?.webViewWebContentProcessDidTerminate?(webView)
-        processDied()
-    }
-
-    // MARK: Popups
-
-    func webView(
-        _ webView: WKWebView,
-        createWebViewWith configuration: WKWebViewConfiguration,
-        for navigationAction: WKNavigationAction,
-        windowFeatures: WKWindowFeatures
-    ) -> WKWebView? {
-        let url = navigationAction.request.url
-        switch guardian.popupAction(url: url, sourceIsTrusted: trusted(navigationAction.sourceFrame, webView)) {
-        case .showMedia, .openInBrowser: if let url { route(url) }
-        case .openMail: if let url { UIApplication.shared.open(url, options: [:], completionHandler: nil) }
-        case .refuse: break
-        }
-        // Every other scheme (tel:, other apps' URL schemes, javascript:, data:) is refused: a page cannot launch apps.
-        return nil
-    }
-
-    // MARK: prompt() cookie channel (Capacitor answers CapacitorCookies.get/set here, for any frame)
-
-    func webView(
-        _ webView: WKWebView,
-        runJavaScriptTextInputPanelWithPrompt prompt: String,
-        defaultText: String?,
-        initiatedByFrame frame: WKFrameInfo,
-        completionHandler: @escaping (String?) -> Void
-    ) {
-        // Capacitor's cookie and HTTP plugins are refused here too: its handler answers CapacitorCookies.* for any enabled state.
-        guard !BridgeGuard.blocksPrompt(prompt), promptChannelAllowed(frame, webView), let ui = inner as? WKUIDelegate
-        else { return completionHandler(nil) }
-        ui.webView?(
-            webView, runJavaScriptTextInputPanelWithPrompt: prompt, defaultText: defaultText,
-            initiatedByFrame: frame, completionHandler: completionHandler) ?? completionHandler(nil)
-    }
-
-    // MARK: Camera, microphone, motion: trusted frame only (Capacitor's own handler grants everything)
-
-    func webView(
-        _ webView: WKWebView,
-        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
-        initiatedByFrame frame: WKFrameInfo,
-        type: WKMediaCaptureType,
-        decisionHandler: @escaping (WKPermissionDecision) -> Void
-    ) {
-        decisionHandler(devicePermission(frame, webView) == .grant ? .grant : .deny)
-    }
-
-    func webView(
-        _ webView: WKWebView,
-        requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
-        initiatedByFrame frame: WKFrameInfo,
-        decisionHandler: @escaping (WKPermissionDecision) -> Void
-    ) {
-        decisionHandler(devicePermission(frame, webView) == .grant ? .grant : .deny)
     }
 }

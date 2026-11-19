@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS claim_settled (
   message_id TEXT PRIMARY KEY,
   at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS main_handover (
+  message_id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS card_raisers (
   card_id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL,
@@ -117,6 +122,52 @@ export class WorkerStore {
       .query(
         `SELECT r.* FROM worker_routes r LEFT JOIN inbound_claims c ON c.message_id = r.message_id
          WHERE c.message_id IS NULL ORDER BY r.woke_at`,
+      )
+      .all() as Array<Record<string, unknown>>
+    return rows.map(toRoute)
+  }
+
+  /**
+   * The router is handing a late route (a deadline or a switch-off) to main: written when the hand-over begins, deleted when
+   * `mainEmit` returns. A row left behind is a hand-over a stop cut short, which the next start repeats. Databases from before
+   * this table have no rows, so an upgrade redelivers nothing.
+   */
+  beginMainHandover(messageId: string, now: number): void {
+    this.db.query('INSERT OR IGNORE INTO main_handover(message_id, at) VALUES (?, ?)').run(messageId, now)
+  }
+
+  endMainHandover(messageId: string): void {
+    this.db.query('DELETE FROM main_handover WHERE message_id = ?').run(messageId)
+  }
+
+  /** A repeat that failed for a reason of its own: the number of failures so far for this message. */
+  failMainHandover(messageId: string): number {
+    this.db.query('UPDATE main_handover SET attempts = attempts + 1 WHERE message_id = ?').run(messageId)
+    const r = this.db.query('SELECT attempts FROM main_handover WHERE message_id = ?').get(messageId) as {
+      attempts: number
+    } | null
+    return r?.attempts ?? 0
+  }
+
+  /**
+   * Rows whose route main no longer holds the claim for (`close()` gave it back after the row was written, or a worker has it):
+   * the deadline path owns those, and a repeat from the row too would hand main the message twice.
+   */
+  dropStaleMainHandovers(): void {
+    this.db
+      .query(
+        `DELETE FROM main_handover WHERE message_id NOT IN (SELECT message_id FROM inbound_claims WHERE claimed_by = 'main')`,
+      )
+      .run()
+  }
+
+  /** Hand-overs a stop cut short whose route main still holds the claim for, oldest first. */
+  pendingMainHandovers(): RouteRow[] {
+    const rows = this.db
+      .query(
+        `SELECT r.* FROM worker_routes r JOIN main_handover h ON h.message_id = r.message_id
+         JOIN inbound_claims c ON c.message_id = r.message_id
+         WHERE c.claimed_by = 'main' ORDER BY r.woke_at, r.message_id`,
       )
       .all() as Array<Record<string, unknown>>
     return rows.map(toRoute)
@@ -224,6 +275,7 @@ export class WorkerStore {
     this.db.query('DELETE FROM worker_routes WHERE woke_at < ?').run(cut)
     this.db.query('DELETE FROM inbound_claims WHERE at < ?').run(cut)
     this.db.query('DELETE FROM claim_settled WHERE at < ?').run(cut)
+    this.db.query('DELETE FROM main_handover WHERE at < ?').run(cut)
     this.db.query('DELETE FROM card_raisers WHERE at < ?').run(cut)
   }
 }

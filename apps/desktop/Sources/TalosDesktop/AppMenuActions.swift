@@ -80,6 +80,7 @@ enum AppMenuActions {
     case .signIn: SignInAction.start(model: model)
     case .signOut: Task { await web.signOut() }
     case .quit: model.quitFromMenu()
+    case .reload: web.reloadFrontWindow()
     case .hide, .hideOthers, .showAll, .closeWindow, .minimize: break  // AppKit's own actions
     }
   }

@@ -19,7 +19,7 @@ describe('D3: offline page retry is native', () => {
     expect(html.toLowerCase()).not.toContain('relay')
   })
   it('a relay page that answers with a server error is cancelled as a failed load, so the offline page and its retries follow', () => {
-    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`))
     // which statuses count is BridgeGuard.isFailedPageLoad (ShellPolicyTests)
     expect(swiftBody(vc, 'decidePolicyFor navigationResponse')).toMatch(
       /if navigationResponse\.isForMainFrame, let url = navigationResponse\.response\.url, guardian\.isRelayURL\(url\),\s*BridgeGuard\.isFailedPageLoad\(statusCode: \(navigationResponse\.response as\? HTTPURLResponse\)\?\.statusCode\) \{\s*return decisionHandler\(\.cancel\)/,
@@ -28,7 +28,7 @@ describe('D3: offline page retry is native', () => {
   it('the view controller intercepts the same scheme the page links to, and retries on tap, network return and foreground', () => {
     const swift = read('ios/BridgeGuard/Sources/BridgeGuard/ShellPolicy.swift')
     expect(swift).toContain('retryScheme = "talos-retry"')
-    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`))
     // a tap is decided by BridgeGuard.allowsRetry (ShellPolicyTests), acted on, and never loaded
     expect(swiftBody(vc, 'decidePolicyFor navigationAction')).toMatch(
       /if let url = navigationAction\.request\.url, BridgeGuard\.isRetryURL\(url\) \{\s*if guardian\.allowsRetry\(url: url, isMainFrame: navigationAction\.sourceFrame\.isMainFrame, currentURL: webView\.url\) \{\s*retry\(\)\s*\}\s*decisionHandler\(\.cancel\)\s*return/,
@@ -46,7 +46,7 @@ describe('D3: offline page retry is native', () => {
       /willResignActiveNotification, UIApplication\.didEnterBackgroundNotification[\s\S]*?revival\?\.cancel\(\)/,
     )
     expect(triggers).toMatch(
-      /guard path\.status == \.satisfied else \{ return \}\s*DispatchQueue\.main\.async \{ self\?\.retryIfNeeded\(\) \}/,
+      /guard path\.status == \.satisfied else \{ return \}\s*DispatchQueue\.main\.async \{\s*self\?\.retryIfNeeded\(\)\s*self\?\.runAttest\(\.network\)\s*\}/,
     )
     expect(triggers).toMatch(/monitor\.start\(queue:/)
     // Capacitor's reload for a terminated web process still runs: the shell forwards the callback after resetting audio
@@ -82,7 +82,7 @@ describe('D49: launch screen and background are Talos, not Capacitor', () => {
     expect(sb).toContain('red="0.0784313725"')
   })
   it('launch has a native spinner that stops when a page finishes, and a watchdog that falls to the offline page', () => {
-    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`))
     expect(swiftBody(vc, 'override func viewDidLoad')).toMatch(
       /view\.addSubview\(launchSpinner\)[\s\S]*launchSpinner\.startAnimating\(\)/,
     )
@@ -98,7 +98,7 @@ describe('D49: launch screen and background are Talos, not Capacitor', () => {
     )
   })
   it('a committed relay page gets the longer limit (slow bundle is not a stall)', () => {
-    const vc = read(`${APP}/TalosBridgeViewController.swift`)
+    const vc = read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`)
     expect(vc).toContain('BridgeGuard.launchLimit(relayPageCommitted: relayPageCommitted)')
     expect(vc).toContain('didCommit: { [weak self] in self?.pageDidCommit() }')
     expect(vc).toMatch(/didCommit\(\)\n\s+\(inner as\? WKNavigationDelegate\)\?\.webView\?\(webView, didCommit/)
@@ -132,7 +132,7 @@ describe('the media viewer closes with an X, never a swipe (the owner, 2026-11-1
   // A card (the default) closes on a swipe down, which fought every scroll of a long HTML page. Over full screen has no
   // swipe either and, unlike full screen, keeps the shell's web view in the window (a live call, the stuck-page rebuild).
   it('is presented over full screen, so no swipe closes it and the shell stays in the window', () => {
-    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`))
+    const vc = withoutComments(read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`))
     expect(vc).toMatch(
       /UINavigationController\(rootViewController: viewer\)[\s\S]{0,400}?modalPresentationStyle = \.overFullScreen/,
     )

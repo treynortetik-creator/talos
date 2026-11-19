@@ -35,6 +35,8 @@ public struct ScreenCore: Sendable {
   public var secretWindows: @Sendable () -> Set<UInt32> = { ScreenSecretWindows.current }
   /// Keys besides `ScreenKeyGuard`'s own that are never pressed: the owner's Talos hotkeys and this Mac's enabled shortcuts.
   public var refusedKeys: @Sendable () -> [ScreenKeyCombo] = { [] }
+  /// True while the Mac is locked (`ScreenLockState`). Tests pass their own; the live one reads the console session.
+  public var isLocked: @Sendable () -> Bool = { ScreenLockState.liveIsLocked() }
   /// How typing waits between pieces (`textPaceSeconds`); tests record it instead of sleeping.
   public var pause: @Sendable (Double) -> Void = { usleep(useconds_t(max(0, $0) * 1_000_000)) }
   /// The keyboard layout typed text is made from. Empty (the default): all text goes as Unicode strings.
@@ -52,10 +54,21 @@ public struct ScreenCore: Sendable {
     self.maxLongEdge = maxLongEdge
   }
 
+  /// The Mac is locked, or the lock screen, the screen saver or a system password prompt is in front: every screen verb stops here,
+  /// before anything is read, drawn or posted. Fails closed (`ScreenLockState`).
+  func refuseIfLocked() throws(ScreenRefusal) { try refuseIfLocked(front: apps.frontmost()) }
+
+  /// The same, for a caller that has already read the front app (the input gate reads it once per event).
+  func refuseIfLocked(front: ScreenApp?) throws(ScreenRefusal) {
+    if isLocked() || ScreenDenied.isLockSurface(front?.bundleID) { throw .screenLocked }
+    if ScreenDenied.contains(front?.bundleID) { throw .systemPrompt(app: front?.name ?? front?.bundleID ?? "an app") }
+  }
+
   // MARK: capture
 
   /// A screenshot for an agent: only the allowed apps' windows and the desktop picture.
   public func agentCapture(allowed: ScreenAllowed, area: ScreenArea = .full) async throws(ScreenRefusal) -> ScreenShot {
+    try refuseIfLocked()
     guard permissions.screenRecording() else { throw .screenRecordingNotGranted }
     let content: ScreenContent
     do { content = try await capture.content() } catch {
@@ -97,6 +110,7 @@ public struct ScreenCore: Sendable {
   /// open for the id is the one checked against the owner's entry, and that same app is opened: an impostor that claims the id
   /// is not opened.
   public func openApp(bundleID: String, allowed: ScreenAllowed) async throws(ScreenRefusal) {
+    try refuseIfLocked()
     let id = bundleID.trimmingCharacters(in: .whitespaces)
     guard !id.isEmpty else { throw .badRequest("no app named") }
     guard let path = apps.appPath(bundleID: id) else {
@@ -333,6 +347,10 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
   /// The point is the menu bar, a menu bar extra or another window above normal ones (level 24 and up).
   case systemArea
   case noFrontmostApp
+  /// The Mac is locked, the screen saver is on, or a system lock or password prompt is in front.
+  case screenLocked
+  /// A system password, consent or permission prompt is in front on an unlocked Mac: the owner answers it.
+  case systemPrompt(app: String)
   case nothingAtPoint
   case openFailed(app: String, detail: String)
   case inputFailed(String)
@@ -371,6 +389,10 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
       return "Another app came to the front after \(String(app.prefix(80))) got the last key, so Talos stopped there. Take a screenshot to see where things are."
     case .systemArea: return "That spot is the menu bar or a system overlay, which Talos never clicks for an agent. Nothing was clicked."
     case .noFrontmostApp: return "No app is in front, so nothing was clicked or typed."
+    case .screenLocked:
+      return "The Mac is locked (or the screen saver is on); Talos does nothing until the owner unlocks it. Nothing was done."
+    case .systemPrompt(let app):
+      return "A system prompt (\(String(app.prefix(80)))) is in front; Talos won't act on it. The owner answers it."
     case .nothingAtPoint: return "Nothing is at that spot on the screen, so nothing was clicked."
     case .openFailed(let app, let d): return "\(app) did not open: \(d)."
     case .inputFailed(let d): return "The click or keypress was not sent: \(d)."
@@ -403,6 +425,8 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
     case .frontChanged: return "front_changed"
     case .systemArea: return "system_area"
     case .noFrontmostApp: return "no_frontmost_app"
+    case .screenLocked: return "screen_locked"
+    case .systemPrompt: return "system_prompt"
     case .nothingAtPoint: return "nothing_at_point"
     case .openFailed: return "open_failed"
     case .inputFailed: return "input_failed"
@@ -415,7 +439,7 @@ public enum ScreenRefusal: Error, Equatable, Sendable {
   /// The app a refusal is about, when it names one.
   public var app: String? {
     switch self {
-    case .appNotAllowed(let a, _), .appNotAllowable(let a, _), .openFailed(let a, _): return a
+    case .appNotAllowed(let a, _), .appNotAllowable(let a, _), .openFailed(let a, _), .systemPrompt(let a): return a
     default: return nil
     }
   }

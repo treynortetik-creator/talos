@@ -37,6 +37,10 @@ public enum WebToNative: Equatable, Sendable {
   case shellPane(threadId: String, rect: TerminalViewRect?)
   /// The owner closed that thread's Terminal pane (`shell_pane_close`): its shells end.
   case shellPaneClose(threadId: String)
+  /// The page is about to send a Run for the terminal pane (`run_witness`): this message, in this thread, with this script's hash.
+  /// The app keeps it only when the owner's own click in its window was just made (PaneRun.swift); it carries no script, no time and no
+  /// way to type: a witness is a claim to be checked, and writes nothing.
+  case runWitness(threadId: String, clientMsgId: String, scriptSha256: String)
   /// The page's answer to `capture_drop` (the screenshot hotkey): ok = the image is in a composer as a pending attachment, not
   /// sent; not ok = why (`not_signed_in`, `bad_image`, `no_thread`), and the shell discards the image.
   case captureAck(req: String, ok: Bool, reason: String?)
@@ -128,6 +132,11 @@ public enum WebToNative: Equatable, Sendable {
     case "shell_pane_close":
       guard only(["thread_id"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t) else { return nil }
       return .shellPaneClose(threadId: t)
+    case "run_witness":
+      guard only(["thread_id", "client_msg_id", "script_sha256"]), let t = o["thread_id"] as? String, ThreadIdRule.isValid(t),
+        let id = o["client_msg_id"] as? String, PaneRun.isMsgId(id), let sha = o["script_sha256"] as? String, PaneRun.isSha256Hex(sha)
+      else { return nil }
+      return .runWitness(threadId: t, clientMsgId: id, scriptSha256: sha)
     case "capture_ack":
       guard allowed(required: ["req", "ok"], optional: ["reason"]), let req = o["req"] as? String, CompanionReq.isValid(req),
         let ok = JSONValue.bool(o["ok"])
@@ -193,6 +202,9 @@ public enum NativeToWeb: Equatable, Sendable {
   /// What the owner chose in the open panel for `pick_folder`: an absolute path, or nil when they cancelled. `why` says it was not the
   /// owner cancelling: the app cannot show the panel now, or the chosen folder's name has a character Talos cannot use.
   case folderPicked(req: String, path: String?, why: FolderPickWhy? = nil)
+  /// What became of a Run for the terminal pane that the app accepted or refused (`run_result`): the page shows it by the message it
+  /// sent. `reason` is present exactly when `ok` is false. Carries no text the shell printed.
+  case runResult(clientMsgId: String, ok: Bool, reason: RunResultReason?)
 
   public var object: [String: Any] {
     switch self {
@@ -212,6 +224,10 @@ public enum NativeToWeb: Equatable, Sendable {
     case .folderPicked(let r, let p, let why):
       var o: [String: Any] = ["type": "folder_picked", "req": r, "path": p.map { $0 as Any } ?? NSNull()]
       if let why { o["why"] = why.rawValue }
+      return o
+    case .runResult(let id, let ok, let reason):
+      var o: [String: Any] = ["type": "run_result", "client_msg_id": id, "ok": ok]
+      if let reason { o["reason"] = reason.rawValue }
       return o
     }
   }
@@ -233,6 +249,7 @@ public enum NativeToWeb: Equatable, Sendable {
     case .terminalSelect(let s): return TerminalSessions.isValidSession(s) ? m : nil
     case .folderPicked(let r, let p, let why):
       return CompanionReq.isValid(r) && (p.map(FolderPath.isValid) ?? true) && !(p != nil && why != nil) ? m : nil
+    case .runResult(let id, let ok, let reason): return PaneRun.isMsgId(id) && ok == (reason == nil) ? m : nil
     }
   }
 
@@ -264,6 +281,23 @@ public enum NativeToWeb: Equatable, Sendable {
     s.removeFirst()  // [
     s.removeLast()  // ]
     return s
+  }
+}
+
+/// Why a Run for the terminal pane did not run, as `run_result` says it (`RUN_RESULT_REASONS`, packages/protocol/src/native.ts).
+public enum RunResultReason: String, Equatable, Sendable {
+  case noWitness = "no_witness"
+  case expired
+  case notStarted = "not_started"
+  case paneBusy = "pane_busy"
+  case badScript = "bad_script"
+  case appClosed = "app_closed"
+
+  /// The reason the page is told for what the app answered: the answer's own code. A refusal with a code the page has no word for is
+  /// told as `not_started` (the Run did not go in), never as ok.
+  public static func forAnswer(_ a: PaneRunAnswer) -> RunResultReason? {
+    if a.ok { return nil }
+    return RunResultReason(rawValue: a.code) ?? .notStarted
   }
 }
 

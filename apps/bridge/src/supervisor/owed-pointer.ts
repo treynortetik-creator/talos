@@ -172,6 +172,14 @@ export async function typeOwedPointer(o: {
   awake: number
   sleep?: (ms: number) => Promise<void>
   extraDialog?: (rows: string[]) => boolean
+  /**
+   * Called with the state to keep right after an Enter that went (or may have), before the check's reads, which wait about a second:
+   * the caller writes workers.json saying the pointer is done. Without it a relaunch in that wait finds the pointer still owed on an
+   * empty box, reads that as the owner clearing it, and types the line a second time. Called again with the flagged state if the
+   * check flags the Enter, so the hold is on disk before the tick ends. A crash before that second call is read as delivered: a
+   * flag found only after a crash is not in the file.
+   */
+  onEnter?: (state: OwedState) => void
 }): Promise<PointerStep> {
   const extra = o.extraDialog ?? (() => false)
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
@@ -235,6 +243,7 @@ export async function typeOwedPointer(o: {
   if (keyNotSent(enter)) return step(true, { wroteLine, ...(enter === 'refused' ? { held: 'refused' as const } : {}) })
   // did it land on a prompt that opened just then? Captured at once and ENTER_CHECK_LATER_MS later (enter-check.ts). Only an
   // Enter known to be sent: one whose send timed out may not have gone, and is counted as sent as before (never a second)
+  o.onEnter?.({ ...NOTHING_OWED })
   const after = enter === 'sent' ? await o.pane.visibleRowsEscaped() : null
   if (enter === 'sent') await sleep(ENTER_CHECK_LATER_MS)
   const later = enter === 'sent' ? await o.pane.visibleRowsEscaped() : null
@@ -247,6 +256,7 @@ export async function typeOwedPointer(o: {
   const check = checkEnter(pre, after, later, latest)
   if (enter === 'sent' && check.flagged) {
     s = { ...s, enterUncertain: true }
+    o.onEnter?.(s)
     return step(true, { wroteLine, held: 'enter_uncertain', enterCheck: check })
   }
   s = { ...NOTHING_OWED }

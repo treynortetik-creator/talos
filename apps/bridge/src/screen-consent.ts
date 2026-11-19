@@ -26,7 +26,7 @@ import {
 import type { LedgerRow } from './cards-ledger.ts'
 import { type BridgeContext, defaultThreadRef } from './context.ts'
 import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
-import { refusalText, type ScreenAnswer, screenTransport } from './screen.ts'
+import { isDeniedScreenApp, refusalText, SCREEN_TEXT, type ScreenAnswer, screenTransport } from './screen.ts'
 import { assertFrameFits } from './transport.ts'
 
 /** "Not now" holds this long for that app on this Mac. */
@@ -156,6 +156,11 @@ export class ScreenConsent {
     if (!info.ok) return cant(refusalText(info))
     const app = parseMeasured(info.body)
     if (!app) return cant('the Mac sent an answer the bridge cannot read.')
+    // the lock screen and the security prompts are never offered, whatever the Mac measured: no record, no card
+    if (isDeniedScreenApp(app.bundle_id)) {
+      ctx.log.security('screen consent refused for a system app', { app: app.bundle_id })
+      return { ok: false, text: SCREEN_TEXT.denied(app.name) }
+    }
     // From here to the ledger write nothing awaits: two sessions asking at once make one card.
     const key = keyOf(app)
     const now = ctx.clock.now()
@@ -253,6 +258,10 @@ export class ScreenConsent {
       if (key && action === 'kill')
         ctx.store.kvSet(key, JSON.stringify({ not_now_until: ctx.clock.now() + SCREEN_NOT_NOW_MS, name } satisfies Rec))
       return
+    }
+    if (app && isDeniedScreenApp(String(app.bundle_id))) {
+      ctx.log.security('screen allow not sent for a system app', { card: row.id, app: app.bundle_id })
+      return this.end(row, false, SCREEN_TEXT.denied(name))
     }
     if (key) ctx.store.kvDelete(key)
     const proof = buildDialogProof(raw, row.binding)

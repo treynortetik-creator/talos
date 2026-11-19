@@ -28,6 +28,12 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   pick_folder: { type: 'pick_folder', req: 'r12', start: '/Users/alex/Projects' },
   shell_pane: { type: 'shell_pane', thread_id: 'general', rect: { x: 760, y: 420, width: 520, height: 360 } },
   shell_pane_close: { type: 'shell_pane_close', thread_id: 'general' },
+  run_witness: {
+    type: 'run_witness',
+    thread_id: 'general',
+    client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V4',
+    script_sha256: 'a'.repeat(64),
+  },
   capture_ack: { type: 'capture_ack', req: 'r12', ok: false, reason: 'not_signed_in' },
   navigate: { type: 'navigate', path: '/t/general' },
   compose: { type: 'compose', thread_id: 'general', text: 'Hello from the shell.' },
@@ -88,6 +94,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   },
   terminal_resume_result: { type: 'terminal_resume_result', thread_id: 'general', outcome: 'asked' },
   terminal_select: { type: 'terminal_select', session: 'general' },
+  run_result: { type: 'run_result', client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V3', ok: false, reason: 'expired' },
   folder_picked: { type: 'folder_picked', req: 'r12', path: '/Users/alex/Projects' },
   capture_drop: {
     type: 'capture_drop',
@@ -135,6 +142,15 @@ const MUST_REJECT: Array<[string, unknown]> = [
     { type: 'shell_pane', thread_id: 'general', rect: { x: 0, y: 0, width: -1, height: 1 } },
   ],
   ['shell_pane_close carries text', { type: 'shell_pane_close', thread_id: 'general', input: 'exit' }],
+  ['run_witness carries the script', { ...SAMPLES.run_witness, script: 'ls\n' }],
+  ['run_witness carries text to type', { ...SAMPLES.run_witness, input: 'ls\n' }],
+  ['run_witness hash in capitals', { ...SAMPLES.run_witness, script_sha256: 'A'.repeat(64) }],
+  ['run_witness short hash', { ...SAMPLES.run_witness, script_sha256: 'a'.repeat(63) }],
+  ['run_witness without a message id', { type: 'run_witness', thread_id: 'general', script_sha256: 'a'.repeat(64) }],
+  ['run_witness names a time', { ...SAMPLES.run_witness, at: 0 }],
+  ['run_result carries text', { ...SAMPLES.run_result, text: 'ls' }],
+  ['run_result unknown reason', { ...SAMPLES.run_result, reason: 'because' }],
+  ['run_result hostile id', { ...SAMPLES.run_result, client_msg_id: '../x' }],
   [
     'capture_drop names the window',
     {

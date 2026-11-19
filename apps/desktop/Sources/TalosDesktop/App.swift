@@ -178,7 +178,8 @@ struct TalosApp: App {
             companionOn: { CompanionController.shared.isEnabled },
             signedIn: { WebController.shared.signedIn },
             offersSignIn: { WebController.shared.pageState.offersSignIn },
-            hasRelay: { WebController.shared.hasRelay })
+            hasRelay: { WebController.shared.hasRelay },
+            canReload: { WebController.shared.webWindowIsFront })
           AppMenu.shared.install()
           AppMenu.shared.keepInstalled()
           model.installQuitHooks()

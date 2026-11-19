@@ -6,6 +6,15 @@ import TalosDesktopCore
 /// `WebWindow.swift` (the stored state stays there). The page says where the slot is and which thread it belongs to; the
 /// native pane (`OwnerShellPane`) is laid over it. Nothing here writes to a shell or sends the page anything about one.
 extension WebController {
+  /// The run channel (ShellRunChannel.swift): the pane, the Talos window whose clicks it reads, and the barred flag of a Mac that is signing out.
+  func makeRunChannel() -> ShellRunChannel {
+    let c = ShellRunChannel(
+      pane: shellPane, window: { [weak self] in self?.window as? WebNSWindow })
+    c.barred = { [weak self] in self?.shellPaneBarred ?? true }
+    c.report = { [weak self] id, a in self?.tellPageHowARunWent(id, a) }
+    return c
+  }
+
   /// `shell_pane`: the slot for `thread` is at `rect`, or (nil) is not showing right now. The shells keep running while hidden.
   func shellPaneAsked(thread: String, rect: TerminalViewRect?) {
     shellPaneSlot = rect.map { (thread, $0) }
@@ -23,12 +32,14 @@ extension WebController {
   func endShellPanes() {
     shellPaneBarred = true
     shellPaneSlot = nil
+    runChannel.clear()
     shellPane.closeAll()
   }
 
   /// The slot belonged to the document that is gone; a new document asks again. The shells are the owner's and keep running.
   func forgetShellPaneSlot() {
     shellPaneSlot = nil
+    runChannel.clear()  // what the old page vouched for goes with it
     shellPane.hide()
   }
 

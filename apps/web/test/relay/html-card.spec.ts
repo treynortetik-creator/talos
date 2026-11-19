@@ -45,10 +45,6 @@ test('an HTML page card is a sandboxed iframe: no same-origin, no cookies, no /a
       ],
     }),
   )
-  // Chromium waits for a tap before an inline page runs; WebKit runs it at once.
-  await page.locator('iframe[title="report.html"], button[aria-label="Run report.html"]').first().waitFor()
-  const run = page.getByRole('button', { name: 'Run report.html' })
-  if (await run.count()) await run.click()
   const frame = page.locator('iframe[title="report.html"]')
   await expect(frame).toBeVisible()
   expect(await frame.getAttribute('sandbox')).toBe('allow-scripts')

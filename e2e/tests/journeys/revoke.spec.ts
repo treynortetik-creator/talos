@@ -2,6 +2,7 @@
 // REVOKED), and the revoked device's open socket must die and stay dead. Second run: the Mac is down when it happens.
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { enrollDevice, expect, openThread, signedIn, test, waitUntil } from '../../harness/fixtures.ts'
+import { shiftBrowserClock } from '../../harness/hostile.ts'
 import type { Stack } from '../../harness/stack.ts'
 
 test.setTimeout(150_000)
@@ -37,6 +38,7 @@ test.afterEach(async () => {
 async function twoDevices(stack: Stack, page: Page, context: Parameters<typeof signedIn>[2], browser: Browser) {
   await signedIn(stack, page, context)
   const ctxB = await browser.newContext()
+  await shiftBrowserClock(ctxB)
   opened.push(ctxB)
   const pageB = await ctxB.newPage()
   await enrollDevice(stack, pageB, ctxB, { label: 'tablet' })

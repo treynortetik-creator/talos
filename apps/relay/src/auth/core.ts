@@ -349,6 +349,23 @@ export class AuthCore {
     return { id, credentialId: r.credential_id, deviceId: r.device_id }
   }
 
+  /**
+   * The same judgement as `lookupSession`, with NO side effect: it does not slide the expiry, touch `last_seen_at`, or end a
+   * session that ran out. For a caller that only wants to know "is this the owner's live session" (the attest route's
+   * rate bucket), where a refresh or a deletion would be a hole an unauthenticated caller could use.
+   */
+  peekSession(token: string | null): { id: string; deviceId: string | null } | null {
+    if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null
+    const id = sha256(token)
+    const r = this.db.prepare('select device_id, last_seen_at, expires_at from auth_sessions where id = ?').get(id) as
+      | { device_id: string | null; last_seen_at: number; expires_at: number }
+      | undefined
+    if (!r) return null
+    const now = this.now()
+    if (now >= r.expires_at || now - r.last_seen_at > this.idleMs) return null
+    return { id, deviceId: r.device_id }
+  }
+
   attachDevice(sessionId: string, deviceId: string): void {
     this.db.prepare('update auth_sessions set device_id = ? where id = ?').run(deviceId, sessionId)
   }

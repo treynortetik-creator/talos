@@ -205,6 +205,10 @@ export function createAuthImplementation(
       await next()
     },
     takeRate: (c, name, key) => state.limiter.take(name, key ?? clientIp(c)),
+    peekPairedSession: (c) => {
+      const row = core.peekSession(readCookie(c.req.header('cookie'), COOKIE_NAME))
+      return Boolean(row?.deviceId && sessionPinned({ sessionId: row.id, deviceId: row.deviceId }))
+    },
     getSession: (c) => sessions.get(c.req.raw) ?? null,
   }
 }

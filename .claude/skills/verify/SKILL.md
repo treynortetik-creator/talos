@@ -2,7 +2,7 @@
 
 name: verify
 description: The pre-commit smoke-test recipe for Talos. Run it before every commit that changes behaviour (skip docs-only and test-only changes) and before calling any Talos change done. It says what to drive on each surface (Mac app, web client in fake mode, iPhone simulator, bridge/CLI), how to capture before/after screenshots or transcripts as evidence, how to list every route the change reaches, how to check every theme (colours only, fonts identical), and how to end the commit message with a Verified trailer.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # verify: run the change, attach the evidence
@@ -21,7 +21,7 @@ House rules (worktrees, group time limits, never-list) are in `talos-build`; rea
 5. Bridge/CLI change: `node scripts/verify/bridge-run.mjs --worktree . --label after --route <name> --cli '0::<args>' --route-list ...`
 6. Read the PNGs (look at them) and `index.md`. Any `FAIL`, or any exit other than 0, means it is not done.
 7. Mac app / iPhone simulator / real browser parts: the sections below.
-8. Remove only the worktrees you made. Commit with the trailer: `Verified: <what you drove>; evidence <folder>/` (see "Landing").
+8. Remove only the worktrees you made. Commit with the trailer: `Verified: <what you drove>; evidence <root>/<short-sha>/` (see "Landing"). Write `<root>` literally, never the absolute folder: a home path in a commit is refused by the personal check.
 
 Both scripts stop what they started when they are interrupted (SIGINT exits 130, SIGTERM 143: the relay, build and test processes, the temp folders, a simulator they booted). Exit codes: 0 good; 1 an expectation failed (in a `before` run that is recorded as observed, because the bug is the point);
 2 bad usage; 3 a surface could not be reached (printed, and written into `index.md`; never skipped quietly).
@@ -83,6 +83,10 @@ the route list and the lead runs it.
    (needs the signing identity named in `build-app.sh`'s header). Installing replaces the owner's running app (`apps/desktop/scripts/install.sh`):
    that is a Mac install, allowed with a one-line notice to the owner; do it only if the brief says so. Otherwise say "installed build predates
    the change" and verify on web and the simulator.
+   **To pick up a new relay or web build in the running app, press `screen_key` `cmd+r`** (View > Reload): the Talos window loads its current
+   page again and keeps the route. **Never quit or relaunch Talos for that.** A quit drops every session the app owns, Main and Pantheon
+   included (it happened on 2026-11-17). Reload needs the Talos web window to be the front window; a Mac build that predates View > Reload
+   refuses the key with `key_not_in_menu`, and then you say "installed build predates reload" instead of relaunching.
 3. Drive the change from its real entry point: `screen_click` the button, `screen_key` the shortcut, `screen_scroll` the list. Never reach
    a state by editing files or defaults.
 4. `screen_type` replies say whether the text was verified. A bare "Typed N" is NOT proof: take a `screen_shot` after typing and read it.
@@ -148,7 +152,7 @@ The iPhone shell wraps the web app (`apps/mobile`, Capacitor). Two levels:
   boots a dedicated "Talos UI Test" device and drives the shell with XCUITest, which is the reference for any native flow).
 
 ```
-xcrun simctl list devices available | grep -i iphone          # pick one
+xcrun simctl create <name> <device type> <runtime>            # your own simulator; never use talos-ci-s* or a shared device
 xcrun simctl boot <udid>                                      # boot (no Simulator window needed); capture.mjs sim --udid does this for you
 xcrun simctl io <udid> screenshot <file>.png                  # picture
 xcrun simctl io <udid> recordVideo <file>.mp4 &               # clip; stop it by pid with kill -INT
@@ -192,7 +196,7 @@ Verified: web fake mode, graph click x5, themes all; evidence <root>/96f2389/
 Verified: none - docs only
 ```
 
-- It says what was driven and where the evidence is. `Verified: none - <reason>` is allowed and the reason is required (a bare `none` is
+- It says what was driven and where the evidence is, as `<root>/<short-sha>/` (an absolute path is flagged as unusable). `Verified: none - <reason>` is allowed and the reason is required (a bare `none` is
   logged as unusable), so unverified commits can be found: `git log --format='%h %(trailers:key=Verified,valueonly)'`.
 - The pre-push hook checks for it in **observe** mode: a commit without it gets one line on stderr and in the log
   (`<git common dir>/talos-verified-trailer.log`); it never blocks a push. `TALOS_VERIFIED_TRAILER=off|observe|enforce` (or
@@ -210,5 +214,6 @@ Verified: none - docs only
 
 ## Changelog
 
+- 1.1.0: Mac app route: `screen_key cmd+r` reloads the Talos window for a new relay or web build; never quit or relaunch Talos.
 - 1.0.0: first version. Quick start, route list, evidence, themes read from code (fonts identical, contrast measured), Mac app, web fake mode,
   iPhone simulator, bridge/CLI, the Verified trailer.

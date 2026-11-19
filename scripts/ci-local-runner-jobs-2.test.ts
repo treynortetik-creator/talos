@@ -407,8 +407,9 @@ describe('docker_up on Linux: rootless Docker is started with systemctl --user, 
 })
 
 describe('a status that could not be posted says so in the log, with why', () => {
-  // The job still passes: a lost final post leaves its pending, which sweep later closes as an error ("no verdict"), never a green.
-  it('gh not on PATH, gh not signed in, or gh failing: "status not posted: <context> (<reason>)", and the run goes on', async () => {
+  // A post that cannot be made fails the run (exit 1, ::error::), after the other jobs have reported: never a green run with a
+  // context unposted. A transport failure gets one retry first (the next describe).
+  it('gh not on PATH, gh not signed in, or gh failing: "status not posted: <context> (<reason>)", the run goes on and ends red', async () => {
     const cases: [Record<string, string>, string, RegExp][] = [
       [
         { gh: 'echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4' },
@@ -420,8 +421,9 @@ describe('a status that could not be posted says so in the log, with why', () =>
     for (const [tools, , reason] of cases) {
       const r = repo('job_x() { :; }', tools)
       const run = r.start([...withStatus, '--jobs', 'x'], repoArgs)
-      expect(await run.done, run.out()).toBe(0)
+      expect(await run.done, run.out()).toBe(1)
       expect(run.out()).toMatch(new RegExp(`status not posted: local-ci/x ${reason.source}`))
+      expect(run.out()).toContain('::error::ci-local: status not posted: local-ci/x')
     }
     // no gh at all: a PATH of the fake tools (without gh) and the system's folders
     const r = repo('job_x() { :; }')
@@ -430,8 +432,69 @@ describe('a status that could not be posted says so in the log, with why', () =>
       ...repoArgs,
       PATH: `${join(r.T, 'bin')}:/usr/bin:/bin:/usr/sbin:/sbin`,
     })
-    expect(await run.done, run.out()).toBe(0)
+    expect(await run.done, run.out()).toBe(1)
     expect(run.out()).toContain('status not posted: local-ci/x (no gh on PATH)')
+  })
+})
+
+describe('a status post that fails in transit is tried once more; a post that still fails fails the run loudly', () => {
+  // gh fails the first N posts of local-ci/x's final status (success), with `err`; local-ci/y always posts. Counts go to $HOME/n.
+  const flaky = (fails: number, err: string, code = 1) =>
+    `case "$1" in repo) exit 1 ;; esac
+echo "$*" >> "$GH_LOG"
+case "$*" in *"state=success"*"context=local-ci/x "*)
+  n=$(cat "$HOME/n" 2>/dev/null || echo 0); echo $((n + 1)) > "$HOME/n"
+  if [ "$n" -lt ${fails} ]; then printf '%s\\n' "${err}" >&2; exit ${code}; fi ;;
+esac
+exit 0`
+  const env = { ...repoArgs, CI_POST_RETRY_SLEEP: '0' }
+  const jobs = 'job_x() { :; }; job_y() { :; }'
+  const finals = (r: { posted: () => string }, c: string) =>
+    r
+      .posted()
+      .split('\n')
+      .filter((l) => l.includes('-X POST') && l.includes(`context=local-ci/${c} `) && l.includes('state=success'))
+
+  it('an empty reply, then success: posted, the run succeeds, one retry line', async () => {
+    const r = repo(jobs, { gh: flaky(1, 'unexpected end of JSON input') })
+    const run = r.start([...withStatus, '--jobs', 'x,y'], env)
+    expect(await run.done, run.out()).toBe(0)
+    expect(finals(r, 'x')).toHaveLength(2) // the failed try and the retry
+    expect(run.out().match(/retrying once/g)).toHaveLength(1)
+    expect(run.out()).not.toContain('status not posted')
+    expect(run.out()).not.toContain('::error::')
+  })
+
+  it('both tries fail: ::error:: naming the context and the gh error, a nonzero exit, the other jobs still reported', async () => {
+    const r = repo(jobs, { gh: flaky(9, 'unexpected end of JSON input') })
+    const run = r.start([...withStatus, '--jobs', 'x,y'], env)
+    expect(await run.done, run.out()).toBe(1)
+    expect(finals(r, 'x')).toHaveLength(2) // exactly one retry
+    expect(finals(r, 'y')).toHaveLength(1)
+    expect(run.out()).toMatch(
+      /::error::ci-local: status not posted: local-ci\/x \(gh exit 1: unexpected end of JSON input\)/,
+    )
+    expect(run.out()).toContain('statuses were not posted: local-ci/x')
+  })
+
+  it('a 5xx or a timeout is retried too', async () => {
+    for (const err of ['HTTP 502: Bad Gateway', 'Post "https://api.github.com/x": Client.Timeout exceeded']) {
+      const r = repo(jobs, { gh: flaky(1, err) })
+      const run = r.start([...withStatus, '--jobs', 'x,y'], env)
+      expect(await run.done, run.out()).toBe(0)
+      expect(run.out(), err).toContain('retrying once')
+    }
+  })
+
+  it('a 422: no retry, a loud failure', async () => {
+    const r = repo(jobs, { gh: flaky(9, 'HTTP 422: Validation Failed') })
+    const run = r.start([...withStatus, '--jobs', 'x,y'], env)
+    expect(await run.done, run.out()).toBe(1)
+    expect(finals(r, 'x')).toHaveLength(1)
+    expect(run.out()).not.toContain('retrying')
+    expect(run.out()).toContain(
+      '::error::ci-local: status not posted: local-ci/x (gh exit 1: HTTP 422: Validation Failed)',
+    )
   })
 })
 
@@ -458,5 +521,79 @@ describe('--sha: the commit the plan fixed; a run whose PR or ref has moved on t
       const r = repo('job_x() { :; }')
       expect(await r.start([...withStatus, '--jobs', 'x', '--sha', bad], repoArgs).done, bad).toBe(64)
     }
+  })
+})
+
+describe("a take-back never posts over the owner's answer (ci-runner.sh fallback, CI_FALLBACK_NOTES)", () => {
+  const GH = `case "$1" in repo) exit 1 ;; esac
+echo "$*" >> "$GH_LOG"
+case "$*" in *"-X POST"*) exit 0 ;; *"/statuses?"*) cat "$HOME/rows" 2>/dev/null ;; *"/status?"*) cat "$HOME/combined" 2>/dev/null ;; esac
+exit 0`
+  const ATTEMPT = 'https://example.test/runs/9/attempts/1#'
+  const env = {
+    ...repoArgs,
+    CI_ATTEMPT_URL: ATTEMPT,
+    CI_STATUS_URL: `${ATTEMPT}lemnos`,
+    CI_FALLBACK_NOTES: 'x=titan did not answer in time',
+  }
+  const titanPass = `local-ci/x\tsuccess\t${ATTEMPT}titan\tpassed on titan in 39s`
+  const ownPending = `local-ci/x\tpending\t${ATTEMPT}lemnos\trunning on ci-runner`
+  const finals = (r: { posted: () => string }) =>
+    r
+      .posted()
+      .split('\n')
+      .filter((l) => l.includes('-X POST') && l.includes('context=local-ci/x ') && !l.includes('state=pending'))
+  // the job: Titan's pass lands (newest first, above this run's pending) while it works, then it ends as `body` says
+  const lateOwner = (body: string) =>
+    `job_x() { printf '${titanPass}\\n${ownPending}\\n' > "$HOME/rows"; cp "$HOME/rows" "$HOME/combined"; ${body}; }`
+
+  it('the owner passes after the take-back started and before it posts: its red is logged, not posted', async () => {
+    const r = repo(lateOwner('return 1'), { gh: GH })
+    const run = r.start([...withStatus, '--jobs', 'x'], env)
+    expect(await run.done, run.out()).toBe(0) // the held failure does not end the run red: a warning names it
+    expect(finals(r), r.posted()).toEqual([])
+    expect(run.out()).toContain('x: answered first elsewhere in this attempt')
+    expect(run.out()).toContain('::warning::ci-local: failed here, not posted')
+    expect(run.out()).toContain('✗ x') // the failure is still logged
+  })
+
+  it("the owner's pass lands between the start check and this run's pending (its pending is on top): the pass is posted again, no red", async () => {
+    const r = repo(
+      `job_x() { printf '${ownPending}\\n${titanPass}\\n' > "$HOME/rows"; cp "$HOME/rows" "$HOME/combined"; return 1; }`,
+      { gh: GH },
+    )
+    const run = r.start([...withStatus, '--jobs', 'x'], env)
+    expect(await run.done, run.out()).toBe(0)
+    const f = finals(r)
+    expect(f.join('\n')).not.toMatch(/state=failure/)
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatch(
+      /state=success .*description=passed on titan in 39s .*target_url=https:\/\/example\.test\/runs\/9\/attempts\/1#titan/,
+    )
+    expect(run.out()).toContain('✗ x')
+  })
+
+  it("the owner's pass before the take-back starts: x is not run and nothing is posted", async () => {
+    const r = repo('job_x() { touch "$HOME/ran"; return 1; }', { gh: GH })
+    writeFileSync(join(r.home, 'rows'), `${titanPass}\n`)
+    const run = r.start([...withStatus, '--jobs', 'x'], env)
+    expect(await run.done, run.out()).toBe(0)
+    expect(existsSync(join(r.home, 'ran'))).toBe(false)
+    expect(finals(r)).toEqual([])
+  })
+
+  it('no owner answer: the take-back runs and posts its red, with the fallback note', async () => {
+    const r = repo('job_x() { return 1; }', { gh: GH })
+    writeFileSync(join(r.home, 'rows'), `${ownPending}\n`)
+    const run = r.start([...withStatus, '--jobs', 'x'], env)
+    await run.done
+    expect(finals(r).join('\n')).toMatch(/state=failure .*\(fallback: titan did not answer in time\)/)
+  })
+
+  it('a run with no take-back note for this job still posts its red', async () => {
+    const r = repo(lateOwner('return 1'), { gh: GH })
+    const run = r.start([...withStatus, '--jobs', 'x'], { ...env, CI_FALLBACK_NOTES: 'image=titan did not answer' })
+    await run.done
+    expect(finals(r).join('\n')).toMatch(/state=failure /)
   })
 })

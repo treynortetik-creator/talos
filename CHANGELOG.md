@@ -1,5 +1,46 @@
 # Changelog
 
+## Signing in to Claude in the Mac app takes a long code
+
+- When you paste the sign-in code in the Mac app's first-run setup, Talos now types the code and then presses Return on its own a moment later. Claude Code treats a long burst of typing as a paste and could drop a Return sent with it, so a real code (longer than 64 characters) could leave the sign-in waiting.
+
+## The Mac app says version 0.1.4
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.4, the release with Run in Terminal and the relay attestation the iPhone app needs.
+
+## A permission prompt shows one card on a slow connection
+
+- A permission prompt on a slow connection no longer shows two cards on your phone.
+
+## HTML pages in a thread show at once, with Open in new tab on the card
+
+- An HTML page the agent sends now shows in its card straight away in every browser. Chrome, Edge and Android no longer ask you to tap "Run page" first. The page still runs in the same locked-down sandbox.
+- Every HTML page card has "Open in new tab" beside Expand; before, it was only in the full-screen view.
+- In Chrome-based browsers a page can try to pull your typing into itself; Talos hands it back and hides a page that keeps trying, but a few keys can reach the page first (docs/SECURITY.md, "A page taking the keyboard").
+- The relay no longer leaves a status or card-expiry timer running after it stops while a Mac's last frames are still arriving.
+- After the relay is stopped and started again within one process, a schedule alert held through quiet hours is sent once the window ends.
+- A message for a thread session that the bridge was handing to the main session when it restarted is no longer lost.
+
+## Your agent can no longer use the Mac's lock screen
+
+- When your Mac is locked or the screen saver is on, the agent's screen tools now answer "The Mac is locked; Talos does nothing until the owner unlocks it" and do nothing. Before, a key press while the lock screen was in front asked you to allow "loginwindow".
+- The lock screen, the screen saver and the system's password prompts can never be put on the allowed list, and Talos never asks you about them.
+## The iPhone "Add your relay" scanner shows the camera picture
+
+- The camera picture on the scan screen was never drawn (a grey box, with the camera running and the scan working), because it was sized before the screen had laid itself out. The picture is now the box's own layer, so it always fills the box. Checked by layout tests on the iPhone simulator, which has no camera; not checked on a real iPhone.
+## Run a script in your terminal pane with one tap
+
+- In the Talos Mac app, tapping Run on a shell block can now run it in that thread's Terminal pane (your own shell), instead of handing it to the agent. The script is sent as one paste then Enter, so a multi-line block runs as one piece.
+- It runs only if you really clicked in the Talos window a moment before (within 2 seconds) and the window is in front. A tap from your phone, or from a script on the page with no click of yours, is refused with a line in the thread saying why; it is never run by the agent instead. If a program is already running in the shell, nothing is typed into it.
+- Not covered: a hostile page could run a script of its own right after a click of yours that was about something else. Tried with real shells in tests; not yet with a real tap from the web page, which needs the web side of this change.
+
+## The iPhone app checks that your Mac answers behind the relay
+
+- When you add a relay, the iPhone app now asks your Mac for a fresh signature and checks it against the key in the setup code. If your Mac does not answer, or the key is not the one in the code, nothing is saved and the setup code is not sent.
+- After that, the app checks again when it opens, when you come back to it, when the network changes and every 10 minutes. If your Mac does not answer, a banner says so with the time it was last confirmed, and the page's camera and microphone access, sharing and the app's native features are off. The page stays readable, with Retry and Remove on the banner.
+- After 24 hours without a confirmed check, the app stops showing the relay and offers Retry and Remove. If the relay answers with a different key, a red screen offers only Remove and pair again. If your Mac's key changed through `talos-app rotate`, the app asks you to confirm every time, and names the address. Notification buttons (Reply, Approve) stop working the same way: for a pairing that failed its check, or was last confirmed 24 hours ago or more.
+- Not covered: this proves your Mac is reachable through that address, not who runs the server there. Tried with a stand-in relay on the iPhone simulator, not on a real iPhone.
+
 ## The iPhone app connects to the relay you scan, and keeps each relay's login apart
 
 - The iPhone app now loads the relay you added by scanning its setup code, not an address fixed when the app was built. With no relay added, a release build shows "Connect your Mac" and loads no page; its button opens the scan sheet. After you add a relay and tap Done, the app switches to it.
@@ -7,6 +48,10 @@
 - Sharing from the iPhone share sheet and the Reply and Approve buttons on notifications now go to the relay you scanned. Switching relays clears the saved share link, so the new relay's page sets it again.
 - Each relay's notification keys are now kept apart on the phone. A notification from a relay you are no longer on shows its words but offers no Reply or Approve, and a button press is refused unless the notification really came through the Talos notification extension for the relay you are on. A relay you remove or replace loses its keys, and the phone lets go of its push registration when you switch. After this update, open Settings and tap Show message text once more: the old keys, which were shared by every relay, are deleted rather than reused.
 - Each relay gets its own storage on the phone, so logins and saved data never mix between relays, and a removed or replaced relay's storage is deleted.
+## View > Reload in the Mac app
+
+- The Talos Mac app has a View menu with Reload (Cmd-R). It loads the current page of the Talos window again, so a new web build or relay shows without quitting the app, and no session stops. Your agent can press it with the screen key tool as "cmd+r". With no Talos window in front it is dimmed and does nothing.
+
 ## Your agent can click through a see-through window that floats over the screen
 
 - A tool that keeps a see-through status window on top of the screen (a dictation tool's, for example) no longer makes your agent's clicks in that part of the screen refuse with "the menu bar or a system overlay". Talos asks macOS which window really takes the click there: if that is the window below, the click goes on to the allowed-list check; if it is the floating window, the menu bar, Control Center or Notification Center, or Talos cannot tell, it is refused as before.

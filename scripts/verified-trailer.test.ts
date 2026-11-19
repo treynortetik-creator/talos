@@ -71,7 +71,7 @@ describe('verified-trailer.sh', () => {
 
   it('accepts evidence text and "none" with a dash and a reason; refuses a bare "none" and an empty value', () => {
     const r = repo()
-    r.commit('a\n\nVerified: web fake mode, graph click x5, themes all; evidence /home/alex/ev/96f2389/')
+    r.commit('a\n\nVerified: web fake mode, graph click x5, themes all; evidence <root>/96f2389/')
     r.commit('b\n\nVerified: none — docs only')
     r.commit('c\n\nVerified: none - rename the compiler checks')
     r.commit('d\n\nVerified: None: comment only')
@@ -82,6 +82,16 @@ describe('verified-trailer.sh', () => {
       const o = x.run()
       expect(o.code).toBe(0)
       expect(o.err, bad).toMatch(/no Verified: trailer|unusable Verified: trailer/)
+    }
+  })
+
+  it('a trailer naming an absolute path is flagged (the personal check refuses home paths): cite <root>/<sha>/', () => {
+    for (const p of ['/home/alex/ev/96f2389/', '/Users/alex/ev/x/', '/private/tmp/ev/', '/var/folders/ab/x/']) {
+      const r = repo()
+      r.commit(`a\n\nVerified: web fake mode; evidence ${p}`)
+      const o = r.run()
+      expect(o.code, p).toBe(0)
+      expect(o.err, p).toContain('naming an absolute path; cite <root>/<sha>/ instead')
     }
   })
 

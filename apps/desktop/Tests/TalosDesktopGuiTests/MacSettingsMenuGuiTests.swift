@@ -25,10 +25,10 @@ struct TopMenuGuiTests {
     m.items.flatMap { [$0] + ($0.submenu.map(allItems) ?? []) }
   }
 
-  @Test func topLevelMenusAreTalosEditWindowHelp() {
+  @Test func topLevelMenusAreTalosEditViewWindowHelp() {
     _ = NSApplication.shared
     let m = menu(Rec()).build()
-    #expect(m.items.map(\.title) == ["Talos", "Edit", "Window", "Help"])
+    #expect(m.items.map(\.title) == ["Talos", "Edit", "View", "Window", "Help"])
   }
 
   @Test func settingsIsThereWithCommandCommaAndOpensSettings() throws {
@@ -42,6 +42,24 @@ struct TopMenuGuiTests {
     #expect(s.isEnabled || am.validateMenuItem(s))
     am.fire(s)
     #expect(rec.ran == [.settings])
+  }
+
+  @Test func viewReloadIsOnCommandRRunsReloadAndIsDimmedWithoutAWebWindow() throws {
+    _ = NSApplication.shared
+    let rec = Rec()
+    var canReload = false
+    let am = AppMenu()
+    am.host = AppMenu.Host(
+      run: { rec.ran.append($0) }, companionOn: { false }, signedIn: { false }, offersSignIn: { false }, hasRelay: { true },
+      canReload: { canReload })
+    let view = try #require(am.build().items.first { $0.title == "View" }?.submenu)
+    let item = try #require(view.items.first)
+    #expect(item.title == "Reload" && item.keyEquivalent == "r" && item.keyEquivalentModifierMask == .command)
+    #expect(!am.validateMenuItem(item), "no web window in front: dimmed")
+    canReload = true
+    #expect(am.validateMenuItem(item))
+    am.fire(item)
+    #expect(rec.ran == [.reload])
   }
 
   @Test func helpMenuHoldsTalosHelpAndItRuns() throws {

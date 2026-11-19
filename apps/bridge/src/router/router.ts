@@ -92,6 +92,9 @@ function runEnded(e: WorkerEntryT, at: number): boolean {
  */
 export const GOVERNOR_PARK_RETRY_MS = 30_000
 
+/** Starts in a row a hand-over to main may fail for a reason of its own before it is given up. */
+const REDELIVER_ATTEMPTS = 3
+
 export class ThreadRouter {
   /** Threads already told their supervisor is older than their settings, this run (old-supervisor-notice.ts). */
   private readonly oldSupervisorTold = new Set<string>()
@@ -107,6 +110,7 @@ export class ThreadRouter {
    * make every later start skip a message nobody delivered. A claim leaves the set the moment its hand-over begins.
    */
   private readonly claiming = new Set<string>()
+  private readonly redelivering = new Set<string>()
   private delivering: Promise<void> = Promise.resolve()
   private lastStatusKey = ''
   /**
@@ -481,30 +485,55 @@ export class ThreadRouter {
    * A fallback with nobody waiting on the write (a deadline or a switch-off, not the caller's own emit). The caller of
    * `route` hears a failed write and ends the card itself; here nobody does, so a card decision that main cannot be
    * told about ends the card and tells the owner. Anything else is logged by the caller.
+   * `again`: a start repeating a hand-over a stop cut short. main may already have run that turn, so its point is taken only
+   * when the one recorded is of another folder (as `route` does for an id it saw before).
+   * While the hand-over runs a `main_handover` row stands (written when it begins, deleted when `mainEmit` returns); only a
+   * row left behind is repeated by `resume`, and only this path writes one: `route`'s own fallback is replayed by the relay.
    */
-  private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT, claimed: string) {
+  private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT, claimed: string, again = false) {
     try {
       // main runs it now, in its own folder: that point replaces the one taken of the worker's
       await waitForRestore(this.ctx, 'main')
-      await pointBefore(this.ctx, n, 'main', { replace: true })
+      await pointBefore(this.ctx, n, 'main', { replace: again ? 'elsewhere' : true })
+      try {
+        this.store.beginMainHandover(claimed, this.ctx.clock.now())
+      } catch (e) {
+        this.ctx.log.warn('main hand-over not recorded', { error: (e as Error).message })
+      }
       this.claiming.delete(claimed) // the hand-over begins: the claim stays
-      await this.fallback(n, thread, reason)
+      await this.fallback(n, thread, reason, () => this.endMainHandover(claimed))
     } catch (e) {
       if (isStopping(e)) throw e // not delivered, and no failure to tell the owner of: `close()` gave the claim back
       this.claiming.delete(claimed) // a failure of its own: the claim is as it always was
       const cardId = n.meta.kind === 'card_action' ? n.meta.card_id : undefined
       if (!cardId) throw e
+      this.endMainHandover(claimed) // the card ends here: a start must not end it again
       this.ctx.log.warn('card decision not delivered to main', { card_id: cardId, error: (e as Error).message })
       this.onCardUndelivered(cardId)
     }
   }
 
-  private async fallback(n: Notification, lead: string, reason: ErrorCodeT) {
+  /**
+   * main has the message: the hand-over row goes. Dying between `mainEmit` returning and this delete leaves the row, and the
+   * next start gives main the message a second time: nothing on main's side drops a repeated message id (`heldForMain` only
+   * tracks the id for the unanswered report), so this is a duplicate, never a loss, by choice.
+   */
+  private endMainHandover(id: string) {
+    try {
+      this.store.endMainHandover(id)
+    } catch (e) {
+      this.ctx.log.warn('main hand-over not cleared', { error: (e as Error).message })
+    }
+  }
+
+  private async fallback(n: Notification, lead: string, reason: ErrorCodeT, delivered?: () => void) {
     const { ctx } = this
     // the message's own thread: a sub-thread's message held for its parent's lead is still that sub-thread's
     // a thread session's wake is only ever that session's: dropped with a report, never main's own words
-    if (n.meta.kind === 'wake')
-      return dropWake(ctx, n, this.wakeDropReason(n.meta.thread_id ?? '', reason), this.mainEmit)
+    if (n.meta.kind === 'wake') {
+      await dropWake(ctx, n, this.wakeDropReason(n.meta.thread_id ?? '', reason), this.mainEmit)
+      return delivered?.()
+    }
     const thread = this.shownIn(n, lead)
     ctx.log.info('thread session fallback', { thread, lead, reason })
     // main has it now: a main session that dies with it in flight must be reported (D39). A scheduled run is not an owner message:
@@ -512,6 +541,7 @@ export class ThreadRouter {
     if (n.meta.message_id && n.meta.kind !== 'schedule_run' && n.meta.kind !== 'wake')
       ctx.seen.heldForMain(thread, n.meta.message_id)
     await this.mainEmit({ content: n.content, meta: { ...n.meta, routed: 'fallback', reason } })
+    delivered?.()
     try {
       await postSystemNotice(
         ctx,
@@ -630,9 +660,46 @@ export class ThreadRouter {
     }
   }
 
-  /** After a (re)start: re-arm every unclaimed route; ones past their deadline fall back now. */
+  /**
+   * After a (re)start: re-arm every unclaimed route (ones past their deadline fall back now), and finish every hand-over to main
+   * that a stop cut short (a `main_handover` row, see `fallbackLate`; an old database has none). The original reason is not
+   * stored: 'worker_unavailable'. A card decision is never replayed to main: its card ends once, as an unknown outcome. A repeat
+   * that fails for a reason of its own is given up after REDELIVER_ATTEMPTS starts, with an error in the log.
+   */
   resume(): void {
+    this.store.dropStaleMainHandovers() // before re-arming: an unclaimed route is the deadline path's, not a repeat's
     for (const row of this.store.allUnclaimed()) if (!this.timers.has(row.message_id)) this.arm(row)
+    if (this.ctx.closing) return
+    for (const row of this.store.pendingMainHandovers()) {
+      const id = row.message_id
+      const { kind, card_id: cardId } = row.notification.meta
+      if (this.redelivering.has(id)) continue
+      if (kind === 'card_action' || kind === 'handoff') {
+        // the card first: a crash between the two repeats the end (a card already ended ignores it), never loses it
+        if (kind === 'card_action' && cardId) this.onCardUndelivered(cardId, 'unknown')
+        this.endMainHandover(id)
+        continue
+      }
+      this.redelivering.add(id)
+      void this.fallbackLate(row.notification, row.thread_id, 'worker_unavailable', id, true)
+        .catch((e) => {
+          if (isStopping(e)) return
+          let failed = REDELIVER_ATTEMPTS
+          try {
+            failed = this.store.failMainHandover(id)
+          } catch {}
+          this.ctx.log.error('main redelivery failed', { error: (e as Error).message, attempts: failed })
+          if (failed >= REDELIVER_ATTEMPTS) {
+            this.endMainHandover(id) // given up: never again
+            postSystemNotice(
+              this.ctx,
+              'A message could not be handed to the main session. Send it again to carry on.',
+              { thread: threadRef(this.ctx, this.shownIn(row.notification, row.thread_id)) },
+            ).catch((err) => this.ctx.log.warn('hand-over notice not posted', { error: (err as Error).message }))
+          }
+        })
+        .finally(() => this.redelivering.delete(id))
+    }
   }
 
   /** Called from the bridge's poll: governor park-all, workers.status and each worker's context (`sendState`). */

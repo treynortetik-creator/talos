@@ -28,7 +28,7 @@ afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-const until = (cond: () => boolean) => vi.waitUntil(cond, { timeout: 30_000, interval: 25 })
+const until = (cond: () => boolean) => vi.waitUntil(cond, { timeout: scaled(30_000), interval: 25 })
 
 /** Bounded, so a job the test leaves behind ends by itself: `waitfor <file>` gives up after 30 s. */
 const waitfor = `waitfor() { local i; for i in $(seq 1 600); do [ -f "$1" ] && return 0; sleep 0.05; done; return 1; }`
@@ -331,20 +331,17 @@ job_x() { echo ran >> "$HOME/runs"; waitfor "$HOME/go"; }`)
     expect(r.posted()).toMatch(/state=success .*context=local-ci\/x/)
   })
 
+  // B starts while A still holds the commit, so B waits and takes A's failure. A holds until the test has seen B waiting
+  // (B's "already being tested" line), so no timing decides whether the runs overlap.
   it('a different job list on the same commit cannot overwrite a failure with a pass', async () => {
     const r = repo(`
-job_flaky() {
-  if mkdir "$HOME/first-in" 2>/dev/null; then
-    for i in $(seq 1 40); do [ -f "$HOME/second-in" ] && break; sleep 0.05; done
-    return 1
-  fi
-  touch "$HOME/second-in"
-  for i in $(seq 1 200); do grep -q 'state=failure' "$GH_LOG" 2>/dev/null && break; sleep 0.05; done
-}
+job_flaky() { echo ran >> "$HOME/flaky-runs"; touch "$HOME/a-in"; waitfor "$HOME/b-waiting"; return 1; }
 job_other() { :; }`)
     const a = r.start(['--ref', 'HEAD', '--jobs', 'flaky'], { CI_SLOTS: '2' })
-    await until(() => existsSync(r.at('first-in')))
+    await until(() => existsSync(r.at('a-in')))
     const b = r.start(['--ref', 'HEAD', '--jobs', 'flaky,other'], { CI_SLOTS: '2' })
+    await until(() => b.out().includes('already being tested'))
+    r.touch('b-waiting')
     expect(await a.done).toBe(1)
     await b.done
     const flaky = r
@@ -352,6 +349,7 @@ job_other() { :; }`)
       .split('\n')
       .filter((l) => l.includes('context=local-ci/flaky') && !l.includes('state=pending'))
     expect(flaky.at(-1)).toContain('state=failure')
+    expect(readFileSync(r.at('flaky-runs'), 'utf8').trim().split('\n')).toHaveLength(1)
   })
 })
 

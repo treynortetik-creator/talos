@@ -581,7 +581,18 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       }
       return () => void set_.delete(listener as never)
     },
-    async sendMessage({ threadId, text, attachments = [], replyTo, intent, runBlock }): Promise<SendResult> {
+    async sendMessage({
+      threadId,
+      text,
+      attachments = [],
+      replyTo,
+      intent,
+      runBlock,
+      runWhere,
+      requireLive,
+    }): Promise<SendResult> {
+      if (requireLive && (store.getState().connection !== 'online' || !store.getState().devicePinned))
+        throw new NotSentError('mac_offline', "You're offline.")
       const clientMsgId = newId('m')
       await owner({
         type: 'message',
@@ -592,6 +603,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(replyTo ? { reply_to: replyTo } : {}),
         ...(intent ? { intent } : {}),
         ...(runBlock ? { run_block: runBlock } : {}),
+        ...(runWhere ? { run_where: runWhere } : {}),
       })
       append({
         id: clientMsgId,

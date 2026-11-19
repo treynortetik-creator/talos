@@ -79,7 +79,10 @@ test('old client: Run hands the agent the script once', async ({ stack, page, co
   })
   expect(res.isError).toBeFalsy()
   await page.getByRole('button', { name: 'Run', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: /^Sent to your Mac/ })).toBeVisible()
+  // yesterday's page says "Sent to your Mac…", today's "Sent · the agent runs it" (2026-11-18): the spec runs on both
+  await expect(
+    page.getByRole('status').filter({ hasText: /^(Sent to your Mac|Sent · the agent runs it)/ }),
+  ).toBeVisible()
   const note = await stack.claude.waitForNotification((n) => n.meta.run === 'tap')
   expect(note.content).toContain('echo old-client run')
   expect(stack.claude.notifications.filter((n) => n.meta.run === 'tap')).toHaveLength(1)

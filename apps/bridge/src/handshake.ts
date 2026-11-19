@@ -2,6 +2,7 @@
 import {
   AGENTS_MD_FEATURE,
   ALWAYS_ALLOW_FEATURE,
+  ATTEST_FEATURE,
   DRIVING_FEATURE,
   FILES_FEATURE,
   FILES_PUT_FEATURE,
@@ -23,6 +24,7 @@ import {
   PROBLEMS_FEATURE,
   PROBLEMS_INSTALL_FEATURE,
   RUN_FEATURE,
+  RUN_PANE_FEATURE,
   SCHEDULES_FEATURE,
   SCHEDULES_FEATURE_V2,
   SEARCH_FEATURE,
@@ -36,6 +38,7 @@ import {
   THREADS_FEATURE,
 } from '@talos-app/protocol'
 import { isLoopbackUrl } from './config.ts'
+
 import type { KeyMaterial } from './keys.ts'
 import { ownerHost } from './platform.ts'
 
@@ -71,6 +74,8 @@ export function bridgeFeatures(svc: {
   memoryRoots?: { available: boolean } | undefined
   /** Problem reports (docs/ERRORS.md): present on a live bridge, which is the one that files them. */
   problems?: unknown
+  /** Run in the terminal pane (src/pane-run.ts): only while the Mac app's run channel answers. */
+  paneRun?: { available: boolean } | undefined
   /** Sub-threads: advertised only while the Mac app reports it checks a sub-thread's folder (workers.json). */
   config?: { subthreadsSupported?(): boolean }
 }): string[] {
@@ -109,6 +114,10 @@ export function bridgeFeatures(svc: {
     ...(svc.problems ? [PROBLEMS_INSTALL_FEATURE] : []),
     // the config takes every stock theme id (iris, harbor): always on, last, where an older page goes without it
     THEMES_V2_FEATURE,
+    // answers a phone's attest.request (BYOR phase 4): last, where an older page goes without it
+    ATTEST_FEATURE,
+    // last: an older page goes without it. Only while the Mac app's run channel is connected
+    ...(svc.paneRun?.available ? [RUN_PANE_FEATURE] : []),
   ]
 }
 

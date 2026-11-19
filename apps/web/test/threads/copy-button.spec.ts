@@ -154,20 +154,42 @@ test('eight short alternating messages stay dense on a phone (the Copy box does 
   const rows = page.locator('[data-msg-id*="D"]')
   await expect(rows).toHaveCount(8)
   await rows.first().scrollIntoViewIfNeeded()
-  const first = await box(rows.first())
-  const last = await box(rows.last())
+  for (let i = 0; i < 8; i++) {
+    await expect(rows.nth(i).getByRole('button', { name: 'Copy message' })).toBeVisible()
+    if (i % 2 === 1) await expect(rows.nth(i).getByTestId('speak')).toBeVisible()
+  }
+  // Every box from one frame: the timeline may still follow the bottom a frame later (its ResizeObserver, or the rAF after
+  // a mutation), so boxes read in separate awaits can straddle that scroll and differ by a scroll step (88 px, seen under
+  // load). The checks below are about layout, which a scroll does not change.
+  const geo = await rows.evaluateAll((els) => {
+    const rect = (e: Element | null) => {
+      if (!e) return null
+      const b = e.getBoundingClientRect()
+      return { x: b.x, y: b.y, width: b.width, height: b.height }
+    }
+    return els.map((el) => ({
+      row: rect(el),
+      copy: rect(el.querySelector('[aria-label="Copy message"]')),
+      speak: rect(el.querySelector('[data-testid="speak"]')),
+    }))
+  })
+  const need = <T>(v: T | null | undefined, what: string): T => {
+    if (!v) throw new Error(`no box: ${what}`)
+    return v
+  }
+  const first = need(geo[0]?.row, 'row 0')
+  const last = need(geo[7]?.row, 'row 7')
   const span = last.y + last.height - first.y
   // Before the fix this span was 896 px (each row 28 px taller than its text needs); a row without a 44 px Copy box was 672.
   // 740 is that 672 plus 10%.
   expect(span, `eight rows span ${span} px`).toBeLessThanOrEqual(740)
   // and the Copy box is still 44 by 44, beside Listen on agent rows
   for (let i = 0; i < 8; i++) {
-    const r = rows.nth(i)
-    const c = await box(r.getByRole('button', { name: 'Copy message' }))
+    const c = need(geo[i]?.copy, `Copy in row ${i}`)
     expect(c.width).toBeGreaterThanOrEqual(44)
     expect(c.height).toBeGreaterThanOrEqual(44)
     if (i % 2 === 1) {
-      const l = await box(r.getByTestId('speak'))
+      const l = need(geo[i]?.speak, `Listen in row ${i}`)
       expect(hits(c, l), `Copy hits Listen in row ${i}`).toBe(false)
       expect(Math.abs(c.y - l.y), 'Copy and Listen share one row').toBeLessThanOrEqual(2)
     }

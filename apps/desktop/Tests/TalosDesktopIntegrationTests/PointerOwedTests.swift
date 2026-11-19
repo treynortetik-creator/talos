@@ -205,7 +205,12 @@ struct PointerOwedTests {
     r.ownerTypes("half a thought")  // a draft holds the next pointer, with the worker warm
     #expect(r.wait(5) { r.screen().contains("half a thought") })
     try r.wake("trip", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"])
-    #expect(r.wait(5) { r.owed().until != nil }, "the held pointer is not on disk")
+    // The first copy must have TAKEN the second wake (the file is gone) before it goes. A deadline on disk is not that signal: the
+    // first pointer's own may still be there while its tick ends, and a wake left in the folder is taken fresh by the second copy,
+    // which types it as any wake is typed (no deadline check), once the draft is gone.
+    #expect(
+      r.wait(5) { !FileManager.default.fileExists(atPath: r.talosHome + "/workers/trip/wake") && r.owed().until != nil },
+      "the held pointer is not on disk")
     r.appGone("crash")
     _ = r.comeBack(ahead: 100)
     #expect(r.wait(10) { r.owed().until == nil }, "a warm worker's pointer outlived 90 s: \(r.owed())")

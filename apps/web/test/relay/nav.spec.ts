@@ -1,6 +1,7 @@
 import { loadExampleConfig } from '@talos-app/testkit'
 import { expect, test } from '../helpers/fixtures.ts'
 import { startHarness } from '../helpers/harness.ts'
+import { shiftBrowserClock } from '../helpers/hostile.ts'
 import { isPhoneWidth, threadSwitcher } from '../helpers/phone.ts'
 import { openSignedIn } from '../helpers/util.ts'
 
@@ -22,6 +23,7 @@ test('Ctrl+2 switches to the second thread, in config order', async ({ browser }
   const harness = await startHarness({ agentConfig: loadExampleConfig('five-threads') })
   const config = harness.relay.config.threads
   const context = await browser.newContext({ baseURL: harness.url })
+  await shiftBrowserClock(context)
   const page = await context.newPage()
   try {
     await openSignedIn(harness, page, context, `/t/${config[0]?.id}`)

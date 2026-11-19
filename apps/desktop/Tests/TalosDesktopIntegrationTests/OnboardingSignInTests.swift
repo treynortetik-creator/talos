@@ -33,7 +33,9 @@ final class FakeTools {
   /// "Paste code here" prompt, reads a line, writes it to `code-received`, signs in only for GOODCODE), `fail`, `hang`. It prints
   /// a fake secret and starts a background child, to show neither is read and the child dies with the group. `urlfail` prints the URL
   /// and fails once the file `url-seen` exists (the test writes it when the link reached the screen; 15 s at most), so the link is
-  /// on the screen for as long as a busy machine needs to show it, and the login still ends.
+  /// on the screen for as long as a busy machine needs to show it, and the login still ends. `pasteburst` is `paste` the way the
+/// real Claude Code reads it (2.1.322, OBSERVED on Titan): one read of more than 64 bytes is a paste and its Enter is dropped, so
+/// a code and its Return in one write never submit; it signs in only for FAKE_GOODCODE.
   static let defaultClaude = """
     case "$1 $2" in
       "--version "*) echo "2.1.312 (Claude Code)"; exit 0 ;;
@@ -49,6 +51,20 @@ final class FakeTools {
           paste) echo "Opening browser to sign in..."; echo "$URL"; printf 'Paste code here if prompted > '
             read -r code; echo "$code" > "$FAKE_DIR/code-received"
             [ "$code" = GOODCODE ] && { touch "$FAKE_DIR/auth-ok"; exit 0; }; exit 1 ;;
+          pasteburst) echo "Opening browser to sign in..."; echo "$URL"; /bin/stty raw -echo  # raw before the prompt: no early cooked read
+            printf 'Paste code here if prompted > '
+            exec /usr/bin/perl -e '
+              my $buf = "";
+              while (sysread(STDIN, my $c, 4096)) {
+                $c =~ s/\\r//g if length($c) > 64;  # like Claude Code: a burst over 64 bytes is a paste, and its Enter is dropped
+                $buf .= $c;
+                if ($buf =~ s/\\r.*//s) {
+                  open(my $f, ">", "$ENV{FAKE_DIR}/code-received"); print $f "$buf\\n"; close($f);
+                  if ($buf eq $ENV{FAKE_GOODCODE}) { open(my $g, ">", "$ENV{FAKE_DIR}/auth-ok"); close($g); exit 0 }
+                  exit 1;
+                }
+              }
+              exit 1' ;;
           fail) echo login-ended >> "$FAKE_DIR/events"; exit 1 ;;
           urlfail) echo "$URL"; n=0; while [ ! -f "$FAKE_DIR/url-seen" ] && [ $n -lt 300 ]; do sleep 0.05; n=$((n+1)); done; exit 1 ;;
           hang) exec sleep 60 ;;
@@ -202,6 +218,24 @@ struct OnboardingSignInTests {
     #expect(log.wantsCode && log.url != nil)
     #expect(t.read("code-received").trimmingCharacters(in: .whitespacesAndNewlines) == "GOODCODE", "the code reached the CLI through the pty")
     for s in log.all { #expect(!"\(s)".contains("GOODCODE")) }
+  }
+
+  /// A real sign-in code is longer than 64 characters. Claude Code takes a burst that long as a paste and drops an Enter inside
+  /// it, so the code and its Return must be two writes, or the login waits for ever (Titan, 11/18: 89 chars in one write, no
+  /// answer in 45 s; the code, then a lone Return, answered in 2 to 6 s).
+  @Test func aLongCodeIsSubmittedEvenWhenAPasteSwallowsItsEnter() async throws {
+    let t = try FakeTools()
+    defer { t.remove() }
+    let code = "GOOD" + String(repeating: "x7Q", count: 28) + "#state"  // 94 characters, like a real code#state
+    let e = env(t, ["FAKE_LOGIN": "pasteburst", "FAKE_GOODCODE": code])
+    let session = ClaudeLoginSession(claude: t.claude, env: e)
+    let claude = t.claude
+    let sent = ScreenLog()
+    let o = await ClaudeSignIn.run(
+      claude: claude, env: e, interval: 0.1, limit: 15, session: session,
+      onScreen: { s in if s.wantsCode, sent.all.isEmpty { sent.add(s); session.submit(code: code) } })
+    #expect(t.read("code-received").trimmingCharacters(in: .whitespacesAndNewlines) == code, "the Return reached the CLI after the code")
+    #expect(o == .signedIn)
   }
 
   @Test func aWrongCodeEndsTheLoginAsNotSignedIn() async throws {

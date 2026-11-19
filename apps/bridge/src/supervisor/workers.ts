@@ -889,6 +889,12 @@ export class WorkerManager {
       nowMs,
       awake: this.d.now(),
       extraDialog: (rows) => detectPrompt(rows) !== null, // an unnamed prompt: do not type (the Mac's guardShape)
+      // the file says done (turn begun), or flagged, the moment that is known; a flag keeps the turn, as the Mac does
+      onEnter: (s) => {
+        w.owed = s
+        if (!s.pending) status.pointerEntered(w, new Date(nowMs).toISOString(), this.d.wallMs())
+        this.publish()
+      },
     })
     w.owed = r.state
     auditPointerLook((e, f) => this.d.audit(e, f), w.id, r.enterCheck, w.host?.unknownShapes?.() ?? [])
@@ -908,12 +914,6 @@ export class WorkerManager {
     }
     if (r.delivered) {
       w.idle = activeNow(w.idle, nowMs, this.d.now()) // a pointer is activity
-      const at = new Date(nowMs).toISOString()
-      w.entry = {
-        ...status.withTurnStarted(w.entry, at), // last_turn_at moves when the turn ends (advance, turnLook)
-        ...(w.entry.session_id ? { turn_session: w.entry.session_id } : {}),
-      }
-      ;[w.turnSeenBusy, w.turnTypedAtMs] = [false, this.d.wallMs()] // after the Enter
       this.d.audit('worker_pointer', { thread: w.id })
     }
     if (r.wroteLine)

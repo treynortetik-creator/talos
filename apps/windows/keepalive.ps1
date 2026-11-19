@@ -18,9 +18,12 @@ $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe' # by its full path (R1-11): 
 function Log([string]$m) {
   # a small log: the last 200 lines
   $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'), $m
-  $old = @()
-  if (Test-Path $log) { $old = @(Get-Content $log -Tail 199) }
-  Set-Content -Path $log -Value ($old + $line) -Encoding UTF8
+  # never throws: a log held open by another process drops the line (found on Titan, 2026-11-18)
+  try {
+    $old = @()
+    if (Test-Path -LiteralPath $log) { $old = @(Get-Content -LiteralPath $log -Tail 199 -ErrorAction Stop) }
+    Set-Content -LiteralPath $log -Value ($old + $line) -Encoding UTF8 -ErrorAction Stop
+  } catch { }
 }
 
 # A Windows notification, with Windows PowerShell's own app id (no module, no install); a failure to show one is logged.

@@ -4,6 +4,7 @@
 // exercise the browser's share-target path.
 import { test as base, expect } from '../helpers/fixtures.ts'
 import { type Harness, startHarness } from '../helpers/harness.ts'
+import { hostileClockMs } from '../helpers/hostile.ts'
 import { frameOfType, openSignedIn, sigOk, waitUntil } from '../helpers/util.ts'
 
 // A relay that lists share/1 in ready.features (the harness lists none by default, like a relay with sharing off).
@@ -29,6 +30,9 @@ test('share target: a multipart form POST lands on /share with the file; the sig
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', 'Web Share Target exists on Chromium only; iOS uses a Shortcut')
+  // the service worker stamps the stashed share with its own, unshifted, clock (a worker cannot be shifted), so the shifted page
+  // reads it as a day old and drops it
+  test.skip(hostileClockMs() !== 0, 'a service worker cannot be shifted by the hostile clock')
   const dev = await openSignedIn(harness, page, context, '/threads')
   await page.evaluate(() => navigator.serviceWorker.ready)
   await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)

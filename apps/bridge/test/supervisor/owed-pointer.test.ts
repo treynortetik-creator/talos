@@ -278,6 +278,69 @@ describe('typing it', () => {
   })
 })
 
+describe('the Enter and the file', () => {
+  it('the Enter is reported before the check reads the pane, so the file can say done first', async () => {
+    const p = new FakePane()
+    const order: string[] = []
+    const look = p.visibleRowsEscaped.bind(p)
+    let entered = false
+    const send = p.sendEnterKey.bind(p)
+    p.sendEnterKey = async () => {
+      entered = true
+      return send()
+    }
+    p.visibleRowsEscaped = async () => {
+      if (entered) order.push('read')
+      return look()
+    }
+    await typeOwedPointer({
+      pane: p,
+      state: owed(),
+      nowMs: NOW,
+      awake: 100,
+      sleep: async () => {},
+      onEnter: () => order.push('written'),
+    })
+    expect(order[0]).toBe('written')
+  })
+  it('an Enter that timed out still reports itself, and the record it hands over reads as delivered', async () => {
+    const p = new FakePane()
+    p.failEnter = 'unknown'
+    const kept: OwedState[] = []
+    await typeOwedPointer({
+      pane: p,
+      state: owed(),
+      nowMs: NOW,
+      awake: 100,
+      sleep: async () => {},
+      onEnter: (s) => kept.push(s),
+    })
+    expect(kept).toHaveLength(1)
+    expect(persisted(kept[0] as OwedState)).toEqual({})
+  })
+  it('typed but not entered, then a relaunch: the line is entered exactly once and typed no more', async () => {
+    const p = new FakePane()
+    p.failEnter = 'refused' // typed, the Enter never went
+    const first = await tick(p, owed())
+    expect(p.submitted).toEqual([])
+    const kept = persisted(first.state)
+    expect(kept).toMatchObject({ enter_owed: true })
+    p.failEnter = null
+    let typed = 0
+    const send = p.sendText.bind(p)
+    p.sendText = async (t) => {
+      typed++
+      return send(t)
+    }
+    const again = await tick(p, restored(kept), { awake: 1 })
+    expect(typed).toBe(0)
+    expect(p.submitted).toEqual([WORKER_POINTER_TEXT])
+    expect(again.delivered).toBe(true)
+    // and a second relaunch from what is now kept finds nothing owed
+    expect(persisted(again.state)).toEqual({})
+  })
+})
+
 describe('a restored pointer past its deadline', () => {
   const late = () => ({ ...restored(persisted(owed({ enterOwed: true }))) })
   const after = NOW + CLAIM_DEADLINE_MS + 1

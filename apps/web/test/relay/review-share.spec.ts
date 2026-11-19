@@ -1,6 +1,7 @@
 // Adversarial review of PR #42 (WP-V4 share), web part. Production build + the REAL service worker, against the testkit
 // FakeRelay (the relay-backed harness). The first describe FAILS on the PR head (dc22c74); the second holds.
 import { expect, test } from '../helpers/fixtures.ts'
+import { hostileClockMs } from '../helpers/hostile.ts'
 import { frameOfType, newId, openSignedIn } from '../helpers/util.ts'
 
 /** Exactly the row the real relay builds for a Shortcut token share (apps/relay/src/core/share.ts). */
@@ -117,6 +118,9 @@ test.describe('holds on PR #42: guards', () => {
     browserName,
   }) => {
     test.skip(browserName !== 'chromium', 'the share target exists on Chromium only')
+    // the service worker stamps the stashed share with its own, unshifted, clock (a worker cannot be shifted), so the shifted page
+    // reads it as a day old and drops it
+    test.skip(hostileClockMs() !== 0, 'a service worker cannot be shifted by the hostile clock')
     await openSignedIn(harness, page, context, '/threads')
     await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
     const target = new URL('/share-target', harness.url).href

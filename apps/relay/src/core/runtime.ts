@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3'
 import type { RelayEnv } from '../env.ts'
 import type { Clock, CryptoService, Logger, PushTransport, RelayServices } from '../services.ts'
 import { createNtfySink } from './alerts-ntfy.ts'
+import { AttestRouter } from './attest.ts'
 import { backfillOwnReports, bugReportBytes, sweepBugReports } from './bug-reports.ts'
 import { CardReminder } from './card-reminder.ts'
 import { createCryptoService } from './crypto.ts'
@@ -38,6 +39,8 @@ export type CoreRuntime = {
   media: FileMediaStore
   push: CorePush
   health: HealthWatch
+  /** BYOR phase 4: hands a phone's nonce to the live Mac (core/attest.ts). */
+  attest: AttestRouter
   /** Tells the owner once when a thread's session has waited on him too long (core/session-wait.ts). */
   sessionWait: SessionWait
   transport: PushTransport
@@ -179,6 +182,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     config: () => hub.agentConfig(),
   })
 
+  const attest = new AttestRouter(clock, hub)
   const stoppers: Array<() => void> = []
   let sweepTimer: unknown = null
   let stopped = false
@@ -248,6 +252,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     onBridgeKeyRotated: (newKeyId) => closeBridgeNotOnKey(hubDeps, newKeyId),
   }
   runtimes.set(services, {
+    attest,
     sessionWait,
     store,
     hub,
@@ -278,6 +283,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
       if (sweepTimer) clock.clearTimeout(sweepTimer)
       if (reconcileTimer) clock.clearTimeout(reconcileTimer)
       for (const fn of stoppers.splice(0)) fn()
+      attest.stop()
       cardReminder.stop()
       sessionWait.stop()
       quietSummary.stop()

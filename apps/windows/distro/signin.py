@@ -6,7 +6,8 @@
 #   {"event":"url","url":"https://..."}    open this, sign in, and copy the code it shows
 #   {"event":"code"}                        ready: write the code as one line on stdin
 #   {"event":"signed_in"}                   done: the token is in place, and the supervisor picks it up by itself
-#   {"event":"error","message":"..."}       a fixed plain sentence (none of Claude Code's own text is passed on)
+#   {"event":"error","why":"<id>","message":"..."}   a fixed plain sentence (none of Claude Code's own text is passed on),
+#                                           and its fixed id from WHY, which the tray logs (Pantheon, 2026-11-18)
 # Exit 0 only after signed_in.
 #
 # The token never leaves the distro (Pantheon's rules, 2026-11-12): it is read from the pty here, checked, and written by a
@@ -25,6 +26,7 @@ import sys
 import termios
 import fcntl
 import time
+import traceback
 
 # talos, and its own Claude Code. The two TALOS_SIGNIN_* names are for a test as an ordinary user with a stand-in claude;
 # the tray sets neither (it runs this through `wsl -u root --exec`, with root's own environment), and whatever they name
@@ -61,24 +63,36 @@ URL_DONE = re.compile(r"(https://(claude\.ai|claude\.com|[a-z0-9.-]*\.anthropic\
 KNOWN_FAILURES = [
     (re.compile(r"getaddrinfo|EAI_AGAIN|EAI_FAIL|ENOTFOUND|ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENETUNREACH"
                 r"|EHOSTUNREACH|socket hang up|fetch failed|network|timeout|timed out", re.I),
-     "Talos could not reach Claude, so the code was not checked. Make sure this PC is online."),
+     "offline", "Talos could not reach Claude, so the code was not checked. Make sure this PC is online."),
     (re.compile(r"invalid.*code|code.*invalid|n.?t accepted|not accepted", re.I),
-     "Claude did not accept that code. Next time, paste the whole code the page shows."),
+     "not_accepted", "Claude did not accept that code. Next time, paste the whole code the page shows."),
     (re.compile(r"expired", re.I),
-     "That code had expired. Next time, paste the code within a few minutes."),
+     "expired", "That code had expired. Next time, paste the code within a few minutes."),
 ]
-OTHER_FAILURE = "Claude Code could not sign you in. Try again in a minute."
+OTHER_FAILURE = ("other", "Claude Code could not sign you in. Try again in a minute.")
+# every failure's id, the only part of it the tray writes to its log: fixed words, never a code, a link or Claude Code's text
+WHY = {"no_user", "no_claude", "no_link", "code_wait", "not_a_code", "no_answer", "unreadable", "not_saved", "offline",
+       "not_accepted", "expired", "other"}
 # Claude Code ends an error with this and then waits for Enter, with no newline after it: the line is whole once it is there
 ERROR_END = re.compile(r"press enter to retry", re.I)
 
 
+SIGNED = False
+
+
 def say(event, **kw):
+    global SIGNED
     line = json.dumps(dict(event=event, **kw), separators=(",", ":"))
-    os.write(1, (line + "\n").encode())
+    data = (line + "\n").encode()
+    written = os.write(1, data)
+    # only a whole signed_in line counts as said: a short or failed write leaves the normal failure path (Opus review, 2026-11-18)
+    if event == "signed_in" and written == len(data):
+        SIGNED = True
 
 
-def fail(message):
-    say("error", message=message)
+def fail(why, message):
+    # an id off the list is "other": the person still gets the sentence (the test holds every call to the list)
+    say("error", why=why if why in WHY else "other", message=message)
     sys.exit(1)
 
 
@@ -187,10 +201,10 @@ def main():
     try:
         u = pwd.getpwnam(USER)
     except KeyError:
-        fail("there is no talos user in this distro")
+        fail("no_user", "there is no talos user in this distro")
     claude = (os.environ.get("TALOS_SIGNIN_CLAUDE") if TESTING else None) or os.path.join(u.pw_dir, ".local", "bin", "claude")
     if not os.path.exists(claude):
-        fail("Claude Code is not installed in this distro yet")
+        fail("no_claude", "Claude Code is not installed in this distro yet")
     env = {
         "HOME": home_of(u),
         "USER": USER,
@@ -258,20 +272,20 @@ def main():
     try:
         url = read_until(URL_WAIT_S, lambda t: URL_DONE.search(t))
         if not url:
-            fail("Claude Code did not give a sign-in link. Try again in a minute.")
+            fail("no_link", "Claude Code did not give a sign-in link. Try again in a minute.")
         say("url", url=url.group(1))
         read_until(10, lambda t: "code" in t.lower() and ">" in t)
         warmer = warm(WARM_HOSTS, fd)
         say("code")
         # at most CODE_WAIT_S for her to sign in and paste; the tray closing ends stdin, which ends this too
-        signal.signal(signal.SIGALRM, lambda *a: fail("The sign-in waited too long for the code. Try again."))
+        signal.signal(signal.SIGALRM, lambda *a: fail("code_wait", "The sign-in waited too long for the code. Try again."))
         signal.alarm(CODE_WAIT_S)
         line = sys.stdin.readline().strip()
         signal.alarm(0)
         end_child(warmer)
         warmer = None
         if not CODE.fullmatch(line):
-            fail("That is not a sign-in code. Copy the whole code the sign-in page shows, then try again.")
+            fail("not_a_code", "That is not a sign-in code. Copy the whole code the sign-in page shows, then try again.")
         del out[:]
         os.write(fd, line.encode() + b"\r")
         line = None
@@ -291,23 +305,41 @@ def main():
 
         got = read_until(RESULT_WAIT_S, result)
         if not got:
-            fail("The code was sent, but there was no answer from Claude in %d seconds. Make sure this PC is online."
+            fail("no_answer", "The code was sent, but there was no answer from Claude in %d seconds. Make sure this PC is online."
                  % RESULT_WAIT_S)
         kind, value = got
         if kind == "error":
-            fail(next((words for pat, words in KNOWN_FAILURES if pat.search(value)), OTHER_FAILURE))
+            fail(*next(((why, words) for pat, why, words in KNOWN_FAILURES if pat.search(value)), OTHER_FAILURE))
         if not TOKEN_SHAPE.fullmatch(value):
             value = None
-            fail("Claude Code gave a sign-in Talos could not read whole. Try again.")
+            fail("unreadable", "Claude Code gave a sign-in Talos could not read whole. Try again.")
         if not write_token(u, value):
-            fail("The sign-in worked, but Talos could not save it. Try again.")
+            fail("not_saved", "The sign-in worked, but Talos could not save it. Try again.")
         value = None
         say("signed_in")
     finally:
-        end_child(warmer)
-        stop()
-        out[:] = b"\0" * len(out)
+        # each step runs even when the one before it raises, and the token buffer is always zeroed (Opus review, 2026-11-18)
+        try:
+            end_child(warmer)
+        finally:
+            try:
+                stop()
+            finally:
+                out[:] = b"\0" * len(out)
+
+
+def run():
+    try:
+        main()
+    except Exception:
+        if SIGNED:
+            # signed_in is already said and the token is saved: the tray must not hear a second event, so the failure of a
+            # best-effort cleanup goes to stderr only, and the exit is 0 (Opus review, 2026-11-18)
+            traceback.print_exc()
+            return
+        # an unexpected crash: say one fixed sentence on stdout; the traceback (stderr) is never sent on
+        fail(OTHER_FAILURE[0], OTHER_FAILURE[1])
 
 
 if __name__ == "__main__":
-    main()
+    run()

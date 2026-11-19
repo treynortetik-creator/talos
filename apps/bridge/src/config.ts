@@ -202,6 +202,8 @@ export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-
     bridgeKey: join(home, 'bridge.key'),
     bridgeKeyNext: join(home, 'bridge.key.next'),
     bridgeKeyPrev: join(home, 'bridge.key.prev'),
+    /** The rotation certificates the OLD key signed (attest.ts): 0600, a JSON array, appended by `rotate`. */
+    bridgeRotations: join(home, 'bridge.rotations.json'),
     devicesJson: join(home, 'devices.json'),
     historyDb: join(home, 'history.sqlite'),
     media: join(home, 'media'),

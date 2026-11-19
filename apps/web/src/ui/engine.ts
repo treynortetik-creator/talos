@@ -14,9 +14,6 @@ export function isChromiumEngine(nav: NavLike | undefined = typeof navigator ===
   return /\b(Chrome|Chromium|HeadlessChrome)\//.test(ua)
 }
 
-/** HTML page cards on these engines wait for a tap before they run any script. Everywhere else they run at once. */
-export const pageCardsWaitForTap = () => isChromiumEngine()
-
 /**
  * Safari, every browser on iPhone and iPad, and the Mac app's web view. WebKit does not let a frame focus its own field
  * without a tap (checked with Playwright WebKit), so nothing is guarded there and a tap into a page is never second-guessed.

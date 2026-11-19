@@ -74,6 +74,8 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// The owner's own shell laid over the page's Terminal pane slot (`shell_pane`, WebWindowShellPane.swift), and the slot the
   /// page last asked for. The page places it; it cannot type into it, read it, or choose what it runs.
   let shellPane = OwnerShellPane()
+  /// The one road for a pane Run into that shell (ShellRunChannel.swift, made in WebWindowShellPane.swift).
+  private(set) lazy var runChannel = makeRunChannel()
   var shellPaneSlot: (thread: String, rect: TerminalViewRect)?
   /// Set while this Mac is signing out or being forgotten, until the next document loads: the page that is on its way out is
   /// still alive and may say it is signed in and ask for a pane, and no shell may start for it.
@@ -540,6 +542,9 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     case .shellPaneClose(let thread):
       guard signedIn, !shellPaneBarred else { break }  // like `companionState`: a signed-out page, or one past a sign-out, closes nothing
       shellPaneClosed(thread: thread)
+    case .runWitness(let thread, let id, let sha):
+      guard signedIn, !shellPaneBarred else { break }
+      runChannel.witness(threadId: thread, clientMsgId: id, scriptSha256: sha)
     case .captureAck: break  // the screenshot hotkey (screen-helper lane 5) handles it; nothing sends capture_drop yet
     }
   }
@@ -707,6 +712,12 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     retryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
       Task { @MainActor in self?.reload() }
     }
+  }
+
+  /// A reload the owner asked for replaces the retry schedule (View > Reload, `WebWindowReload.swift`).
+  func cancelRetries() {
+    retryTimer?.invalidate()
+    retryAttempt = 0
   }
 
   private func reload() {

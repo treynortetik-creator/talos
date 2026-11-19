@@ -127,6 +127,12 @@ describe('frame focus guard', () => {
     expect(field.focus).not.toHaveBeenCalled()
   })
 
+  it('the hold numbers are pinned: three hand-backs in ten seconds hide the frame (the only guard on page cards)', () => {
+    // HTML page cards run at once on Chromium (no Run tap since 2026-11-18): loosening these is a security change.
+    expect(REPEAT_COUNT).toBe(3)
+    expect(REPEAT_WINDOW_MS).toBe(10_000)
+  })
+
   it('holds a frame that keeps taking focus: REPEAT_COUNT hand-backs inside the window, then once', () => {
     const held = vi.fn()
     guard.watch(frame, held)

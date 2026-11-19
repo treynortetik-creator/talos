@@ -2,7 +2,7 @@
 // screen socket is a fake that answers the way TalosDesktopCore's ScreenProtocol does and refuses what it refuses: an `allow`
 // whose owner signature, device or binding does not check out against devices.json allows nothing.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   type CardT,
@@ -16,6 +16,7 @@ import { loadEnv } from '../src/config.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import type { ScreenAnswer } from '../src/screen.ts'
+import { SCREEN_DENIED_BUNDLES, SCREEN_TEXT } from '../src/screen.ts'
 import { displayName, SCREEN_CONSENT_TEXT, SCREEN_NOT_NOW_MS } from '../src/screen-consent.ts'
 import { callTool } from '../src/tools/index.ts'
 import { screenTransport } from '../src/tools/screen.ts'
@@ -54,6 +55,7 @@ class FakeMac {
     if (!this.running) return { ok: false, code: 'not_running', text: '' }
     const bundle = String(this.measured.bundle_id)
     switch (req.op) {
+      case 'key':
       case 'type':
         if (this.allowed.has(bundle)) return { ok: true, body: { events: 1, read_back: 'verified' } }
         return {
@@ -410,5 +412,128 @@ describe('how many apps are asked about at once (R1-5)', () => {
     expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.busy)
     await sleep(150)
     expect(screenCards(x)).toHaveLength(10)
+  })
+})
+
+describe('the lock screen and the security prompts are never offered to an agent', () => {
+  // ids read from this Mac's own bundles (lsappinfo and each Info.plist), see SCREEN_DENIED_BUNDLES
+  const SYSTEM = (id: string) => ({
+    bundle_id: id,
+    team_id: null,
+    requirement: `anchor apple and identifier "${id}"`,
+    name: id.split('.').pop() as string,
+    signer: 'apple',
+  })
+
+  test('every denied id, even when the Mac measured it and handed out an ask: no card, no record, a plain refusal', async () => {
+    const { x, mac } = await start()
+    for (const id of SCREEN_DENIED_BUNDLES) {
+      mac.measured = SYSTEM(id)
+      const r = await callTool(x.bridge.ctx, 'screen_key', { keys: 'cmd+r' })
+      expect(r.isError).toBe(true)
+      expect(text(r)).toContain('Talos never lets an agent use it and never asks the owner to allow it')
+      expect(text(r)).not.toContain('Asked the owner')
+    }
+    // the same, with the id spelled in another case
+    mac.measured = SYSTEM('COM.APPLE.LOGINWINDOW')
+    expect(text(await typeHi(x))).toContain('never asks the owner')
+    await sleep(200)
+    expect(screenCards(x)).toHaveLength(0)
+    expect(x.bridge.ctx.store.kvKeys('scr:')).toHaveLength(0)
+  })
+
+  test('a system prompt in front on an unlocked Mac reads as a prompt, not a lock; nothing else is done', async () => {
+    const { x, mac } = await start()
+    screenTransport.request = async (_c, req) => {
+      mac.seen.push(req)
+      return { ok: false, code: 'system_prompt', text: 'ignored', app: 'UserNotificationCenter' }
+    }
+    for (const [name, args] of [
+      ['screen_key', { keys: 'return' }],
+      ['screen_apps', {}],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const r = await callTool(x.bridge.ctx, name, args)
+      expect(r.isError).toBe(true)
+      expect(text(r)).toBe(SCREEN_TEXT.systemPrompt('UserNotificationCenter'))
+    }
+    expect(SCREEN_TEXT.systemPrompt('X')).toBe(
+      "A system prompt (X) is in front; Talos won't act on it. The owner answers it.",
+    )
+    expect(SCREEN_TEXT.systemPrompt('X')).not.toContain('locked')
+    await sleep(150)
+    expect(screenCards(x)).toHaveLength(0)
+  })
+
+  test('the bridge list and the Mac app list name the same ids', () => {
+    const swift = readFileSync(
+      join(import.meta.dir, '../../desktop/Sources/TalosDesktopCore/ScreenDenied.swift'),
+      'utf8',
+    )
+    const block = /bundleIDs: \[String\] = \[([^\]]*)\]/.exec(swift)?.[1] ?? ''
+    const ids = [...block.matchAll(/^\s*"([^"]+)",/gm)].map((m) => m[1])
+    expect(ids.length).toBeGreaterThan(15)
+    for (const id of ['com.apple.coreservices.uiagent', 'com.apple.accessibility.universalAccessAuthWarn'])
+      expect(SCREEN_DENIED_BUNDLES).toContain(id)
+    expect([...ids].sort()).toEqual([...SCREEN_DENIED_BUNDLES].sort())
+  })
+
+  test('the real sighting: loginwindow in front and screen_key cmd+r made a card (02:08)', async () => {
+    const { x, mac } = await start()
+    mac.measured = SYSTEM('com.apple.loginwindow')
+    const r = await callTool(x.bridge.ctx, 'screen_key', { keys: 'cmd+r' })
+    expect(text(r)).toBe(SCREEN_TEXT.denied('loginwindow'))
+    await sleep(200)
+    expect(screenCards(x)).toHaveLength(0)
+  })
+
+  test('a card for a system app that is somehow tapped Allow never reaches the Mac', async () => {
+    const { x, mac } = await start()
+    // make a real card for an ordinary app, then swap what the bridge reads from it: build the ledger row from a system app
+    await typeHi(x)
+    await eventually(() => expect(screenCards(x)).toHaveLength(1))
+    const card = screenCards(x)[0] as CardT
+    const row = x.bridge.ctx.ledger.get(card.id)
+    expect(row).toBeDefined()
+    const bad = {
+      ...(row as NonNullable<typeof row>),
+      binding: {
+        ...(row as NonNullable<typeof row>).binding,
+        payload: { v: 1, screen_allow: SYSTEM('com.apple.SecurityAgent') },
+      },
+    }
+    await x.bridge.ctx.screenConsent?.onResolved(bad, 'primary', {})
+    expect(mac.proofs).toHaveLength(0)
+    expect(mac.seen.some((r) => r.op === 'allow')).toBe(false)
+    const failed = updates(x, card.id).find((u) => u.state === 'failed') as { result: { text: string } } | undefined
+    expect(failed?.result.text).toBe(SCREEN_TEXT.denied('SecurityAgent'))
+  })
+
+  test('a locked Mac answers every screen tool in words, makes no card and does nothing else', async () => {
+    const { x, mac } = await start()
+    const locked = async (req: Record<string, unknown>): Promise<ScreenAnswer> => {
+      mac.seen.push(req)
+      return { ok: false, code: 'screen_locked', text: 'anything the app says' }
+    }
+    screenTransport.request = (_c, req) => locked(req)
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['screen_shot', {}],
+      ['screen_click', { x: 1, y: 2 }],
+      ['screen_type', { text: 'hi' }],
+      ['screen_key', { keys: 'cmd+r' }],
+      ['screen_scroll', { x: 1, y: 2, dy: -3 }],
+      ['screen_open_app', { bundle_id: 'com.apple.TextEdit' }],
+      ['screen_apps', {}],
+    ]
+    for (const [name, args] of calls) {
+      const r = await callTool(x.bridge.ctx, name, args)
+      expect(r.isError).toBe(true)
+      expect(text(r)).toBe(SCREEN_TEXT.locked)
+    }
+    expect(SCREEN_TEXT.locked).toContain(
+      'The Mac is locked (or the screen saver is on); Talos does nothing until the owner unlocks it.',
+    )
+    expect(mac.seen).toHaveLength(calls.length)
+    await sleep(150)
+    expect(screenCards(x)).toHaveLength(0)
   })
 })

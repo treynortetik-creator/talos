@@ -207,10 +207,10 @@ struct ShellPaneReachTests {
 
   static let paneFiles = ["apps/desktop/Sources/TalosDesktop/OwnerShellPane.swift", "apps/desktop/Sources/TalosDesktop/WebWindowShellPane.swift"]
 
-  @Test func thePaneNeverWritesToAShellAndNeverHandsItsScreenToAnyone() throws {
+  @Test func thePaneNeverWritesToAShellExceptThroughTheOneRunEntryAndNeverHandsItsScreenToAnyone() throws {
     // writing to the pty, reading the screen back, talking to the page, the network, tmux, or another process
     let banned = [
-      ".send(", "sendInput", ".feed(", "deliver(", "evaluateJavaScript", "callAsyncJavaScript", "NativeToWeb", "URLSession", "URLRequest",
+      "sendInput", ".feed(", "deliver(", "evaluateJavaScript", "callAsyncJavaScript", "NativeToWeb", "URLSession", "URLRequest",
       "getTerminal", "getText", "getLine", "getSelection", "selectedText", "NSPasteboard", "tmux", " Process(", "posix_spawn", "socket(",
       "FileHandle", "NotificationCenter", "DistributedNotification", "NSXPC", "write(",
     ]
@@ -219,6 +219,87 @@ struct ShellPaneReachTests {
       #expect(src.count > 500, "\(f) was read")
       for b in banned { #expect(!src.contains(b), "\(f) uses \(b)") }
     }
+  }
+
+  /// "One path to the shell": the pty is written from exactly one line of the app, inside `runScript`, which takes a `Ticket`
+  /// that only `ShellRunChannel.swift` can make (a `fileprivate` initializer), after the owner's own click vouched for the Run.
+  @Test func onlyTheRunChannelCanWriteToTheShellAndTheCompilerHoldsItThere() throws {
+    let pane = try Self.code(Self.paneFiles[0])
+    #expect(pane.components(separatedBy: ".send(").count == 2, "one write to a shell in OwnerShellPane.swift")
+    let fn = try #require(pane.range(of: "func runScript(_ ticket: ShellRunChannel.Ticket, deadline: Double, now: @escaping () -> Double) async -> ShellRunChannel.Step"))
+    let end = try #require(pane.range(of: "private func started(_ tab: Tab)", range: fn.upperBound..<pane.endIndex))
+    // the one write is a private helper, and the helper is called only from runScript: the Ctrl+C that clears the line and the paste
+    let put = try #require(pane.range(of: "private func put(_ bytes: [UInt8], in v: SafeTerminalView) { v.send(data: bytes[...]); noteWrite(bytes) }"))
+    #expect(put.lowerBound > end.lowerBound, "the helper sits after runScript")
+    let calls = pane.components(separatedBy: "put(").count - 1
+    let callsInRun = pane[fn.upperBound..<end.lowerBound].components(separatedBy: "put(").count - 1
+    #expect(calls == callsInRun + 1 && callsInRun == 2, "put( is called twice, both in runScript (found \(callsInRun) of \(calls - 1))")
+    #expect(pane[fn.upperBound..<end.lowerBound].contains("put([0x03], in: v)") && pane[fn.upperBound..<end.lowerBound].contains("put(PaneRun.bytes(script: ticket.script), in: v)"), "Ctrl+C, then the paste")
+    // the paste is never sent without the line editor being checked, and the line being cleared first
+    let body = String(pane[fn.upperBound..<end.lowerBound])
+    #expect(body.range(of: "atLineEditor(tab)")!.lowerBound < body.range(of: "put([0x03]")!.lowerBound)
+    #expect(body.range(of: "put([0x03]")!.lowerBound < body.range(of: "put(PaneRun.bytes")!.lowerBound)
+    let chan = try Self.code("apps/desktop/Sources/TalosDesktop/ShellRunChannel.swift")
+    #expect(chan.contains("fileprivate init(thread: String, script: String)"), "a ticket is made in ShellRunChannel.swift only")
+    #expect(chan.components(separatedBy: "Ticket(thread:").count == 2, "and it is made once, after the witness is spent")
+    let witnessSpent = try #require(chan.range(of: "book.consume("))
+    let made = try #require(chan.range(of: "Ticket(thread: r.threadId"))
+    #expect(witnessSpent.lowerBound < made.lowerBound, "the ticket comes after the witness check")
+    for f in Self.files(under: "apps/desktop/Sources", ext: ["swift"]) {
+      let src = try Self.code(f)
+      let isChan = f.hasSuffix("/ShellRunChannel.swift"), isPane = f.hasSuffix("/OwnerShellPane.swift")
+      if !isChan { #expect(!src.contains("Ticket("), "\(f) makes a ticket") }
+      if !isChan && !isPane { #expect(!src.contains("runScript("), "\(f) reaches the shell's input") }
+      if !isChan { #expect(!src.contains("PaneRunService") || f.hasSuffix("/ScreenServer.swift") || f.contains("ScreenHelperHost"), "\(f) serves the run socket op") }
+      // the stamp of the owner's click: set in the window's sendEvent, read by the channel, nowhere else
+      if !f.hasSuffix("/SyntheticInputGuard.swift") {
+        for w in ["activation.record", "activationClock", "noteHumanActivation"] { #expect(!src.contains(w), "\(f) touches the click stamp (\(w))") }
+      }
+      if !isChan && !f.hasSuffix("/SyntheticInputGuard.swift") { #expect(!src.contains("takeHumanActivation"), "\(f) reads the click stamp") }
+      // witnesses are kept and spent by the channel only
+      if !isChan && !f.hasSuffix("/PaneRun.swift") { #expect(!src.contains("RunWitnessBook"), "\(f) keeps witnesses") }
+      // the socket op lives in one place
+      if !f.hasSuffix("/ScreenServer.swift") { #expect(!src.contains("\"pane_run\""), "\(f) answers pane_run") }
+    }
+    let guardSrc = try Self.code("apps/desktop/Sources/TalosDesktop/SyntheticInputGuard.swift")
+    #expect(guardSrc.contains("private var activation = HumanActivation()"), "the stamp is private to the window")
+    #expect(guardSrc.contains("private var activationClock"))
+    // what a test may move, and the way to it, is not in the app that ships
+    for (f, hook) in [("SyntheticInputGuard.swift", "func setActivationClockForTest"), ("ShellRunChannel.swift", "func setClockForTest"), ("ShellRunChannel.swift", "func setKeyCheckForTest")] {
+      let src = try Self.code("apps/desktop/Sources/TalosDesktop/" + f)
+      let dbg = try #require(src.range(of: "#if DEBUG", range: src.startIndex..<(src.range(of: hook)?.lowerBound ?? src.startIndex)), "\(hook) is under #if DEBUG")
+      #expect(dbg.lowerBound < (src.range(of: hook)?.lowerBound ?? src.startIndex))
+    }
+  }
+
+  /// The page and the bridge meet only at the relay: nothing the page can reach in the app, and nothing in the web app, is a road to
+  /// the bridge's socket or to the Mac's, so a pane Run reaches the app only through the signed frame, the bridge and the local socket.
+  @Test func thePageReachesTheBridgeOnlyThroughTheRelay() throws {
+    // 1. the web app never names a local socket or the op
+    for f in Self.files(under: "apps/web/src", ext: ["ts", "tsx"]) {
+      let s = try Self.read(f)
+      for w in ["screen.sock", "hub.sock", "pane_run", "pane_status"] { #expect(!s.contains(w), "\(f) names \(w)") }
+    }
+    // 2. the bridge opens no listener the page could dial: its Unix hub socket (workers) and the loopback OAuth catcher are all there is
+    var listeners: Set<String> = []
+    for f in Self.files(under: "apps/bridge/src", ext: ["ts"]) {
+      let s = try Self.code(f)
+      if s.contains(".listen(") || s.contains("Bun.serve(") || s.contains("createServer(") { listeners.insert(String(f.dropFirst("apps/bridge/src/".count))) }
+    }
+    #expect(listeners == ["hub/server.ts", "apps/direct-oauth.ts"], "a new listener in the bridge: \(listeners)")
+    let oauth = try Self.code("apps/bridge/src/apps/direct-oauth.ts")
+    #expect(!oauth.contains("pane") && !oauth.contains("run_witness"), "the OAuth catcher has no road to a Run")
+    // 3. the app: the page's messages reach the channel's witness and nothing else of it; the socket module is not in the page's path
+    for f in ["NativeBridge.swift", "WebWindow.swift", "WebWindowShellPane.swift"] {
+      let s = try Self.code("apps/desktop/Sources/TalosDesktop/" + f)
+      for w in ["ScreenSocket", "screen.sock", "hub.sock", "PaneRunService", "PaneRunRequest", "RunWitnessBook"] { #expect(!s.contains(w), "\(f) names \(w)") }
+    }
+    let wc = try Self.code("apps/desktop/Sources/TalosDesktop/WebWindow.swift")
+    let calls = wc.components(separatedBy: "runChannel.").dropFirst().map { String($0.prefix { $0 != "(" }) }
+    #expect(Set(calls).isSubset(of: ["witness", "clear"]) && calls.contains("witness"), "the window calls only witness (and clear): \(calls)")
+    // 4. the page's one message into it carries no script, and the bridge is told nothing by it
+    let ts = try Self.read("packages/protocol/src/native.ts")
+    #expect(!ts.contains("run_witness") || !ts.contains("script:"), "run_witness has no script field")
   }
 
   @Test func onlyTheWindowHoldsThePaneAndItOnlyPlacesHidesAndClosesIt() throws {
@@ -231,7 +312,7 @@ struct ShellPaneReachTests {
     for f in Self.files(under: "apps/desktop/Sources", ext: ["swift"]) where f != Self.paneFiles[0] && !f.hasSuffix("/ShellClipboardGuard.swift") {
       let src = try Self.code(f)
       if src.contains("OwnerShellPane") {
-        #expect(f.hasSuffix("/WebWindow.swift") || f.hasSuffix("/WebWindowShellPane.swift"), "\(f) reaches for the pane")
+        #expect(f.hasSuffix("/WebWindow.swift") || f.hasSuffix("/WebWindowShellPane.swift") || f.hasSuffix("/ShellRunChannel.swift"), "\(f) reaches for the pane")
       }
       for hook in ["tabsForTest", "viewsForTest", "ShellClipboardGuard", "pressPlusForTest", "pressTabForTest", "pressCloseForTest"] {
         #expect(!src.contains(hook), "\(f) uses \(hook)")
@@ -239,7 +320,9 @@ struct ShellPaneReachTests {
       for line in src.split(separator: "\n") {
         let text = String(line)
         if bare.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
-          #expect(text.trimmingCharacters(in: .whitespaces) == "let shellPane = OwnerShellPane()", "\(f): `\(text)` hands the pane on")
+          let t = text.trimmingCharacters(in: .whitespaces)
+          // the run channel is made with the pane once, in the window controller: it is the one other holder
+          #expect(t == "let shellPane = OwnerShellPane()" || t.hasPrefix("pane: shellPane, window: { [weak self] in self?.window as? WebNSWindow }"), "\(f): `\(text)` hands the pane on")
         }
         var rest = line[...]
         while let r = rest.range(of: "shellPane.") {

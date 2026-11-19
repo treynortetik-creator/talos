@@ -12,6 +12,7 @@ import {
 } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { replyFrame } from '../frames-out.ts'
+import { inlineCommandNote } from '../inline-commands.ts'
 import { kindFor } from '../media.ts'
 import { say } from '../owner-words.ts'
 import { RelayHttpError } from '../relay-http.ts'
@@ -173,7 +174,10 @@ export const reply: ToolRecord = {
       })
       // never awaited: a slow TTS holds neither the reply nor this tool call
       if (wantVoice && driving) void sendVoiceFollowUp(ctx, message, spoken)
-      return ok(notes.length ? `${status}; ${notes.join('; ')}` : status)
+      // after the send, so a failed one never carries it; the message itself is not touched
+      const inline = inlineCommandNote(text)
+      const head = notes.length ? `${status}; ${notes.join('; ')}` : status
+      return ok(inline ? `${head}\n${inline}` : head)
     } catch (e) {
       return fail((e as Error).message)
     }

@@ -15,6 +15,8 @@ with the owner's OK.
 When Talos Setup fails on the WSL step on someone's PC, [IF-WSL-FAILS.md](IF-WSL-FAILS.md) goes through each red line Setup
 shows, what it means, and the fix, for whoever helps them on a call.
 
+**Windows is parked** (2026-11-18): [PARKED.md](PARKED.md) says where it stands and what to do first to resume.
+
 For the day someone installs Talos on a Windows PC, [INSTALL-DAY.md](INSTALL-DAY.md) lists every Setup page in order, with what
 to click, what each step looks like when it has gone wrong, and which files to send.
 

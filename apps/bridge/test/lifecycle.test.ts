@@ -282,13 +282,24 @@ describe('key rotation', () => {
     // bug hunt core #9: two failed tries used to leave two different keys in bridge.key.next
     h = await startHarness({ startBridge: false })
     const p = paths(h.home)
-    const env = { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: 'http://127.0.0.1:1' }
-    const first = cliIO()
-    expect(await runCli(['rotate'], first.io, env)).toBe(1)
-    const next1 = JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id
-    expect(first.err.join('\n')).toContain('the next talos-app rotate finds out')
-    expect(await runCli(['rotate'], cliIO().io, env)).toBe(1)
-    expect(JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id).toBe(next1)
+    // a relay that answers its descriptor (an older one: 404) but cannot take the rotation: rotate now asks the descriptor first
+    // and refuses outright when that is unreachable (test/attest.test.ts), so the failure has to come from the rotate call
+    const down = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: (req) => new Response('x', { status: new URL(req.url).pathname === '/bridge/rotate' ? 500 : 404 }),
+    })
+    try {
+      const env = { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: `http://127.0.0.1:${down.port}` }
+      const first = cliIO()
+      expect(await runCli(['rotate'], first.io, env)).toBe(1)
+      const next1 = JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id
+      expect(first.err.join('\n')).toContain('the next talos-app rotate finds out')
+      expect(await runCli(['rotate'], cliIO().io, env)).toBe(1)
+      expect(JSON.parse(readFileSync(p.bridgeKeyNext, 'utf8')).key_id).toBe(next1)
+    } finally {
+      down.stop(true)
+    }
   })
 
   test('a key an earlier try left that the relay never took is not reused: the rotation goes to a fresh key', async () => {

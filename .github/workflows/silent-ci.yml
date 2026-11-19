@@ -1,0 +1,42 @@
+name: Silent-failure sweep
+run-name: Silent-failure sweep
+
+# scripts/silent-ci.ts: a workflow whose last 2 runs on main failed, a report-ci/* or hostile-ci/* status that failed twice or
+# went quiet for 26 h, or a live deploy with no saved web bundle, becomes one alert in the lead's inbox (scripts/lead-inbox.sh),
+# where the day and overnight inbox jobs read it. Two CI jobs broke unseen in one week of 2026-11. Read-only towards CI: it
+# reads runs, statuses and deployments, and its only write is the inbox comment. Twice a day (and by hand), on GitHub's runners
+# so it does not depend on the CI machines it watches. It checks out main only, keeps no token in .git/config, installs nothing.
+on:
+  schedule:
+    - cron: "37 7,19 * * *" # not on the hour: GitHub delays, and can drop, scheduled runs at the top of the hour
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: silent-ci
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out main
+      actions: read # workflow runs
+      statuses: read # commit statuses on main
+      deployments: read # the live production deploy
+      issues: write # the lead's inbox issue: its only write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0 # lead-inbox.sh's scrub reads the commit authors' names from the history
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Post what has failed or gone quiet to the lead's inbox
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun scripts/silent-ci.ts

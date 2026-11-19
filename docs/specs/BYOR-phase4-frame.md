@@ -43,7 +43,7 @@ to the relay (`impl.ts:86-89`), and a native call sends none; the route changes 
 **Cookie, said once:** the fetcher reads only that origin's session cookie (`__Host-talos_s`, `apps/relay/src/auth/util.ts:8`) from the profile's own
 `WKHTTPCookieStore` and sends it only for a paired profile, never at pairing. The relay checks it with no side effects: no refresh, no `Set-Cookie`, no
 last-used update, no failure count. A missing or bad cookie falls back to the public bucket. **Rate limits** (all assumptions): a per-address bucket; a
-relay-wide public bucket of 0.5 per second, below the bridge's 1 per second; a paired-session bucket of 0.5 per second with a small burst (so two of the
+relay-wide public bucket of 0.5 per second with a burst of 2, below the bridge's 1 per second; a paired-session bucket of 0.5 per second with a burst of 3 (so two of the
 owner's phones do not flicker), so outside traffic cannot push the owner's phones to `unverified`. The phone retries one 429 inside its 10 s. A flood on the
 public bucket can still stall pairing, which has no cookie yet. Codes: 200 `{pubkey, sig, chain}`; 400 `bad_request` (nonce shape); 429; 503 `mac_offline` (no live bridge) or
 `attest_unsupported` (hello lacks `attest/1`, listed last, `handshake.ts:77-79`); 504 `attest_timeout` (the Mac did not answer in 5 s, assumption).
@@ -65,7 +65,7 @@ The relay keeps a small map `request id -> waiting HTTP call` (5 s), sends the r
 
 **Bridge** (new file `apps/bridge/src/attest.ts`): accept only `nonce` matching `^[A-Za-z0-9_-]{43}$`; answer on the socket it arrived on; never
 queue, retry or replay an `attest.request` (a request that arrives from a resend is not answered); sign only with the current key (`keyRef`,
-`bridge.ts:147,870-873`), never the `.prev` or `.next` fallbacks the socket may dial with (`bridge.ts:636-655`); rate limit signatures (assumption: 1 per second).
+`bridge.ts:147,870-873`), never the `.prev` or `.next` fallbacks the socket may dial with (`bridge.ts:636-655`); rate limit signatures (assumption: capacity 5, refilled at 1 per second; at capacity 1 a public request every 2 s can take the Mac's only token, so the owner's paired request can get a 504 and show `unverified`; 5 covers the relay's paired burst of 3 plus a public burst of 2).
 
 **Signed bytes.** UTF-8, LF only, no spaces, no trailing LF:
 `"talos-bridge-attest/v1\n" + nonce + "\n" + origin + "\n" + fp`. `nonce` and `fp` are the 43-character base64url TEXT, never decoded bytes.
@@ -93,7 +93,7 @@ arguments, resolves with nothing; it works only while the state is `pass`.
 **Check order (the one order; section 6 uses it).** (1) Body at most 8 KB and well-formed; (2) `fp(K)` = canonical base64url text of `SHA256(pubkey)`;
 (3) `fp(K) == pinned`, or else the chain walk of section 6; (4) the Ed25519 signature over `bytes(nonce, origin, fp(K))`. Only when 3 and 4 both pass does
 the verdict come out (`.pass`, or `.repin` after a walk) and anything get saved. Total time 10 s (request and body, `AddRelayFlow.swift:93-94`);
-running out is `unverified`. More than 8 chain entries, a key not exactly 32 bytes, a repeated fp, or non-canonical text is `fail`.
+running out is `unverified`. A 200 whose body is over 8 KB is a `fail` (step 1 of this order), not `unverified`; the same size on any other status is only an unreachable relay (4b review round 1). Accepting a re-pin saves the new fp and then runs a FRESH attest: the answer the key change came with is never stamped as a pass. More than 8 chain entries, a key not exactly 32 bytes, a repeated fp, or non-canonical text is `fail`.
 At pairing only `.pass` against the QR's `fp` is accepted; a `.repin` there is a `fail`.
 
 **When ("reconnect", defined natively).** At pairing, before the code leaves the phone; at launch before the first load; on foreground
@@ -182,7 +182,7 @@ TypeScript refuses, the Swift check adds the rule itself.
    return its answer; the signed origin still matches. The attest proves only "the owner's Mac is reachable through this origin", not who the server
    is. Closing it needs the relay's own key in the QR and a second signature: a later phase. Document it in `SECURITY.md`.
 2. **Liveness, not content.** Bridge frames to the app stay unsigned (`frame-base.ts:8-13`); a relay that passes can still lie about content.
-3. **My numbers**, not the owner's: 5 s relay wait, 1 per second on the Mac, 0.5 per second public cap, 10-minute timer, 30 s gap.
+3. **My numbers**, not the owner's: 5 s relay wait, a Mac bucket of capacity 5 refilled at 1 per second (the relay's paired burst of 3 plus its public burst of 2), 0.5 per second public cap, 10-minute timer, 30 s gap.
 4. **Chain loss.** Lose the rotations file, or rotate more than 8 times between a phone's checks, and that phone re-pairs.
 5. **Open signing route.** Anyone can learn the public key and whether the Mac is online, and cost it a signature; both ends rate limit (section 3).
    Sending the session cookie before the check passes is acceptable: the page load sends it anyway, and a server that could use it can already pass
@@ -191,3 +191,5 @@ TypeScript refuses, the Swift check adds the rule itself.
 7. **Lookalike hosts at pairing:** a spoofed QR carries its own `fp`, so the attest passes for the attacker; the guard is the host shown to the owner and the Mac's y/N (BYOR 10(h)).
 8. **Browsers and the PWA** are out of scope; they pair by passkey and never see `fp`.
 9. **Read-only page, not tried on a device.** I have not checked that the page still works with the whole Capacitor bridge and the prompt() channel off while unverified.
+   Tried in the simulator on 2026-11-17 (evidence `talos-verify-evidence/byor-4b-attest/`): the page loads and works read-only, and the plugin calls and the microphone are refused. It found that WebKit keeps a camera or microphone grant given under `.pass` and does not ask the delegate again, so leaving `.pass` now ends the page's capture (`setCameraCaptureState(.none)`, `setMicrophoneCaptureState(.none)`). A file input with `capture` opens the system camera with no WebKit check, so "camera off" is said only of the page's camera access.
+10. **Motion.** A device motion and orientation grant may survive leaving `.pass` in the same way; there is no capture-state call for it. Needs a check on a real device.

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import TalosPushCore
+import TalosRelayCore
 import UIKit
 import UserNotifications
 
@@ -24,6 +25,8 @@ enum TalosQuickAct {
         var grant: (_ keyId: String) -> String?
         var post: (_ url: URL, _ body: Data, _ reply: @escaping (Int?, String?) -> Void) -> Void
         var fail: (_ message: String, _ done: @escaping () -> Void) -> Void
+        /// Whether this pairing may act: its last check did not fail and it was verified less than 24 hours ago (read from its stored profile).
+        var trusted: (_ keyId: String) -> Bool
         var now: () -> Date
         /// Asks iOS for background time; `expired` runs if it runs out. Returns what ends the task.
         var startBackgroundTask: (_ expired: @escaping () -> Void) -> () -> Void
@@ -40,6 +43,7 @@ enum TalosQuickAct {
                 grant: { NativeKeyStore.grant(keyId: $0) },
                 post: { url, body, reply in TalosQuickAct.post(url, body, reply) },
                 fail: { message, done in TalosQuickAct.fail(message, done: done) },
+                trusted: { keyId in TalosQuickAct.trusts(profile: SharedRelayOrigin.currentActive()?.profile, keyId: keyId, now: Date()) },
                 now: Date.init,
                 startBackgroundTask: { expired in
                     var task = UIBackgroundTaskIdentifier.invalid
@@ -53,6 +57,13 @@ enum TalosQuickAct {
                 },
                 retryLater: { work in DispatchQueue.global().asyncAfter(deadline: .now() + 1, execute: work) })
         }
+    }
+
+    /// The stored facts of the active pairing decide: no profile, another pairing's profile, a failed check or no verification in the
+    /// last 24 hours all refuse. (Unverified inside the 24 hours is allowed: no worse than the readable page.)
+    static func trusts(profile: RelayProfile?, keyId: String, now: Date) -> Bool {
+        guard let profile, profile.keyId == keyId else { return false }
+        return profile.allowsQuickAct(now: now)
     }
 
     private static let session: URLSession = {
@@ -89,6 +100,11 @@ enum TalosQuickAct {
         guard RichPush.pressMatchesActiveKey(userInfo: userInfo, activeKeyId: keyId) else {
             return env.fail("That notification is from another relay. Open Talos.", done)
         }
+        // A pairing whose check failed, or that was last verified a day ago or more, signs and sends nothing (the app shows no page for it
+        // either). Before any key is read, like the check above.
+        guard env.trusted(keyId) else {
+            return env.fail("Talos can't confirm your Mac. Open Talos.", done)
+        }
         // Button data that names the active pairing could still have been written by a push that skipped the extension: only the
         // extension can make the MAC, because only it and this app hold the seal key.
         guard let sealKey = env.encKey(keyId), RichPush.pressIsAuthentic(userInfo: userInfo, sealKey: sealKey) else {
@@ -121,6 +137,10 @@ enum TalosQuickAct {
         // The app may have moved to another relay while this was signed: send only if the same pairing is still the active one.
         guard env.activeRelay()?.keyId == keyId else {
             return run.conclude("That notification is from another relay. Open Talos.")
+        }
+        // A failed check may have landed while this was signed: the same look as at the start, just before the post.
+        guard env.trusted(keyId) else {
+            return run.conclude("Talos can't confirm your Mac. Open Talos.")
         }
         run.send(
             body: RichPush.wireJson(frame),

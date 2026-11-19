@@ -119,7 +119,19 @@ export class AgentDriver {
       try {
         child = spawn('sh', ['-c', h.command as string], {
           cwd: this.o.cwd,
-          env: { PATH: process.env.PATH ?? '', ...this.o.env },
+          // a real agent's hooks inherit its environment: in the hostile nightly that carries the clock shift (a caller's own
+          // BUN_OPTIONS, e.g. the e2e world clock's, still wins)
+          env: {
+            PATH: process.env.PATH ?? '',
+            ...(process.env.TALOS_HOSTILE_CLOCK_MS
+              ? {
+                  TALOS_HOSTILE_CLOCK_MS: process.env.TALOS_HOSTILE_CLOCK_MS,
+                  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '',
+                  BUN_OPTIONS: process.env.BUN_OPTIONS ?? '',
+                }
+              : {}),
+            ...this.o.env,
+          },
           stdio: ['pipe', 'pipe', 'ignore'],
           detached: true, // own process group, so the timeout kills a forked child (dash forks `sleep`) too
         })

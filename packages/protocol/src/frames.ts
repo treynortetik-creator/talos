@@ -240,6 +240,12 @@ export const MessageFrame = ownerFrame('message', {
   intent: z.enum(['what_did_i_miss', 'run']).optional(),
   /** The block a Run is for (`run.ts`); the Mac refuses a Run without it. */
   run_block: RunBlockRef.optional(),
+  /**
+   * Where a Run runs (`run.ts`, RUN_PANE_FEATURE): `pane` = in the owner's Terminal pane in the Mac app, instead of handed to
+   * the agent. Only with `intent: 'run'`. Routing only: the Mac app writes to the pane only after a real click in its own
+   * window within 2 s, so a Run signed anywhere else never reaches the shell.
+   */
+  run_where: z.enum(['pane']).optional(),
   /** When the words were first written, on a frame signed again because it waited too long (`original-ts/1`). */
   original_ts: IsoTs.optional(),
   /** Memory notes for [Ask {agent}] (docs/V2-FEATURES.md V5.3); only when the bridge advertises `memory/1`. */
@@ -493,6 +499,24 @@ export const DevicePinnedFrame = frame('device.pinned', {
   first: z.literal(true).optional(),
 })
 export const DeviceRevokedFrame = frame('device.revoked', { device_id: DeviceId })
+
+// ---- BYOR phase 4: the Mac proves it is the one behind this relay (docs/specs/BYOR-phase4-frame.md S3) ----------------------
+// Neither is durable or consumable, and neither is ever in an outbox: the relay asks the LIVE Mac while a phone's HTTP call
+// waits, and a request that cannot be answered now is simply not answered. `ref` is the request's id, as `ack.ref`.
+/** One rotation certificate: the OLD key signed `certBytes(relay_id, old fp, new fp)` (bridge-attest.ts). */
+export const RotationCert = z.strictObject({
+  relay_id: z.string().regex(/^r_[a-z2-7]{20}$/),
+  old_pubkey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  new_pubkey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  sig: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+})
+export const AttestRequestFrame = frame('attest.request', { nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/) })
+export const AttestResponseFrame = frame('attest.response', {
+  ref: Ulid,
+  pubkey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  sig: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+  chain: z.array(RotationCert).max(8),
+})
 
 // ---- schedules (docs/SCHEDULES.md S2.2) ------------------------------------------------------------------------
 // None of these are durable or consumable: they need the Mac now, so the relay never stores or buffers them. With the
@@ -1136,6 +1160,8 @@ export const frameSchemas = {
   'device.enrolled': DeviceEnrolledFrame,
   'device.pinned': DevicePinnedFrame,
   'device.revoked': DeviceRevokedFrame,
+  'attest.request': AttestRequestFrame,
+  'attest.response': AttestResponseFrame,
   'schedules.list': SchedulesListFrame,
   'schedules.snapshot': SchedulesSnapshotFrame,
   'schedule.get': ScheduleGetFrame,
@@ -1356,6 +1382,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...V2_READ_RESPONSE_FRAME_TYPES,
     ...APP_BRIDGE_FRAME_TYPES,
     'health.beat',
+    'attest.response',
   ],
   relay_to_bridge: [
     ...COMMON,
@@ -1374,6 +1401,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'voice.ended',
     'device.enrolled',
     'device.revoked',
+    'attest.request',
     ...SCHEDULE_OWNER_FRAME_TYPES,
     ...HEARTBEAT_OWNER_FRAME_TYPES,
     ...SESSION_OWNER_FRAME_TYPES,

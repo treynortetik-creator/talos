@@ -25,9 +25,47 @@ export const SCREEN_TEXT = {
   controlGrant:
     "macOS hasn't allowed Talos to control the screen yet. On the Mac: Talos → Permissions → Grant. Nothing is stuck.",
   notAllowed: (app: string) => `${app} isn't on this Mac's allowed list yet.`,
+  locked:
+    'The Mac is locked (or the screen saver is on); Talos does nothing until the owner unlocks it. Nothing was done.',
+  systemPrompt: (app: string) => `A system prompt (${app}) is in front; Talos won't act on it. The owner answers it.`,
+  denied: (app: string) =>
+    `${app} is part of the Mac's lock screen or its security prompts. Talos never lets an agent use it and never asks the owner to allow it. Nothing was done.`,
   filterUnavailable:
     "Talos couldn't limit the screenshot to the apps allowed on this Mac, so it took no screenshot. Nothing was shown.",
 } as const
+
+/**
+ * System processes that draw the lock screen, the screen saver or a password and authorisation prompt. An agent is never offered
+ * them: they are not put on the allowed list, no consent card is made for them and the Mac refuses them even from a list.
+ * Kept equal to `ScreenDenied.bundleIDs` in TalosDesktopCore (ScreenDenied.swift); ids read from this Mac's own bundles.
+ */
+export const SCREEN_DENIED_BUNDLES: readonly string[] = [
+  'com.apple.loginwindow',
+  'com.apple.SecurityAgent',
+  'com.apple.ScreenSaver.Engine',
+  'com.apple.LockScreen',
+  'com.apple.LocalAuthentication.UIAgent',
+  'com.apple.coreautha',
+  'com.apple.UserNotificationCenter',
+  'com.apple.NetAuthAgent',
+  'com.apple.EscrowSecurityAlert',
+  'com.apple.security.Keychain-Circle-Notification',
+  'com.apple.mcx.MCXDiskAuthorization',
+  'com.apple.coreservices.uiagent', // the "Open?" prompt for a downloaded app (Gatekeeper)
+  'com.apple.accessibility.universalAccessAuthWarn', // the "control this computer" Accessibility prompt
+  'com.apple.UniversalAccessControl', // the privacy (TCC) permission UI
+  'com.apple.AskPermissionUI', // Ask to Buy and Screen Time permission requests
+  'com.apple.AOSAlertManager', // Apple ID and Find My alerts, including a remote lock
+  'com.apple.IOUIAgent', // "allow this accessory to connect" prompts
+  'com.apple.FileSystemUIAgent', // password prompts for encrypted volumes
+  'com.apple.frameworks.diskimages.diuiagent', // disk image password and licence prompts
+]
+
+/** True for a system lock, screen saver or auth prompt process (compared without regard to case). */
+export const isDeniedScreenApp = (bundleId: string): boolean => {
+  const b = bundleId.trim().toLowerCase()
+  return SCREEN_DENIED_BUNDLES.some((d) => d.toLowerCase() === b)
+}
 
 export type ScreenAnswer =
   | { ok: true; body: Record<string, unknown> }
@@ -59,6 +97,10 @@ export function refusalText(a: { code: string; text: string; app?: string }): st
       return SCREEN_TEXT.controlGrant
     case 'app_not_allowed':
       return SCREEN_TEXT.notAllowed(one(a.app || 'That app', 200))
+    case 'screen_locked':
+      return SCREEN_TEXT.locked
+    case 'system_prompt':
+      return SCREEN_TEXT.systemPrompt(one(a.app || 'an app', 80))
     case 'filter_unavailable':
       return a.text ? one(a.text) : SCREEN_TEXT.filterUnavailable
     case 'not_mac':

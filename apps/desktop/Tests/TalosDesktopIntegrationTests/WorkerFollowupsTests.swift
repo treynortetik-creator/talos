@@ -125,9 +125,11 @@ struct WorkerFollowupsTests {
     usleep(600_000)  // a tick or two on the new clock
     try r.wake("aa", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T402"], at: c.now)
     #expect(r.wait(8) { r.typedLines.count == 3 }, "the second pointer never went in: \(r.typedLines) \(r.why("aa"))")
-    // tmux's own output times are real: on a wall clock five seconds behind, both read as busy until it has caught up
-    usleep(7_000_000)
-    #expect(r.state("aa") == "live" && r.state("bb") == "live", "precondition: both quiet: \(r.why("aa")) / \(r.why("bb"))")
+    // tmux's own output times are real: on a wall clock five seconds behind, both read as busy until it has caught up. The clocks
+    // are moved on, both in one step, instead of sleeping the time away, and the state is waited for: a snapshot taken at a fixed
+    // moment is of whichever tick last finished.
+    c.pass(7)
+    #expect(r.wait(10) { r.state("aa") == "live" && r.state("bb") == "live" }, "precondition: both quiet: \(r.why("aa")) / \(r.why("bb"))")
     try r.wake("cc", at: c.now)
     #expect(r.wait(10) { r.allEvents.contains { if case .parked(_, "cap") = $0 { return true } else { return false } } }, "nothing was parked for the cap: \(r.allEvents)")
     #expect(r.allEvents.contains(.parked(thread: "bb", reason: "cap")), "the session in use was the cap's choice: \(r.allEvents)")

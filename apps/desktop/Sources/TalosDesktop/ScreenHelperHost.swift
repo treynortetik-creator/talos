@@ -30,7 +30,8 @@ final class ScreenHelperHost {
     self.store = store
     let s = ScreenSocket(
       path: ScreenSocket.path(talosHome: home),
-      proto: ScreenProtocol(service: ScreenCore.live(talosHotkeys: { ScreenHelperHost.talosHotkeys.value }), allowList: store, signing: LiveCodeSigning(), store: store))
+      proto: ScreenProtocol(service: ScreenCore.live(talosHotkeys: { ScreenHelperHost.talosHotkeys.value }), allowList: store, signing: LiveCodeSigning(), store: store,
+        paneRun: WebController.shared.runChannel))
     do {
       try s.start()
       socket = s

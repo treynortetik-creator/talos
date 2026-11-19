@@ -107,7 +107,7 @@ public struct ScreenAllowed: Sendable {
   public var bundleIDs: Set<String> { Set(apps.map(\.bundleID)) }
 
   func entry(_ bundleID: String?) -> ScreenAllowedApp? {
-    guard let b = bundleID, !b.isEmpty else { return nil }
+    guard let b = bundleID, !b.isEmpty, !ScreenDenied.contains(b) else { return nil }
     return apps.first { $0.bundleID == b }
   }
 

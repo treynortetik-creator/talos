@@ -1,7 +1,7 @@
 // @vitest-environment node
 // A server error never deletes a signed frame. It stays in the outbox with a visible failed state, and "tap to retry"
 // resends the IDENTICAL bytes. Also: a bare ack does not advance lastSeq, only a stored message does.
-import { newId } from '@talos-app/protocol'
+import { newId, verifyOwnerFrame } from '@talos-app/protocol'
 import { FakeRelay, mkFrame, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSocketClient, MAX_UPLOAD_BYTES, type OutboxEntry } from '../src/lib/socketClient.ts'
@@ -77,6 +77,46 @@ describe('outbox failed state', () => {
       const sent = relay.frames.find((f) => f.direction === 'from_app' && f.raw.id === entry.id)
       expect(sent?.raw).toMatchObject({ intent: 'run', run_block: block })
       expect(JSON.stringify(sent?.raw)).toBe(entry.bytes)
+    } finally {
+      client.close()
+    }
+  })
+
+  it('run_where is set only with runWhere pane, and it is inside the signed bytes', async () => {
+    const { client, storage } = await setup(false)
+    try {
+      const text = 'Run exactly this:\n\n```sh\necho hi\n```'
+      const runBlock = { message_id: newId('m'), index: 0 }
+      await client.sendMessage({ threadId: 'general', text, intent: 'run', runBlock })
+      await client.sendMessage({ threadId: 'general', text, intent: 'run', runBlock, runWhere: 'pane' })
+      const [plain, paned] = (await storage.all<OutboxEntry>('outbox')).sort((a, b) => a.bytes.length - b.bytes.length)
+      const plainFrame = JSON.parse(plain?.bytes ?? '{}')
+      const panedFrame = JSON.parse(paned?.bytes ?? '{}')
+      expect(plainFrame).not.toHaveProperty('run_where')
+      expect(panedFrame.run_where).toBe('pane')
+      // the signature covers it: changing it breaks the signature
+      const key = await client.deviceKey()
+      if (!key) throw new Error('no key')
+      expect(await verifyOwnerFrame(panedFrame, key.publicJwk)).toBe(true)
+      expect(await verifyOwnerFrame({ ...panedFrame, run_where: undefined }, key.publicJwk)).toBe(false)
+    } finally {
+      client.close()
+    }
+  })
+
+  it('requireLive refuses before anything is stored when the device is not pinned, and sends when it is live', async () => {
+    const { client, storage } = await setup(false)
+    try {
+      const text = 'Run exactly this:\n\n```sh\necho hi\n```'
+      const runBlock = { message_id: newId('m'), index: 0 }
+      await expect(
+        client.sendMessage({ threadId: 'general', text, intent: 'run', runBlock, runWhere: 'pane', requireLive: true }),
+      ).rejects.toMatchObject({ code: 'mac_offline' })
+      expect(await storage.all<OutboxEntry>('outbox')).toHaveLength(0)
+      expect(client.outboxSize()).toBe(0)
+      client.setPinned(true)
+      const r = await client.sendMessage({ threadId: 'general', text, intent: 'run', runBlock, requireLive: true })
+      expect(r.state).toBe('sent')
     } finally {
       client.close()
     }

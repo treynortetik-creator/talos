@@ -504,6 +504,9 @@ the dying session and acked it, and the restart skipped it.
   anything inside `$TALOS_APP_HOME` (except `media/` and `approved/`), and `.env` files.
 - `reply` with `voice: true` runs `TALOS_APP_TTS_CMD` and attaches the audio as a `voice_reply`. The owner's
   `voice_notes.reply_with_voice` setting (`never` / `when_voice` / `always`) overrides the parameter.
+- `reply` adds a line to its result (never to the message, and only after a successful send) when the text has a shell command in
+  inline code outside a fence, such as `` `git status` ``: the web app draws Run only on a fenced block with no language, `sh`, `bash`, `zsh` or
+  `shell`. A lone command word, a path or a span inside a fence does not count; the word list is `INLINE_COMMAND_WORDS` in `apps/bridge/src/inline-commands.ts`.
 - `list_threads` counts `unread` as owner messages the agent was told about and has not touched yet (a tool call with
   that `thread_id` marks them seen).
 - `inbox_raw` returns the raw event payload inside the untrusted wrapper.
@@ -573,6 +576,15 @@ get the tools.
   entry. One exception has no switch: nothing an agent sends ever answers an approval card or a permission prompt (Approve,
   Deny, Always allow, a dialog's options, the popup, a sheet or alert). Such a click or key is dropped and the tool says so
   (`protected_prompt`); a terminal view in Talos takes no agent input at all; an event aimed at Talos that is not confirmed in time is `delivery_unverified`, never sent. docs/SECURITY.md, "An agent in Talos".
+- **The lock screen and the security prompts are off limits.** While the Mac is locked (the console session says so, cannot be
+  read, or is not on the console), the screen saver is on, or loginwindow, SecurityAgent or another system password or lock
+  process is in front, every screen tool answers "The Mac is locked (or the screen saver is on); Talos does nothing until the
+  owner unlocks it." (`screen_locked`) before it reads, draws or posts anything. Those system apps (`ScreenDenied` in
+  TalosDesktopCore, `SCREEN_DENIED_BUNDLES` in `src/screen.ts`) are never put on the allowed list, never measured for a consent
+  card, and refused even if an entry is found in the list file.
+  `screen_apps` is gated the same way. When one of those apps that is not the lock screen itself (a Gatekeeper "Open?" or an
+  Accessibility "control this computer" prompt, an alert from the system) is in front on an unlocked Mac, the tools answer
+  "A system prompt (<app>) is in front; Talos won't act on it. The owner answers it." (`system_prompt`) and do nothing.
 - **`screen_type` says whether the text landed, never a bare "Typed N".** The Mac app types text as the keys that make each
   character on the current keyboard layout (shift where needed, a newline as the Return key, a tab as Tab), the same key events
   `screen_key` sends, because some apps (Terminal's text view among them) are thought to drop a Unicode-string event with key

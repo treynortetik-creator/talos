@@ -81,7 +81,7 @@ describe('the active relay origin is set only by a native scan', () => {
   it('the build-time relay is read in two places only, and only as the profile-less DEBUG fallback', () => {
     // `serverURL` is Capacitor's descriptor field: read once to find the fallback and set once from the active profile.
     expect(filesWith(/\bserverURL\b/)).toEqual(['App/App/TalosBridgeViewController.swift'])
-    const vc = read(`${APP}TalosBridgeViewController.swift`)
+    const vc = read(`${APP}TalosBridgeViewController.swift`) + read(`${APP}WebViewGuards.swift`)
     expect(swiftBody(vc, 'override func instanceDescriptor()')).toContain('buildTimeURL: descriptor.serverURL')
     expect(vc.match(/\bserverURL\b/g)?.length).toBe(
       swiftBody(vc, 'override func instanceDescriptor()').match(/\bserverURL\b/g)?.length,
@@ -108,7 +108,7 @@ describe('the active relay origin is set only by a native scan', () => {
   })
 
   it('the shell gives each relay its own data store and removes it with the relay', () => {
-    const vc = read(`${APP}TalosBridgeViewController.swift`)
+    const vc = read(`${APP}TalosBridgeViewController.swift`) + read(`${APP}WebViewGuards.swift`)
     expect(vc).toMatch(/websiteDataStore\s*=\s*WKWebsiteDataStore\(\s*forIdentifier:/)
     expect(vc).not.toMatch(/websiteDataStore\s*=\s*\.?default|nonPersistent/)
     const runtime = read(`${APP}Relay/RelayRuntime.swift`)
@@ -117,7 +117,7 @@ describe('the active relay origin is set only by a native scan', () => {
   })
 
   it("Capacitor's cookie and HTTP plugins are refused before any other check", () => {
-    const vc = read(`${APP}TalosBridgeViewController.swift`)
+    const vc = read(`${APP}TalosBridgeViewController.swift`) + read(`${APP}WebViewGuards.swift`)
     const handler = swiftBody(vc, 'final class GuardedMessageHandler')
     const receive = swiftBody(handler, 'func userContentController')
     expect(receive.indexOf('BridgeGuard.blocksPluginCall(body: message.body)')).toBeGreaterThanOrEqual(0)
@@ -127,7 +127,7 @@ describe('the active relay origin is set only by a native scan', () => {
   })
 
   it('the prompt() channel refuses cookie and HTTP plugin prompts before it forwards anything', () => {
-    const vc = read(`${APP}TalosBridgeViewController.swift`)
+    const vc = read(`${APP}TalosBridgeViewController.swift`) + read(`${APP}WebViewGuards.swift`)
     const prompt = swiftBody(vc, 'runJavaScriptTextInputPanelWithPrompt prompt')
     expect(prompt).toContain('BridgeGuard.blocksPrompt(prompt)')
     expect(prompt.indexOf('blocksPrompt')).toBeLessThan(prompt.indexOf('promptChannelAllowed'))
@@ -168,7 +168,7 @@ describe('the active relay origin is set only by a native scan', () => {
   })
 
   it('the trust state reaches every guarded call, in the app and in the gate', () => {
-    const vc = read(`${APP}TalosBridgeViewController.swift`)
+    const vc = read(`${APP}TalosBridgeViewController.swift`) + read(`${APP}WebViewGuards.swift`)
     for (const name of ['guardian.allowsPluginCall', 'guardian.allowsPromptChannel', 'guardian.devicePermission']) {
       const calls = callsTo(vc, name)
       expect(calls.length, name).toBeGreaterThan(0)

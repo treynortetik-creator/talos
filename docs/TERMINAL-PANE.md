@@ -101,23 +101,75 @@ while its pane is open, which is the native half of "the layout is remembered pe
 - **Failure.** A shell that cannot start, or ends with an error within a second of starting, leaves a sentence in the pane
   that says so and names the shell. Reaching a limit says so too.
 
-## No remote path to the shell
+## No remote path to the shell, but one owner-clicked Run
 
-The claim: nothing in the page, the relay, the bridge, any message or any screen tool can put a byte into the shell, read what it prints,
-choose what it runs or its environment, or move the owner's typing into it. What a shell reads is what the owner types or
-pastes into the native view, and the terminal's own answers to a program that asks it something (where the cursor is, what
-kind of terminal it is). What holds it:
+The claim: nothing in the page, the relay, the bridge, any message or any screen tool can put a byte into the shell, read what
+it prints, choose what it runs or its environment, or move the owner's typing into it, with ONE exception: a Run the owner
+clicked in this Mac app's own window (below). What a shell reads is what the owner types or pastes into the native view, that
+Run, and the terminal's own answers to a program that asks it something (where the cursor is, what kind of terminal it is).
 
-1. The only messages about the pane are the two above, and they carry geometry and a thread id. The decoder refuses any
+**Run in Terminal (owner, 2026-11-18).** In the Mac app, the ▶ on a shell block in an agent message opens this thread's pane
+and runs the block there, one click, no second ask (the owner's rule: a tap is the approval; a script with characters beyond
+plain ASCII still asks twice, as every Run does). It is the signed Run of `docs/SECURITY.md` ("Run button") with
+`run_where: 'pane'`, and it reaches the shell only along this path:
+
+- The bridge consumes it exactly like any Run (its shape, `run_block`, its ages, once per tap's message id), then, instead of
+  handing it to the agent, hands `{thread_id, script, client_msg_id}` to the Mac app over the app's own local channel. It is
+  never re-routed to the agent if the app refuses.
+- The Mac app writes into that thread's pane only if it holds a **witness** for exactly that `thread_id`, `client_msg_id`
+  and the sha256 of the script's UTF-8 bytes as received: the page sends `run_witness` right after the Run, and the app
+  records it only if a real human click, Return (the keypad's Enter too) or Space reached the page's web view in its key window within
+  `RUN_PANE_CLICK_MS` (2 s), told apart from synthetic input as in item 7 below; keys typed into the Terminal pane itself and
+  the click that only makes the window key do not count. Neither does a mouse press within 0.5 s of the app becoming active
+  or the Talos window becoming key; that is the press that brought it forward. One activation
+  mints at most one witness; a witness is used once (a hash that does not match burns it too), lives 30 s, and the table
+  holds 16 at most, in memory only, refusing a new one when full. A Run that arrives before its witness waits 1.5 s at most.
+- The app refuses (`bad_script`) a script with ESC or any other control character but line feed and tab (so nothing can end
+  the paste early), a bidi control or zero-width character, an empty script, one without a final line feed, and one over 4000
+  characters.
+- The app writes only when the shell is at its line editor: the terminal's foreground process group is the shell's own and
+  the shell has turned on bracketed paste (mode 2004). A shell that is still reading its startup profile, is in a builtin
+  such as `read`, `vared`, `wait` or `select`, or has a program running (vim, ssh, a REPL) is not at its line editor. Such a
+  Run waits up to 5 s, re-checking, and is then refused `pane_busy` with nothing written (`not_started` if the shell never
+  started). So nothing, not even the Ctrl+C below, reaches a program the owner has running.
+- Once the shell is at its line editor, and before pasting, the app sends Ctrl+C to discard whatever is already on the
+  shell's line, a half-typed command or an open continuation, so a script is never appended to someone else's input. It
+  then pastes only once the shell has answered it, that is, it has printed something since, been quiet for 50 ms and is
+  back at its line editor, within 3 s; otherwise the Run is refused `pane_busy` and nothing more is written.
+- The write is always one bracketed paste of the script (one trailing line feed dropped) and then exactly one Return; there
+  is no typed path, so a tab in a script is pasted, not completed, and is allowed.
+- One pane Run at a time per shell. A pane Run has 10 s in all from when the app takes it; the app never writes after
+  that. The bridge waits 12 s for the app's answer; on a timeout or an answer it cannot read, the thread says "Talos.app
+  didn't answer in time; check the terminal pane before running it again" (not "Nothing was run": the write may have
+  happened).
+- Every pane Run that reaches the app ends in a `run_result` from the app to the page (no text: ran, or refused and why;
+  never a reason beside ok), so the screen never says a refused Run ran. One the bridge refuses itself (too old, a reset history) leaves its line in the thread, and the page stops waiting after 30 s and points there. The page sends a pane Run only while the Mac is connected: it is never queued to arrive after its
+  witness has gone. The bridge never hands a pane Run to the agent instead, whatever the app answers. A pane Run is accepted
+  in a dedicated thread too (no agent is involved); an ordinary Run there is still refused.
+- So a Run signed on a phone or in a browser (never witnessed here), or by a script with no click in this window, never
+  reaches the shell; it fails with a visible line.
+
+What this Run adds that the agent's Run does not have: the block runs in the owner's own login shell, without the agent's
+action rules, ask rules or permission cards, and without the agent's judgment; the owner's click is the only check.
+**Residual risk, accepted by the owner (2026-11-18):** a relay that turned hostile, or a script in the page, inside the Mac
+app's own window, can send a witness right after a genuine click of the owner's on anything in that window, for a Run it
+signs itself or for any pane Run it can see (one signed on a stolen phone included), and so run one script of its choosing
+in the shell per such click. Closing that would take a confirmation the page cannot draw (a native
+sheet), which the owner declined: one click.
+
+1. The only messages about the pane are the two above, and they carry geometry and a thread id (`run_witness` carries an id and a
+   hash, never text). The decoder refuses any
    other field (`ShellPaneTests`, `packages/protocol/test/native.test.ts`, `scripts/native-fixtures.ts` MUST_REJECT).
 2. The bridge accepts a message only from the main frame of the relay's own page, never from an agent page under `/media/`
    or an iframe (`NativeBridge.accept`, unchanged).
-3. `OwnerShellPane.swift` has no call that writes to a pty, reads a terminal's screen, evaluates JavaScript, or opens a
-   network or process connection. The window's only calls into it place, hide and close the pane, and the pane object is
+3. `OwnerShellPane.swift` writes to a pty in one place only: a Run from the app's local run channel that passed the witness
+   check above (Run in Terminal). It has no other call that writes to a pty, and none that reads a terminal's screen,
+   evaluates JavaScript, or opens a network or process connection. The window's only calls into it place, hide and close the pane, and the pane object is
    never handed on under another name. The hooks tests use to reach a shell's view are compiled out of the app that ships
    (`ShellPaneReachTests`, a scan of the source that runs in the default suite).
-4. There is no native-to-web message for the pane, no relay route, no bridge tool, no protocol frame
-   (`ShellPaneReachTests`).
+4. There is no native-to-web message for the pane, no relay route, no bridge tool, and no protocol frame other than the signed
+   Run's `run_where: 'pane'`, which the bridge only routes (`ShellPaneReachTests`; the run channel is the one way in, and
+   it writes only with a witness).
 5. The shell runs on a pty file descriptor held by the Mac app, not in tmux, so there is no socket for `send-keys`.
 6. With real ptys, every message in the bridge fixtures plus a list of hostile ones is driven through the real decoder into
    the real window controller, and the shells' input stays empty; a line typed through the view then arrives, which proves
@@ -133,8 +185,9 @@ What this does not claim:
 
 - The relay serves the page, so a relay that turned hostile, or a script in the page, could show or hide the pane, pick
   which thread's shells are in front, open up to 16 idle shells at 12 a minute, slide the opaque view under a click that
-  is about to land, or hide the pane and take the keyboard back to a look-alike it draws itself. It could not type into a
-  shell or read one.
+  is about to land, or hide the pane and take the keyboard back to a look-alike it draws itself. It could not read a shell. It
+  could type into one only through Run in Terminal, right after a real click of the owner's in this window (the residual risk
+  above).
 - It could change where a dedicated thread's next shell starts, the same way it can change where that thread's agent
   session starts: the folder is a thread setting, saved through the thread patch the bridge checks, and the pane reads the
   folder the bridge wrote. The pane adds no second way to name a folder. A folder is only where the shell starts, but the

@@ -257,6 +257,8 @@ export type BridgeContext = {
   health?: HealthService
   /** Read aloud on request (the play button): set by a live bridge; absent = the read answers a fixed error. */
   speak?: SpeakServiceSeam
+  /** Whether the Mac app's run channel is connected (`run-pane/1`; pane-run.ts): live main bridge only. */
+  paneRun?: import('./pane-run.ts').PaneChannel
   /** The folder picker's lister (live main bridge only); absent = `fs.list` answers a fixed error. */
   folders?: FolderServiceSeam
   /** The Files pane's fenced list and read of a thread's folder (live main bridge only); absent = `files.*` answers a fixed error. */

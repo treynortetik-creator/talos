@@ -37,11 +37,46 @@ ci_mem_gb() { # whole GB of RAM, empty when it can't be read
   if b="$(sysctl -n hw.memsize 2>/dev/null)" && [ -n "$b" ]; then echo $((b / 1073741824))
   elif k="$(sed -n 's/^MemTotal: *\([0-9]*\) kB.*/\1/p' /proc/meminfo 2>/dev/null)" && [ -n "$k" ]; then echo $((k / 1048576)); fi
 }
-# A simulator for the app's tests, by id (a name can match one iOS runtime, xcodebuild look on another). Booted first; no iPhone: empty.
-# The name may hold parentheses ("iPhone SE (3rd generation)"), so the line is read from the end: the last two groups are the id and the state.
+# The simulator for the app's tests: this runner slot's own, "talos-ci-s<N>", by id. Two xcodebuild runs on one device replace each
+# other's app (main went red at 52805b3 when a builder shared the CI one), so no other simulator is listed, booted or erased.
+# Missing: it is created on the newest installed iOS runtime with the newest plain "iPhone NN" type (as apps/mobile/scripts/ui-test.sh
+# does; no runtime is downloaded). Prints the xcodebuild destination, or nothing and the reason on stderr. The name line is on stderr too.
 ci_ios_sim_dest() {
   [ -z "${TALOS_IOS_SIM:-}" ] || { echo "platform=iOS Simulator,name=$TALOS_IOS_SIM"; return 0; } # a name set by hand wins
-  local id; id="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl list devices available 2>/dev/null | sed -nE 's/^ +iPhone.* \(([0-9A-F-]{36})\) \((Booted|Shutdown)\).*/\2 \1/p' | sort -s -k1,1 | head -1 | cut -d' ' -f2)"; [ -z "$id" ] || echo "platform=iOS Simulator,id=$id"
+  local name="talos-ci-s${CI_SLOT:-1}" udid='^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$' out rc id pick
+  # The device listing is read first and checked: a listing that failed or ran out of time is not "the simulator is missing"
+  # (that would make a second one). The exact name is matched, in the JSON, never a name that merely starts the same.
+  out="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl list -j devices available 2>/dev/null)"; rc=$?
+  [ "$rc" = 0 ] || { echo "ci-local: could not list the simulators (exit $rc), so $name was neither looked for nor created: ${out:0:300}" >&2; return 0; }
+  id="$(printf '%s' "$out" | python3 -c '
+import json, sys
+for ds in json.load(sys.stdin)["devices"].values():
+    for d in ds:
+        if d["name"] == sys.argv[1] and d.get("isAvailable"):
+            print(d["udid"]); sys.exit(0)
+' "$name" 2>/dev/null)"
+  if [ -z "$id" ]; then
+    out="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl list runtimes -j 2>/dev/null)"; rc=$?
+    [ "$rc" = 0 ] || { echo "ci-local: could not list the simulator runtimes (exit $rc), so $name was not created: ${out:0:300}" >&2; return 0; }
+    pick="$(printf '%s' "$out" | python3 -c '
+import json, re, sys
+r = [x for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and x["identifier"].split(".")[-1].startswith("iOS")]
+r.sort(key=lambda x: [int(p) for p in x["version"].split(".")], reverse=True)
+for rt in r:
+    t = [d for d in rt.get("supportedDeviceTypes", []) if re.fullmatch(r"iPhone \d+", d["name"])]
+    t.sort(key=lambda d: int(d["name"].split()[1]))
+    if t:
+        print(rt["identifier"], t[-1]["identifier"]); break
+' 2>/dev/null)"
+    [ -n "$pick" ] || { echo "ci-local: no iOS runtime with a plain iPhone device type is installed, so $name cannot be created" >&2; return 0; }
+    # simctl's own reason stays on stderr (the job log). Only a real UDID counts as the answer: a limit's "stopped after" text is not one.
+    id="$(ci_with_limit "$CI_SIMCTL_LIMIT" xcrun simctl create "$name" "${pick##* }" "${pick%% *}")"
+    printf '%s' "$id" | grep -Eq "$udid" || { echo "ci-local: could not create the simulator $name: ${id:0:300}" >&2; return 0; }
+    echo "ci-local: created simulator $name ($id)" >&2
+  fi
+  printf '%s' "$id" | grep -Eq "$udid" || { echo "ci-local: the simulator $name has no valid id: ${id:0:300}" >&2; return 0; }
+  echo "ci-local: app tests run on simulator $name ($id)" >&2
+  echo "platform=iOS Simulator,id=$id"
 }
 # ci_git_net <git args...>: a git call that talks to origin (fetch), run here, with stdin from /dev/null and stopped after
 # CI_GIT_LIMIT (300 s). When it fails it says which remote and the likely reason, with git's own last line: a run on a machine

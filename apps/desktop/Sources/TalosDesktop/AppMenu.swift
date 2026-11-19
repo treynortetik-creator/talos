@@ -19,6 +19,8 @@ final class AppMenu: NSObject, NSMenuItemValidation {
     /// the relay is down.
     var offersSignIn: () -> Bool
     var hasRelay: () -> Bool
+    /// True while a Talos web window is the key or main window; View > Reload is dimmed otherwise.
+    var canReload: () -> Bool = { true }
   }
 
   var host: Host?
@@ -197,6 +199,8 @@ final class AppMenu: NSObject, NSMenuItemValidation {
     case .signOut:
       item.isHidden = !host.signedIn()
       return true
+    case .reload:
+      return host.canReload()
     default:
       return true
     }

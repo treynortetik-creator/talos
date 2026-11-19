@@ -42,6 +42,9 @@ async function open(page: Page) {
     })
   }, MSGS as MessageT[])
 }
+type Box = { x: number; y: number; width: number; height: number }
+const hits = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 const row = (page: Page, n: number) => page.locator(`[data-msg-id$="A${n}"]`)
 const noHorizontalScroll = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
@@ -56,7 +59,11 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await r.scrollIntoViewIfNeeded()
       const button = r.getByTestId('run-button')
       await expect(button).toBeVisible()
-      expect((await button.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44)
+      const size = (await button.boundingBox()) as { width: number; height: number }
+      expect(size.height).toBeGreaterThanOrEqual(44)
+      expect(size.width).toBeGreaterThanOrEqual(44)
+      await expect(button).toHaveAccessibleName('Run')
+      await expect(button).toHaveText('') // icon only
       expect(await noHorizontalScroll(page)).toBe(true)
       await r.screenshot({ path: info.outputPath(`run-idle-${colorScheme}.png`) })
 
@@ -76,7 +83,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       const r = row(page, 1)
       await r.scrollIntoViewIfNeeded()
       await r.getByTestId('run-button').click()
-      await expect(r.getByTestId('run-status')).toHaveText(/^Sent to your Mac/)
+      await expect(r.getByTestId('run-status')).toHaveText(/^Sent ·/)
       const sent = await page.evaluate(
         () =>
           window.__talos.sent as Array<{
@@ -107,7 +114,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await r.screenshot({ path: info.outputPath(`run-queued-${colorScheme}.png`) })
     })
 
-    test('failed: the error and Try again', async ({ page }, info) => {
+    test('failed: the error, and the icon stays', async ({ page }, info) => {
       await open(page)
       await page.evaluate(() => {
         window.__talos.sendMessage = () => Promise.reject(new Error('no'))
@@ -116,7 +123,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await r.scrollIntoViewIfNeeded()
       await r.getByTestId('run-button').click()
       await expect(r.getByRole('alert')).toContainText("Couldn't send")
-      await expect(r.getByTestId('run-button')).toHaveText('Try again')
+      await expect(r.getByTestId('run-button')).toHaveAccessibleName('Run') // the icon stays
       await r.screenshot({ path: info.outputPath(`run-failed-${colorScheme}.png`) })
     })
 
@@ -182,17 +189,74 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await r.getByTestId('run-button').click()
       await expect.poll(() => page.evaluate(() => window.__talos.sent.length)).toBe(sentBefore + 1)
       // once it has gone, Run again offers a fresh tap
-      await expect(r.getByTestId('run-button')).toHaveText('Run again')
+      await expect(r.getByTestId('run-button')).toHaveAccessibleName('Run again')
     })
 
-    test('the second confirm puts Cancel where Run was and Yes beside it, never under it', async ({ page }) => {
+    test('the second confirm sits under the block, Cancel first and Yes beside it, never under the icon', async ({
+      page,
+    }) => {
       await open(page)
       const r = row(page, 2)
       await r.scrollIntoViewIfNeeded()
-      const run = (await r.getByTestId('run-button').boundingBox()) as { x: number; width: number }
+      const run = (await r.getByTestId('run-button').boundingBox()) as Box
       await r.getByTestId('run-button').click()
-      const yes = (await r.getByTestId('run-confirm').boundingBox()) as { x: number }
-      expect(yes.x).toBeGreaterThanOrEqual(run.x + run.width)
+      const cancel = (await r.getByTestId('run-cancel').boundingBox()) as Box
+      const yes = (await r.getByTestId('run-confirm').boundingBox()) as Box
+      const pre = (await r.locator('pre').boundingBox()) as Box
+      expect(yes.x).toBeGreaterThanOrEqual(cancel.x + cancel.width)
+      expect(cancel.y).toBeGreaterThanOrEqual(pre.y + pre.height) // under the block, so nothing covers the script
+      expect(hits(yes, run)).toBe(false)
+    })
+
+    test('the icon sits on the first row, at the right edge, and adds no row', async ({ page }, info) => {
+      await open(page)
+      for (const n of [1, 4]) {
+        const r = row(page, n)
+        await r.scrollIntoViewIfNeeded()
+        const m = await r.evaluate((el) => {
+          const pre = el.querySelector('pre') as HTMLElement
+          const icon = pre.querySelector('[data-testid="run-button"]') as HTMLElement
+          const slot = icon.parentElement as HTMLElement
+          const code = pre.querySelector('code') as HTMLElement
+          const range = document.createRange()
+          range.selectNodeContents(code)
+          const rects = Array.from(range.getClientRects()).filter((t) => t.width > 0)
+          const glyphs = rects[0] as DOMRect
+          // the first line's box starts at the pre's content edge; it is as tall as the line-height (or the text, if taller)
+          const cs = getComputedStyle(pre)
+          const top =
+            pre.getBoundingClientRect().top + Number.parseFloat(cs.borderTopWidth) + Number.parseFloat(cs.paddingTop)
+          const lh = Number.parseFloat(getComputedStyle(code).lineHeight) || glyphs.height
+          const first = { top, bottom: top + Math.max(lh, glyphs.height) }
+          const i = icon.getBoundingClientRect()
+          const p = pre.getBoundingClientRect()
+          const before = p.height
+          slot.style.display = 'none'
+          const without = pre.getBoundingClientRect().height
+          slot.style.display = ''
+          return {
+            iconTop: i.top,
+            iconBottom: i.bottom,
+            iconLeft: i.left,
+            iconRight: i.right,
+            firstTop: first.top,
+            firstBottom: first.bottom,
+            preBottom: p.bottom,
+            preRight: p.right,
+            before,
+            without,
+            textClash: rects.some((t) => t.left < i.right && t.right > i.left && t.top < i.bottom && t.bottom > i.top),
+          }
+        })
+        // the box top is within the first line's box, and the block's own bottom edge holds the icon (no extra row)
+        expect(m.iconTop, `A${n} icon top`).toBeGreaterThanOrEqual(m.firstTop - 1)
+        expect(m.iconTop, `A${n} icon top`).toBeLessThanOrEqual(m.firstBottom)
+        expect(m.iconBottom, `A${n} icon bottom`).toBeLessThanOrEqual(m.preBottom + 1)
+        expect(m.iconRight, `A${n} icon right`).toBeLessThanOrEqual(m.preRight)
+        expect(m.before, `A${n} height with and without the icon`).toBe(m.without)
+        expect(m.textClash, `A${n} icon covers script text`).toBe(false)
+        await r.screenshot({ path: info.outputPath(`run-first-row-${n}-${colorScheme}.png`) })
+      }
     })
 
     test('accessible', async ({ page }) => {

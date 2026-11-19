@@ -168,6 +168,14 @@ ci_post_status() { # ci_post_status <slug> <sha> <job> <state> <description> [ur
   esac
   err="$(gh api -X POST "repos/$1/statuses/$2" -f state="$st" -f context="$ctx" -f description="$desc" ${url[@]+"${url[@]}"} 2>&1 >/dev/null)"
   rc=$?
+  # A transport failure (an empty reply, a 5xx, a timeout, a reset) gets exactly ONE more try: the call is retried, never the test.
+  # A 4xx or a validation error is not retried; the second failure is the caller's to report (ci-local.sh post: ::error::).
+  if [ "$rc" != 0 ] && ci_post_transport_failure "$err"; then
+    echo "ci-local: status post for $ctx failed in transit (gh exit $rc: $(printf '%s' "$err" | head -1 | cut -c1-120)); retrying once" >&2
+    sleep "${CI_POST_RETRY_SLEEP:-2}"
+    err="$(gh api -X POST "repos/$1/statuses/$2" -f state="$st" -f context="$ctx" -f description="$desc" ${url[@]+"${url[@]}"} 2>&1 >/dev/null)"
+    rc=$?
+  fi
   if [ "$rc" = 0 ]; then
     # A final answer GitHub took is written down for the sweep that ends a workflow job (ci-runner.sh sweep): its read of the
     # commit's statuses can lag this post, and must not close what this run already answered. CI_SHA_FILE is in RUNNER_TEMP,
@@ -183,7 +191,15 @@ ci_post_status() { # ci_post_status <slug> <sha> <job> <state> <description> [ur
     *) why="gh exit $rc${err:+: $(printf '%s' "$err" | head -1 | cut -c1-120)}" ;;
   esac
   echo "ci-local: status not posted: $ctx ($why)" >&2
+  CI_POST_WHY="$why"
   return "$rc"
+}
+ci_post_transport_failure() { # ci_post_transport_failure <gh stderr>: 0 when the failure is the network's or GitHub's, not the request's
+  case "$1" in
+    *"HTTP 4"* | *"gh auth login"* | *"not logged"*) return 1 ;; # a 4xx (422, 401, 403): the request is wrong, a second try says the same
+    *"unexpected end of JSON input"* | *"HTTP 5"* | *[Tt]imeout* | *"timed out"* | *[Cc]onnection\ reset* | *"EOF"*) return 0 ;;
+  esac
+  [ -z "$1" ] # an empty reply: nothing came back to say what was wrong
 }
 ci_still_ours() { # ci_still_ours <slug> <sha> <job> <url>: 0 if the newest local-ci/<job> status of that commit is still the pending
   # one this run posted (same link). Anything else means someone answered since (the other machine, a newer run): not ours to

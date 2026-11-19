@@ -165,10 +165,9 @@ describe('the browser job with CI_BROWSER_E2E_PART: web here, every other e2e pa
     const r = repo()
     r.set('rows', [])
     r.set('jobs', ['titan-e2e\tcompleted'])
-    const t0 = Date.now()
-    const run = r.start(browserRun, fold)
+    // An hour's wait: a run that waited would hit the test's own timeout, whatever the load, instead of a flat wall-clock bound.
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '3600' })
     expect(await run.done, run.out()).toBe(0)
-    expect(Date.now() - t0).toBeLessThan(25_000) // not the 30 s wait
     expect(e2eCalls(r)).toEqual([WEB, THERE])
     expect(r.posts('local-ci/browser')).toEqual([
       expect.stringMatching(/state=success .*\(e2e packages here: titan-e2e did not answer\)/),
@@ -179,10 +178,8 @@ describe('the browser job with CI_BROWSER_E2E_PART: web here, every other e2e pa
     const r = repo()
     r.set('rows', [partRefused])
     r.set('jobs', ['titan-e2e\tin_progress'])
-    const t0 = Date.now()
-    const run = r.start(browserRun, fold)
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '3600' }) // a wait would hit the test's timeout
     expect(await run.done, run.out()).toBe(0)
-    expect(Date.now() - t0).toBeLessThan(25_000)
     expect(e2eCalls(r)).toEqual([WEB, THERE])
   })
 

@@ -71,6 +71,12 @@ export class ScheduleRouter {
     this.limits = new RateLimiter(h.clock)
   }
 
+  /** A same-process restart: the alerts held when it stopped (or added while stopped) are looked at again. */
+  start(): void {
+    this.stopped = false
+    if (this.held.size) this.armHoldPoll()
+  }
+
   stop(): void {
     this.stopped = true
     if (this.holdTimer) this.h.clock.clearTimeout(this.holdTimer)
@@ -229,13 +235,16 @@ export class ScheduleRouter {
   /** Held through the quiet window like hooks (SPEC 7.4): one push per template once the window ends. */
   private hold(template: PushIntent['template']): void {
     this.held.add(template)
+    this.armHoldPoll()
+  }
+
+  private armHoldPoll(): void {
     if (this.holdTimer || this.stopped) return
     const poll = () => {
       this.holdTimer = null
       if (this.stopped) return
       if (this.h.quietNow()) {
-        this.holdTimer = this.h.clock.setTimeout(poll, this.h.holdPollMs ?? HOLD_POLL_MS)
-        this.h.track(this.holdTimer)
+        this.armHoldPoll()
         return
       }
       const templates = [...this.held]

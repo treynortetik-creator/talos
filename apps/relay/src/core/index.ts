@@ -43,6 +43,7 @@ import {
   getSession,
   guardWsUpgrade,
   noteDeviceUse,
+  peekPairedSession,
   preflightBridgeHttp,
   rateLimit,
   requireCsrf,
@@ -153,6 +154,36 @@ routes.get(RELAY_DESCRIPTOR_PATH, (c) => {
     'Cache-Control': 'public, max-age=60',
   })
 })
+
+// ---- bridge attest (BYOR phase 4) -----------------------------------------------------------------------------------------
+// Public and cache-free: the phone asks before it has a session (pairing) or with one (a reconnect). No csrf: a native call
+// sends no Origin, and the route changes no state. Order: this address's bucket, the body's shape (400), a Mac that is there
+// and lists attest/1 (503), then the relay-wide bucket, so a stranger's refused calls spend nothing of what the owner's phones
+// share. The cookie is only LOOKED AT (peekPairedSession): no refresh, no Set-Cookie, no stamp, no failure count.
+const NO_STORE = { 'Cache-Control': 'no-store' } as const
+routes.post(
+  '/api/bridge/attest',
+  limitBody(() => 1024),
+  bodyTimeout(),
+  async (c) => {
+    const { attest } = rt(c)
+    const limited = (retryAfterS: number) =>
+      c.json({ error: 'rate_limited' }, 429, { ...NO_STORE, 'Retry-After': String(retryAfterS) })
+    const addr = attest.limits.address(ipOf(c))
+    if (!addr.ok) return limited(addr.retryAfterS)
+    const raw: unknown = await c.req.json().catch(() => null)
+    if (lateRequest(c)) return c.json({ error: 'request_timeout' }, 408, NO_STORE)
+    const body = protocolRoutes.bridgeAttest.req.safeParse(raw)
+    if (!body.success) return c.json({ error: 'bad_request' }, 400, NO_STORE)
+    const no = attest.unavailable()
+    if (no) return c.json({ error: no }, 503, NO_STORE)
+    const wide = attest.limits.wide(peekPairedSession(c))
+    if (!wide.ok) return limited(wide.retryAfterS)
+    const res = await attest.ask(body.data.nonce)
+    if (!res.ok) return c.json({ error: res.error }, res.status, NO_STORE)
+    return c.json(res.answer, 200, NO_STORE)
+  },
+)
 
 // ---- WebSockets -------------------------------------------------------------------------------------------------
 
@@ -628,6 +659,9 @@ routes.get('/media/:id/page', requireSession, (c) => {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Security-Policy': PAGE_CSP,
+      // As /media/:id/app: the web card's Open in new tab loads this page top-level, outside the app's frame policy.
+      'Permissions-Policy': APP_PERMISSIONS_POLICY,
+      'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'same-origin',
       'Cache-Control': 'private, no-store',

@@ -107,8 +107,8 @@ mobile_swift_steps() { # mobile_swift_steps <log>: the Swift packages, the gener
     run "$log" xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App \
       -destination 'generic/platform=iOS Simulator' -derivedDataPath "$WT/.dd" CODE_SIGNING_ALLOWED=NO build || return 1
     # The tests that run inside the app (AppTests: the real Keychain, sign-out). They need a simulator; none is a failure.
-    local dest; dest="$(ci_ios_sim_dest)"
-    [ -n "$dest" ] || { echo "FAILED: no iPhone simulator is installed, so the app's own tests (AppTests) did not run. Install one in Xcode or set TALOS_IOS_SIM." | tee -a "$log"; return 1; }
+    local dest; dest="$(ci_ios_sim_dest 2>> "$log")"
+    [ -n "$dest" ] || { echo "FAILED: no iPhone simulator is installed or could be made, so the app's own tests (AppTests) did not run. Install an iOS runtime in Xcode or set TALOS_IOS_SIM." | tee -a "$log"; return 1; }
     ci_ios_test "$log" "${dest##*=}" xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App -destination "$dest" -derivedDataPath "$WT/.dd" test || return 1
   else
     # Never a pass: the generated-project check and the simulator build are the point of this job. On a Mac it is a failure

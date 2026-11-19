@@ -24,7 +24,7 @@ struct NativeFixtureTests {
     #expect(
       Set(w.keys) == [
         "ready", "notify", "badge", "open_external", "haptic", "threads", "pair_status", "companion_state", "companion_reply",
-        "terminal_view", "terminal_resume", "terminal_leave", "pick_folder", "shell_pane", "shell_pane_close", "capture_ack",
+        "terminal_view", "terminal_resume", "terminal_leave", "pick_folder", "shell_pane", "shell_pane_close", "run_witness", "capture_ack",
       ])
     for (type, entry) in w {
       let sample = try #require((entry as? [String: Any])?["sample"])
@@ -37,7 +37,7 @@ struct NativeFixtureTests {
     #expect(
       Set(n.keys) == [
         "navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
-        "terminal_sessions", "terminal_resume_result", "terminal_select", "folder_picked", "capture_drop",
+        "terminal_sessions", "terminal_resume_result", "terminal_select", "run_result", "folder_picked", "capture_drop",
       ])
     let cases: [(String, NativeToWeb)] = [
       ("compose", .compose(threadId: "general", text: "Hello from the shell.")),
@@ -48,6 +48,7 @@ struct NativeFixtureTests {
       ("notify_permission", .notifyPermission(.granted)),
       ("terminal_resume_result", .terminalResumeResult(threadId: "general", outcome: .asked)),
       ("terminal_select", .terminalSelect(session: "general")),
+      ("run_result", .runResult(clientMsgId: "m_01JBF3V7Q8K2M4N6P8R0S1T2V3", ok: false, reason: .expired)),
       ("folder_picked", .folderPicked(req: "r12", path: "/Users/alex/Projects")),
     ]
     for (type, msg) in cases {
@@ -66,6 +67,16 @@ struct NativeFixtureTests {
     }
   }
 
+  /// The fixture's `run_witness` sample with `changes` applied (a nil value removes the field).
+  private func witness(_ changes: [String: Any?]) -> [String: Any] {
+    var o: [String: Any] = [
+      "type": "run_witness", "thread_id": "general", "client_msg_id": "m_01JBF3V7Q8K2M4N6P8R0S1T2V4",
+      "script_sha256": String(repeating: "a", count: 64),
+    ]
+    for (k, v) in changes { if let v { o[k] = v } else { o.removeValue(forKey: k) } }
+    return o
+  }
+
   @Test func theTypeScriptMustRejectListIsRejected() {
     let bad: [[String: Any]] = [
       ["type": "open_external", "url": "javascript:alert(1)"],
@@ -79,8 +90,19 @@ struct NativeFixtureTests {
       ["type": "capture_ack", "req": "r12", "ok": "yes"],
       ["type": "capture_ack", "req": "has space", "ok": true],
       ["type": "capture_ack", "req": "r12", "ok": true, "extra": 1],
+      // the six run_witness entries of scripts/native-fixtures.ts MUST_REJECT, on the fixture's own sample
+      witness(["script": "ls\n"]), witness(["input": "ls\n"]), witness(["script_sha256": String(repeating: "A", count: 64)]),
+      witness(["script_sha256": String(repeating: "a", count: 63)]), witness(["client_msg_id": nil]), witness(["at": 0]),
     ]
     for m in bad { #expect(WebToNative.decode(m) == nil, "\(m) must be refused") }
+  }
+
+  @Test func theRunWitnessSampleDecodesToTheFields() throws {
+    let w = try #require(try fixtures()["web_to_native"] as? [String: Any])
+    let sample = try #require((w["run_witness"] as? [String: Any])?["sample"])
+    #expect(
+      WebToNative.decode(sample)
+        == .runWitness(threadId: "general", clientMsgId: "m_01JBF3V7Q8K2M4N6P8R0S1T2V4", scriptSha256: String(repeating: "a", count: 64)))
   }
 
   @Test func captureAckDecodes() {

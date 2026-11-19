@@ -9,6 +9,7 @@ import { setMacNotifyPermission } from '../../lib/native/notifyPermission.ts'
 import type { Shell } from '../../lib/native/shell.ts'
 import { useSession } from '../auth/session.ts'
 import { useTerminalSessions } from '../terminal/sessions.ts'
+import { setRunResult, useRunResults } from '../threads/runResults.ts'
 import { handleCaptureDrop } from './capture.ts'
 import { lastReplyText, startCompanionFeed } from './companion.ts'
 import { startNativeNotify } from './notify.ts'
@@ -92,6 +93,10 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
       if (!signedIn()) throw new Error('not signed in')
       useTerminalSessions.getState().setResume(m.thread_id, m.outcome)
     },
+    run_result(m) {
+      if (!signedIn()) throw new Error('not signed in')
+      setRunResult(m.client_msg_id, { ok: m.ok, ...(m.reason ? { reason: m.reason } : {}) })
+    },
     terminal_select(m) {
       if (!signedIn()) throw new Error('not signed in')
       useTerminalSessions.getState().requestSelect(m.session)
@@ -144,6 +149,7 @@ export function attachShell(shell: Shell, client: TalosClient, opts: { nav?: Nav
     if (!live) {
       const t = useTerminalSessions.getState()
       if (t.items !== null || Object.keys(t.resume).length > 0 || t.selectRequest !== null) t.reset()
+      if (Object.keys(useRunResults.getState().byId).length > 0) useRunResults.getState().reset()
     }
     const key = JSON.stringify(items)
     if (key !== lastThreads) {

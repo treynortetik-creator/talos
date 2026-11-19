@@ -24,7 +24,8 @@ ok    relay accepts this Mac: a signed read-only call was accepted
 warn  live bridge (status.json): no status.json: no bridge has run here since this update, or none is running. Start your agent with: talos-app start (a bridge that was already running needs a restart to start writing it)
 If the app says the server turned away this Mac's key, put this line in the relay variables on Railway and deploy:
 BRIDGE_PUBKEY=<pubkey>
-If you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it."
+If you have run \`talos-app rotate\`, also set BRIDGE_PUBKEY_FORCE=1 for that one deploy, then remove it.
+Phones paired before going back to an older key have to pair again."
 `;
 
 exports[`talos-app doctor text prints these lines, and exits 1, when the relay is down and nothing is set up 1`] = `

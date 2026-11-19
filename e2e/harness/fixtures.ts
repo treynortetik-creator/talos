@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from '@playwright/test'
 import { signStandard } from '@talos-app/integrations'
+import { shiftBrowserClock } from './hostile.ts'
 import { type Stack, startStack } from './stack.ts'
 
 export { waitUntil } from './stack.ts'
@@ -9,6 +10,7 @@ export { expect }
 export const test = base.extend<{ stack: Stack; worldAt: string | undefined }>({
   // a drop of the link or the Mac is said at once here (the app waits 30 s for an owner: lib/linkShown.ts)
   context: async ({ context }, use) => {
+    await shiftBrowserClock(context)
     await context.addInitScript(() => {
       ;(window as unknown as { __talosLinkGraceMs: number }).__talosLinkGraceMs = 0
     })

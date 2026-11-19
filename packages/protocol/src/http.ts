@@ -8,6 +8,7 @@ import {
   HookDigestFrame,
   InboxUpdateFrame,
   ReplyFrame,
+  RotationCert,
   ThreadUpsertFrame,
 } from './frames.ts'
 import { HealthStatus } from './health.ts'
@@ -911,6 +912,20 @@ export const routes = {
     owner: 'BYOR',
     res: RelayDescriptor,
     note: 'public descriptor {protocol, relay_version, relay_id, kind, min_app}; min_app is not a security check',
+  },
+  bridgeAttest: {
+    id: 'bridgeAttest',
+    method: 'POST',
+    path: '/api/bridge/attest',
+    auth: 'none',
+    owner: 'BYOR',
+    req: z.strictObject({ nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }),
+    res: z.strictObject({
+      pubkey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+      sig: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+      chain: z.array(RotationCert).max(8),
+    }),
+    note: 'the Mac signs attestBytes(nonce, origin, fp) (BYOR phase 4); public, rate limited; 503 mac_offline | attest_unsupported, 504 attest_timeout',
   },
 } as const satisfies Record<string, RouteDef>
 

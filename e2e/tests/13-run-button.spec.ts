@@ -9,6 +9,7 @@ import {
   test,
   waitUntil,
 } from '../harness/fixtures.ts'
+import { shiftBrowserClock } from '../harness/hostile.ts'
 import type { Stack } from '../harness/stack.ts'
 
 // The Run button, end to end: the real relay, the real bridge (which alone decides whether a tap counts) and the real app.
@@ -51,6 +52,7 @@ async function twoDevices(stack: Stack, page: Page, context: BrowserContext, bro
   await enrollDevice(stack, page, context)
   await openThread(page, 'General')
   const ctxB = await browser.newContext()
+  await shiftBrowserClock(ctxB)
   opened.push(ctxB)
   const pageB = await ctxB.newPage()
   recordWire(pageB)
@@ -75,7 +77,7 @@ test('13. Run: one tap hands the agent exactly that script; Run again and a seco
 
   // First tap, device A: a plain script is one tap. The agent gets the owner's own Run message, and it is marked `tap`.
   await blockA.getByTestId('run-button').click()
-  await expect(blockA.getByTestId('run-status')).toHaveText(/^Sent to your Mac/)
+  await expect(blockA.getByTestId('run-status')).toHaveText(/^Sent · the agent runs it/)
   const note = await stack.claude.waitForNotification((n) => n.meta.run === 'tap')
   expect(note.content).toBe(RUN_LINE)
   expect(note.meta).toMatchObject({ thread_id: 'general', trust: 'owner', kind: 'text', run: 'tap' })
@@ -86,7 +88,8 @@ test('13. Run: one tap hands the agent exactly that script; Run again and a seco
   expect(signed[0]?.json.run_block).toEqual({ message_id: expect.stringMatching(/^m_/), index: 0 })
 
   // Run again on the same screen: a fresh tap, its own signed message, runs it again (owner, 2026-11-15, audit 14)
-  await blockA.getByTestId('run-button').filter({ hasText: 'Run again' }).click()
+  // the Run button is an icon since 2026-11-18: its name is its aria-label
+  await blockA.getByRole('button', { name: 'Run again', exact: true }).click()
   await waitUntil(() => runNotes(stack).length === 2, 'the second Run at the agent')
 
   // The same block from the second device: its own tap, its own Run.

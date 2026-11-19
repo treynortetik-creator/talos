@@ -27,11 +27,16 @@ const TRY_AGAIN = 'Ask your agent to post the script again if you still want it.
  * Does this Run count? Either the plain line for the owner (it does not), or the block it is for (it does). Pure reads:
  * nothing is written here.
  */
-export function runCheck(ctx: BridgeContext, f: MessageFrame): { line: string } | { block: RunBlockRefT } {
+export function runCheck(
+  ctx: BridgeContext,
+  f: MessageFrame,
+  /** A Run for the terminal pane never meets an agent, so a thread with its own session takes it like any other (pane-run.ts). */
+  forPane = false,
+): { line: string } | { block: RunBlockRefT } {
   const no = (why: string, tail = TRY_AGAIN) => ({ line: `That Run was not run: ${why}.${tail ? ` ${tail}` : ''}` })
   // A thread with its own session (set to dedicated, whether or not its worker is running) takes no Run: it would have to be
   // handed to the main session or held for the worker, and a held one could arrive late. A re-post cannot run there either.
-  if (threadSessionMode(ctx.config.config, f.thread_id) === 'dedicated')
+  if (!forPane && threadSessionMode(ctx.config.config, f.thread_id) === 'dedicated')
     return no("this thread has its own session, so Run isn't available here", '')
   // the tap sends the text and the block it is for, and nothing else
   if (f.attachments.length || f.refs?.length || f.share_content || f.reply_to)

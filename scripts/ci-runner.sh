@@ -523,9 +523,11 @@ ci_exec_local() {
 # per machine, from plan) that has no final answer in this attempt is run here: at once when its machine never picked its job up
 # or ended without answering, after CI_REMOTE_DEADLINE (900 s from the run's start) when it is still working. All of them in one
 # ci-local.sh call. GitHub never moves a queued job to another runner, so this is the only way a machine that is off still gets
-# a verdict (docs/CI-MACHINES.md, "How Lemnos decides").
+# a verdict (docs/CI-MACHINES.md, "How Lemnos decides"). A job in CI_DECLINE_JOBS (this machine's own setting, a comma list) is
+# never taken: when its machine has no answer, an `error` is posted on it instead (after the deadline, or at once when its machine
+# is not working on it), so the context never stays pending.
 ci_fallback() {
-  local spec m list j st final take="" waiting started deadline now cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" jobs sha
+  local spec m list j st final take="" declined="" waiting started deadline now cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" jobs sha
   local notes="" why
   if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh)
   [ -n "${CI_FALLBACK:-}" ] || { echo "ci-runner: fallback: nothing was handed to another machine"; return 0; }
@@ -539,6 +541,12 @@ ci_fallback() {
       case "$j" in check | mod | browser | image | desktop | mobile) ;; *) echo "ci-runner: fallback: '$j' is not a job" >&2; return 1 ;; esac
     done
   done
+  case "${CI_DECLINE_JOBS:-}" in
+    *[!a-z,]* | ,* | *, | *,,*) echo "ci-runner: fallback: CI_DECLINE_JOBS '$CI_DECLINE_JOBS' is not <job,...>" >&2; return 1 ;;
+  esac
+  for j in $(printf '%s' "${CI_DECLINE_JOBS:-}" | tr ',' ' '); do
+    case "$j" in check | mod | browser | image | desktop | mobile) ;; *) echo "ci-runner: fallback: CI_DECLINE_JOBS '$j' is not a job" >&2; return 1 ;; esac
+  done
   ci_guard || return 1
   ci_split_checks fallback || return 1
   [ -n "${CI_ATTEMPT_URL:-}" ] || { echo "ci-runner: fallback needs CI_ATTEMPT_URL" >&2; return 1; }
@@ -547,7 +555,7 @@ ci_fallback() {
   started="$(date -u -d "$started" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$started" +%s 2>/dev/null || date +%s)"
   deadline=$((started + 10#${CI_REMOTE_DEADLINE:-900}))
   while :; do
-    take="" waiting=0 now=$(date +%s)
+    take="" declined="" waiting=0 now=$(date +%s)
     jobs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-0}/jobs?per_page=100" --jq '.jobs[] | [.name, .status] | @tsv' 2>/dev/null)"
     for spec in $CI_FALLBACK; do
       m="${spec%%:*}" list="${spec#*:}"
@@ -556,15 +564,30 @@ ci_fallback() {
         final="$(ci_attempt_final "$GITHUB_REPOSITORY" "$sha" "$(ci_ns "local-ci/$j")" "$CI_ATTEMPT_URL")" || final=""
         [ -z "$final" ] || continue # answered in this attempt, by anyone
         if [ "$st" = in_progress ] && [ "$now" -lt "$deadline" ]; then waiting=1; continue; fi
+        case ",${CI_DECLINE_JOBS:-}," in *",$j,"*) declined="${declined:+$declined }$j:$m"; continue ;; esac # never taken here
         take="${take:+$take,}$j" # queued (never picked up), completed without an answer, unreadable, or past the deadline
       done
     done
     [ "$waiting" = 1 ] || break
     sleep "${CI_FALLBACK_POLL:-30}"
   done
-  [ -n "$take" ] || { echo "ci-runner: fallback: every job handed elsewhere is answered in this attempt"; return 0; }
+  [ -n "$take" ] || [ -n "$declined" ] || { echo "ci-runner: fallback: every job handed elsewhere is answered in this attempt"; return 0; }
   # A PR that moved on or was closed: the run step and the other machine tested nothing for it, and neither does this.
   if [ "${GITHUB_EVENT_NAME:-}" = pull_request ] && ci_pr_gone; then return 0; fi
+  local declfail=0
+  for spec in $declined; do
+    j="${spec%%:*}" m="${spec#*:}"
+    echo "ci-runner: fallback: $j is declined here (CI_DECLINE_JOBS) and $m did not answer; posting error, not running it"
+    gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state=error -f context="$(ci_ns "local-ci/$j")" \
+      -f description="not run: this machine declines $j (CI_DECLINE_JOBS) and $m did not answer" \
+      -f target_url="${CI_STATUS_URL:-$CI_ATTEMPT_URL}" >/dev/null 2>&1 || {
+        # a gating context left unreported is no quiet skip: with nothing to take back this step fails (when a job is taken, the exec
+        # below makes this process ci-local.sh, so the ::error:: line is what remains)
+        echo "::error::ci-runner: fallback: could not post the error for local-ci/$j; it stays unreported" >&2
+        declfail=1
+      }
+  done
+  [ -n "$take" ] || return "$declfail"
   echo "ci-runner: fallback: taking $take here"
   # why each one is answered here, for the end of its status (ci-local.sh): "titan errored" (it closed its pending as an error:
   # stopped or cancelled), "titan did not answer in time" (still working at the deadline), else "titan did not answer"

@@ -43,6 +43,7 @@ export type CardsCtx = {
   enqueueRow(stamped: StoredFrame, ttlMs: number): void
   afterEnqueue(stamped: StoredFrame): void
   cardTimers: Map<string, unknown>
+  isStopped(): boolean
   expireCard(card: CardT): void
   agentConfig(): ReturnType<Hub['agentConfig']>
   nativeApproveCard(body: unknown): string | undefined
@@ -55,6 +56,7 @@ export const CARD_CLOSED_ON_MAC: readonly string[] = ['card_not_pending', 'card_
 export const cardsFrames = {
   /** Arms the timer that expires a pending card when its time comes. */
   scheduleCardExpiry(this: CardsCtx, cardId: string, expiresAt: number): void {
+    if (this.isStopped()) return // a card handled while the sockets drain: stop() has cleared the timers, nothing would clear this one
     const prev = this.cardTimers.get(cardId)
     if (prev) this.d.clock.clearTimeout(prev)
     longTimeout(

@@ -68,6 +68,16 @@ export function withoutStatus(e: WorkerEntryT): WorkerEntryT {
 /** A message typed in: a turn begins (`last_turn_at` moves when it ends). */
 export const withTurnStarted = (e: WorkerEntryT, at: string): WorkerEntryT => ({ ...e, turn_started_at: at })
 
+/** The pointer's Enter went: the turn begins in this conversation (`Entry.hadTurn`), and a quiet pane is no end until it drew. */
+export function pointerEntered(
+  w: { entry: WorkerEntryT; turnSeenBusy?: boolean; turnTypedAtMs?: number },
+  at: string,
+  wallMs: number,
+): void {
+  w.entry = { ...withTurnStarted(w.entry, at), ...(w.entry.session_id ? { turn_session: w.entry.session_id } : {}) }
+  ;[w.turnSeenBusy, w.turnTypedAtMs] = [false, wallMs]
+}
+
 /**
  * One look at a running turn: busy marks it seen, and only quiet AFTER that ends it (`last_turn_at` its end). A pane read quiet
  * between the line going in and the turn first drawing is not a finished turn (Pantheon's question on 61831732). True: the entry

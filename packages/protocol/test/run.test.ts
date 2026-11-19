@@ -2,10 +2,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   isOneTapRunScript,
+  isPaneRun,
   isPlainRunScript,
   MessageFrame,
   parseRun,
   RUN_MAX_AGE_MS,
+  RUN_PANE_CLICK_MS,
+  RUN_PANE_FEATURE,
   RUN_PREFIX,
   RUN_SCRIPT_MAX_CHARS,
   RunBlockRef,
@@ -178,5 +181,36 @@ describe('the frame', () => {
   })
   it('a Run is good for a day', () => {
     expect(RUN_MAX_AGE_MS).toBe(86_400_000)
+  })
+})
+
+describe('run_where: pane (RUN_PANE_FEATURE)', () => {
+  const base = {
+    v: 1,
+    type: 'message',
+    id: '01JBF3V7Q8K2M4N6P8R0S1T2V3',
+    ts: '2026-11-18T08:00:00.000Z',
+    device_id: 'd_abcdefghijklmnopqrst',
+    osig: 'A'.repeat(86),
+    thread_id: 'general',
+    client_msg_id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2V4',
+    text: 'Run exactly this:',
+    attachments: [],
+  }
+  it('the message frame takes run_where: pane, and nothing else there', () => {
+    const ok = MessageFrame.safeParse({ ...base, intent: 'run', run_where: 'pane' })
+    expect(ok.success, JSON.stringify(ok.error?.issues)).toBe(true)
+    expect(MessageFrame.safeParse({ ...base, intent: 'run', run_where: 'agent' }).success).toBe(false)
+    expect(MessageFrame.safeParse({ ...base, intent: 'run', run_where: 'PANE' }).success).toBe(false)
+  })
+  it('isPaneRun: only a Run with run_where pane', () => {
+    expect(isPaneRun({ intent: 'run', run_where: 'pane' })).toBe(true)
+    expect(isPaneRun({ intent: 'run' })).toBe(false)
+    expect(isPaneRun({ run_where: 'pane' })).toBe(false)
+    expect(isPaneRun({ intent: 'what_did_i_miss', run_where: 'pane' })).toBe(false)
+  })
+  it('the feature name and the click window', () => {
+    expect(RUN_PANE_FEATURE).toBe('run-pane/1')
+    expect(RUN_PANE_CLICK_MS).toBe(2000)
   })
 })

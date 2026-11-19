@@ -97,6 +97,21 @@ public final class RelayStore {
         try save(Blob(relays: [profile], active: profile.id))
     }
 
+    /// Changes the profile with this key id (the pairing the phone minted, never the relay's own id) and nothing else: of what `change`
+    /// does, only `bridgeFp`, `lastVerifiedAt` and `attestFailed` are kept. Returns false (and changes nothing) when no stored profile has that key id.
+    @discardableResult
+    public func update(keyId: String, _ change: (inout RelayProfile) -> Void) throws -> Bool {
+        var b = try load()
+        guard let i = b.relays.firstIndex(where: { $0.keyId == keyId }) else { return false }
+        var edited = b.relays[i]
+        change(&edited)
+        b.relays[i].bridgeFp = edited.bridgeFp
+        b.relays[i].lastVerifiedAt = edited.lastVerifiedAt
+        b.relays[i].attestFailed = edited.attestFailed
+        try save(b)
+        return true
+    }
+
     /// Deletes the stored item outright, so a damaged one (which makes every other call throw) can be cleared.
     public func reset() throws { try backing.delete() }
 

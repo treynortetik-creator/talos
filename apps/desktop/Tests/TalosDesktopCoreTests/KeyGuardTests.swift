@@ -491,12 +491,15 @@ struct KeyGuardTests {
     let exempt = ["SupervisorKeyGuard.swift", "WorkerKeyGuard.swift", "TmuxPtyHost.swift", "PtyHost.swift", "SwiftTermPtyHost.swift"]
     // by name, each a key that is not Talos's to guard: the `claude auth login` pty (a sign-in code typed into the login tool, not Claude
     // Code), the owner's own key buttons in the Terminals window and the one-line pass-through they call, and the owner's typing in a
-    // pane shell's terminal
+    // pane shell's terminal, and a script the owner tapped Run on, written only after their own click vouched for that exact Run
+    // (`ShellRunChannel`, which alone can make the ticket `runScript` takes: docs/TERMINAL-PANE.md "One path to the shell")
     let owners: [(file: String, line: String)] = [
-      ("ClaudeLoginSession.swift", "host.send(keys: Array(clean.utf8) + [0x0d])"),
+      ("ClaudeLoginSession.swift", "host.send(keys: Array(clean.utf8))"),  // the code, then its Return as a write of its own
+      ("ClaudeLoginSession.swift", "self.host.send(keys: [0x0d])"),
       ("TerminalWindow.swift", "model.supervisor.hostSend(b.bytes)"),
       ("Supervisor.swift", "public func hostSend(_ keys: [UInt8]) { host.send(keys: keys) }"),
       ("ShellClipboardGuard.swift", "inner.send(source: source, data: data)"),
+      ("OwnerShellPane.swift", "v.send(data: bytes[...]); noteWrite(bytes)"),
     ]
     var found = 0, ownersSeen = 0
     for target in ["TalosSupervisor", "TalosDesktop"] {

@@ -76,9 +76,10 @@ CI_PW_PORT_BASE=4873
 CI_PW_PORT_STEP=10
 CI_PW_PORT_SLOTS=6
 CI_POLL="${CI_POLL:-5}" CI_LOCK_TIMEOUT="${CI_LOCK_TIMEOUT:-3600}"
-# The time limits of the mobile job's simulator steps (ci_ios_test). They hold the machine-wide `suites` mutex, and a run waiting
-# for it gives up after CI_LOCK_TIMEOUT, so the worst case of the steps must stay under it: 4 simctl calls (two listings, two
-# shutdowns) and 4 boot waits or test runs (the Busy retry doubles them). 4 x 120 + 4 x 600 = 2880 s, under the 3600 s above.
+# The time limits of the mobile job's simulator steps (ci_ios_test). They hold the machine-wide `desktop` mutex, and a run waiting
+# for it gives up after CI_LOCK_TIMEOUT, so the worst case of the steps must stay under it: 6 simctl calls (the device list,
+# runtime list and create, the check listing, two shutdowns) and 4 boot waits or test runs (the Busy retry doubles them).
+# 6 x 120 + 4 x 600 = 3120 s, under the 3600 s above.
 # scripts/ci-local-runner.test.ts checks the sum against the timeout, so raising a limit without the timeout goes red.
 CI_SIMCTL_LIMIT="${CI_SIMCTL_LIMIT:-120}" CI_XCODE_TEST_LIMIT="${CI_XCODE_TEST_LIMIT:-600}"
 CI_LOCK_GRACE="${CI_LOCK_GRACE:-30}" # seconds a lock may exist without an owner before a waiter may give it one
@@ -104,6 +105,7 @@ if (return 0 2>/dev/null); then return 0; fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
+unset _ci_held # internal (report() sets it): an exported one must never hold back a post
 unset TALOS_CI_CACHE # for this run only: the tests start this script themselves, under a fake HOME, and must not inherit it
 mkdir -p "$CACHE/logs"
 
@@ -301,9 +303,17 @@ if [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ] && ci_stood_aside "$SLUG" "
   exit 0
 fi
 
+POSTFAIL=()
 post() { # post <job> <state> <description>
   [ "$STATUS" = 1 ] || return 0
-  ci_post_status "$SLUG" "$SHA" "$1" "$2" "$3" "${CI_STATUS_URL:-}" || true # it says why on stderr
+  # report() sets _ci_held (its own local) when the owning machine answered this job in this attempt: that answer stands
+  [ "${_ci_held:-}" != 1 ] || { echo "ci-local: $1: answered first elsewhere in this attempt; $2 not posted"; return 0; }
+  # It says why on stderr. A post that failed (after its one retry for a transport error) is loud: ::error:: now, a nonzero exit at
+  # the end (POSTFAIL), never a green run with a context unposted. The run goes on, so the other jobs still report.
+  ci_post_status "$SLUG" "$SHA" "$1" "$2" "$3" "${CI_STATUS_URL:-}" || {
+    echo "::error::ci-local: status not posted: $(ci_context "$1") (${CI_POST_WHY:-gh failed}); this run cannot end green"
+    POSTFAIL+=("$(ci_context "$1")")
+  }
 }
 
 WT="" CONTAINER="" SLOT_TMP="" RUN_DIR="" WATCHDOG="" RESDIR=""
@@ -759,7 +769,7 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
   for j in "$@"; do echo "$!" > "$RESULTS/$j.group"; done
 }
 report() { # report <job> <exit code> <seconds> <why it skipped>
-  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$CACHE/logs/$SHORT-$1.log" slept=0 woke warned="" retried="" n=0 t f rows red answered=0 parts="" _p _m
+  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$CACHE/logs/$SHORT-$1.log" slept=0 woke warned="" retried="" n=0 t f rows red answered=0 fb=0 _ci_held="" _all _ok _top parts="" _p _m
   # Its own steps against its wall time: a job that waited for another (browser for check) says so, and timings.tsv keeps both.
   local waited steps took
   waited="$(cat "$RESULTS/$j.waited" 2>/dev/null)"
@@ -777,6 +787,7 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
       *) echo "warning: $woke" | tee -a "$log" >> "$RESULTS/$j.warn" ;;
     esac
   fi
+  case ";${CI_FALLBACK_NOTES:-};" in *";$j="*) fb=1 ;; esac # this run took the job back from another machine (ci-runner.sh fallback)
   # Right before the final post, the attempt's other answers (two answers for one context): another machine's red of this attempt
   # makes this one red with the first red's words; a pass after another pass of it posts nothing more (the first green stands).
   if [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ] && [ -z "$why" ]; then
@@ -788,6 +799,15 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
     red="$(printf '%s\n' "$rows" | ci_attempt_red)"
     if [ -n "$red" ]; then
       rc=1 && printf '%s\n' "$red" > "$RESULTS/$j.why" && echo "  ! $j: this attempt already has a red for it: $red"
+    elif [ "$fb" = 1 ] && _all="$(ci_statuses "$SLUG" "$SHA")" &&
+      _ok="$(printf '%s\n' "$_all" | awk -F'\t' -v c="$(ci_context "$j")" -v a="$CI_ATTEMPT_URL" -v own="${CI_STATUS_URL:-}" \
+        '$1 == c && $2 == "success" && index($3, a) == 1 && $3 != own { print $3 "\t" $4; exit }')" && [ -n "$_ok" ]; then
+      # A take-back never posts over the owner's pass, whichever of the two statuses is newer (the owner can answer between the
+      # start check and this run's own pending, or later): this run's result, a failure included, is logged below, not posted.
+      answered=1 _ci_held=1
+      _top="$(printf '%s\n' "$_all" | awk -F'\t' -v c="$(ci_context "$j")" '$1 == c { print $2 "\t" $3; exit }')"
+      # this run's pending is on top of the owner's pass: the pass goes on top again, in the owner's own words and link
+      [ "$_top" != "pending"$'\t'"${CI_STATUS_URL:-}" ] || ci_post_status "$SLUG" "$SHA" "$j" success "${_ok#*$'\t'}" "${_ok%%$'\t'*}" || true
     elif [ "$rc" = 0 ] && [ -n "$(printf '%s\n' "$rows" | ci_attempt_final)" ] &&
       ! ci_still_ours "$SLUG" "$SHA" "$(ci_context "$j")" "${CI_STATUS_URL:-}"; then
       answered=1 # another machine's final is the newest status: it stands. (If this run's pending is newer, this run answers.)
@@ -849,10 +869,10 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
   fi
   if [ "$slept" = 1 ]; then
     echo "  ✗ $j ($took): the Mac slept during the run; not trusted, re-run"; post "$j" error "the Mac slept during the run; result not trusted, re-run"
-    FAILED+=("$j")
+    if [ "$_ci_held" = 1 ]; then HELD+=("$j"); else FAILED+=("$j"); fi
   elif [ -n "$nottested" ]; then
     echo "  ✗ $j ($took): $nottested"; post "$j" error "$nottested"
-    FAILED+=("$j")
+    if [ "$_ci_held" = 1 ]; then HELD+=("$j"); else FAILED+=("$j"); fi
   elif [ -s "$RESULTS/$j.refused" ]; then
     # a part this machine cannot run (a tool missing): error, never a red; the machine that runs check takes it over
     # not a failure (the run ends green if nothing else failed), but loud: a ::warning:: line in the job's GitHub log
@@ -863,7 +883,8 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
     echo "  ✗ $j ($took), log: $log"; tail -25 "$log" | sed 's/^/    /'
     if [ -s "$RESULTS/$j.why" ]; then post "$j" failure "$(noted "$j" "$(head -1 "$RESULTS/$j.why")")"
     else post "$j" failure "$(noted "$j" "failed on $WHERE; see ~/.cache/talos-ci/logs/$SHORT-$j.log")"; fi
-    FAILED+=("$j")
+    # held: the owner's pass stands for this job, so this run does not end red (the log above is kept)
+    if [ "$_ci_held" = 1 ]; then HELD+=("$j"); else FAILED+=("$j"); fi
   elif [ -n "$why" ]; then
     echo "  - $j skipped: $why (${secs}s)"
     case "$why" in
@@ -903,7 +924,7 @@ done
 
 # Results as they come. A job that died without leaving one (killed from outside) is a failure, never a pass.
 # While check runs with parts on other machines, this shell (it has the token; the jobs don't) keeps their states up to date.
-FAILED=() REFUSED=() WAITING="$UNIQUE" PART_POLLED=0 JOB_TIMES=""
+FAILED=() HELD=() REFUSED=() WAITING="$UNIQUE" PART_POLLED=0 JOB_TIMES=""
 while [ -n "${WAITING// /}" ]; do
   STILL=""
   for j in $WAITING; do
@@ -947,6 +968,10 @@ _pty="$(cat "$RESULTS/desktop.pty" 2>/dev/null)"
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
   "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" "$JOB_TIMES" "${_pty:--}" "bun=$RUN_BUN" \
   >> "$CACHE/logs/timings.tsv"
+[ ${#HELD[@]} -eq 0 ] || echo "::warning::ci-local: failed here, not posted: the owning machine's pass for this attempt stands: ${HELD[*]} ($SHORT)"
+if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ] && [ ${#POSTFAIL[@]} -gt 0 ]; then
+  echo "ci-local: FAILED: the jobs passed, but these statuses were not posted: ${POSTFAIL[*]} ($SHORT)"; exit 1
+fi
 if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ]; then
   [ ${#REFUSED[@]} -eq 0 ] || { echo "ci-local: nothing failed; refused, not tested here (see each one's line above): ${REFUSED[*]} ($SHORT)"; exit 0; }
   echo "ci-local: all green ($SHORT)"; exit 0

@@ -23,22 +23,29 @@ count = flakes.tsv lines since 11-14; last = last seen (UTC).
 
 Suspected: fixed waits against a real tmux and real processes, which lose under CPU load (load 13-42 here in gates).
 
-| count    | last         | test                                                                                                        | file                            |
-| -------- | ------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| 27       | 11-16        | aCursorMovedByTheOwnerStillGetsTheLabelClickedAndNothingElse                                                | NeedsYouPopupTests.swift        |
-| 13       | 11-17        | switchedOffNothingRestartsAndSwitchedOnItWaitsForTheNextRelease                                             | WorkerUpdateRestartTests.swift  |
-| 7        | 11-17        | anUpdateRestartsEachStaleSessionOnceOneAtATime…                                                             | WorkerUpdateRestartTests.swift  |
-| 9        | 11-17        | aWarmWorkersPointerIsDroppedAfter90Seconds                                                                  | PointerOwedTests.swift          |
-| 8        | 11-17        | FINDING_theCrashLoopCountSurvivesARelaunch                                                                  | ReviewOC3IntegrationTests.swift |
-| 8+3+3    | 11-17        | aNeedsYouWorkerIsNotIdleParked, aDialogOnALiveWorkerIsFlaggedToo, aDialogThatHasNotHeldStillIsNotFlaggedYet | WorkerDialogTests.swift         |
-| 6        | 11-16        | theSameAskBackAfterAThreeSecondFlickerKeepsItsOneLine                                                       | PromptRelay322Tests.swift       |
-| 4        | 11-15        | theLastOutcomeSurvivesAnAppRelaunch                                                                         | MainRestartCheckTests.swift     |
-| 4        | 11-15        | aLiveSessionThatEndsByItselfIsCounted                                                                       | WorkerCrashCountTests.swift     |
-| 4        | 11-15        | aKilledSessionIsGone                                                                                        | WorkerUnknownTests.swift        |
-| 4        | 11-15        | aToolPermissionPromptOnALiveWorkerNotifiesItsOwnThreadOnce                                                  | PromptRelayTests.swift          |
-| 3        | 11-16        | aScreenThatChangedBetweenTheDecisionAndTheEnterGetsNoEnter                                                  | DevChannelsAcceptTests.swift    |
-| 2        | 11-17        | aLineThatIsGoneFromTheBoxIsTypedAgainNotEntered                                                             | PointerOwedEnterTests.swift     |
-| 1-2 each | 11-14..11-17 | 22 more (FINDING_aCrashLeavesNothingInTheGroup, aTapWalksToTheSignedRowFirst, aKilledServerIsGone, …)       | same target                     |
+| count    | last         | test                                                                                                        | file                              |
+| -------- | ------------ | ----------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 27       | 11-16        | aCursorMovedByTheOwnerStillGetsTheLabelClickedAndNothingElse                                                | NeedsYouPopupTests.swift          |
+| 13       | 11-17        | switchedOffNothingRestartsAndSwitchedOnItWaitsForTheNextRelease                                             | WorkerUpdateRestartTests.swift    |
+| 7        | 11-17        | anUpdateRestartsEachStaleSessionOnceOneAtATime…                                                             | WorkerUpdateRestartTests.swift    |
+| 9        | 11-17        | aWarmWorkersPointerIsDroppedAfter90Seconds                                                                  | PointerOwedTests.swift            |
+| 8        | 11-17        | FINDING_theCrashLoopCountSurvivesARelaunch                                                                  | ReviewOC3IntegrationTests.swift   |
+| 8+3+3    | 11-17        | aNeedsYouWorkerIsNotIdleParked, aDialogOnALiveWorkerIsFlaggedToo, aDialogThatHasNotHeldStillIsNotFlaggedYet | WorkerDialogTests.swift           |
+| 6        | 11-16        | theSameAskBackAfterAThreeSecondFlickerKeepsItsOneLine                                                       | PromptRelay322Tests.swift         |
+| 4        | 11-15        | theLastOutcomeSurvivesAnAppRelaunch                                                                         | MainRestartCheckTests.swift       |
+| 4        | 11-15        | aLiveSessionThatEndsByItselfIsCounted                                                                       | WorkerCrashCountTests.swift       |
+| 4        | 11-15        | aKilledSessionIsGone                                                                                        | WorkerUnknownTests.swift          |
+| 4        | 11-15        | aToolPermissionPromptOnALiveWorkerNotifiesItsOwnThreadOnce                                                  | PromptRelayTests.swift            |
+| 3        | 11-16        | aScreenThatChangedBetweenTheDecisionAndTheEnterGetsNoEnter                                                  | DevChannelsAcceptTests.swift      |
+| 2        | 11-17        | aLineThatIsGoneFromTheBoxIsTypedAgainNotEntered                                                             | PointerOwedEnterTests.swift       |
+| 1        | 11-18        | FINDING_aToolProcessThatLeftTheGroupDoesNotOutliveACrash                                                    | ReviewOC3R2IntegrationTests.swift |
+| 1-2 each | 11-14..11-17 | 22 more (FINDING_aCrashLeavesNothingInTheGroup, aTapWalksToTheSignedRowFirst, aKilledServerIsGone, …)       | same target                       |
+
+Open: `FINDING_aToolProcessThatLeftTheGroupDoesNotOutliveACrash` (ReviewOC3R2IntegrationTests.swift, the "parked" wait at :453) failed once on CI at a8bd0ac, one failure in about 563 desktop logs. Hypothesis: the test killed the worker while its pointer was still owed, so `runQueued` (WorkerPark.swift:61-62) started it again in the tick that parked it and "parked" never showed; the same race as ff0bbffc0. Not reproduced: 105 local runs, quiet and under an 18-core burn, 0 failures. Changed: the test waits for the typed pointer before the kill, and both "parked" waits in the file print `r.why` (state, error, starts). Status OPEN: closed only by a repro, or by a CI failure whose message shows the state. Owner: Lemnos.
+
+Fixed (11-18): `aWarmWorkersPointerIsDroppedAfter90Seconds` (PointerOwedTests.swift). 27 failing CI desktop logs, 11-10 to 11-18 (always the two issues at `:211` and `:214`, the same two lines at `:181` and `:184` before 4a6637e30; none from the pty-exhausted c9a606d), "passed on retry" in the 11-18 nightly. Cause: TEST, not the app. The test waited for "a deadline on disk" (`owed().until != nil`) to know the first copy had taken the second wake, but the first message's own deadline can still be on disk while its tick ends, so the first copy could go (`appGone`) with the wake file still in the folder. The second copy then took that wake fresh: a wake's pointer is typed with no deadline check by design (a hand-off waits up to 15 minutes, `WorkerWakes.swift:36-38`), so it stayed held by the draft (`until` still set at `:211`) and was typed once the draft went (two lines at `:214`). Shown red by a variant that detaches before the second wake is taken: the same two failures and the same ~30 s. Fix: the test waits for the wake file to be gone and the deadline to be on disk. Status: fixed in the test; the app is as designed.
+
+Fixed in the test, cause not proven (11-18): `afterTheWallClockIsSetBackTheSessionInUseIsNotTheCapsChoice` (WorkerFollowupsTests.swift). 5 failing CI logs: 4 at the "both quiet" precondition (`aa` read busy; e7d0f69 11-12, a641326 11-17, daf32f6 11-18, and c9a606d 11-18, which was pty-exhausted and is no evidence) and 1 (3d2d125, 11-17) where the cap parked `aa`, the session in use. The test slept a fixed 7 s of real time so tmux's real output times would catch up with a wall clock set back 5 s, then read one state snapshot, which is whichever tick last finished. The app's ranking is right (the cap ranks on the awake clock, `WorkerManager.swift:519`); a run with the ranking put back on the wall clock still fails this test. Not reproduced: about 35 parallel runs under a 14-core burn and one full-suite run under a 10-core burn, 0 failures, and the busy reading that failed the runs was not found. Change: the clocks are moved on in one step (`c.pass(7)`, no sleep) and the test waits for both states to read live. Status: test no longer waits on time; if it fails again its message shows the states, and the cause is still open.
 
 ### B. Bridge (bun) — file watches and slow `ps`
 

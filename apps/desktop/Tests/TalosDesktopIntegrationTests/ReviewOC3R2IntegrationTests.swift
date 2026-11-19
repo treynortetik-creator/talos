@@ -13,7 +13,8 @@ extension WorkerRig {
 
   /// The real tmux, except that a verb with a file in `faults/` fails the way an overloaded server does: stderr, exit 1,
   /// no timeout. File content: `once` (one failure), `hold` (until removed), `slow` (once, after 0.4 s). The verb `-e` is the
-  /// `capture-pane` that reads the colours (the plain one is `capture-pane`).
+  /// `capture-pane` that reads the colours (the plain one is `capture-pane`). `afterEnter` (for a verb that is read, not sent): once a
+  /// pointer's Enter has gone through, the verb waits, writing `blocked`, until its file is removed: a tick held where it stands.
   func faultShim() throws -> String {
     try FileManager.default.createDirectory(atPath: faultDir, withIntermediateDirectories: true)
     let p = root + "/tmux-fault"
@@ -22,10 +23,15 @@ extension WorkerRig {
     d='\(faultDir)'
     for a in "$@"; do
       case "$a" in send-keys\\ *\\ Enter | send-keys\\ *\\ Enter\\ *) a=Enter ;; esac  # the pointer's Enter is the send of an if-shell: one string
+      [ "$a" = Enter ] && touch "$d/entered"  # never reset: `afterEnter` is for a test with one pointer's Enter
       case "$a" in
         display-message|has-session|capture-pane|list-clients|Enter|-e)
           if [ -f "$d/$a" ]; then
             m=$(cat "$d/$a")
+            if [ "$m" = afterEnter ]; then
+              if [ -f "$d/entered" ]; then touch "$d/blocked"; while [ -f "$d/$a" ]; do sleep 0.05; done; fi
+              continue
+            fi
             # swallow: the send reports it went (as the pane's if-shell does) and nothing reaches the pane; each one is counted
             if [ "$m" = swallow ]; then echo x >> "$d/$a.swallowed"; echo talos-sent; exit 0; fi
             [ "$m" = hold ] || rm -f "$d/$a"
@@ -150,7 +156,7 @@ struct ReviewOC3R2Quit {
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
     r.mgr.stopAll()
-    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
+    #expect(r.wait(5) { r.state("trip") == "parked" }, "\(r.why("trip"))")  // the snapshot publishes at the end of the tick that emitted .parked
     try r.wake("trip")
     usleep(1_500_000)
     #expect(r.state("trip") == "parked", "\(String(describing: r.state("trip"))) after Quit and stop")
@@ -440,7 +446,9 @@ struct ReviewOC3R2Children {
     defer { r.killLeftovers(file + ".trip") }
     let pid = try #require(r.entry("trip")?.pane_pid)
     let tool = try #require(r.lines(file + ".trip").first.flatMap { Int32($0) })
-    usleep(300_000)
+    // the pointer typed first: a crash with one still owed starts the worker again to deliver it (the same tick that parks it), so
+    // "parked" would never be seen
+    #expect(r.wait(10) { r.typedLines.count == 1 }, "\(r.typedLines)")
     #expect(kill(tool, 0) == 0, "control: the tool is running")
     #expect(getpgid(tool) != pid, "control: it left the group")
     kill(pid, SIGKILL)
@@ -450,7 +458,7 @@ struct ReviewOC3R2Children {
         return false
       }
     })
-    #expect(r.wait(5) { r.state("trip") == "parked" })  // the snapshot publishes at the end of the tick that emitted .parked
+    #expect(r.wait(5) { r.state("trip") == "parked" }, "\(r.why("trip"))")  // the snapshot publishes at the end of the tick that emitted .parked
     usleep(500_000)
     // Known issue, not fixed: R15 is an owner call (a tool that left the group needs a new way to find it and a new kind of
     // kill), see the PR. The assertion stands: this goes red the day the behaviour changes, so it gets a real decision.
