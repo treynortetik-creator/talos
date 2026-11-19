@@ -258,7 +258,7 @@ while IFS= read -r nested; do
     *) "${SIGN[@]}" "$nested" ;;
   esac
 done < <(find "$APP/Contents" -type f ! -path "$APP/Contents/MacOS/Talos" -print0 \
-  | xargs -0 file -h 2>/dev/null | sed -n 's/^\(.*\): *Mach-O.*/\1/p' | awk -F/ '{print NF "\t" $0}' | sort -rn | cut -f2-)
+  | xargs -0 file -h 2>/dev/null | grep -v '(for architecture ' | sed -n 's/^\([^:]*\): *Mach-O.*/\1/p' | awk -F/ '{print NF "\t" $0}' | sort -rn | cut -f2-)
 # The hardened build takes the release entitlements: the resources a local build has without asking (Resources/entitlements-release.plist).
 ENTITLEMENTS=Resources/entitlements.plist
 [ "$HARDENED" = 1 ] && ENTITLEMENTS=Resources/entitlements-release.plist

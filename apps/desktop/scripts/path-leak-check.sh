@@ -14,7 +14,12 @@ total=0; first=""
 while IFS= read -r -d '' f; do
   n=0
   for p in "${PATTERNS[@]}"; do
-    hits="$(LC_ALL=C grep -a -o -i -F -e "$p" -- "$f" 2>/dev/null)"; rc=$?
+    if [ "$p" = "/Users/" ]; then
+      # A home folder, any case: "/Users/<name>/", not a route that happens to say users ("/api/users/:id" in bun's docs).
+      hits="$(LC_ALL=C grep -a -o -i -E -e '(^|[^A-Za-z0-9_])/users/[A-Za-z0-9._-]+/' -- "$f" 2>/dev/null)"; rc=$?
+    else
+      hits="$(LC_ALL=C grep -a -o -i -F -e "$p" -- "$f" 2>/dev/null)"; rc=$?
+    fi
     [ "$rc" -le 1 ] || { echo "path-leak-check: could not read ${f#"$TARGET"/}; nothing is known clean" >&2; exit 2; }
     [ -z "$hits" ] || n=$((n + $(printf '%s\n' "$hits" | wc -l | tr -d ' ')))
   done
