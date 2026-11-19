@@ -138,11 +138,15 @@ export function leadSpokeSince(db: Database, thread: string, sinceMs: number, no
   }
 }
 
-/** `leadSpokeSince` for every lead: any thread's lead handed main anything after `sinceMs`. */
-export function anyLeadSpokeSince(db: Database, sinceMs: number, now: number): boolean {
+/**
+ * `leadSpokeSince` for every lead: any thread's lead handed main anything after `sinceMs`. A query error is "no" by default (the
+ * callers that only add a warning); with `failClosed` it throws, except for a table that does not exist yet, which is no hand-off.
+ */
+export function anyLeadSpokeSince(db: Database, sinceMs: number, now: number, failClosed = false): boolean {
   try {
     return !!db.query("SELECT 1 FROM handoffs WHERE dir = 'to_main' AND at > ? AND at <= ? LIMIT 1").get(sinceMs, now)
-  } catch {
+  } catch (e) {
+    if (failClosed && !/no such table/i.test((e as Error).message)) throw e
     return false
   }
 }

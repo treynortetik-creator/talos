@@ -9,14 +9,15 @@ import TalosSupervisor
 ///   3. Main was told about an owner message, has not acted on it for `unseen_s`, and its pane has printed nothing since.
 extension Rig {
   /// The live bridge's status.json with the relay and unseen fields set; stamped now, from Main's own process.
-  func writeLiveStatus(connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true) throws {
+  func writeLiveStatus(connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true, stop: Date? = nil) throws {
     let pid = sup.status.childPid ?? getpid()
     let at = ISOTime.string(clock.wallMs() / 1000)
     let code = closeCode.map(String.init) ?? "null"
     let u = unseen.map { "\"\(ISOTime.string($0.timeIntervalSince1970))\"" } ?? "null"
+    let st = stop.map { "\"\(ISOTime.string($0.timeIntervalSince1970))\"" } ?? "null"
     let json =
       "{\"v\":1,\"pid\":\(pid),\"mode\":\"live\",\"relay\":{\"connected\":\(connected),\"last_close_code\":\(code)},"
-      + "\"queue_depth\":0,\"main_resend\":\(mainResend),\"unseen_oldest_at\":\(u),\"updated_at\":\"\(at)\"}"
+      + "\"queue_depth\":0,\"main_resend\":\(mainResend),\"last_stop_at\":\(st),\"unseen_oldest_at\":\(u),\"updated_at\":\"\(at)\"}"
     try json.write(toFile: talosHome + "/status.json", atomically: true, encoding: .utf8)
   }
 
@@ -32,13 +33,13 @@ extension Rig {
   }
 
   /// Moves the clocks `seconds` on in steps, the bridge rewriting its status (every 15 s) as it goes.
-  func pass(_ seconds: Double, connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true) throws {
+  func pass(_ seconds: Double, connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true, stop: Date? = nil) throws {
     var left = seconds
     while left > 0 {
       let step = min(15, left)
       clock.advance(step)
       left -= step
-      try writeLiveStatus(connected: connected, closeCode: closeCode, unseen: unseen, mainResend: mainResend)
+      try writeLiveStatus(connected: connected, closeCode: closeCode, unseen: unseen, mainResend: mainResend, stop: stop)
       sup.tickNow()
     }
   }

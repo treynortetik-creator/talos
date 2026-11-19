@@ -5,17 +5,34 @@ import { join } from 'node:path'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
 
 export const PEERS_INBOUND_FILE = 'peers-inbound.json'
-export type InboundPeer = { name: string; conn_id: string }
+/**
+ * `secret_file`: when an agent run left a secret file for this inbox, and which kind: `create` (the sender has the secret from the
+ * start, so the first message proves it was carried over) or `rotate` (the old secret works for 24 hours, so a message inside that
+ * window may still be signed with it and proves nothing).
+ */
+/** How long the old secret of a rotated inbox keeps working (the relay's rule). */
+export const PEER_ROTATE_GRACE_MS = 24 * 3600_000
+export type SecretFileMark = { kind: 'create' | 'rotate'; at: number }
+export type InboundPeer = { name: string; conn_id: string; secret_file?: SecretFileMark }
 
 const file = (home: string): string => join(home, PEERS_INBOUND_FILE)
 
 export function readInboundPeers(home: string): InboundPeer[] {
   const raw = readJsonFile<{ v?: unknown; peers?: unknown }>(file(home))
   if (raw?.v !== 1 || !Array.isArray(raw.peers)) return []
-  return raw.peers.filter(
-    (p): p is InboundPeer =>
-      typeof p === 'object' && p !== null && typeof p.name === 'string' && typeof p.conn_id === 'string',
-  )
+  return raw.peers
+    .filter(
+      (p): p is InboundPeer =>
+        typeof p === 'object' && p !== null && typeof p.name === 'string' && typeof p.conn_id === 'string',
+    )
+    .map((p) => {
+      const m = (p as { secret_file?: Partial<SecretFileMark> }).secret_file
+      const mark =
+        m && (m.kind === 'create' || m.kind === 'rotate') && Number.isFinite(m.at)
+          ? { kind: m.kind, at: m.at as number }
+          : undefined
+      return { name: p.name, conn_id: p.conn_id, ...(mark ? { secret_file: mark } : {}) }
+    })
 }
 
 const write = (home: string, peers: InboundPeer[]): void => writeJsonAtomic(file(home), { v: 1, peers })

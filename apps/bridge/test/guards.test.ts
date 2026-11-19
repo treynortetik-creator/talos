@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import { runInstallGuards, withGuardsSettings } from '../src/guards/install.ts'
 import { buildGuardConfig, denyRules, guardDecision } from '../src/guards/rules.ts'
 import { DEFAULT_ASK_RULES } from '../src/permission/ask-rules.ts'
+import { fenceDenyRules } from '../src/supervisor/worker-policy.ts'
 
 const root = mkdtempSync('/tmp/gd')
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -574,6 +575,23 @@ describe('guard decisions', () => {
       expect(bash(c), c).toBeDefined()
     expect(write(join(home, 'screen', 'allowed-apps.json'))).toBeDefined()
     expect(write(join(home, 'screen', 'allowed-apps.json'), 'Edit')).toBeDefined()
+  })
+  test('owner-folders.json (the folders the owner chose, which folder trust relies on) is read-only to sessions: a shell, Write and Edit', () => {
+    expect(cfg.writeDenied).toContain(join(realpathSync(root), 'user', '.config', 'talos', 'owner-folders.json'))
+    expect(bash(`cat ${home}/owner-folders.json`)).toBeUndefined()
+    for (const c of [
+      `echo '{"v":1,"threads":{}}' > ${home}/owner-folders.json`,
+      `tee ${home}/owner-folders.json`,
+      `sed -i '' s/a/b/ ${home}/owner-folders.json`,
+      `python3 -c "open('${home}/owner-folders.json','w')"`,
+      `cp x ${home}/owner-folders.json`,
+      `mv /tmp/x ${home}/owner-folders.json`,
+    ])
+      expect(bash(c), c).toBeDefined()
+    expect(write(join(home, 'owner-folders.json'))).toBeDefined()
+    expect(write(join(home, 'owner-folders.json'), 'Edit')).toBeDefined()
+    // a thread session's own fence closes the whole Talos home to the file tools, so it is covered there too
+    expect(fenceDenyRules(home)).toEqual(expect.arrayContaining([`Write(/${home}/**)`, `Edit(/${home}/**)`]))
   })
   test('the Write tools are denied on the trust files too', () => {
     for (const f of ['devices.json', 'config.json', 'tripwire.writing', 'tripwire.json', 'guards/guards.json'])

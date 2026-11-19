@@ -69,6 +69,12 @@ public enum SupervisorNotice {
       + "request may be stuck (a long think can look the same). Press Esc in its pane to cancel, then send again"
   }
 
+  /// Main's turn ended on an empty thinking block with no answer (nothing pressed): the owner's message was delivered again, or could not be.
+  public static let missedTurnResent = "Your agent missed your message; sent it again"
+  /// The re-delivered message was missed too: nothing more is sent by itself.
+  public static let missedTurnAgain = "Your agent missed your message again; please send it again or restart it"
+  public static let missedTurnFailed = "Your agent missed your message and Talos couldn't send it again; please send it again"
+
   public static func recovery(_ o: AgentRecovery.Outcome) -> String {
     switch o {
     case .restartedOnRequest: return restartedOnRequest

@@ -1,7 +1,10 @@
 // Option C: an opt-in dedicated Claude Code session per thread (docs/OPTION-C.md). WP-OC0 owns this file: the thread
 // switch, the global `dedicated` settings, the supervisor's `workers.json`, the wake file, the local hub socket lines
 // and the constants every side has to agree on. Nothing here starts a process; the bridge and the desktop supervisor
-// read it. Everything defaults to off: a config without these fields behaves exactly as before.
+// read it. No thread has its own session until the owner turns that thread's switch on. The master switch (`dedicated.enabled`)
+// is on for a config that never wrote one (the owner, 2026-11-19: "they can't even go look at it"), and is written the first time
+// a thread is turned on (`writeSwitchOnFirstUse`): until then routing, and the Mac app, read it as off, and no thread is on its
+// own session (`clearUnswitchedSessions`), so nothing starts that the owner did not turn on.
 import { z } from 'zod'
 import { WorkerDialog } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
@@ -133,10 +136,55 @@ export const DedicatedConfig = z.object({
 })
 export type DedicatedConfigT = z.infer<typeof DedicatedConfig>
 
-/** The settings in force: a config without `dedicated` is the all-defaults (off) one. */
+/** The settings in force for routing: a config without `dedicated` is the all-defaults one, off (see threadSessionsAllowed). */
 export function dedicatedSettings(config: { dedicated?: unknown }): DedicatedConfigT {
   const parsed = DedicatedConfig.safeParse(config.dedicated ?? {})
   return parsed.success ? parsed.data : DedicatedConfig.parse({})
+}
+
+/**
+ * The master switch as the owner sees it, in Settings and on each thread: a config that never wrote one (no `dedicated` at all, every
+ * new install) shows it on, so each thread offers its own switch (off). An explicit value is what it says. Whether a thread is
+ * routed to its own session is still `threadSessionMode`, which needs the switch WRITTEN on: the Mac app reads a missing one as off.
+ */
+export function threadSessionsAllowed(config: { dedicated?: unknown }): boolean {
+  if (config.dedicated === undefined) return true
+  return dedicatedSettings(config).enabled
+}
+
+/**
+ * A config that never wrote the switch has no thread on its own session: the Mac app reads a missing switch as off, so such a
+ * thread never ran, and the owner is shown it off. Read that way everywhere (the bridge on load, reload and every write; the
+ * fake Mac), so no later change can start one he never turned on: not an agent card that sends every thread whole, not the
+ * switch turned off and on. Turning things off only, so it never needs asking. Unchanged config: the same object.
+ */
+export function clearUnswitchedSessions<C extends ConfigLike>(config: C): C {
+  if (config.dedicated !== undefined || !config.threads.some((t) => t.session === 'dedicated')) return config
+  return {
+    ...config,
+    threads: config.threads.map((t) => (t.session === 'dedicated' ? { ...t, session: 'shared' as const } : t)),
+  }
+}
+
+/**
+ * The patch-time rule that makes the shown switch real (the bridge's `config.patch` and `update`, the fake Mac). `before` is on
+ * disk (cleared by clearUnswitchedSessions: no thread on its own session), `after` about to be written, `patch` the change as
+ * sent (absent for a tool's `update`). Only when `before` never wrote the switch, and `after` turns a thread on or writes
+ * `dedicated`: the switch is written on, unless the patch itself names `dedicated.enabled` (an explicit off stays off). A patch
+ * that writes only a limit (`max_live`) would otherwise leave the schema's `enabled: false` behind and hide every thread's switch.
+ * Anything else comes back unchanged (the same object).
+ */
+export function writeSwitchOnFirstUse<C extends ConfigLike>(
+  before: ConfigLike,
+  after: C,
+  patch?: { dedicated?: unknown },
+): C {
+  if (before.dedicated !== undefined) return after
+  const turnedOn = after.threads.some((t) => t.session === 'dedicated' && canBeDedicated(after, t.id))
+  if (!turnedOn && after.dedicated === undefined) return after
+  const sent = patch?.dedicated
+  if (typeof sent === 'object' && sent !== null && 'enabled' in sent && after.dedicated !== undefined) return after
+  return { ...after, dedicated: { ...DedicatedConfig.parse(after.dedicated ?? {}), enabled: true } }
 }
 
 /** Main's front doors: never dedicated (OPTION-C 9.2), on top of the default thread and any `system` thread. */
@@ -467,6 +515,8 @@ export const WorkersFile = z.object({
     subthreads_own_folder: z.boolean().default(false).catch(false),
     /** This supervisor also starts a dedicated sub-thread with no folder, or its parent's own, in the parent's folder; without it that is refused. */
     subthreads_shared_folder: z.boolean().default(false).catch(false),
+    /** This supervisor also starts a dedicated sub-thread with a folder of its own under a parent with none (judged against the agent folder, the parent's rules carried over); without it that is refused. */
+    subthreads_folderless_parent: z.boolean().default(false).catch(false),
     /**
      * This supervisor's reader takes `workers/<id>/control` (WORKER_FILES.control) before `wake`. The bridge writes an owner's tap
      * there only when this is true; absent (an older supervisor) or false, it writes the tap into `wake` as it always did, so no

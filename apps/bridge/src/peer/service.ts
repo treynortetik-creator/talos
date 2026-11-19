@@ -35,6 +35,7 @@ const MIDNIGHT_SLACK_MS = 30_000
 /** The name sent as `from`: shown only, the receiver uses the name of its own connection. */
 const SENDER_NAME = 'linked'
 
+export { notePeerChanges } from './changes.ts'
 export type PeerFetch = (url: string, init: RequestInit) => Promise<Response>
 export type PeerServiceOptions = {
   secrets?: SecretStore
@@ -126,7 +127,7 @@ export class PeerService {
     const { peer } = a
     if (!PeerName.safeParse(peer).success) return no(`"${peer}" is not a name a linked agent can have.`)
     const cfg = this.peerConfig(peer)
-    const unlinked = `"${peer}" is not linked to this Talos. Only the owner links one, at the computer: talos-app peer add ${peer} --url <the other install's inbox url>`
+    const unlinked = `"${peer}" is not linked to this Talos. Link it with: talos-app peer add ${peer} --url <the other install's inbox url> --secret-file <the secret file its peer create wrote> (while "Lock Talos settings" is on, the owner does it at the computer)`
     if (!cfg) return no(unlinked)
     let secret: string | undefined
     try {

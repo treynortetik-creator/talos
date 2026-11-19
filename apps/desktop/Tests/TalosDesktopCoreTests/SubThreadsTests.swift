@@ -306,10 +306,19 @@ struct SubThreadEffectiveTests {
     #expect(d.threads["b"]?.model == "inherit" && d.threads["b"]?.effort == nil)
   }
 
-  @Test func aParentWithNoFolderOfItsOwnMeansItsSubsAreRefused() throws {
-    let all = [thread("p"), thread("s", parent: "p", opts: ["cwd": "/home/alex/p/s"])]
+  // the owner, 2026-11-19: a sub-thread with its own folder under a parent with none was refused ("give the parent a folder first")
+  @Test func aParentWithNoFolderOfItsOwnLetsASubWithAFolderStartJudgedAgainstTheAgentFolder() throws {
+    let all = [thread("p"), thread("s", parent: "p", opts: ["cwd": "/home/alex/Desktop/reports"])]
     let l = try #require(SubThreads.launch(all[1], in: all))
-    #expect(l.refusal?.contains("give the parent a folder first") == true, "\(String(describing: l.refusal))")
+    #expect(l.refusal == nil && l.ownCwd && !l.shares && l.parentCwd == nil, "\(l)")
+    let cfg = #"{"default_thread":"general","dedicated":{"enabled":true},"threads":[{"id":"general","kind":"fixed"},"#
+      + #"{"id":"p","kind":"fixed","session":"dedicated"},"#
+      + #"{"id":"s","kind":"fixed","session":"dedicated","parent_id":"p","session_opts":{"cwd":"/home/alex/Desktop/reports"}},"#
+      + #"{"id":"b","kind":"fixed","session":"dedicated","parent_id":"p"}]}"#
+    let d = DedicatedSettings.parse(Data(cfg.utf8)).judgedAgainstAgentFolder("/home/alex/agent")
+    #expect(d.threads["s"]?.sub?.parentCwd == "/home/alex/agent" && d.threads["s"]?.cwd == "/home/alex/Desktop/reports")
+    // one with no folder still shares its parent's (the agent folder) and is judged against nothing
+    #expect(d.threads["b"]?.sub?.shares == true && d.threads["b"]?.sub?.parentCwd == nil)
     let junkParent = [thread("p", opts: ["cwd": 7]), thread("s", parent: "p", opts: ["cwd": "/home/alex/p/s"])]
     #expect(SubThreads.launch(junkParent[1], in: junkParent)?.refusal?.contains("folder setting can't be read") == true)
   }

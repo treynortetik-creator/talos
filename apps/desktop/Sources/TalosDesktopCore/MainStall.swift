@@ -18,6 +18,10 @@ public enum MainStall {
 
   public static func hasWorkingLine(rows: [String]) -> Bool { WorkerActivity.body(rows: rows).split(separator: "\n", omittingEmptySubsequences: false).contains { isWorking(String($0)) } }
 
+  /// Main is idle at its prompt: Claude's input box live and empty, no working line, no select, prompt or dialog anywhere (the screen the
+  /// `.interruptBlank` gate reads, asked here as a plain question: this presses nothing). `escapedRows` are the rows with their colours.
+  public static func idlePrompt(escapedRows: [String]?) -> Bool { KeyGuard.refusal(escapedRows, intent: .interruptBlank) == nil }
+
   /// `WorkerActivity.body` with each working line's elapsed counter (`(5s`, `(1m 5s`) read as "(#" (the token count, verb and label kept).
   public static func maskedBody(rows: [String]) -> String {
     WorkerActivity.body(rows: rows).split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in

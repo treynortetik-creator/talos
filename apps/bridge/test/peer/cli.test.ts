@@ -160,12 +160,12 @@ describe('talos-app peer', () => {
     ).not.toContain('work')
   })
 
-  test('the agent cannot run it: peer is terminal only', async () => {
+  test('the agent runs it (agent-secrets.test.ts has the rest); an unknown subcommand and the guards still say terminal-only', async () => {
     await start()
     const r = await cli(['peer', 'create', 'work'], { terminal: false })
-    expect(r.code).toBe(1)
-    expect(r.err).toContain('only runs in')
-    expect((h as Harness).relay.peers.rows).toHaveLength(0)
+    expect(r.code, r.err).toBe(0)
+    expect((h as Harness).relay.peers.rows).toHaveLength(1)
+    expect((await cli(['peer', 'bogus'], { terminal: false })).err).toContain('only runs in')
     const { terminalOnly } = await import('../../src/talos.ts')
     expect(terminalOnly(['peer', 'add', 'work'])).toBe('peer')
   })

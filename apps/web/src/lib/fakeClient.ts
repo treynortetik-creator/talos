@@ -18,6 +18,7 @@ import {
   type CardT,
   checkConfigPatch,
   checkEditAllowed,
+  clearUnswitchedSessions,
   createDeviceKey,
   dedicatedPatchIssue,
   type ErrorCodeT,
@@ -48,6 +49,7 @@ import {
   subThreadPatchIssue,
   textTypeOfFile,
   threadPatchIssue,
+  writeSwitchOnFirstUse,
 } from '@talos-app/protocol'
 import cardFixture from '@talos-app/protocol/fixtures/frames/card.create.json'
 import inboxFixture from '@talos-app/protocol/fixtures/frames/inbox.item.json'
@@ -752,7 +754,10 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       if (!shown) throw new TalosClientError('config_conflict')
       // the Mac's config: what the app was shown, with the webhook address the relay kept back
       const { bug_webhook_host: _host, ...rest0 } = shown
-      const cfg: AgentConfigT = fakeWebhookUrl ? { ...rest0, bug_webhook_url: fakeWebhookUrl } : rest0
+      // like the bridge: with no switch written, no thread is on its own session (read so before the patch is merged)
+      const cfg: AgentConfigT = clearUnswitchedSessions(
+        fakeWebhookUrl ? { ...rest0, bug_webhook_url: fakeWebhookUrl } : rest0,
+      )
       if (failNext) {
         const { code, message, how } = failNext
         failNext = null
@@ -785,15 +790,22 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       const sessionIssue = dedicatedPatchIssue(cfg, parsed.data)
       if (sessionIssue) throw new TalosClientError('thread_session_refused', sessionIssue)
       // the fake Mac app always supports sub-threads, an own folder outside, and a shared one (workers.json subthreads_*)
-      const subIssue = subThreadPatchIssue(cfg, parsed.data, { macSupports: true, ownFolder: true, sharedFolder: true })
+      const subIssue = subThreadPatchIssue(cfg, parsed.data, {
+        macSupports: true,
+        ownFolder: true,
+        sharedFolder: true,
+        folderlessParent: true,
+      })
       if (subIssue) throw new TalosClientError('bad_frame', subIssue)
       await owner({
         type: 'config.patch',
         base_rev: cfg.rev,
         patch,
       })
+      // like the bridge: the first thread turned on writes the thread-sessions switch (writeSwitchOnFirstUse)
+      const written = clearUnswitchedSessions(writeSwitchOnFirstUse(cfg, parsed.data, patch))
       // like the bridge: trust mode on is `true`, off is no key at all
-      const { trust_mode: tm, ...rest } = parsed.data
+      const { trust_mode: tm, ...rest } = written
       const saved: AgentConfigT = tm === true ? { ...rest, trust_mode: true } : rest
       // what the relay keeps from devices it keeps from the fake app too: the webhook address comes back as its host only
       fakeWebhookUrl = saved.bug_webhook_url

@@ -24,7 +24,7 @@ import { type AgentConfigT, HHMM, isIanaZone, MAX_SESSION_MODELS, ModelValue } f
 import { IsoTs, ThreadId } from './ids.ts'
 import { THREAD_TOPIC_MAX, type ThreadT } from './models.ts'
 import { themeProblems, validateTheme } from './theme.ts'
-import { canBeDedicated, DEFAULT_IDLE_PARK_MIN, dedicatedSettings } from './thread-sessions.ts'
+import { canBeDedicated, DEFAULT_IDLE_PARK_MIN, threadSessionsAllowed } from './thread-sessions.ts'
 
 /**
  * Stock voices GPT-Live documents. The default, `meridian`, is documented as North American. One list for the Settings
@@ -544,7 +544,8 @@ export const SETTINGS_TABLE = defineSettingsTable({
       hint: 'true to let threads have their own sessions, false to turn them all off',
       value: z.boolean(),
       show: onOff,
-      read: (c) => dedicatedSettings(c).enabled,
+      // as the owner sees it (on until written off): the agent and Settings agree
+      read: (c) => threadSessionsAllowed(c),
       patch: (v) => ({ dedicated: { enabled: v } }),
     },
     default: undefined,

@@ -128,6 +128,22 @@ export class SeenTracker {
     return oldest === undefined ? null : new Date(oldest).toISOString()
   }
 
+  private stopAt: number | null = null
+  /** A stop the mod carried out for the owner (a session control `stop` answered ok): kept so a missed-turn resend is never made for a turn they stopped. */
+  noteStop(at: number) {
+    this.stopAt = this.stopAt === null ? at : Math.max(this.stopAt, at)
+    this.onChange?.()
+  }
+  /** After a restart: the last stop the bridge kept (epoch ms as text). */
+  restoreStop(raw: string | null | undefined) {
+    const n = Number(raw)
+    if (raw && Number.isFinite(n)) this.stopAt = n
+  }
+  /** When the owner last pressed Stop (ISO), null for none since this bridge started (status.json's `last_stop_at`). */
+  lastStopAt(): string | null {
+    return this.stopAt === null ? null : new Date(this.stopAt).toISOString()
+  }
+
   private resend = newResendMemory()
   /** Every notice on its way to Main (the owner's own are kept for `resendToMain`). */
   hold(n: Notification) {

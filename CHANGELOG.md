@@ -1,8 +1,13 @@
 # Changelog
 
+## The Mac app says version 0.1.6
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.6, the release where a thread's own folder is trusted for you (no terminal prompt), a sub-thread keeps its own folder under a parent with none, and signing in to Claude again happens in a Talos window.
+
 ## The Mac app says version 0.1.5
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.5, the release that sets itself up with no Terminal (it fetches its own Talos copy, pairs this Mac with the four words in a window of its own, and presses Esc for you once when Main's model request looks stuck).
+- Your agent can now link another Talos and manage approved devices itself, unless Lock Talos settings is on.
 
 ## Report a bug during a call
 

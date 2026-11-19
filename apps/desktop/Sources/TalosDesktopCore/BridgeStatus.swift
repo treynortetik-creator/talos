@@ -27,6 +27,9 @@ public struct BridgeStatus: Equatable, Sendable {
   /// `main_resend`: this bridge answers the Mac's `main-resend.json` request (`MainWatch`'s unstick). false from an older bridge: the Mac
   /// then presses nothing, since it could not send the message again.
   public var mainResend: Bool = false
+  /// `last_stop_at`: when the owner last stopped the agent from the app (a stop the mod carried out); nil for none, or from an older
+  /// bridge. The missed-turn watch never re-sends a message the owner stopped after it was delivered.
+  public var lastStopAt: Date? = nil
   /// `started_at`: when this bridge process started; nil when unreadable.
   public var startedAt: Date? = nil
   public static let governorStates: Set<String> = ["ok", "paused", "park_all", "off", "unknown"]
@@ -50,6 +53,7 @@ public struct BridgeStatus: Equatable, Sendable {
       lastOwnerAt: (o["last_owner_at"] as? String).flatMap { isoDate($0) == nil || $0.count > 64 ? nil : $0 },
       startedAt: (o["started_at"] as? String).flatMap(isoDate))
     status.mainResend = JSONValue.bool(o["main_resend"]) == true
+    status.lastStopAt = (o["last_stop_at"] as? String).flatMap(isoDate)
     return status
   }
 

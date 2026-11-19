@@ -56,6 +56,8 @@ export type OfferState = {
   disturbed: boolean
   /** Every proof that checked out, so one signed tap is used once (on disk too, dialog-proofs-used.json). */
   proofsUsed: string[]
+  /** The owner's tap pressed "No, exit" on the folder-trust question: the session's exit that follows is that answer, not a crash. */
+  declinedTrust: boolean
 }
 
 export const newOfferState = (): OfferState => ({
@@ -65,7 +67,17 @@ export const newOfferState = (): OfferState => ({
   enterSentFor: null,
   disturbed: false,
   proofsUsed: [],
+  declinedTrust: false,
 })
+
+/** What the thread is told when the owner answered "No, exit" to the folder-trust question (null: they did not); taking it clears the mark. */
+export function declinedTrustText(o: OfferState): string | null {
+  const was = o.declinedTrust
+  o.declinedTrust = false
+  return was
+    ? 'you chose not to trust this folder, so its session was stopped. Send a message to start it again and be asked again, or pick another folder'
+    : null
+}
 
 /** One worker as this module sees it: its id, its offer state, and the entry's `dialog`. */
 export type OfferTarget = {
@@ -231,6 +243,7 @@ export class WorkerDialogs {
       if (cur.cursor !== d.cursor) t.setDialog({ ...cur, cursor: d.cursor })
       return
     }
+    t.offer.declinedTrust = false
     t.setDialog({
       id: newDialogId(),
       kind: d.kind,
@@ -408,8 +421,11 @@ export class WorkerDialogs {
         if (!last || dialogDiffers(offer, last) || last.cursor === null || last.options[last.cursor] !== chosen)
           return nothing()
         // a timeout may have been delivered: counted, never repeated
-        if (keyNotSent(await pane.sendDialogKey('Enter', offer.kind as DialogKeyKind))) return nothing()
+        const sent = await pane.sendDialogKey('Enter', offer.kind as DialogKeyKind)
+        if (keyNotSent(sent)) return nothing()
         t.offer.enterSentFor = offer.id
+        // only a delivery the pane confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
+        if (offer.kind === 'trust' && !chosen.startsWith('Yes') && sent === 'sent') t.offer.declinedTrust = true
         return { outcome: 'pressed', choice, label: chosen }
       }
       if (keyNotSent(await pane.sendDialogKey(key, offer.kind as DialogKeyKind))) return nothing()

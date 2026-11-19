@@ -37,6 +37,20 @@ export const WORKER_OPS_READ_OK: readonly string[] = ['errors list', 'errors sho
  * `doctor` say how the setup is; `logs` shows a thread session only its own thread's lines (cli-main.ts `cmdLogs`).
  */
 export const WORKER_READ_OK: readonly string[] = ['status', 'doctor', 'logs']
+/**
+ * Also open to a thread session (owner ruling 2026-11-19, Pantheon's decision C): the commands the agent runs itself unless
+ * "Lock Talos settings" is on (agent-cli.ts judges the lock, the outside text and the device lock-out). Everything else in the
+ * fence is unchanged. `devices` alone lists; a `devices` or `peer` word not named in talos.ts AGENT_UNLESS_LOCKED stays terminal-only.
+ */
+export const WORKER_AGENT_OK: readonly string[] = [
+  'peer create',
+  'peer add',
+  'peer list',
+  'peer remove',
+  'peer rotate',
+  'peer secret-forget',
+  'devices',
+]
 const USAGE_WORDS = ['help', '--help', '-h']
 
 /** The nearest folder at or above `cwd` that holds a `.talos-lead` marker (a lead's folder), or undefined. */
@@ -60,7 +74,7 @@ const listed = (list: readonly string[], argv: readonly string[]) =>
 export function refusedForWorkers(argv: readonly string[], opsRead = false): boolean {
   const [cmd] = argv
   if (cmd === undefined || USAGE_WORDS.includes(cmd)) return false
-  if (listed(WORKER_COMMANDS_OK, argv) || listed(WORKER_READ_OK, argv)) return false
+  if (listed(WORKER_COMMANDS_OK, argv) || listed(WORKER_READ_OK, argv) || listed(WORKER_AGENT_OK, argv)) return false
   return !(opsRead && listed(WORKER_OPS_READ_OK, argv))
 }
 

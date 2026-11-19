@@ -45,6 +45,11 @@ bash scripts/install-test.sh "$OUT/Talos.app"
 bash scripts/release-install-test.sh "$OUT/Talos.app"
 bash scripts/review-d6-install-test.sh
 bash scripts/bundle-tools-test.sh
+# The release's own steps with no Developer ID: a universal build with the bundled tools, ad hoc, the nested-code listing, the
+# path-leak check. Only when a release script, the entitlements or the version changed (release-dryrun-wanted.sh); TALOS_RELEASE_DRYRUN=1 forces it.
+bash scripts/release-dryrun-wanted-test.sh
+if bash scripts/release-dryrun-wanted.sh; then bash scripts/release-dryrun.sh
+else echo "release-dryrun: not run (no release script, entitlements or version changed)"; fi
 bash scripts/relay-wait-test.sh
 [ ! -f scripts/review-d0-test.sh ] || bash scripts/review-d0-test.sh
 [ ! -f scripts/review-d0-recheck-test.sh ] || bash scripts/review-d0-recheck-test.sh

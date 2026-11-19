@@ -173,6 +173,8 @@ function onlyParentNarrowed(
 }
 
 const trimSlashes = (p: string) => p.replace(/\/+$/, '')
+/** An absolute path with no `.` or `..` segment: the only kind that can be a folder of a sub-thread's own. */
+const cleanAbsolute = (p: string) => p.startsWith('/') && !p.split('/').some((seg) => seg === '.' || seg === '..')
 
 /**
  * A dedicated sub-thread whose folder is an absolute path outside its parent's, and not the parent's own: it keeps its
@@ -182,8 +184,10 @@ const trimSlashes = (p: string) => p.replace(/\/+$/, '')
 function keepsOwnFolder(t: SubThreadLike, parent: SubThreadLike | undefined): boolean {
   const cwd = t.session_opts?.cwd
   const parentCwd = parent?.session_opts?.cwd
-  if (t.session !== 'dedicated' || !cwd || !parentCwd) return false
-  if (!cwd.startsWith('/') || cwd.split('/').some((seg) => seg === '.' || seg === '..')) return false
+  if (t.session !== 'dedicated' || !cwd || !cleanAbsolute(cwd)) return false
+  // a parent with no folder runs in the agent folder: the supervisor judges the child against that, on disk
+  // (`subthreads_folderless_parent`); here, a folder of its own
+  if (!parentCwd) return true
   if (folderInside(cwd, parentCwd)) return false
   return trimSlashes(cwd) !== trimSlashes(parentCwd)
 }
@@ -240,7 +244,7 @@ function touched(
 export function subThreadPatchIssue(
   before: SubConfigLike,
   after: SubConfigLike,
-  opts: { macSupports: boolean; ownFolder?: boolean; sharedFolder?: boolean },
+  opts: { macSupports: boolean; ownFolder?: boolean; sharedFolder?: boolean; folderlessParent?: boolean },
 ): string | null {
   const find = (c: SubConfigLike, id: string | undefined) => (id ? c.threads.find((x) => x.id === id) : undefined)
   for (const t of after.threads) {
@@ -268,14 +272,19 @@ export function subThreadPatchIssue(
     const cwd = t.session_opts?.cwd
     const parentCwd = parent.session_opts?.cwd
     // with `subthreads_shared_folder` a dedicated sub-thread may name no folder (it runs in its parent's, or the agent's)
-    // or the parent's own; a folder under a parent with none is still refused
+    // or the parent's own; a folder of its own under a parent with none needs `subthreads_folderless_parent`
     const shares = opts.sharedFolder === true && t.session === 'dedicated'
     if (t.session === 'dedicated') {
+      if (!cwd && !parentCwd && !shares)
+        return `${label} needs a folder for its own session: give "${parent.id}" a folder first, or update the Talos app on your Mac`
       if (!cwd && !shares)
-        return `${label}: a sub-thread with its own session needs its own folder inside its parent's folder`
-      if (cwd && !parentCwd) return `${label}: give "${parent.id}" a folder first; a sub-thread's folder goes inside it`
-      if (!parentCwd && !shares)
-        return `${label}: give "${parent.id}" a folder first; a sub-thread's folder goes inside it`
+        return `${label} needs a folder for its own session: pick one inside "${parent.id}"'s folder (or update the Talos app on your Mac, so it can share "${parent.id}"'s)`
+      // `subthreads_folderless_parent`: under a parent with no folder (it runs in the agent folder), a sub-thread may have a
+      // folder of its own; the supervisor judges it against the agent folder on disk, with the parent's rules carried over
+      if (cwd && !parentCwd && !(opts.folderlessParent === true && cleanAbsolute(cwd)))
+        return opts.folderlessParent === true
+          ? `${label}: its folder must be a full path with no "." or ".." in it`
+          : `${label} can't have a folder of its own while "${parent.id}" has none until the Talos app on your Mac is updated; update it, or give "${parent.id}" a folder first`
     }
     if (
       cwd &&
@@ -284,7 +293,11 @@ export function subThreadPatchIssue(
       !(shares && folderSame(cwd, parentCwd)) &&
       !(opts.ownFolder === true && keepsOwnFolder(t, parent))
     )
-      return `${label}: a sub-thread's folder must be inside its parent's folder`
+      return t.session !== 'dedicated'
+        ? `${label}: its folder must be inside "${parent.id}"'s folder`
+        : opts.ownFolder === true
+          ? `${label}: its folder must be inside "${parent.id}"'s folder, or another folder that already exists (not "${parent.id}"'s own, and a full path with no "." or "..")`
+          : `${label}: its folder must be inside "${parent.id}"'s folder (a folder elsewhere needs the Talos app on your Mac updated)`
     const mine = t.session_opts?.mcp_allow
     const theirs = parent.session_opts?.mcp_allow
     if (mine && theirs) {

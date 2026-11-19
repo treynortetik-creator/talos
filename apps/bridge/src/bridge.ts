@@ -18,7 +18,7 @@ import { CardLedger } from './cards-ledger.ts'
 import { sessionMarkerInherited } from './claude-env.ts'
 import { type Clock, realClock } from './clock.ts'
 import { assertSecureRelayUrl, type BridgePaths, paths as pathsOf } from './config.ts'
-import { ConfigFile } from './config-file.ts'
+import { ConfigFile, supervisorFlagOpts } from './config-file.ts'
 import { ConfigProposals } from './config-propose/service.ts'
 import {
   type BridgeContext,
@@ -56,7 +56,7 @@ import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
 import { withPaneRun } from './pane-run.ts'
-import { notePeerTaint, PeerService } from './peer/service.ts'
+import { notePeerChanges, notePeerTaint, PeerService } from './peer/service.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
 import { RelayClient } from './relay-client.ts'
@@ -227,15 +227,13 @@ export class Bridge {
     }
     const http = new RelayHttp(env.relayUrl ?? '', getKey, opts.fetchFn)
     const macWorkers = new WorkersReader(p.home)
-    const macFlag = (key: 'subthreads_supported' | 'subthreads_own_folder' | 'subthreads_shared_folder') => {
-      const f = macWorkers.read()
-      return supervisorFresh(f, this.clock.now()) && f?.supervisor[key] === true
-    }
+    // what the Mac's supervisor says it can do, while its heartbeat is fresh (workers.json)
     const config = new ConfigFile(p.configJson, {
       log: this.log,
-      subthreadsSupported: () => macFlag('subthreads_supported'),
-      subthreadsOwnFolder: () => macFlag('subthreads_own_folder'),
-      subthreadsSharedFolder: () => macFlag('subthreads_shared_folder'),
+      ...supervisorFlagOpts((key) => {
+        const f = macWorkers.read()
+        return supervisorFresh(f, this.clock.now()) && f?.supervisor[key] === true
+      }),
     })
     config.load()
     // only the live main bridge may move a damaged history aside; any other process leaves the file to it
@@ -491,11 +489,13 @@ export class Bridge {
           },
           queue_depth: this.ctx.store.outboxCount(),
           unseen_oldest_at: this.ctx.seen.oldestUnseenAt(),
+          last_stop_at: this.ctx.seen.lastStopAt(),
           permission_relay: this.ctx.permission.configured,
           permission_relay_declared: this.ctx.permission.declared ?? this.ctx.permission.configured,
           ...queueSignals(this.ctx),
         }),
       })
+      this.ctx.seen.restoreStop(this.ctx.store.kvGet('last_stop_at'))
       this.ctx.seen.onChange = () => this.statusWriter?.poke() // unseen_oldest_at
     }
   }
@@ -782,9 +782,9 @@ export class Bridge {
 
   /** A trust mode flip is said out loud in the thread, whether it happened while the bridge ran or while it was down. */
   private noteTrust() {
-    void noteTrustFlip(this.ctx).catch((e) => this.log.warn('trust note failed', { error: (e as Error).message }))
-    void noteLockFlip(this.ctx).catch((e) => this.log.warn('lock note failed', { error: (e as Error).message }))
-    void noteFenceFlip(this.ctx).catch((e) => this.log.warn('fence note failed', { error: (e as Error).message }))
+    const notes = { trust: noteTrustFlip, lock: noteLockFlip, fence: noteFenceFlip, peer: notePeerChanges }
+    for (const [what, note] of Object.entries(notes))
+      void note(this.ctx).catch((e) => this.log.warn(`${what} note failed`, { error: (e as Error).message }))
   }
 
   private pokePoll() {

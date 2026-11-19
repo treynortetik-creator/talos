@@ -43,6 +43,11 @@ export type BridgeStatusFile = {
   last_owner_at: string | null
   /** This bridge answers the Mac's `main-resend.json` request (main-resend.ts). Absent in an older bridge: the Mac then presses nothing. */
   main_resend: boolean
+  /**
+   * When the owner last pressed Stop in the app (a `session.control` stop reached this bridge, ISO), null for none since this bridge
+   * started. Only the time: never the turn or the thread. The Mac's missed-turn watch never re-sends a message the owner stopped.
+   */
+  last_stop_at: string | null
   updated_at: string
 }
 export const GOVERNOR_STATES = ['ok', 'paused', 'park_all', 'off', 'unknown'] as const
@@ -65,6 +70,7 @@ export const STATUS_KEYS = [
   'governor',
   'last_owner_at',
   'main_resend',
+  'last_stop_at',
   'updated_at',
 ] as const
 export const STATUS_RELAY_KEYS = ['connected', 'last_connect_at', 'last_close_code'] as const
@@ -76,7 +82,7 @@ export const STATUS_FRESH_MS = 45_000
 export type StatusSnapshot = Pick<
   BridgeStatusFile,
   'mode' | 'relay' | 'queue_depth' | 'unseen_oldest_at' | 'permission_relay' | 'permission_relay_declared'
-> & { governor?: GovernorStateT | null; last_owner_at?: string | null }
+> & { governor?: GovernorStateT | null; last_owner_at?: string | null; last_stop_at?: string | null }
 
 const defaultAlive = (pid: number) => {
   try {
@@ -131,6 +137,9 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
     last_owner_at:
       typeof o.last_owner_at === 'string' && !Number.isNaN(Date.parse(o.last_owner_at)) ? o.last_owner_at : null,
     main_resend: o.main_resend === true,
+    // an older bridge never wrote it: null, "no stop known"
+    last_stop_at:
+      typeof o.last_stop_at === 'string' && !Number.isNaN(Date.parse(o.last_stop_at)) ? o.last_stop_at : null,
     updated_at: o.updated_at,
   }
 }
@@ -276,6 +285,7 @@ export class StatusWriter {
         governor: body.governor ?? null,
         last_owner_at: body.last_owner_at ?? null,
         main_resend: true,
+        last_stop_at: body.last_stop_at ?? null,
         updated_at: new Date(this.o.clock.now()).toISOString(),
       }
       writeJsonAtomic(this.o.path, file, 0o600)

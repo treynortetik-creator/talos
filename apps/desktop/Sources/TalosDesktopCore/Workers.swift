@@ -17,14 +17,21 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     public var subthreads_own_folder: Bool
     /// This build also starts a dedicated sub-thread with no folder, or its parent's own, in the parent's folder. Written only when true.
     public var subthreads_shared_folder: Bool
+    /// This build also starts a dedicated sub-thread with a folder of its own under a parent with none, judged against the agent folder (where
+    /// that parent runs). Written only when true.
+    public var subthreads_folderless_parent: Bool
     public var main_pane_pid: Int32
     /// Main's own dialog on its pane (the development-channels warning), published here because Main has no thread entry. The bridge makes
     /// a card from it for the default thread. A value that does not fit reads as none.
     public var main_dialog: DialogOffer?
-    enum CodingKeys: String, CodingKey { case pid, heartbeat_at, workers_supported, subthreads_supported, subthreads_own_folder, subthreads_shared_folder, main_pane_pid, main_dialog }
+    enum CodingKeys: String, CodingKey {
+      case pid, heartbeat_at, workers_supported, subthreads_supported, subthreads_own_folder, subthreads_shared_folder, subthreads_folderless_parent
+      case main_pane_pid, main_dialog
+    }
     public init(
       pid: Int32, heartbeat_at: String, workers_supported: Bool, main_pane_pid: Int32, main_dialog: DialogOffer? = nil,
-      subthreads_supported: Bool = false, subthreads_own_folder: Bool = false, subthreads_shared_folder: Bool = false
+      subthreads_supported: Bool = false, subthreads_own_folder: Bool = false, subthreads_shared_folder: Bool = false,
+      subthreads_folderless_parent: Bool = false
     ) {
       self.pid = pid
       self.heartbeat_at = heartbeat_at
@@ -32,6 +39,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       self.subthreads_supported = subthreads_supported
       self.subthreads_own_folder = subthreads_own_folder
       self.subthreads_shared_folder = subthreads_shared_folder
+      self.subthreads_folderless_parent = subthreads_folderless_parent
       self.main_pane_pid = main_pane_pid
       self.main_dialog = main_dialog
     }
@@ -43,6 +51,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       subthreads_supported = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_supported)) ?? nil) ?? false
       subthreads_own_folder = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_own_folder)) ?? nil) ?? false
       subthreads_shared_folder = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_shared_folder)) ?? nil) ?? false
+      subthreads_folderless_parent = ((try? c.decodeIfPresent(Bool.self, forKey: .subthreads_folderless_parent)) ?? nil) ?? false
       main_pane_pid = try c.decodeIfPresent(Int32.self, forKey: .main_pane_pid) ?? 0
       main_dialog = ((try? c.decodeIfPresent(DialogOffer.self, forKey: .main_dialog)) ?? nil).flatMap { $0.isValid ? $0 : nil }
     }
@@ -55,6 +64,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       if subthreads_supported { try c.encode(true, forKey: .subthreads_supported) }
       if subthreads_own_folder { try c.encode(true, forKey: .subthreads_own_folder) }
       if subthreads_shared_folder { try c.encode(true, forKey: .subthreads_shared_folder) }
+      if subthreads_folderless_parent { try c.encode(true, forKey: .subthreads_folderless_parent) }
       try c.encode(main_pane_pid, forKey: .main_pane_pid)
       try c.encodeIfPresent(main_dialog, forKey: .main_dialog)
     }
@@ -488,6 +498,19 @@ public enum McpAllow {
 }
 
 public struct DedicatedSettings: Equatable, Sendable {
+  /// A dedicated sub-thread with a folder of its own under a parent with none: that parent runs in the agent folder, so the child is judged
+  /// against it, as against any parent's folder (made inside it, or an existing one outside kept, with its rules carried in). Applied where the
+  /// supervisor reads the settings (it knows the agent folder); the bridge's wiring does the same (workers-wiring.ts).
+  public func judgedAgainstAgentFolder(_ agentDir: String) -> DedicatedSettings {
+    var out = self
+    for (id, t) in threads {
+      guard var sub = t.sub, sub.ownCwd, !sub.shares, sub.parentCwd == nil, sub.refusal == nil else { continue }
+      sub.parentCwd = agentDir
+      out.threads[id]?.sub = sub
+    }
+    return out
+  }
+
   public var enabled: Bool
   public var maxLive: Int
   /// Dedicated threads, after the same front-door rules as the protocol's `threadSessionMode`.

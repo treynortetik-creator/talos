@@ -27,6 +27,31 @@ export function bumpLastOwnerTs(ctx: BridgeContext, ts: string): void {
   if (prev === undefined || !(Date.parse(prev) > Date.parse(ts))) ctx.store.kvSet('last_owner_ts', ts)
 }
 
+/**
+ * Which device the owner's latest message came from (kv `last_owner_device`, `{device_id, at}`), and when the BRIDGE received the
+ * frame: `at` is `Item.receivedAt`, stamped when the frame came off the transport (never the phone's clock, and never the time its
+ * turn in a busy lane came, so outside text that landed in between still counts as after his words). It moves forward in receive
+ * order (`at` is the earlier of that and the relay's own received_at, when it has one). Called once per message the bridge has not seen (a resent client_msg_id never moves it), from onMessage, onVoiceNote and the
+ * backlog. `devices revoke` from the agent reads the device so it never locks him out, and the agent checks read `at` as "when he
+ * last spoke" (agent-cli.ts). Only his own typed or spoken message counts: a share is not him speaking, and nothing from a peer, a
+ * hook or the agent comes through here.
+ */
+export function noteOwnerDevice(ctx: Pick<BridgeContext, 'store'>, it: Item): void {
+  const f = it.frame as { share_content?: unknown }
+  if (f.share_content !== undefined || !it.owner?.ok) return
+  // The relay's own receive time is unsigned, but taking the earlier of the two can only make the checks stricter: a message the relay
+  // held while outside text arrived here still counts as spoken before it.
+  const relayAt = Date.parse((it.raw.relay as { received_at?: unknown } | undefined)?.received_at as string)
+  const at = Number.isFinite(relayAt) ? Math.min(it.receivedAt, relayAt) : it.receivedAt
+  try {
+    const prev = JSON.parse(ctx.store.kvGet('last_owner_device') ?? 'null') as { at?: number } | null
+    if (typeof prev?.at === 'number' && prev.at > at) return // an earlier arrival processed later: keep the later receive
+    ctx.store.kvSet('last_owner_device', JSON.stringify({ device_id: it.owner.deviceId, at }))
+  } catch {
+    // a store that refuses the write: the revoke check then has no record and refuses
+  }
+}
+
 export const messagesFrames = {
   async fetchAttachments(this: Inbound, refs: AttachmentRefT[], threadId?: string, source: AttachmentSource = 'owner') {
     const files: Array<{ path: string; mime: string; name: string }> = []
@@ -89,6 +114,7 @@ export const messagesFrames = {
     if (ctx.store.hasSeen(f.client_msg_id)) return this.done(it) // a replay under a new frame id: consumed, not notified twice
     if (!ctx.config.thread(f.thread_id))
       return this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
+    noteOwnerDevice(ctx, it) // not seen before, and for a thread that exists
     const thread = threadRef(ctx, f.thread_id)
     if (f.intent === 'run' || f.run_where !== undefined) return this.onRun(it, f, thread)
     const { files, notes, refMeta } = await this.messageExtras(f)
@@ -186,6 +212,7 @@ export const messagesFrames = {
     if (ctx.store.hasSeen(f.client_msg_id)) return this.done(it)
     if (!ctx.config.thread(f.thread_id))
       return this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
+    noteOwnerDevice(ctx, it)
     const thread = threadRef(ctx, f.thread_id)
     const v = await this.voiceNoteContent(f)
     this.record({
@@ -231,6 +258,7 @@ export const messagesFrames = {
         this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
         continue
       }
+      noteOwnerDevice(ctx, it) // the backlog is only messages not seen before
       const thread = threadRef(ctx, f.thread_id)
       if (f.type === 'message') {
         const { files: fs, notes, refMeta } = await this.messageExtras(f)

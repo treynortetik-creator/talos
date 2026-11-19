@@ -466,7 +466,9 @@ describe('a sub-thread in its parent’s folder is SubThreads.swift’s', () => 
     ]
     const said = (i: number) => subLaunch(all[i] as Record<string, unknown>, all)?.refusal as string
     expect(text).toContain(said(1).replace('(42)', '(\\(bad))'))
-    expect(text).toContain(said(3))
+    // a folder of its own under a parent with none starts on both sides (subthreads_folderless_parent): no refusal left
+    expect(said(3)).toBeNull()
+    expect(text).not.toContain('give the parent a folder first')
     expect(text).toContain(said(4).replace('the parent thread is not there any more', '\\(why)'))
   })
 

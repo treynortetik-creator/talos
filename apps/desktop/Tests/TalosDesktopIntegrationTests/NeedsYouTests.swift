@@ -281,6 +281,56 @@ struct NeedsYouTests {
     #expect(r.wait(10) { r.offer == nil })
   }
 
+  /// "Don't trust": the signed tap presses "No, exit", Claude exits, and the thread ends failed with its own words: not a crash, no
+  /// retry on its own.
+  @Test func aSignedNoOnTheTrustQuestionStopsTheSessionCleanly() throws {
+    let (r, keys, _, owner) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(15) { r.result != nil })
+    #expect(r.result?["outcome"] as? String == "pressed" && r.result?["label"] as? String == "No, exit")
+    #expect(r.wait(15) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+    let e = try #require(r.entry("trip")?.error)
+    #expect(e.code == "start_failed")
+    #expect(e.detail == WorkerManager.declinedTrustText)
+    #expect(r.entry("trip")?.restarts.isEmpty == true, "not a crash")
+    usleep(1_500_000)
+    #expect(r.state("trip") == "failed", "it does not start itself again")
+    #expect(keys.keys == ["ENTER"])
+  }
+
+  /// An Enter on "No, exit" whose tmux call timed out may or may not have landed: it is counted as pressed (never repeated) but is not
+  /// remembered as the owner's decline, so the exit that follows reads as what it is, not as a "Don't trust".
+  @Test func anEnterOnNoThatTimedOutIsNotRememberedAsADecline() throws {
+    let keys = KeyLog()
+    let r = try WorkerRig(scenario: "dialog-real.sh", extraEnv: ["FAKE_DLG": "trust", "FAKE_DLG_KEYLOG": keys.path])
+    defer { r.teardown(); keys.remove() }
+    let shim = r.root + "/tmux-slow-enter"
+    try """
+    #!/bin/bash
+    slow=
+    for a in "$@"; do case "$a" in *Enter*) slow=1 ;; esac; done
+    '\(Rig.tmuxPath!)' "$@"; rc=$?
+    [ -z "$slow" ] || sleep 3
+    exit $rc
+    """.write(toFile: shim, atomically: true, encoding: .utf8)
+    chmod(shim, 0o755)
+    r.tmuxBin = shim
+    r.makeManager()
+    let log = NoticeLog()
+    r.trackNotices(log)
+    r.mgr.tune { $0.cardAckWait = 600; $0.callTimeout = 1 }
+    let owner = TestOwner()
+    try r.writeDevices([owner.entry()])
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(20) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+    let e = try #require(r.entry("trip")?.error)
+    #expect(e.detail != WorkerManager.declinedTrustText, "an unconfirmed Enter is not a decline: \(e.detail)")
+    #expect(keys.keys == ["ENTER"], "pressed once, never repeated: \(keys.keys)")
+  }
+
   /// The words at the top of the file are for display; the Mac presses from what was signed.
   @Test func aTapPressesFromTheSignedChoiceNotFromTheDisplayedWords() throws {
     let (r, keys, _, owner) = try make("trust")

@@ -17,6 +17,11 @@ extension WorkerManager {
     if r.pgid > 0, signaller.alive(r.pgid) { signaller.signal(r.pgid, SIGKILL) }  // the children of a crashed worker
     release(id)
     r = rt[id] ?? r
+    if r.offer.declinedTrust {  // the owner's own "No, exit" on the trust question: failed with its own words, never a crash or a retry
+      rt[id]?.offer.declinedTrust = false
+      fail(id, "start_failed", Self.declinedTrustText)
+      return runQueued(id, after: after, settings: settings, now: t)
+    }
     if wasStarting, sessionTrouble(id, rows: rows) {
       // a start the next one mends is not a crash: nothing is counted, and what was waiting (a message, a tap) still happens
       notePark(id, why: "start_retry", bg: BackgroundWork.Found.none)

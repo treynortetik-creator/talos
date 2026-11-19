@@ -38,7 +38,7 @@ extension WorkerManager {
     let saved = rt
     defer { rt = saved }  // nothing of this look stays in the manager
     rt = file.file.threads.mapValues { Runtime(entry: $0) }
-    let settings = FileManager.default.contents(atPath: configJson).flatMap(DedicatedSettings.readable)
+    let settings = FileManager.default.contents(atPath: configJson).flatMap(DedicatedSettings.readable)?.judgedAgainstAgentFolder(options.agentDir)
     // the dry plan reads the config through `loadSettings`, which says new dropped entries in the audit and the default thread:
     // they count as said already here (this look says nothing to anyone)
     if let settings { droppedSaid = settings.droppedEntries.map(String.init).joined(separator: ",") }

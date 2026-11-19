@@ -283,9 +283,22 @@ that is set on it can do. The terminal check and the guards below are a speed bu
 has been misled by a message it read; they are not a boundary against one that is determined to get through. The tripwire is
 the backstop: it cannot stop a change, it tells the owner about one.
 
-- **Terminal check.** `enroll`, `devices` (and `devices revoke`), `rotate` and `trust on` refuse when stdin or stdout is not a
-  terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these four until he decides on adding devices). `peer`
-  (linking another Talos of his: create, add, list, remove, rotate) refuses the same way, so only he can link or unlink one. Everything
+- **Terminal check.** `enroll`, `rotate` and `trust on` refuse when stdin or stdout is not a
+  terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these until he decides on adding devices). `devices` and `peer`
+  are the agent's own unless "Lock Talos settings" is on (owner ruling 2026-11-19, `agent-cli.ts`): `peer create|add|list|remove|rotate|secret-forget`
+  and `devices list|revoke` run from a session with no terminal, and refuse with the one lock sentence while the lock is on; a terminal runs
+  as it always did, lock on or off (the desktop app's Revoke-this-device runs the CLI under a pty, and enroll and the bridge-key rotate are
+  terminal-reachable already). From a session (main or a thread's own: one rule, and the session name is only for the audit line) `peer create`, `peer add`,
+  `peer rotate` and `devices revoke` are also refused while, since the owner's latest words in any thread (counted from when the bridge received them, never the phone's clock), outside text
+  reached any thread (one that has left config.json too), any lead handed main anything (a hand-off is the agent's own words, so it sets no outside text), or the peer taint
+  stands; with history.sqlite missing or unreadable they are refused too. `devices revoke` never takes
+  the last approved device or the one his latest message came from (the bridge keeps that device id, kv `last_owner_device`, from his
+  signed messages). A peer secret never appears in command output (stdout, stderr, the audit line, a row): `peer create` and `peer rotate` write it to `peer-secrets/<name>.secret`, and an agent run gets it only in that 0600 file
+  (0600, folder 0700, never through a symlink), `peer add --secret-file` reads such a file (a regular file of the current user, 0600
+  or stricter) and deletes it after storing the secret, and the bridge deletes the creator's copy when the first message of that connection
+  arrives (after a rotate: the first message after the old secret's 24 hours, recorded in `peers-inbound.json`). Every session run writes an `agent cli` line in bridge.log (session, command, target, allowed or refused); the bridge posts a
+  silent row in the default thread for each change it sees (peer added, removed or changed, inbox made, removed or replaced, an agent rotate, device revoked). With the guards
+  installed their deny rules still keep a session from running `talos-app peer` and `talos-app devices` at all: the opt-in lock. A faked terminal (`script`) skips the lock and every agent check above (a terminal returns before them), so against a faked terminal only the guards (`install-guards`) hold. On a keychain-wide key store (the macOS Keychain, the Secret Service) an agent run is refused unless TALOS_APP_HOME is the account's default home, because the store keys a peer secret by name, not by home. Everything
   else a person could ask the agent to do, it may (the kit's update, rollback and restore, adopt, apps scan, install-ask-rules,
   install-guards, supervise start and stop among them); `internal` rows (hook, start, supervise, guards refresh) are run by
   Talos itself, which nothing enforces. One thing stays the owner's inside `supervise start`: while his own Stop stands, a start

@@ -3,6 +3,8 @@
 // questions against the code as it is now and demands the same answers, word for word: the default, whether the phone
 // and the agent may write the field, the step-up it needs, the values each path accepts or refuses (wrong types and
 // unknown fields included), and what loading the file does with a missing, garbled or unknown field.
+// Changed on purpose (2026-11-19, thread sessions allowed by default): the agent reads `dedicated` as the owner sees it, on until
+// written off (threadSessionsAllowed), so its default reads true and turning it off, not on, is the change it can propose.
 // Refresh the file only on purpose: WRITE_GOLDEN=1 vitest run packages/protocol/test/settings-parity.test.ts
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

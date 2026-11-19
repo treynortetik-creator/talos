@@ -27,7 +27,7 @@ LIBEVENT_SHA=f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c
 BUN_URL="https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION"
 TMUX_URL="https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz"
 UTF8PROC_URL="https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v$UTF8PROC_VERSION.tar.gz"
-CLAUDE_INSTALL_SHA=3a68d3406cf674e17bed1733a4dcf37805e2e47d87417700007d7e1aa766a944   # the same pin as ClaudeInstaller.swift
+CLAUDE_INSTALL_SHA=2c5506d110560bf618bbe88f678f2c2a0047c86a9c6585fc84976120b1de0b44   # the same pin as ClaudeInstaller.swift
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
 LIBEVENT_URL="https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VERSION/libevent-$LIBEVENT_VERSION.tar.gz"
 

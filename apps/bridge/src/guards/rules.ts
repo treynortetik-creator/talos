@@ -64,6 +64,9 @@ export function buildGuardConfig(a: {
       // the screen helper's allowed-apps list: Talos.app is its only writer (it is sealed too; this keeps a session from trying)
       join(real(a.home), 'screen'),
       join(real(a.home), 'config.json'),
+      // the folders the owner chose for threads (supervisor/owner-folders.ts): only the bridge writes it, after a signed config.patch;
+      // a session that could write it could have a folder it picked trusted with no card
+      join(real(a.home), 'owner-folders.json'),
       // phone recovery: the request file the Mac app acts on, and the saved setups a restore reads
       join(real(a.home), 'agent-request.json'),
       // restart_main: the Mac app's own answer to "would Main come back?" (only the app writes it; the bridge reads it)
@@ -201,7 +204,15 @@ function dialogFileAt(abs: string, home: string): string | undefined {
   return name && inWorkers ? name : undefined
 }
 /** Files inside the Talos home that a command may read but not write. */
-const HOME_READ_ONLY = ['devices.json', 'config.json', 'last-good', 'config-history', 'screen', ...SUPERVISOR_READ_ONLY]
+const HOME_READ_ONLY = [
+  'devices.json',
+  'config.json',
+  'owner-folders.json',
+  'last-good',
+  'config-history',
+  'screen',
+  ...SUPERVISOR_READ_ONLY,
+]
 /** Spellings of those names that mean the file wherever the shell is standing (`cd <home> && rm guards.json`). */
 const BARE_STEMS = [
   'guards.json',

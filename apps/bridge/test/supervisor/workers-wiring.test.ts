@@ -78,6 +78,30 @@ const config = (threads: unknown[], enabled = true) => ({
   threads: [{ id: 'general', kind: 'fixed' }, { id: 'inbox', kind: 'system' }, ...threads],
 })
 
+describe('a sub-thread with a folder of its own under a parent with none', () => {
+  it('is judged against the agent folder, where that parent runs', () => {
+    const parent = { id: 'dash', name: 'Dash', kind: 'user', session: 'dedicated' }
+    const child = {
+      id: 'well',
+      name: 'Well',
+      kind: 'user',
+      session: 'dedicated',
+      parent_id: 'dash',
+      session_opts: { cwd: '/home/alex/Desktop/reports' },
+    }
+    const t = dedicatedThreads(config([parent, child]), '/home/alex/agent')?.find((x) => x.id === 'well')
+    expect(t).toMatchObject({ cwd: '/home/alex/Desktop/reports', parentCwd: '/home/alex/agent' })
+    expect(t?.sub).toMatchObject({ ownCwd: true, refusal: null })
+    // one already refused (its parent's folder setting can't be read) gets no agent folder handed on (as on the Mac)
+    const junk = dedicatedThreads(config([{ ...parent, session_opts: { cwd: 7 } }, child]), '/home/alex/agent')
+    expect(junk?.find((x) => x.id === 'well')).toMatchObject({ parentCwd: null })
+    expect(junk?.find((x) => x.id === 'well')?.sub?.refusal).toContain("can't be read")
+    // one with no folder still shares the parent's (the agent folder), with nothing to be judged against
+    const bare = dedicatedThreads(config([parent, { ...child, session_opts: {} }]), '/home/alex/agent')
+    expect(bare?.find((x) => x.id === 'well')).toMatchObject({ cwd: '/home/alex/agent', parentCwd: null })
+  })
+})
+
 describe('the dedicated threads', () => {
   it('only with the switch on, only threads that ask, never general/inbox/archived', () => {
     const trip = {
@@ -664,6 +688,33 @@ describe('a start’s plan', () => {
       rmSync(join(w.trip, '.claude', 'settings.json'))
       const inside = w.planSub(subOf(join(w.trip, 'bug'), w.trip))
       if ('refused' in inside) throw new Error(inside.refused.detail)
+    },
+  )
+  onCaseExactTmp(
+    'under a parent with no folder (the agent folder): an existing folder outside is kept with the agent folder’s rules; one inside is made',
+    () => {
+      const w = world()
+      mkdirSync(join(w.agentDir, '.claude'), { recursive: true })
+      writeFileSync(
+        join(w.agentDir, '.claude', 'settings.json'),
+        JSON.stringify({ permissions: { deny: ['Read(./private/**)'] } }),
+      )
+      const own = join(w.userHome, 'reports')
+      mkdirSync(own)
+      const p = w.planSub(subOf(own, w.agentDir))
+      if ('refused' in p) throw new Error(p.refused.detail)
+      expect(p.launch.cwd).toBe(own)
+      expect(JSON.parse(p.settingsJSON).permissions.deny).toContain(`Read(/${w.agentDir}/private/**)`)
+      const inside = join(w.agentDir, 'threads', 'well')
+      const q = w.planSub(subOf(inside, w.agentDir))
+      if ('refused' in q) throw new Error(q.refused.detail)
+      expect(q.launch.cwd).toBe(inside)
+      expect(existsSync(inside)).toBe(true)
+      // a folder outside that does not exist is never made
+      expect(w.planSub(subOf(join(w.userHome, 'nowhere'), w.agentDir))).toMatchObject({
+        refused: { code: 'start_failed' },
+      })
+      expect(existsSync(join(w.userHome, 'nowhere'))).toBe(false)
     },
   )
   onCaseExactTmp(

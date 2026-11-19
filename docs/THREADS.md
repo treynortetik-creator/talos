@@ -104,12 +104,22 @@ cards and the bridge's own tools).
   The parent's privacy rules still apply to it: the Mac adds the deny rules from the parent's folder chain (parent first) to the
   child's own, and the bridge's attach check reads the `.talos-lead` markers at or above both folders, so any refusal refuses.
   A sub-thread without its own session still runs in its parent's lane and keeps the inside rule.
+- **A folder of its own under a parent with none** (2026-11-19). A parent with no folder runs in the agent folder, so a
+  sub-thread with its own session and a folder of its own is judged against the agent folder, as against any parent's: an
+  existing one outside is kept as its own folder (never made, so a missing one is refused) and the agent folder's deny and ask
+  rules are carried in. A folder inside the agent folder cannot be saved from the app (the bridge refuses the agent folder for
+  every thread session when it knows it, `TALOS_AGENT_DIR`, as every install does); one written by hand is made there, as for a parent whose folder is the agent folder. The attach check
+  reads `.talos-lead` markers only from a parent's own folder setting, so here none come from the parent (which runs in the
+  agent folder and reads none itself). Only when the supervisor says `supervisor.subthreads_folderless_parent`
+  (both do; the Mac's `DedicatedSettings.judgedAgainstAgentFolder`, the bridge's `dedicatedThreads`); without it the bridge
+  refuses in plain words: `thread "<id>" can't have a folder of its own while "<parent>" has none until the Talos app on your
+  Mac is updated; update it, or give "<parent>" a folder first`.
 - **Sharing the parent's folder.** Only when the supervisor says `supervisor.subthreads_shared_folder` in workers.json (the Mac app
   and the Linux supervisor both do; without it the old refusal holds, "a sub-thread's folder must be inside its parent's
   folder"), a sub-thread with its own session may have no folder, or the same folder as its parent (compared as written, with
   trailing slashes ignored; a path with `.` or `..` or a link to it is not "the same"). It then runs in its parent's
   effective folder (the agent folder when the parent has none), follows it when it moves, and nothing is made or fenced for
-  it. A folder under a parent with none is still refused. Both sessions can edit the same files, so saving it shows one
+  it. Both sessions can edit the same files, so saving it shows one
   line, `thread "<id>" and its parent "<parent>" work in the same folder; they can edit the same files`
   (`subThreadWarnings`, also under Under in the thread's settings): a warning, not a refusal. The folder claim
   (`folder_claimed`) is lifted for one family only: a parent and its own sub-threads that share its folder, and two such

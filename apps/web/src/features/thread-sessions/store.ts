@@ -2,7 +2,6 @@
 // the park / resume / restart / fresh controls. One store per client, refcounted like the session controller.
 import {
   canBeDedicated,
-  dedicatedSettings,
   type ErrorCodeT,
   type FrameOf,
   type Host,
@@ -10,6 +9,7 @@ import {
   THREAD_SESSIONS_FEATURE,
   type ThreadSessionActionT,
   threadSessionMode,
+  threadSessionsAllowed,
   type WorkerStatusItemT,
   type WorkersStatusT,
 } from '@talos-app/protocol'
@@ -142,7 +142,8 @@ export function useThreadSessionView(threadId: string): ThreadSessionView {
   const status = useWorkersStatus()
   const supported = useThreadSessionsSupported(status)
   if (!config) return { offered: false, unsupported: false, dedicated: false, worker: undefined }
-  const on = dedicatedSettings(config).enabled
+  // shown on until written (threadSessionsAllowed): each thread offers its switch, off; routing still needs it written
+  const on = threadSessionsAllowed(config)
   const allowed = canBeDedicated(config, threadId)
   return {
     offered: on && supported && allowed,

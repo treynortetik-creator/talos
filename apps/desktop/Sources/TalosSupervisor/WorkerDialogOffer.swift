@@ -29,6 +29,8 @@ struct OfferState {
   var proofsUsed: [String] = []
   /// The dialog id Terminals was brought forward for (login): the press-once rule for a dialog that has no Enter. Shared by the card and the popup.
   var openedFor: String?
+  /// The owner's tap pressed "No, exit" on the folder-trust question: the exit that follows is that answer, not a crash (`exited`).
+  var declinedTrust = false
 
   /// Whether the Mac pressed (or opened) anything for this dialog id already, by a verified card answer or a popup click. Only this closes
   /// the popup: a result that says nothing was pressed (a forged answer, a phone that is not paired) leaves the one place to answer up.

@@ -21,11 +21,13 @@ extension Supervisor {
 
   /// The request the bridge reads: the time of the message it is for, in the bridge's own form.
   /// `blank`: the stall was the blank-pane case (no working line), which the bridge accepts from the shorter wait only when told so.
-  public static func resendRequest(for at: Date, blank: Bool = false) -> Data {
+  /// `missed`: the missed-turn case (an idle prompt under an empty thinking block); the bridge accepts it from the same shorter wait.
+  public static func resendRequest(for at: Date, blank: Bool = false, missed: Bool = false) -> Data {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     var body: [String: Any] = ["v": 1, "unseen_at": f.string(from: at)]
     if blank { body["blank"] = true }
+    if missed { body["missed"] = true }
     return (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data()
   }
 
@@ -70,13 +72,45 @@ extension Supervisor {
     l.mainWatch.pressed(unseenAt: at, min: minutes, awakeNow: awake)
   }
 
+  /// The missed turn (a model response that was only an empty thinking block, then nothing): Main idle at its prompt, the owner's message
+  /// unanswered for the blank wait. No key is pressed (Main is idle: there is nothing to interrupt); the bridge is asked to deliver the
+  /// message again, once per message (the unstick latch). Needs the same setting and a bridge that answers resend requests.
+  func missedTurnTick(_ l: inout Launch, awake: Double) {
+    // a key an attached client typed in Main's pane (an Esc there leaves no bridge record)
+    l.mainWatch.notePaneKeys(host.clientActivity().map { Date(timeIntervalSince1970: $0) })
+    if config.unstickMain, l.mainWatch.takeMissedAgain(awakeNow: awake) != nil {
+      l.mainWatch.missedAgainNoted()
+      audit("missed_turn", ["again": "told"])
+      postToPhone { _ in SupervisorNotice.missedTurnAgain }
+      return
+    }
+    guard config.unstickMain, let at = l.mainWatch.takeMissed(awakeNow: awake) else { return }
+    try? FileManager.default.removeItem(atPath: resendAnswerPath)
+    let minutes = max(1, Int(((options.wallClock() / 1000 - at.timeIntervalSince1970) / 60).rounded()))
+    do {
+      try AtomicFile.write(Self.resendRequest(for: at, missed: true), to: resendRequestPath, mode: 0o600)
+    } catch {
+      audit("missed_turn", ["resend": "not_written"])
+      l.mainWatch.missedNotAsked()
+      postToPhone { _ in SupervisorNotice.missedTurnFailed }
+      return
+    }
+    audit("missed_turn", ["resend": "asked", "minutes": "\(minutes)"])
+    l.mainWatch.askedMissed(unseenAt: at, min: minutes, awakeNow: awake)
+  }
+
   /// The bridge's answer to the request in flight (or the wait running out): the one thread line, then the answer file is removed.
   func settleUnstickAnswer(_ l: inout Launch, awake: Double) {
     guard l.mainWatch.awaiting != nil else { return }
     let answer = probe.readFile(resendAnswerPath).flatMap(MainResendAnswer.decode)
     guard let (done, sent) = l.mainWatch.settleAwaiting(answer: answer, awakeNow: awake) else { return }
     try? FileManager.default.removeItem(atPath: resendAnswerPath)
-    audit("unstick_answered", ["sent": sent ? "1" : "0", "answered": answer == nil ? "0" : "1"])
+    audit(done.missed ? "missed_turn_answered" : "unstick_answered", ["sent": sent ? "1" : "0", "answered": answer == nil ? "0" : "1"])
+    if done.missed, answer?.why == "stopped" { return }  // the owner stopped the agent: nothing went missing, nothing to say
+    if done.missed {
+      postToPhone { _ in sent ? SupervisorNotice.missedTurnResent : SupervisorNotice.missedTurnFailed }
+      return
+    }
     let did: MainWatch.Unstick = sent ? .resent(min: done.min) : .failed(min: done.min)
     postToPhone { _ in SupervisorNotice.mainStalled(since: done.unseenAt, did: did) }
   }

@@ -65,6 +65,8 @@ export function buildWorkersFile(o: {
       subthreads_own_folder: true,
       // and one with no folder, or its parent's own, runs in the parent's folder (the agent folder when it has none)
       subthreads_shared_folder: true,
+      // and one with a folder of its own under a parent with none: judged against the agent folder, where that parent runs
+      subthreads_folderless_parent: true,
       // this supervisor's reader takes `control` before `wake` (wake-reader.ts): the bridge may write the owner's taps there (BSUP-5)
       reads_control: true,
       main_pane_pid: o.mainPanePid,

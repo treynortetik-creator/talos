@@ -392,6 +392,13 @@ const FOLDER_ONLY: Record<string, string[]> = {
     "import { lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'",
     'return realpathSync(p)',
   ],
+  // a thread's own FOLDER (folder-trust.ts, owner-folders.ts): the key Claude Code's per-project trust is stored under, and the
+  // owner's recorded choice it is matched against
+  'supervisor/folder-trust.ts': ['realpathSync,', 'return trim(realpathSync(p))'],
+  'supervisor/owner-folders.ts': [
+    "import { lstatSync, readFileSync, realpathSync } from 'node:fs'",
+    "return realpathSync(p).replace(/(.)\\/+$/, '$1')",
+  ],
   // root's releases FOLDER (rooted-kit.ts rootedHookDir): the prefix a rooted session's hook script must be under
   'supervisor/rooted-kit.ts': [
     "import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs'",

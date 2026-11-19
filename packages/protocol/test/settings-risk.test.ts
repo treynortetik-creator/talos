@@ -303,7 +303,8 @@ describe('thread operations as proposals', () => {
     ])
     expect(refused([{ path: 'session_models', value: [] }])).toBeTruthy()
     expect(refused([{ path: 'session_models', value: ['opus; rm -rf'] }])).toBeTruthy()
-    expect(ok([{ path: 'dedicated', value: true }])[0]).toEqual({ path: 'dedicated', old: false, new: true })
+    // shown on until written off (threadSessionsAllowed): the agent turning it off is the change
+    expect(ok([{ path: 'dedicated', value: false }])[0]).toEqual({ path: 'dedicated', old: true, new: false })
     expect(ok([{ path: 'voice_notes.driving_until', value: '2026-11-09T18:00:00.000Z' }])[0]?.old).toBeNull()
     for (const p of ['permission_relay', 'trust_mode', 'work.enabled', 'work.retention', 'bug_webhook_url'])
       expect(refused([{ path: p, value: true }]), p).toMatch(/can't be changed by you/)

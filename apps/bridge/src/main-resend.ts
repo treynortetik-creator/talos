@@ -31,11 +31,14 @@ export const HELD_MAX = 64
 const RESENT_MEMORY = 256
 /** How long the oldest unseen message must have waited before the bridge acts on a request: the spinner stall wait by default. */
 export const STALL_MIN_MS = MAIN_RESTART.model_stall_s * 1000
-/** Only when the Mac says the stall is the blank-pane case (`blank: true`: no working line, the model's turn pending) the shorter wait. */
+/**
+ * Only when the Mac says the stall is the blank-pane case (`blank: true`: no working line, the model's turn pending) or the missed turn
+ * (`missed: true`: Main idle at its prompt after an empty thinking block, nothing pressed) the shorter wait.
+ */
 export const STALL_BLANK_MIN_MS = MAIN_RESTART.model_stall_blank_s * 1000
 const KINDS = new Set(['text', 'voice_note', 'file'])
 
-export type ResendRequest = { unseenAt: number; blank: boolean }
+export type ResendRequest = { unseenAt: number; blank: boolean; missed: boolean }
 
 /** The request file's content, or null when it is not one (wrong shape, wrong version, a time that does not parse). */
 export function parseRequest(raw: string): ResendRequest | null {
@@ -49,7 +52,7 @@ export function parseRequest(raw: string): ResendRequest | null {
   const o = v as Record<string, unknown>
   if (o.v !== 1 || typeof o.unseen_at !== 'string') return null
   const at = Date.parse(o.unseen_at)
-  return Number.isNaN(at) ? null : { unseenAt: at, blank: o.blank === true }
+  return Number.isNaN(at) ? null : { unseenAt: at, blank: o.blank === true, missed: o.missed === true }
 }
 
 /** What `SeenTracker` keeps for a second delivery: the owner's notices by message id (newest last), and the messages already re-sent. */
@@ -58,6 +61,7 @@ export const newResendMemory = (): ResendMemory => ({ held: new Map(), done: [] 
 
 /** Every notice on its way to Main: the owner's own are kept (bounded to `HELD_MAX`). */
 export function holdOwnerNotice(m: ResendMemory, n: Notification): void {
+  if (n.meta.redelivered) return // a copy we made ourselves is never the original that a later resend would be built from
   const id = n.meta.message_id
   const trust = n.meta.trust
   if (!id || (trust !== 'owner' && trust !== 'owner_voice') || !KINDS.has(n.meta.kind ?? '')) return
@@ -68,12 +72,21 @@ export function holdOwnerNotice(m: ResendMemory, n: Notification): void {
   }
 }
 
+/** The line put before a re-delivered owner message, so Main can tell a resend from the owner repeating themselves. */
+export const REDELIVERED_PREFIX =
+  "(Talos sent this again because the last turn ended without an answer. If you already acted on it, don't do it twice.)"
+
+/** The notice as it goes out the second time: the same owner trust and ids, marked in meta and in its first line. Never mutates the held one. */
+export function redelivered(n: Notification, why: 'missed' | 'stall'): Notification {
+  return { content: `${REDELIVERED_PREFIX}\n${n.content}`, meta: { ...n.meta, redelivered: why } }
+}
+
 export type ResendOutcome = 'sent' | 'failed'
 
 /** One look at the request file (every poll of a live bridge). Returns how many notices were delivered again. */
 export async function resendToMain(
   m: ResendMemory,
-  seen: { oldestUnseenAt(): string | null; unseenIds(): string[] },
+  seen: { oldestUnseenAt(): string | null; unseenIds(): string[]; lastStopAt(): string | null },
   ctx: { paths: Pick<BridgePaths, 'mainResend' | 'mainResendResult'>; log: Logger; clock: Clock },
   deliver: (n: Notification) => Promise<void>,
 ): Promise<number> {
@@ -118,8 +131,12 @@ export async function resendToMain(
   const oldest = seen.oldestUnseenAt()
   if (oldest === null || Date.parse(oldest) !== req.unseenAt)
     return refuse('not_oldest', 'that message is no longer the oldest unseen one')
-  if (ctx.clock.now() - req.unseenAt < (req.blank ? STALL_BLANK_MIN_MS : STALL_MIN_MS))
+  if (ctx.clock.now() - req.unseenAt < (req.blank || req.missed ? STALL_BLANK_MIN_MS : STALL_MIN_MS))
     return refuse('too_early', 'the message has not waited long enough to be a stall')
+  // The owner stopped the agent (a stop the mod answered ok) after this message reached Main: the turn ended because they ended it, not because a response went missing.
+  const stop = seen.lastStopAt()
+  if (req.missed && stop !== null && Date.parse(stop) >= req.unseenAt)
+    return refuse('stopped', 'the owner stopped the agent after that message, so the turn did not go missing')
   if (m.done.includes(req.unseenAt)) return refuse('already', 'already delivered again for that message')
   m.done.push(req.unseenAt)
   if (m.done.length > RESENT_MEMORY) m.done.shift()
@@ -133,7 +150,7 @@ export async function resendToMain(
       continue
     }
     try {
-      await deliver(n)
+      await deliver(redelivered(n, req.missed ? 'missed' : 'stall'))
       sent++
     } catch (e) {
       log.warn('main resend: delivery failed', { message_id: id, error: (e as Error).message })

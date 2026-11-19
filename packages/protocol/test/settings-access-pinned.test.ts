@@ -182,7 +182,7 @@ describe('agent path: config_propose result for every field', () => {
     ['voice_notes.reply_with_voice', 'always', 'when_voice'],
     ['voice_notes.driving_until', '2026-11-09T18:00:00.000Z', null],
     ['session_models', ['default', 'opus'], ['default', 'opus', 'sonnet', 'haiku']],
-    ['dedicated', true, false],
+    ['dedicated', false, true], // shown on until written off (threadSessionsAllowed)
     ['theme', { ...structuredClone(STOCK_THEMES[1]), name: 'dusk' }, 'talos'],
     ['agent.voice_persona', 'Speak briefly.', ''],
     ['work.label', 'Office', 'Work systems'],

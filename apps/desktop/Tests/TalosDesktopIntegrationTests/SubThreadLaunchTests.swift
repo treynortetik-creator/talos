@@ -196,12 +196,19 @@ struct SubThreadLaunchTests {
     }
   }
 
-  @Test func aSubWhoseParentHasNoFolderDoesNotStart() throws {
+  // the owner, 2026-11-19: under a parent with no folder (it runs in the agent folder), a sub-thread's own existing folder is used
+  @Test func aSubWhoseParentHasNoFolderStartsInItsOwnExistingFolder() throws {
+    let r = try rig(parentOpts: "{}") { #"{"cwd":"\#($0)/par"}"# }
+    defer { r.teardown() }
+    try r.wake("sub")
+    #expect(r.wait(10) { r.up("sub") }, "\(r.why("sub"))")
+  }
+
+  @Test func aSubWhoseParentHasNoFolderAndWhoseFolderOutsideIsMissingDoesNotStartAndNothingIsMade() throws {
     let r = try rig(parentOpts: "{}") { #"{"cwd":"\#($0)/par/s"}"# }
     defer { r.teardown() }
     try r.wake("sub")
     #expect(r.wait(10) { r.state("sub") == "failed" }, "\(r.why("sub"))")
-    #expect(r.entry("sub")?.error?.detail?.contains("give the parent a folder first") == true, "\(String(describing: r.entry("sub")?.error))")
     #expect(r.starts.isEmpty && !FileManager.default.fileExists(atPath: r.home + "/par/s"))
   }
 
@@ -210,5 +217,6 @@ struct SubThreadLaunchTests {
     defer { r.teardown() }
     #expect(r.wait(5) { FileManager.default.contents(atPath: r.talosHome + "/workers.json").flatMap(WorkersFile.decode)?.supervisor.subthreads_supported == true })
     #expect(r.mgr.snapshot().supervisor.subthreads_supported)
+    #expect(r.mgr.snapshot().supervisor.subthreads_folderless_parent)
   }
 }

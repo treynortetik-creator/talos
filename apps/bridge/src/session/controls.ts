@@ -14,7 +14,7 @@ import {
   type ModControlResultT,
   type ModControlT,
 } from '@talos-app/protocol'
-import type { BridgeContext } from '../context.ts'
+import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { sessionControlResultFrame } from '../frames-out.ts'
 import { RESET_REFUSAL, signedBeforeReset } from '../history-recover.ts'
 import { say } from '../owner-words.ts'
@@ -32,7 +32,7 @@ const SLOW_ACTIONS = new Set(['compact', 'clear'])
 const KEEP_RESULTS = 200
 const INDEX_KEY = 'ctl:index'
 
-type Pending = { timer: unknown; finish: () => void }
+type Pending = { timer: unknown; finish: () => void; action: string; thread: string }
 
 export class SessionControls {
   private readonly pending = new Map<string, Pending>()
@@ -150,7 +150,22 @@ export class SessionControls {
       },
       SLOW_ACTIONS.has(f.action) ? CONTROL_NO_ANSWER_MS : QUICK_NO_ANSWER_MS,
     )
-    this.pending.set(f.control_id, { timer, finish })
+    this.pending.set(f.control_id, { timer, finish, action: f.action, thread: f.thread_id })
+  }
+
+  /**
+   * A stop the mod carried out ("Stopped."): the turn ended because the owner ended it. Kept (and put in status.json) so the Mac's
+   * missed-turn watch never reads it as a response that went missing, logged without content, and shown in the thread.
+   */
+  private stopped(thread: string): void {
+    const { ctx } = this
+    const at = ctx.clock.now()
+    ctx.seen.noteStop(at)
+    ctx.store.kvSet('last_stop_at', String(at))
+    ctx.log.info('session control: stopped by owner', { thread_id: thread, at: new Date(at).toISOString() })
+    postSystemNotice(ctx, 'You stopped your agent', { thread: threadRef(ctx, thread), silent: true }).catch((e) =>
+      ctx.log.warn('stop notice not posted', { error: (e as Error).message }),
+    )
   }
 
   /** A result the mod reported on a sync. Unknown or already-answered ids are dropped. */
@@ -160,6 +175,7 @@ export class SessionControls {
     this.pending.delete(r.control_id)
     this.ctx.clock.clearTimeout(p.timer)
     this.record(r.control_id, { ok: r.ok, ...(r.code ? { code: r.code } : {}), text: r.text })
+    if (p.action === 'stop' && r.ok) this.stopped(p.thread)
     p.finish()
   }
 

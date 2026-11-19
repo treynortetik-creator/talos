@@ -207,5 +207,13 @@ PL_OUT="$(mktemp)"
 if bash scripts/path-leak-test.sh >"$PL_OUT" 2>&1; then ok "path-leak-test.sh: $(grep -c '^  ok' "$PL_OUT") cases green"
 else bad "path-leak-test.sh is red"; grep 'FAIL' "$PL_OUT" | head -20; fi
 rm -f "$PL_OUT"
+NC_OUT="$(mktemp)"
+if bash scripts/nested-code-test.sh >"$NC_OUT" 2>&1; then ok "nested-code-test.sh: $(grep -c '^  ok' "$NC_OUT") cases green"
+else bad "nested-code-test.sh is red"; grep 'FAIL' "$NC_OUT" | head -20; fi
+RS_OUT="$(mktemp "${TMPDIR:-/tmp}/talos-rpath-out-XXXXXX")"
+if bash scripts/rpath-scrub-test.sh >"$RS_OUT" 2>&1; then ok "rpath-scrub-test.sh: $(grep -c '^  ok' "$RS_OUT") cases green"
+else bad "rpath-scrub-test.sh is red"; grep 'FAIL' "$RS_OUT" | head -20; fi
+rm -f "$RS_OUT"
+rm -f "$NC_OUT"
 
 exit $FAIL

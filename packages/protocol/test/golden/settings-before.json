@@ -7170,21 +7170,15 @@
       {
         "v": true,
         "propose": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "dedicated",
-              "old": false,
-              "new": true
-            }
-          ]
+          "ok": false,
+          "error": "dedicated is already that value. Nothing to propose."
         },
         "card": {
           "ok": true,
           "changes": [
             {
               "path": "dedicated",
-              "old": false,
+              "old": true,
               "new": true
             }
           ],
@@ -7198,15 +7192,21 @@
       {
         "v": false,
         "propose": {
-          "ok": false,
-          "error": "dedicated is already that value. Nothing to propose."
+          "ok": true,
+          "changes": [
+            {
+              "path": "dedicated",
+              "old": true,
+              "new": false
+            }
+          ]
         },
         "card": {
           "ok": true,
           "changes": [
             {
               "path": "dedicated",
-              "old": false,
+              "old": true,
               "new": false
             }
           ],
@@ -8248,7 +8248,7 @@
       "Thread fence: on → undefined",
       "Notes that may matter: on → undefined",
       "Lock Talos settings: off → undefined",
-      "Thread sessions: off → [object Object]",
+      "Thread sessions: on → [object Object]",
       "Colour theme: talos → paper"
     ],
     "read_default": [
@@ -8273,7 +8273,7 @@
       true,
       true,
       false,
-      false,
+      true,
       "talos"
     ],
     "patch_for_all": {

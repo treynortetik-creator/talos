@@ -24,7 +24,7 @@ import { liveDialog, type Screen } from './screen.ts'
 import { UpdateRestarts } from './update-restart.ts'
 import { USAGE_LIMIT_KIND } from './usage-limit.ts'
 import { WakeReader } from './wake-reader.ts'
-import { newOfferState, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
+import { declinedTrustText, newOfferState, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
 import { activeNow, monoOf, NEW_BUSY_WATCH, noteScreen, seedLastActive } from './worker-idle.ts'
 import {
   folderMoved,
@@ -379,6 +379,7 @@ export class WorkerManager {
       return false
     }
     w.entry = { ...w.entry, state: to }
+    if (to === 'live') w.offer.declinedTrust = false // a session that runs was not ended by a "No"
     this.dirty = true
     return true
   }
@@ -638,12 +639,10 @@ export class WorkerManager {
       return
     }
     // an exit during its start is a failed start, not a crash (only unasked exits of a live session count to crash_loop)
-    if (w.entry.state === 'starting')
-      return this.fail(
-        w,
-        'start_failed',
-        `it exited during its start (${exit.code ?? (exit.signal !== null ? `signal ${exit.signal}` : '?')})`,
-      )
+    const declined = declinedTrustText(w.offer) // the owner's own "No, exit": said as that, never a crash
+    const code = exit.code ?? (exit.signal !== null ? `signal ${exit.signal}` : '?')
+    if (w.entry.state === 'starting' || declined)
+      return this.fail(w, 'start_failed', declined ?? `it exited during its start (${code})`)
     const restarts = [...w.entry.restarts, wall].slice(-10)
     w.entry = { ...w.entry, restarts }
     if (crashLooping(restarts, this.d.wallMs()))

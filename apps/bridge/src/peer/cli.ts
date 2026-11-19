@@ -1,6 +1,7 @@
 // `talos-app peer create|add|list|remove|rotate` (docs/LINKED-AGENTS.md): linking this Talos to another of the owner's own.
-// Typed by the owner in Terminal only (the command is `needs_terminal`): the agent cannot link, unlink or rotate a peer. A secret
-// is shown once on create/rotate and is read on `add` from the terminal (no echo), never from the command line.
+// The agent runs these itself unless "Lock Talos settings" is on (agent-cli.ts decides; owner ruling 2026-11-19). In a terminal a
+// secret is shown once on create/rotate and is read on `add` (no echo). From an agent run it is never printed: create/rotate write it
+// to <home>/peer-secrets/<name>.secret and `add --secret-file` reads that file. Never from the command line.
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import {
@@ -11,6 +12,7 @@ import {
   PeerName,
   type SecretStore,
 } from '@talos-app/protocol'
+import { agentKeyStoreRefusal } from '../agent-cli.ts'
 import type { CliIO } from '../cli-main.ts'
 import { type BridgeEnv, paths } from '../config.ts'
 import { ConfigFile } from '../config-file.ts'
@@ -25,22 +27,41 @@ import {
   readInboundPeers,
   removeInboundPeer,
 } from './records.ts'
+import {
+  checkPeerSecretPath,
+  deleteIfSame,
+  deletePeerSecretFile,
+  type FileId,
+  readSecretFile,
+  writePeerSecretFile,
+} from './secret-file.ts'
 import { utcDayStart } from './service.ts'
 import { validPeerSecret } from './sign.ts'
 
 export const PEER_USAGE = `usage: talos-app peer create <name> [--cap N]
-       talos-app peer add <name> --url <https inbox url> [--cap N]   (the secret is asked for, never typed on the command line)
-       talos-app peer list | peer remove <name> | peer rotate <name>
-Linking two Talos installs takes both directions. On each install: "peer create <name>" prints an inbox url and a secret once; give
-both to the OTHER install, which runs "peer add <name> --url <url>" and pastes the secret when asked. <name> is what this install
-calls the other one (for example work).`
+       talos-app peer add <name> --url <https inbox url> [--cap N] [--secret-file <file>]   (the secret is asked for, or read from the file; never typed on the command line)
+       talos-app peer list | peer remove <name> | peer rotate <name> | peer secret-forget <name>
+Linking two Talos installs takes both directions. On each install: "peer create <name>" makes an inbox: in a terminal it prints an inbox
+url and a secret once; run by your agent it prints the url and writes the secret to a file (<talos home>/peer-secrets/<name>.secret).
+Give both to the OTHER install, which runs "peer add <name> --url <url>" and pastes the secret when asked, or "--secret-file <file>"
+(the file is deleted once stored). The creator's file is deleted when the first message arrives; "peer secret-forget <name>" deletes it by
+hand. <name> is what this install calls the other one (for example work).`
 
-export type PeerCliDeps = { secrets?: SecretStore }
+class AgentRefusal extends Error {}
+
+export type PeerCliDeps = {
+  secrets?: SecretStore /** Run with no terminal (an agent): no secret is printed or read from stdin. */
+  agent?: boolean
+}
 
 const fail = (io: Pick<CliIO, 'err'>, text: string): number => {
   io.err(`talos-app: ${text}`)
   return 1
 }
+
+/** The one line an agent run of `create` ends with: what to carry where. */
+const secretCarryLine = (name: string, url: string): string =>
+  `Carry the inbox URL and that file to the other install and run there: talos-app peer add <the name it calls this one> --url ${url} --secret-file <file>. The file is deleted when the first message arrives (or run: talos-app peer secret-forget ${name}).`
 
 const parseCap = (v: string | undefined): number | undefined | 'bad' => {
   if (v === undefined) return undefined
@@ -55,6 +76,21 @@ export async function cmdPeer(
   http: () => Promise<RelayHttp>,
   deps: PeerCliDeps = {},
 ): Promise<number> {
+  try {
+    return await runPeer(env, args, io, http, deps)
+  } catch (e) {
+    if (e instanceof AgentRefusal) return fail(io, e.message.replace(/^talos-app: /, ''))
+    throw e
+  }
+}
+
+async function runPeer(
+  env: BridgeEnv,
+  args: string[],
+  io: CliIO,
+  http: () => Promise<RelayHttp>,
+  deps: PeerCliDeps = {},
+): Promise<number> {
   const [sub, ...rest] = args
   // a secret on the command line is in the shell history and the process list: refused wherever it appears
   if (args.some((a) => a.includes('whsec_')))
@@ -63,12 +99,15 @@ export async function cmdPeer(
       'a secret never goes on the command line. Run "peer add <name> --url <url>" and paste it when asked.',
     )
   let parsed: ReturnType<
-    typeof parseArgs<{ options: { cap: { type: 'string' }; url: { type: 'string' } }; allowPositionals: true }>
+    typeof parseArgs<{
+      options: { cap: { type: 'string' }; url: { type: 'string' }; 'secret-file': { type: 'string' } }
+      allowPositionals: true
+    }>
   >
   try {
     parsed = parseArgs({
       args: rest,
-      options: { cap: { type: 'string' }, url: { type: 'string' } },
+      options: { cap: { type: 'string' }, url: { type: 'string' }, 'secret-file': { type: 'string' } },
       allowPositionals: true,
       strict: true,
     })
@@ -91,7 +130,12 @@ export async function cmdPeer(
       )
     return name
   }
-  const secrets = async (): Promise<SecretStore> => deps.secrets ?? openSecretStore({ home: env.home })
+  const secrets = async (): Promise<SecretStore> => {
+    const store = deps.secrets ?? (await openSecretStore({ home: env.home }))
+    const no = deps.agent ? agentKeyStoreRefusal(env.home, store.backend) : undefined
+    if (no) throw new AgentRefusal(no)
+    return store
+  }
   const config = () => new ConfigFile(paths(env.home).configJson, { log: { warn: (m) => io.err(`talos-app: ${m}`) } })
 
   const hasConfigPeer = (nm: string): boolean => {
@@ -109,19 +153,44 @@ export async function cmdPeer(
       const n = needName()
       if (typeof n === 'number') return n
       const cap = parseCap(values.cap)
-      if (cap === 'bad' || values.url !== undefined) {
+      if (cap === 'bad' || values.url !== undefined || values['secret-file'] !== undefined) {
         io.err(PEER_USAGE)
         return 2
       }
       try {
+        // an agent run writes the secret to its file before anything is made: a path that can't be written stops it here
+        if (deps.agent) {
+          try {
+            checkPeerSecretPath(env.home, n)
+          } catch (e) {
+            return fail(io, (e as Error).message)
+          }
+        }
         const made = await (await http()).createPeer({ name: n, ...(cap ? { daily_cap: cap } : {}) })
-        addInboundPeer(env.home, { name: n, conn_id: made.conn_id })
-        io.out(`Made the inbox "${n}" on your relay. It is shown once:`)
-        io.out(`  url:    ${made.inbox_url}`)
-        io.out(`  secret: ${made.secret}`)
-        io.out(
-          `Give both to the other Talos install and run there: talos-app peer add <the name it calls this one> --url ${made.inbox_url}`,
-        )
+        if (deps.agent) {
+          // the file first, then the local record: a write that fails leaves no record, and the inbox on the relay is removed by `peer remove`
+          let path: string
+          try {
+            path = writePeerSecretFile(env.home, n, made.secret)
+          } catch (e) {
+            return fail(
+              io,
+              `the inbox "${n}" was made on your relay but its secret could not be written (${(e as Error).message}). Run "talos-app peer remove ${n}" and then "talos-app peer create ${n}" again.`,
+            )
+          }
+          addInboundPeer(env.home, { name: n, conn_id: made.conn_id, secret_file: { kind: 'create', at: Date.now() } })
+          io.out(`Made the inbox "${n}" on your relay. Its secret is in ${path} (it is not shown).`)
+          io.out(`  url:    ${made.inbox_url}`)
+          io.out(secretCarryLine(n, made.inbox_url))
+        } else {
+          addInboundPeer(env.home, { name: n, conn_id: made.conn_id })
+          io.out(`Made the inbox "${n}" on your relay. It is shown once:`)
+          io.out(`  url:    ${made.inbox_url}`)
+          io.out(`  secret: ${made.secret}`)
+          io.out(
+            `Give both to the other Talos install and run there: talos-app peer add <the name it calls this one> --url ${made.inbox_url}`,
+          )
+        }
         if (!hasConfigPeer(n))
           io.out(
             `Note: there is no peer named "${n}" set up to send from here yet; both sides must use the same name for each other, so run: talos-app peer add ${n} --url <the other install's inbox url>`,
@@ -154,13 +223,43 @@ export async function cmdPeer(
       if (!entry.success) return fail(io, 'the url must be an https address (the inbox url the other install printed).')
       if (!existing && file.load().peers.length >= PEER_MAX)
         return fail(io, `this Talos already has ${PEER_MAX} linked agents.`)
-      const ask = 'Paste the secret the other install printed (it is not shown): '
-      const secret = (await (io.readSecret ? io.readSecret(ask) : io.prompt(ask))).trim()
+      const secretFile = values['secret-file']
+      let secret: string
+      let fileId: FileId | undefined
+      if (secretFile !== undefined) {
+        try {
+          const read = readSecretFile(secretFile)
+          secret = read.secret
+          fileId = read.id
+        } catch (e) {
+          return fail(io, `${(e as Error).message} Nothing was changed.`)
+        }
+      } else if (deps.agent) {
+        return fail(
+          io,
+          'a secret is not read from the terminal when your agent runs this. Run "peer add <name> --url <url> --secret-file <file>" with the secret file the other install\'s "peer create" wrote.',
+        )
+      } else {
+        const ask = 'Paste the secret the other install printed (it is not shown): '
+        secret = (await (io.readSecret ? io.readSecret(ask) : io.prompt(ask))).trim()
+      }
       if (!validPeerSecret(secret))
         return fail(io, 'that is not a secret (it starts with whsec_). Nothing was changed.')
       await (await secrets()).set(PEER_SECRET_SERVICE, peerSecretAccount(n), secret)
       file.update((c) => ({ ...c, peers: [...c.peers.filter((p) => p.name !== n), entry.data] }))
       withLedger(env, (l) => l.clearRevoked(n)) // linked again: sending is allowed once more
+      if (secretFile !== undefined && fileId) {
+        try {
+          if (deleteIfSame(secretFile, fileId) === 'changed')
+            io.err(
+              `talos-app: the secret is stored, but ${secretFile} is no longer the file that was read (it was replaced), so it was not deleted.`,
+            )
+        } catch (e) {
+          io.err(
+            `talos-app: the secret is stored, but ${secretFile} could not be deleted (${(e as Error).message}); delete it yourself.`,
+          )
+        }
+      }
       io.out(
         `Linked "${n}" (${new URL(entry.data.url).host}), up to ${entry.data.daily_cap} messages a day. Your agent can message it now.`,
       )
@@ -175,38 +274,7 @@ export async function cmdPeer(
         io.err(PEER_USAGE)
         return 2
       }
-      const cfg = config().load().peers
-      const store = await secrets()
-      const inbox = await (await http()).listPeers()
-      const p = paths(env.home)
-      let ledger: PeerLedger | undefined
-      let history: ReturnType<typeof openHistory> | undefined
-      if (existsSync(p.historyDb)) {
-        history = openHistory(p.historyDb)
-        ledger = new PeerLedger(history.db)
-      }
-      try {
-        const names = [...new Set([...cfg.map((c) => c.name), ...inbox.map((r) => r.name)])].sort()
-        if (names.length === 0) io.out('No linked agents. See: talos-app peer create')
-        for (const nm of names) {
-          const out = cfg.find((c) => c.name === nm)
-          const inb = inbox.find((r) => r.name === nm)
-          let has = 'no'
-          if (out) {
-            try {
-              has = (await store.get(PEER_SECRET_SERVICE, peerSecretAccount(nm))) ? 'yes' : 'no'
-            } catch {
-              has = 'unreadable'
-            }
-          }
-          const sent = out ? (ledger?.sentSince(nm, utcDayStart(Date.now())) ?? 0) : 0
-          io.out(
-            `${nm}  sends to: ${out ? `${new URL(out.url).host}, cap ${out.daily_cap}/day, sent today ${sent}, secret ${has}` : 'not set up (peer add)'}  |  inbox: ${inb ? `cap ${inb.daily_cap}/day, received today ${inb.received_today}` : 'none (peer create)'}`,
-          )
-        }
-      } finally {
-        history?.close()
-      }
+      await listPeers(env, io, config().load().peers, await secrets(), await (await http()).listPeers())
       return 0
     }
     case 'remove': {
@@ -240,6 +308,12 @@ export async function cmdPeer(
         code = 1
         io.err(`talos-app: config.json was not changed (${(e as Error).message}).`)
       }
+      try {
+        if (deletePeerSecretFile(env.home, n)) found.push('its secret file')
+      } catch (e) {
+        code = 1
+        io.err(`talos-app: could not delete the secret file of "${n}" (${(e as Error).message}).`)
+      }
       if (removeInboundPeer(env.home, n)) found.push('the local record')
       withLedger(env, (l) => l.clearRevoked(n))
       io.out(
@@ -253,17 +327,52 @@ export async function cmdPeer(
       const n = needName()
       if (typeof n === 'number') return n
       try {
+        if (deps.agent) checkPeerSecretPath(env.home, n)
         const r = await (await http()).rotatePeer(n)
-        io.out(`A new secret for the inbox "${n}". It is shown once:`)
-        io.out(`  secret: ${r.secret}`)
-        io.out(
-          `Give it to the other install: talos-app peer add <name> --url <the same inbox url>. The old secret keeps working for 24 hours. If the old one leaked, run "talos-app peer remove ${n}" and then "talos-app peer create ${n}" instead.`,
-        )
+        const old = `The old secret keeps working for 24 hours. If the old one leaked, run "talos-app peer remove ${n}" and then "talos-app peer create ${n}" instead.`
+        if (deps.agent) {
+          let path: string
+          try {
+            path = writePeerSecretFile(env.home, n, r.secret)
+          } catch (e) {
+            return fail(
+              io,
+              `the inbox "${n}" was rotated on your relay but the new secret could not be written (${(e as Error).message}). Run "talos-app peer remove ${n}" and then "talos-app peer create ${n}" again.`,
+            )
+          }
+          const rec = readInboundPeers(env.home).find((x) => x.name === n)
+          if (rec) addInboundPeer(env.home, { ...rec, secret_file: { kind: 'rotate', at: Date.now() } })
+          io.out(`A new secret for the inbox "${n}" is in ${path} (it is not shown).`)
+          io.out(
+            'The file is deleted on the first message that arrives after the old secret stops working (24 hours), or by "talos-app peer secret-forget".',
+          )
+          io.out(
+            `Give that file to the other install: talos-app peer add <name> --url <the same inbox url> --secret-file <file>. ${old}`,
+          )
+        } else {
+          io.out(`A new secret for the inbox "${n}". It is shown once:`)
+          io.out(`  secret: ${r.secret}`)
+          io.out(`Give it to the other install: talos-app peer add <name> --url <the same inbox url>. ${old}`)
+        }
         return 0
       } catch (e) {
         if (e instanceof RelayHttpError && e.status === 404)
           return fail(io, `there is no inbox named "${n}" on your relay.`)
         throw e
+      }
+    }
+    case 'secret-forget': {
+      const n = needName()
+      if (typeof n === 'number') return n
+      try {
+        io.out(
+          deletePeerSecretFile(env.home, n)
+            ? `Deleted the secret file for "${n}".`
+            : `There was no secret file for "${n}" (nothing to delete).`,
+        )
+        return 0
+      } catch (e) {
+        return fail(io, `could not delete the secret file of "${n}" (${(e as Error).message}).`)
       }
     }
     default:
@@ -281,5 +390,44 @@ function withLedger(env: BridgeEnv, fn: (l: PeerLedger) => void): void {
     fn(new PeerLedger(history.db))
   } finally {
     history.close()
+  }
+}
+
+/** `peer list`: one line per name, from the config, the relay's inboxes, the secret store and today's ledger. */
+async function listPeers(
+  env: BridgeEnv,
+  io: CliIO,
+  cfg: ReturnType<ConfigFile['load']>['peers'],
+  store: SecretStore,
+  inbox: Awaited<ReturnType<RelayHttp['listPeers']>>,
+): Promise<void> {
+  const p = paths(env.home)
+  let ledger: PeerLedger | undefined
+  let history: ReturnType<typeof openHistory> | undefined
+  if (existsSync(p.historyDb)) {
+    history = openHistory(p.historyDb)
+    ledger = new PeerLedger(history.db)
+  }
+  try {
+    const names = [...new Set([...cfg.map((c) => c.name), ...inbox.map((r) => r.name)])].sort()
+    if (names.length === 0) io.out('No linked agents. See: talos-app peer create')
+    for (const nm of names) {
+      const out = cfg.find((c) => c.name === nm)
+      const inb = inbox.find((r) => r.name === nm)
+      let has = 'no'
+      if (out) {
+        try {
+          has = (await store.get(PEER_SECRET_SERVICE, peerSecretAccount(nm))) ? 'yes' : 'no'
+        } catch {
+          has = 'unreadable'
+        }
+      }
+      const sent = out ? (ledger?.sentSince(nm, utcDayStart(Date.now())) ?? 0) : 0
+      io.out(
+        `${nm}  sends to: ${out ? `${new URL(out.url).host}, cap ${out.daily_cap}/day, sent today ${sent}, secret ${has}` : 'not set up (peer add)'}  |  inbox: ${inb ? `cap ${inb.daily_cap}/day, received today ${inb.received_today}` : 'none (peer create)'}`,
+      )
+    }
+  } finally {
+    history?.close()
   }
 }

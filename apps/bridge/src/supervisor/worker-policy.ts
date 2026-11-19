@@ -77,9 +77,9 @@ export function fenceSafe(talosHome: string): boolean {
  * case-folding mount sits under a case-sensitive root): a part whose name with its letters' case swapped is the same inode
  * folds. Parts without letters, and parts that are not there, are not judged (false).
  */
-export function foldsCase(
-  path: string,
-  stat: (p: string) => { dev: number; ino: number } | null = (p) => {
+export const fsProbe = {
+  /** The look at a path foldsCase makes; a test swaps it to run the planner on a Mac's case-folding temp folder. */
+  stat: (p: string): { dev: number; ino: number } | null => {
     try {
       const st = statSync(p)
       return { dev: st.dev, ino: st.ino }
@@ -87,6 +87,11 @@ export function foldsCase(
       return null
     }
   },
+}
+
+export function foldsCase(
+  path: string,
+  stat: (p: string) => { dev: number; ino: number } | null = fsProbe.stat,
 ): boolean {
   // part by part from the root: the first part whose name with its letters' case swapped is the same file folds case
   const parts = trimSlash(path)

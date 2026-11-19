@@ -5,21 +5,28 @@ Two Talos installs of the same owner (a home Mac and a work Mac, say) can messag
 main agent as outside data (`kind=peer_message`, `trust=external`). Nothing is sent by a phone push, and nothing a peer says
 approves anything.
 
-## Set up (the owner, on each Mac, in Terminal)
+## Set up (your agent, or you in a terminal)
 
-The agent cannot do this: `talos-app peer ...` only runs in a terminal typed by the owner, and `peers` in config.json is refused to
-the agent and hidden from phones.
+Your agent can do this itself with `talos-app peer ...` unless "Lock Talos settings" is on (then it says so and you do it, or unlock).
+It does not link while outside text (a message from a linked agent, a hook, a shared page, in any thread) or another session's hand-off
+has reached it since you last spoke; ask again in your own words. A request made by voice, or one followed by outside text arriving (a hook, a share, a call ending), may be
+refused for that reason: ask again in a typed message, or run it in a terminal. `peers` in config.json is still refused to the agent's config tools and hidden from phones.
 
 A peer is named by what THIS Mac calls the other one (`work`, `home`). Both directions need two commands each:
 
-1. On A: `talos-app peer create work`. It makes an inbox on A's relay for the other install and prints a URL and a secret, once.
+1. On A: `talos-app peer create work`. It makes an inbox on A's relay for the other install and prints a URL and a secret, once. When
+   your agent runs it, the secret is never printed: it goes to `<talos home>/peer-secrets/work.secret` (0600), and the agent carries the URL
+   and that file to B.
 2. On B: `talos-app peer add home --url <A's url>`, and paste A's secret when asked (it is not shown and never goes on the command
-   line). B can now send to A.
+   line). B can now send to A. With a file (what an agent uses): `talos-app peer add home --url <A's url> --secret-file <file>`; the
+   file must be a regular file of yours, mode 0600 or stricter, and it is deleted once the secret is stored.
 3. On B: `talos-app peer create home`, then on A: `talos-app peer add work --url <B's url>` with B's secret. A can now send to B.
 
 `--cap N` sets a daily limit (default 50 a day, at most 500): on `create` the limit for what that inbox takes, on `add` the limit
 for what this Mac sends. `peer list` shows each peer (the host of its URL, never the URL), the caps, today's counts and whether
-the secret is present. The secret is kept in the Keychain (the key store on Linux), the inbox connection in
+the secret is present. A's copy of the secret file is deleted when B's first message arrives (after a `peer rotate`, the first message after the old secret's 24 hours, because a message inside them may still use the old secret) (or by hand: `talos-app peer secret-forget
+<name>`; `peer remove` deletes it too). The owner sees a quiet row in the default thread whenever a peer or an inbox is added or removed,
+whoever did it. The secret is kept in the Keychain (the key store on Linux), the inbox connection in
 `peers-inbound.json` in the Talos home (0600), the peer's name, URL and cap in config.json `peers`.
 
 ## What the agent can do
@@ -66,5 +73,5 @@ may send anywhere in that turn.
 
 `talos-app peer remove <name>` deletes the inbox on your relay (the other install gets 404 from then on; messages queued for this
 Mac and not yet taken are dropped, and any that were already taken are ignored), the secret, the config entry and the local record.
-`talos-app peer rotate <name>` makes a new inbox secret (shown once); the old one works for 24 hours. If a secret leaked, rotate is
+`talos-app peer rotate <name>` makes a new inbox secret (shown once in a terminal; written to the secret file when your agent runs it); the old one works for 24 hours. If a secret leaked, rotate is
 not enough: `peer remove`, then `peer create` and give the other install the new URL and secret.

@@ -6,7 +6,8 @@ import { defaultThreadRef } from './context.ts'
 import type { Inbound } from './inbound.ts'
 import type { Item, Of } from './inbound-shared.ts'
 import { peerMessageNotification } from './peer/notify.ts'
-import { inboundPeerByConn } from './peer/records.ts'
+import { inboundPeerByConn, PEER_ROTATE_GRACE_MS } from './peer/records.ts'
+import { deletePeerSecretFile } from './peer/secret-file.ts'
 import { glimpse } from './peer/service.ts'
 
 export const peerFrames = {
@@ -63,6 +64,17 @@ export const peerFrames = {
     )
     await ctx.emit(peerMessageNotification({ thread, peer, msg, chain, ts: f.received_at }))
     svc.ledger.markEmitted(msg.id)
+    // The first message of this connection has arrived: the creator's secret file (an agent run of `peer create`) has done its job.
+    // After a `peer rotate` the old secret works for 24 hours, so a message inside that window may still be signed with it and
+    // proves nothing: the file stays until the first message after it (peer/records.ts SecretFileMark).
+    try {
+      const mark = known.secret_file
+      const grace = mark?.kind === 'rotate' && ctx.clock.now() < mark.at + PEER_ROTATE_GRACE_MS
+      if (!grace && deletePeerSecretFile(ctx.env.home, peer))
+        ctx.log.info('peer secret file deleted after the first message', { peer })
+    } catch (e) {
+      ctx.log.warn('peer secret file not deleted', { peer, error: (e as Error).message })
+    }
     this.done(it)
   },
 }

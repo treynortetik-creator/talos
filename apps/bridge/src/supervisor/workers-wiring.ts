@@ -27,7 +27,9 @@ import {
   writeProjectCheck,
 } from '../worker/project-settings.ts'
 import { folderChain, sessionFilesProblem } from '../worker/session-files.ts'
+import { preAcceptFolderTrust, trustConfigFile } from './folder-trust.ts'
 import { INSTRUCTIONS_ENTRY, instructionsDigest, type LaunchSpecInputs, launchSpecHash } from './launch-spec.ts'
+import { ownerChose } from './owner-folders.ts'
 import { rootedHookDir } from './rooted-kit.ts'
 import { strictlyInside } from './sub-thread-folder.ts'
 import { seedThreadState } from './thread-state-seed.ts'
@@ -142,7 +144,8 @@ export function dedicatedThreads(raw: unknown, agentDir: string): WorkerThread[]
         cwd: sub.shares ? (sub.parentCwd ?? agentDir) : (ownOpts(t as Record<string, unknown>).cwd ?? agentDir),
         model: eff.model ?? 'inherit',
         effort: eff.effort ?? null,
-        parentCwd: sub.shares ? null : sub.parentCwd,
+        // a parent with no folder runs in the agent folder: a child with a folder of its own is judged against that
+        parentCwd: sub.shares ? null : (sub.parentCwd ?? (sub.ownCwd && !sub.refusal ? agentDir : null)),
         name: typeof t.name === 'string' ? t.name : null,
         idleParkMin: opts.success ? opts.data.idle_park_min : ThreadSessionOpts.parse({}).idle_park_min,
         ...(eff.mcpAllow !== undefined ? { mcpAllow: eff.mcpAllow } : {}),
@@ -663,7 +666,7 @@ export function workerPlanner(given: PlannerInputs) {
           : null,
       })
       if (!p.dry) {
-        prepareWorkerFolder(i, p.thread, audit)
+        prepareWorkerFolder(i, p.thread, audit, isAgentFolder ? null : folder)
         if (mcp) writeWorkerMcp(mcp)
         writeFileAtomic(join(workerDir(i.talosHome, p.thread.id), 'settings.json'), spec.settingsJSON, 0o600)
       }
@@ -745,12 +748,47 @@ export function workerPlanner(given: PlannerInputs) {
  */
 function prepareWorkerFolder(
   i: PlannerInputs,
-  thread: { id: string; name?: string | null },
+  thread: { id: string; name?: string | null; cwd: string; sub?: { parentId?: string } },
   audit: PlannerInputs['audit'],
+  trustFolder: string | null,
 ): void {
   ensureDir(workerDir(i.talosHome, thread.id))
   const seeded = seedThreadState(i.agentDir, thread.id, thread.name)
   if ('problem' in seeded) audit?.('worker_state_seed_failed', { thread: thread.id, why: seeded.problem })
+  if (trustFolder !== null) acceptFolderTrust(i, thread, trustFolder, audit)
+}
+
+/**
+ * The owner chose this folder for the thread: Claude Code's trust question for it is answered now (folder-trust.ts), before the
+ * session starts. Never the agent folder (Main's trust is first-start's). A refusal or a failure never stops the start: it is
+ * audited, and the question on the pane then reaches the phone as a card (worker-dialogs.ts).
+ */
+function acceptFolderTrust(
+  i: PlannerInputs,
+  thread: { id: string; cwd: string; sub?: { parentId?: string } },
+  folder: string,
+  audit: PlannerInputs['audit'],
+): void {
+  // only a folder the owner chose (a signed config.patch: owner-folders.ts), never one `lead init` or a hand edit wrote: for those
+  // the trust card shows the folder and the owner decides
+  const ids = [thread.id, ...(thread.sub?.parentId ? [thread.sub.parentId] : [])]
+  if (!ownerChose(i.talosHome, ids, thread.cwd, folder)) {
+    audit?.('worker_folder_trust_refused', {
+      thread: thread.id,
+      why: 'the folder is not recorded as the owner’s choice',
+    })
+    return
+  }
+  const r = preAcceptFolderTrust({
+    configFile: trustConfigFile(i.configHome ?? i.userHome),
+    folder,
+    chosen: [thread.cwd],
+    home: i.userHome,
+    talosHome: i.talosHome,
+    agentDir: i.agentDir,
+  })
+  if (!r.ok) audit?.('worker_folder_trust_refused', { thread: thread.id, why: r.why })
+  else if (r.wrote) audit?.('worker_folder_trust_accepted', { thread: thread.id })
 }
 
 /** The files of a launch's spec (launch-spec.ts): each file the start writes, by the bytes it computed, and its other inputs. */

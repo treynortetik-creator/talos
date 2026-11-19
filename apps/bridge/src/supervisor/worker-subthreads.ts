@@ -190,8 +190,9 @@ export function subLaunch(t: Raw, threads: readonly Raw[]): SubLaunch | null {
       if (up.cwdUnreadable !== undefined)
         refusal = `the parent thread's folder setting can't be read (${up.cwdUnreadable}): fix it, so the sub-thread has a folder to follow`
       else if (mine.cwd === undefined) shares = true
-      else if (parentCwd === null) refusal = 'the parent thread has no folder: give the parent a folder first'
-      else shares = folderSame(mine.cwd, parentCwd)
+      // a folder of its own under a parent with none (`subthreads_folderless_parent`): that parent runs in the agent folder, so the
+      // wiring judges the child against the agent folder (made inside it, or an existing one outside kept, with its rules carried)
+      else shares = parentCwd !== null && folderSame(mine.cwd, parentCwd)
     } else if (l.kind === 'orphan') {
       refusal = `${l.why}, so the sub-thread's folder has nothing to be inside`
     } else {

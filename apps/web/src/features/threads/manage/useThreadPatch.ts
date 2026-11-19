@@ -59,6 +59,8 @@ export function wireThreads(
     base: readonly ThreadT[]
     /** Threads taken out from under their parent by this save: the bridge keeps a key left out, so the clear is said (null). */
     clearParent?: ReadonlySet<string>
+    /** Keys sent for a thread even when they did not change (turning on an own session the config already names: the Mac judges by name). */
+    always?: ReadonlyMap<string, Record<string, unknown>>
   },
 ): Array<Record<string, unknown>> {
   const before = new Map(opts.base.map((t) => [t.id, t]))
@@ -70,6 +72,8 @@ export function wireThreads(
     if (!was && rich) for (const k of RICH_KEYS) if (out[k] === undefined) out[k] = null
     // named by the save, never inferred: a parent_id the schema could not read is also undefined here, and must be kept
     if (opts.clearParent?.has(t.id)) out.parent_id = null
+    const keep = opts.always?.get(t.id)
+    if (keep) Object.assign(out, keep)
     return out
   })
 }
@@ -148,13 +152,17 @@ export function useThreadPatch() {
   const apply = async (
     next: (latest: ThreadT[]) => ThreadT[],
     extra: Record<string, unknown> | (() => Record<string, unknown>) = {},
-    opts: { clearParent?: ReadonlySet<string> } = {},
+    opts: { clearParent?: ReadonlySet<string>; always?: ReadonlyMap<string, Record<string, unknown>> } = {},
   ): Promise<boolean> => {
     setErr(null)
     setBusy(true)
     try {
       const latest = sortThreads(client.store.getState().threads)
-      const threads = wireThreads(next(latest), rich, { base: latest, clearParent: opts.clearParent })
+      const threads = wireThreads(next(latest), rich, {
+        base: latest,
+        clearParent: opts.clearParent,
+        always: opts.always,
+      })
       await client.patchConfig({ threads, ...(typeof extra === 'function' ? extra() : extra) })
       return true
     } catch (e) {

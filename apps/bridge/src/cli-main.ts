@@ -54,7 +54,7 @@ import {
   teeCommand,
   writeTeePlan,
 } from './subagent-tee-install.ts'
-import { terminalOnly, usageText } from './talos.ts'
+import { agentUnlessLocked, terminalOnly, usageText } from './talos.ts'
 import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
 import { cmdV2 } from './v2-cli.ts'
@@ -1143,11 +1143,24 @@ export async function runCli(
   // `adopt --dry-run` writes nothing and asks nothing, so it runs without a terminal: an installer checks adopt's refusals with
   // it before it writes anything. adopt itself (the write) stays terminal-only.
   const readOnly = cmd === 'adopt' && rest.includes('--dry-run')
-  const gated = io.isTerminal === false && !readOnly ? terminalOnly(argv) : undefined
+  // peer and devices list|revoke are the agent's unless the lock is on (agent-cli.ts); the rest of those two stay terminal-only
+  const agentCmd = agentUnlessLocked(argv)
+  const gated = io.isTerminal === false && !readOnly && !agentCmd ? terminalOnly(argv) : undefined
   // the three the agent runs when the owner asked (on-request-cli.ts); typed in a terminal they are the owner's own
   {
     const no = (await import('./on-request-cli.ts')).onRequestRefusal(env, argv, Date.now(), {
       terminal: io.isTerminal !== false,
+    })
+    if (no) {
+      io.err(no)
+      return 1
+    }
+  }
+  if (agentCmd) {
+    const no = (await import('./agent-cli.ts')).agentCliRefusal(env, argv, {
+      terminal: io.isTerminal !== false,
+      raw,
+      ...(deps.cwd ? { cwd: deps.cwd } : {}),
     })
     if (no) {
       io.err(no)
@@ -1215,7 +1228,10 @@ export async function runCli(
       case 'trust':
         return cmdTrust(env, rest, io)
       case 'peer':
-        return (await import('./peer/cli.ts')).cmdPeer(env, rest, io, () => httpFor(env), deps.peer)
+        return (await import('./peer/cli.ts')).cmdPeer(env, rest, io, () => httpFor(env), {
+          ...deps.peer,
+          agent: io.isTerminal === false,
+        })
       case 'theme':
         return cmdTheme(env, rest, io)
       case 'lead':

@@ -549,6 +549,8 @@ export class Inbound {
         const owner =
           it.owner ?? (await this.verifyOwner(it, f.type === 'undo.request' ? UNDO_REQUEST_MAX_AGE_MS : MAX_AGE_MS))
         if (!owner.ok) return this.ownerFailed(it, owner)
+        // the owner check is carried on the item to onMessage / onVoiceNote, which note his device once (inbound-messages.ts)
+        if (f.type === 'message' || f.type === 'voice_note') it.owner = owner
         if (f.type === 'thread.session.control') return onThreadSessionControl(this.ctx, f, () => this.done(it))
         if (f.type === 'agent.recover') return onAgentRecover(this.ctx, f, it.raw, () => this.done(it))
         if (f.type === 'undo.request') return onUndoRequest(this.ctx, f, () => this.done(it))

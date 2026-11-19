@@ -1,11 +1,12 @@
-// Settings → Thread sessions (docs/OPTION-C.md 9.2, 9.4): the master switch (off by default) and one row per thread that
-// has its own session, parked ones included.
+// Settings → Thread sessions (docs/OPTION-C.md 9.2, 9.4): the master switch (on until the owner turns it off; each thread's own
+// switch stays off) and one row per thread that has its own session, parked ones included.
 import {
   type AgentConfigT,
   applyMergePatch,
   DedicatedConfigStrict,
   dedicatedPatchIssue,
   dedicatedSettings,
+  threadSessionsAllowed,
   trustOn,
 } from '@talos-app/protocol'
 import { useId, useState } from 'react'
@@ -25,7 +26,10 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
   const status = useWorkersStatus()
   const supported = useThreadSessionsSupported(status)
   const [err, setErr] = useState<string | null>(null)
-  const enabled = config ? dedicatedSettings(config).enabled : false
+  // written: what runs (the Mac reads a missing switch as off). Shown: on until the owner turns it off, where the Mac can run
+  // thread sessions; elsewhere only what is written, so an older Mac is never shown a switch it would not honour
+  const written = config ? dedicatedSettings(config).enabled : false
+  const enabled = supported && config ? threadSessionsAllowed(config) : written
   const toggle = async (v: boolean) => {
     setErr(null)
     try {

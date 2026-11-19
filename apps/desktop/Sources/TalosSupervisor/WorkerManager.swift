@@ -479,7 +479,8 @@ public final class WorkerManager: @unchecked Sendable {
 
   /// The same, and whether this very read worked.
   func readSettings() -> (settings: DedicatedSettings?, fresh: Bool) {
-    guard let d = FileManager.default.contents(atPath: configJson), let s = DedicatedSettings.readable(d) else { return (lastSettings, false) }
+    guard let d = FileManager.default.contents(atPath: configJson), let read = DedicatedSettings.readable(d) else { return (lastSettings, false) }
+    let s = read.judgedAgainstAgentFolder(options.agentDir)
     lastSettings = s
     noteDroppedEntries(s)
     return (s, true)
@@ -492,7 +493,7 @@ public final class WorkerManager: @unchecked Sendable {
       supervisor: .init(
         pid: getpid(), heartbeat_at: ISOTime.string(now()), workers_supported: true, main_pane_pid: mainPanePid(),
         main_dialog: mainDialogFeed.current(), subthreads_supported: true, subthreads_own_folder: true,
-        subthreads_shared_folder: true),
+        subthreads_shared_folder: true, subthreads_folderless_parent: true),
       threads: threads)
   }
 
@@ -661,8 +662,10 @@ public final class WorkerManager: @unchecked Sendable {
       return hold(id, resume: resume, now: t, unreadable: true)
     }
     closeNoticeRecord(id)  // a new start has no dialog open
+    rt[id]?.offer.declinedTrust = false  // an old answer is not this start's
     guard let hook = installHook(id, cwd: cwd, resume: resume, now: t) else { return }  // the copy this session runs, made now; refused when it cannot be
     let base = baseEnv()
+    acceptFolderTrust(id, s, cwd: cwd, base: base)
     let claudeDir = WorkerMcp.claudeDir(home: options.home, env: base)
     let main = mainCeiling(own, claudeDir: claudeDir)  // from this start's one read of main's own --settings (WorkerMainSettings.swift)
     var plan: WorkerMcp.Plan?
@@ -911,6 +914,7 @@ public final class WorkerManager: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: dir(id) + "/ready") {
           unlink(dir(id) + "/launch.sh")
           r.entry.state = "live"
+          r.offer.declinedTrust = false  // a session that runs was not ended by a "No"
           r.gaveNewId = false
           r.readyAt = t
           r.markActive(wall: t, awake: awake())

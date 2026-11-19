@@ -59,6 +59,8 @@ async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: 
       ...c,
       ...(o.trust === false ? {} : { trust_mode: true }),
       ...(o.lock ? { settings_lock: true } : {}),
+      // its threads are on their own sessions: the switch is written (a config without it has none, thread-sessions.ts)
+      dedicated: { enabled: true },
       threads: [
         ...c.threads,
         thread('work', 'Work'),
@@ -158,7 +160,7 @@ describe('threads.<id>.parent through config_propose', () => {
     await ownerAsks(x, 'put Repo under Boss')
     const r = await propose(x, [{ path: 'threads.repo.parent', value: 'boss' }])
     expect(r.isError).toBe(true)
-    expect(text(r)).toContain("must be inside its parent's folder")
+    expect(text(r)).toContain('its folder must be inside "boss"\'s folder')
     expect(parentOf(x, 'repo')).toBeUndefined()
   })
 

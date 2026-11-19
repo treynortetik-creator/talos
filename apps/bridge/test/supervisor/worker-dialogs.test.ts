@@ -257,6 +257,32 @@ describe('the answer', () => {
     expect(existsSync(join(x.dir, 'dialog-answer.json.taken'))).toBe(false)
     expect(JSON.parse(readFileSync(join(x.dir, 'dialog-proofs-used.json'), 'utf8')).used).toHaveLength(1)
   })
+  it('a signed "No, exit" on the folder-trust question is pressed and remembered as the owner’s answer; a Yes is not a decline', async () => {
+    const no = await setup()
+    await no.sync()
+    await answerFor(no, { choice: 0 })
+    await no.d.answer(no.target, no.pane)
+    expect(no.pane.keys).toEqual(['Enter'])
+    expect(no.result()).toMatchObject({ outcome: 'pressed', choice: 0, label: 'No, exit' })
+    expect(no.target.offer.declinedTrust).toBe(true)
+    const yes = await setup()
+    await yes.sync()
+    await answerFor(yes)
+    await yes.d.answer(yes.target, yes.pane)
+    expect(yes.target.offer.declinedTrust).toBe(false)
+  })
+  it('an Enter on "No, exit" that timed out (it may or may not have landed) is pressed, never remembered as a decline', async () => {
+    const x = await setup()
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    const send = x.pane.sendDialogKey.bind(x.pane)
+    x.pane.sendDialogKey = async (k: PtyDialogKey, kind?: string) =>
+      (await send(k, kind)) && k === 'Enter' ? 'unknown' : 'sent'
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 0 }) // counted, never repeated
+    expect(x.target.offer.enterSentFor).not.toBeNull()
+    expect(x.target.offer.declinedTrust).toBe(false)
+  })
   it('a key the guard refused is no press: nothing pressed, never reported as pressed (Fable R3-5)', async () => {
     const x = await setup()
     await x.sync()

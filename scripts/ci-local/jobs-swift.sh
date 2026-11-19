@@ -45,7 +45,7 @@ job_desktop() {
   # so the desktop job holds a mutex: one desktop build at a time, whatever the slots.
   # Its pty use, while ci.sh runs under the mutex: the peak of /dev/ttys* and the limit, in its log and in timings.tsv (pty=peak/max).
   local rc peak
-  TALOS_SIGN_ID=- TALOS_GUI_TESTS="${TALOS_GUI_TESTS:-0}" TALOS_SWIFTPM_CACHE="$CACHE/swiftpm" TALOS_SWIFT_SCRATCH="$CACHE/desktop-build" \
+  TALOS_SIGN_ID=- TALOS_TOOLS_CACHE="$CACHE/tools" TALOS_GUI_TESTS="${TALOS_GUI_TESTS:-0}" TALOS_SWIFTPM_CACHE="$CACHE/swiftpm" TALOS_SWIFT_SCRATCH="$CACHE/desktop-build" \
     run "$log" ci_mutex "$LOCKS" desktop ci_pty_during "$RESULTS/desktop.ptypeak" bash apps/desktop/scripts/ci.sh "$WT/.desktop-out"
   rc=$?
   peak="$(cat "$RESULTS/desktop.ptypeak" 2>/dev/null)"

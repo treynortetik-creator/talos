@@ -47,6 +47,15 @@ public struct MainWatch: Equatable, Sendable {
   /// This reading found the blank case: no working line, and the transcript read right now says the model's turn is pending.
   var stallBlankNow = false
   var stallThinking = false
+  /// This reading found the missed-turn case: the prompt is idle (`idle`), and the newest record is the model's thinking only.
+  var stallMissedNow = false
+  /// The missed-turn re-delivery of this message was sent (the bridge said so), and the owner was told Main missed it again (once).
+  var missedResent = false
+  /// When the owner last stopped the agent (the bridge's `last_stop_at`), and when an attached client last typed in the pane (an Esc
+  /// typed there leaves no bridge record). Either at or after the message's delivery means the turn ended by the owner's hand.
+  var lastStop: Date?
+  var paneKeysAt: Date?
+  var missedAgainTold = false
   /// Told once for this message; `stallActive` is whether the line is up now (anything changing takes it down, never raises it again).
   var stallTold = false
   var stallActive = false
@@ -67,6 +76,8 @@ public struct MainWatch: Equatable, Sendable {
     public var unseenAt: Date
     public var since: Double
     public var min: Int
+    /// The request was the missed-turn one (no Esc was pressed): its answer gets its own line.
+    public var missed = false
   }
   /// How long the bridge has to answer a resend request (its poll runs every 10 s) before the owner is told it was not sent again.
   public static let answerWithin: Double = 15
@@ -91,6 +102,7 @@ public struct MainWatch: Equatable, Sendable {
     if let s = status {
       lastLiveAt = awakeNow
       bridgeResends = s.mainResend
+      lastStop = s.lastStopAt
       relayDownSince = s.relayConnected ? nil : (relayDownSince ?? awakeNow)
       closeCode = s.lastCloseCode
       if s.unseenOldestAt != unseen {
@@ -105,6 +117,9 @@ public struct MainWatch: Equatable, Sendable {
         stallChangedAt = unseen == nil ? nil : awakeNow
         stallWorking = false
         stallBlankNow = false
+        stallMissedNow = false
+        missedResent = false
+        missedAgainTold = false
         stallTold = false
         stallActive = false
         unstickTried = false
@@ -132,7 +147,8 @@ public struct MainWatch: Equatable, Sendable {
   /// the model's turn is pending (`awaitingModel`): a pane gone blank under a request that never answered. A transcript whose newest turn is the model's (a reply, or a tool_use still running) is never a stall.
   /// Once told, the line stays until the message is taken in (`observe`) or the model's record appears: the pane alone, which the
   /// owner opening it redraws, never takes it away.
-  public mutating func observeStall(rows: [String]?, transcript: MainStall.Transcript?, awakeNow: Double) {
+  /// `idle`: whether this tick's pane is the idle prompt (`MainStall.idlePrompt`; nil when it could not be read), for the missed-turn case.
+  public mutating func observeStall(rows: [String]?, transcript: MainStall.Transcript?, awakeNow: Double, idle: Bool? = nil) {
     guard unseen != nil, wantsStallReads else { return }
     var moved = false
     if let rows {
@@ -154,8 +170,14 @@ public struct MainWatch: Equatable, Sendable {
     if answered {
       stallActive = false
       stallBlankNow = false
+      stallMissedNow = false
       return
     }
+    // The missed turn: the model's newest record is thinking only and the prompt is idle (no working line, empty box, no dialog) as of
+    // this reading. A thinking-only record WITH a working line is the long think the 300 s rule covers, never this.
+    var missed = false
+    if rows != nil, idle == true, !stallWorking, stallBody != nil, case .thinking? = transcript?.tail { missed = true }
+    stallMissedNow = missed
     // A blank pane (no working line) counts only on a transcript read right now that says the model's turn is pending: an unreadable
     // transcript with a blank pane is an idle prompt, and an answered one is never a stall.
     var blankPending = false
@@ -185,6 +207,46 @@ public struct MainWatch: Equatable, Sendable {
   public func blankStallReady(awakeNow: Double) -> Bool {
     stallActive && stallBlankNow && (stallChangedAt.map { awakeNow - $0 >= stallBlankAfter } ?? false)
   }
+
+  /// The owner stopped the agent, or typed in Main's pane, at or after the message was delivered: nothing went missing.
+  var ownerEndedTurn: Bool {
+    guard let u = unseen else { return false }
+    return (lastStop.map { $0 >= u } ?? false) || (paneKeysAt.map { $0 >= u } ?? false)
+  }
+
+  /// An attached client's last key in Main's pane (nil: none attached or unreadable).
+  public mutating func notePaneKeys(_ at: Date?) { if let at { paneKeysAt = max(paneKeysAt ?? at, at) } }
+
+  /// The message at `unseen` when the missed-turn re-delivery may be asked for now: this tick's reading found the idle prompt under a
+  /// thinking-only newest record, nothing changed for `stallBlankAfter`, the bridge can resend, no request is in flight, and this
+  /// message has had no try (the unstick latch: one per message, whichever case spent it). Spends nothing; `askedMissed` does.
+  public func takeMissed(awakeNow: Double) -> Date? {
+    guard stallMissedNow, !ownerEndedTurn, bridgeResends, awaiting == nil, let u = unseen, !unstickTried, awakeNow >= unstickNextTry,
+      let since = stallChangedAt, awakeNow - since >= stallBlankAfter
+    else { return nil }
+    return u
+  }
+
+  /// The message at `unseen` when Main has missed it AGAIN: the missed-turn resend was delivered, and the same idle, thinking-only state is
+  /// back for `stallBlankAfter` (counted from the resend, or from the last change since). Once per message; no second resend is ever asked.
+  public func takeMissedAgain(awakeNow: Double) -> Date? {
+    guard missedResent, !missedAgainTold, stallMissedNow, !ownerEndedTurn, awaiting == nil, let u = unseen, let since = stallChangedAt,
+      awakeNow - since >= stallBlankAfter
+    else { return nil }
+    return u
+  }
+
+  /// The owner was told Main missed the message again.
+  public mutating func missedAgainNoted() { missedAgainTold = true }
+
+  /// The request for the missed turn was written (no key went): the one try for this message is spent.
+  public mutating func askedMissed(unseenAt: Date, min: Int, awakeNow: Double) {
+    unstickTried = true
+    awaiting = Awaiting(unseenAt: unseenAt, since: awakeNow, min: min, missed: true)
+  }
+
+  /// The request could not be written: spent all the same (never a second try), and the owner is told.
+  public mutating func missedNotAsked() { unstickTried = true }
 
   /// The try was refused (typing, a dialog, the gate): look again after `Self.retryAfter`, no Esc spent.
   public mutating func refused(awakeNow: Double) { unstickNextTry = awakeNow + Self.retryAfter }
@@ -216,7 +278,11 @@ public struct MainWatch: Equatable, Sendable {
       return nil
     }
     awaiting = nil
-    if unseen == a.unseenAt { unstick = sent ? .resent(min: a.min) : .failed(min: a.min) }
+    if a.missed, sent, unseen == a.unseenAt {
+      missedResent = true
+      stallChangedAt = awakeNow  // the wait for a second miss runs from the resend
+    }
+    if !a.missed, unseen == a.unseenAt { unstick = sent ? .resent(min: a.min) : .failed(min: a.min) }
     return (a, sent)
   }
 
@@ -246,14 +312,17 @@ public struct MainWatch: Equatable, Sendable {
 public struct MainResendAnswer: Equatable, Sendable {
   public var unseenAt: Date
   public var sent: Bool
-  public init(unseenAt: Date, sent: Bool) {
+  /// The bridge's reason for not sending (`stopped`: the owner stopped the agent), when it gave one.
+  public var why: String?
+  public init(unseenAt: Date, sent: Bool, why: String? = nil) {
     self.unseenAt = unseenAt
     self.sent = sent
+    self.why = why
   }
   public static func decode(_ data: Data) -> MainResendAnswer? {
     guard let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], JSONValue.int(o["v"]) == 1,
       let at = (o["unseen_at"] as? String).flatMap(BridgeStatus.isoDate)
     else { return nil }
-    return MainResendAnswer(unseenAt: at, sent: o["outcome"] as? String == "sent")
+    return MainResendAnswer(unseenAt: at, sent: o["outcome"] as? String == "sent", why: o["why"] as? String)
   }
 }

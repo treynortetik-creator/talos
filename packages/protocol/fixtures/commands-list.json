@@ -31,9 +31,9 @@
     },
     {
       "name": "devices",
-      "summary": "List approved devices or revoke one",
+      "summary": "List approved devices or revoke one (your agent may, unless settings are locked)",
       "agent_may_run": false,
-      "args": "[revoke <id>]",
+      "args": "[list | revoke <id>]",
       "needs_terminal": true,
       "who": "owner_terminal"
     }

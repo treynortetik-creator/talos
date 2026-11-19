@@ -1,6 +1,8 @@
-// The "Own session" switch for one thread (docs/OPTION-C.md 9.2). Shown only when the master switch is on, the Mac can
-// host thread sessions, and the thread may have one (never the default thread, General or Inbox). No card:
-// it is a config.patch like any thread setting. Off by default.
+// The "Own session" switch for one thread (docs/OPTION-C.md 9.2). Shown when the master switch is on (it is, until the owner turns
+// it off: threadSessionsAllowed), the Mac can host thread sessions, and the thread may have one (never the default thread, General
+// or Inbox). No card: it is a config.patch like any thread setting, under the cost note. Off by default. The first one turned on
+// on a config that never wrote the switch writes it on, and turns back to shared any thread left dedicated from before (shown
+// off here): the same change the bridge makes (writeSwitchOnFirstUse), sent here too for a Mac with an older bridge.
 import {
   DEFAULT_IDLE_PARK_MIN,
   DOCUMENTED_EFFORTS,
@@ -25,16 +27,31 @@ export function OwnSession({ thread }: { thread: ThreadT }) {
   const host = useHost()
   const { macOnline, err, busy: saving, apply } = useThreadPatch()
   const view = useThreadSessionView(thread.id)
+  const unwritten = useTalos((s) => s.config != null && s.config.dedicated === undefined)
   const ctl = useThreadSessionsController()
   const [outcome, setOutcome] = useState<ControlOutcome | null>(null)
   const [busy, setBusy] = useState(false)
   if (!view.offered && !view.dedicated) return null
-  const on = thread.session === 'dedicated'
+  // what runs, not what the list says: a thread left dedicated while the switch was never written is shown off
+  const on = view.dedicated
   const idle = thread.session_opts?.idle_park_min ?? 30
 
   // the same save path as every other thread edit: the latest list, one owner-signed patch, errors in words
-  const toggle = (next: boolean) =>
-    apply((latest) => latest.map((t) => (t.id === thread.id ? { ...t, session: next ? 'dedicated' : 'shared' } : t)))
+  const toggle = (next: boolean) => {
+    const firstUse = next && unwritten
+    return apply(
+      (latest) =>
+        latest.map((t) =>
+          t.id === thread.id
+            ? { ...t, session: next ? 'dedicated' : 'shared' }
+            : firstUse && t.session === 'dedicated'
+              ? { ...t, session: 'shared' }
+              : t,
+        ),
+      firstUse ? { dedicated: { enabled: true } } : {},
+      firstUse ? { always: new Map([[thread.id, { session: 'dedicated' }]]) } : {},
+    )
+  }
   const run = async (action: ThreadSessionActionT) => {
     setBusy(true)
     setOutcome(null)

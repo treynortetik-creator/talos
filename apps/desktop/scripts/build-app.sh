@@ -88,6 +88,13 @@ APP="$OUT/Talos.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Talos"
+# A release names no folder of the build Mac in its load commands either: SwiftPM adds the toolchain's back-deploy runtime folder
+# as an LC_RPATH (on a Mac whose Xcode sits under the home folder, that path holds the user's name). The app needs none of it at
+# its deployment target (the OS carries the Swift runtime), so every rpath into an Xcode toolchain or the home folder goes, in
+# every slice; /usr/lib/swift and @loader_path stay. scripts/rpath-scrub-test.sh holds this.
+if [ "$CONFIG" = release ]; then
+  bash "$(dirname "$0")/rpath-scrub.sh" "$APP/Contents/MacOS/Talos" || { echo "build-app: could not take the build Mac's rpaths out of the app" >&2; exit 1; }
+fi
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" Resources/Info.plist.template > "$APP/Contents/Info.plist"
 # The clone this app was built from: Create, Adopt and Choose run its install.sh and bridge (the path may hold any character, so it goes in with plutil, which takes the value as one argument; not sed, and not PlistBuddy, whose command string has quotes of its own). The physical path: the app refuses a clone that is a link.
 # A prebuilt app (--no-checkout-stamp) carries none: the Mac it is installed on records its own clone (install.sh).
@@ -257,8 +264,7 @@ while IFS= read -r nested; do
     */Contents/Helpers/bun) "${SIGN[@]}" --entitlements Resources/entitlements-bun.plist "$nested" ;;
     *) "${SIGN[@]}" "$nested" ;;
   esac
-done < <(find "$APP/Contents" -type f ! -path "$APP/Contents/MacOS/Talos" -print0 \
-  | xargs -0 file -h 2>/dev/null | grep -v '(for architecture ' | sed -n 's/^\([^:]*\): *Mach-O.*/\1/p' | awk -F/ '{print NF "\t" $0}' | sort -rn | cut -f2-)
+done < <(bash scripts/nested-code.sh "$APP")  # the list is nested-code.sh, tested by nested-code-test.sh
 # The hardened build takes the release entitlements: the resources a local build has without asking (Resources/entitlements-release.plist).
 ENTITLEMENTS=Resources/entitlements.plist
 [ "$HARDENED" = 1 ] && ENTITLEMENTS=Resources/entitlements-release.plist

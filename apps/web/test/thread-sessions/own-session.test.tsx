@@ -70,7 +70,7 @@ const thread = (client: FakeClient, id: string) => client.store.getState().threa
 describe('Own session switch', () => {
   it('is hidden while the master switch is off, even when the Mac supports it', async () => {
     const client = setup()
-    withConfig(client, () => ({}))
+    withConfig(client, () => ({ dedicated: { enabled: false } }))
     mount(client, <OwnSession thread={thread(client, 'trip')} />)
     await act(async () => client.emit('workers.status', { status: status() }))
     expect(screen.queryByTestId('own-session')).toBeNull()
@@ -114,6 +114,63 @@ describe('Own session switch', () => {
     expect(patch.patch.threads.find((t) => t.id === 'trip')?.session).toBe('dedicated')
     expect(patch.stepup_token).toBeUndefined()
     await waitFor(() => expect(thread(client, 'trip').session).toBe('dedicated'))
+  })
+
+  it('on a config that never wrote the master switch: a leftover shows off, and the first one on sends the whole change', async () => {
+    const client = setup()
+    withConfig(client, (c) => ({
+      dedicated: undefined,
+      threads: [...c.threads, trip, { ...trip, id: 'garden', name: 'Garden', order: 3, session: 'dedicated' }],
+    }))
+    const garden = mount(client, <OwnSession thread={thread(client, 'garden')} />)
+    await act(async () => client.emit('workers.status', { status: status() }))
+    expect(screen.getByTestId('own-session-switch').getAttribute('aria-checked')).toBe('false')
+    garden.unmount()
+    mount(client, <OwnSession thread={thread(client, 'trip')} />)
+    await act(async () => client.emit('workers.status', { status: status() }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('own-session-switch'))
+      await wait()
+    })
+    await waitFor(() => expect(client.sent.filter((f) => f.type === 'config.patch')).toHaveLength(1))
+    const sent = client.sent.filter((f) => f.type === 'config.patch').at(-1) as {
+      patch: { threads: Array<{ id: string; session?: string }>; dedicated?: unknown }
+    }
+    // what a Mac with an older bridge needs to start only Trip: the switch, Trip by name, the leftover back to shared
+    expect(sent.patch.dedicated).toEqual({ enabled: true })
+    expect(sent.patch.threads.find((t) => t.id === 'trip')?.session).toBe('dedicated')
+    expect(sent.patch.threads.find((t) => t.id === 'garden')?.session).toBe('shared')
+  })
+
+  it('the fake Mac, like the bridge: an unrelated edit with a leftover writes no switch and starts nothing', async () => {
+    const client = setup()
+    withConfig(client, (c) => ({ dedicated: undefined, threads: [...c.threads, { ...trip, session: 'dedicated' }] }))
+    // as the app sends it: every thread by id and place, only what changed (wireThreads)
+    const sent = client.store
+      .getState()
+      .threads.map((t) => ({ id: t.id, order: t.order, ...(t.id === 'general' ? { topic: 'Anything' } : {}) }))
+    await act(async () => client.patchConfig({ threads: sent }))
+    const cfg = client.store.getState().config as AgentConfigT
+    expect(cfg.dedicated).toBeUndefined()
+    expect(cfg.threads.find((t) => t.id === 'trip')?.session).toBe('shared')
+  })
+
+  it('turning on a thread left dedicated from before names it, so the Mac starts that one', async () => {
+    const client = setup()
+    withConfig(client, (c) => ({ dedicated: undefined, threads: [...c.threads, { ...trip, session: 'dedicated' }] }))
+    mount(client, <OwnSession thread={thread(client, 'trip')} />)
+    await act(async () => client.emit('workers.status', { status: status() }))
+    expect(screen.getByTestId('own-session-switch').getAttribute('aria-checked')).toBe('false')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('own-session-switch'))
+      await wait()
+    })
+    await waitFor(() => expect(client.sent.filter((f) => f.type === 'config.patch')).toHaveLength(1))
+    const sent = client.sent.filter((f) => f.type === 'config.patch').at(-1) as {
+      patch: { threads: Array<{ id: string; session?: string }> }
+    }
+    expect(sent.patch.threads.find((t) => t.id === 'trip')?.session).toBe('dedicated')
+    await waitFor(() => expect(screen.getByTestId('own-session-switch').getAttribute('aria-checked')).toBe('true'))
   })
 
   it('a dedicated thread shows its worker state; Park now sends thread.session.control and shows the result', async () => {
@@ -188,20 +245,30 @@ describe('Own session switch', () => {
 })
 
 describe('Settings → Thread sessions', () => {
-  it('the master switch is off by default and turns on with a config.patch', async () => {
+  it('the master switch is on by default (never written) and turns off with a config.patch', async () => {
     const client = setup()
-    withConfig(client, () => ({}))
+    withConfig(client, ({ dedicated: _d, ...c }) => ({ ...c, dedicated: undefined }))
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status() }))
     const sw = screen.getByRole('switch', { name: 'Allow threads to have their own session' })
-    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(sw.getAttribute('aria-checked')).toBe('true')
     await act(async () => {
       fireEvent.click(sw)
       await wait()
     })
     await waitFor(() => expect(client.sent.filter((f) => f.type === 'config.patch')).toHaveLength(1))
     const patch = client.sent.filter((f) => f.type === 'config.patch').at(-1) as { patch: unknown }
-    expect(patch.patch).toEqual({ dedicated: { enabled: true } })
+    expect(patch.patch).toEqual({ dedicated: { enabled: false } })
+  })
+
+  it('a Mac not running thread sessions is shown only a switch that was written on', async () => {
+    const client = setup()
+    withConfig(client, () => ({ dedicated: undefined }))
+    mount(client, <ThreadSessionsSection readOnly={false} />)
+    await act(async () => client.emit('workers.status', { status: status({ supported: false }) }))
+    expect(
+      screen.getByRole('switch', { name: 'Allow threads to have their own session' }).getAttribute('aria-checked'),
+    ).toBe('false')
   })
 
   it('parked rows appear, and the governor banner shows when limits are close', async () => {

@@ -30,7 +30,7 @@ TALOS_TOOLS_ONLY=bun bash "$HERE/scripts/bundle-tools.sh" --out "$T/out" --arch 
 
 # the Claude Code installer script is pinned too
 rm -rf "$T/cache" "$T/out"; mkdir -p "$T/cache"; rm -f "$T/mirror/"*
-echo "a different script" > "$T/mirror/claude-install-3a68d3406cf674e17bed1733a4dcf37805e2e47d87417700007d7e1aa766a944.sh"
+echo "a different script" > "$T/mirror/claude-install-2c5506d110560bf618bbe88f678f2c2a0047c86a9c6585fc84976120b1de0b44.sh"
 TALOS_TOOLS_ONLY=claude bash "$HERE/scripts/bundle-tools.sh" --out "$T/out" --arch arm64 >"$T/log" 2>&1; rc=$?
 [ "$rc" = 9 ] && [ ! -e "$T/out" ] && ok "a changed Claude Code installer script is refused" || bad "claude pin exit $rc"
 

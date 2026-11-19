@@ -20,9 +20,12 @@ extension Supervisor {
     let notReading = l.mainWatch.notReading(awakeNow: awake) != nil
     // the pane's rows and the end of Main's transcript, only while a message waits and its stall is still to be told (or is up)
     if l.mainWatch.wantsStallReads {
-      l.mainWatch.observeStall(rows: host.visibleRows(), transcript: transcript(&l, awake: awake), awakeNow: awake)
+      let rows = host.visibleRows()
+      l.mainWatch.observeStall(
+        rows: rows, transcript: transcript(&l, awake: awake), awakeNow: awake, idle: rows.map { MainStall.idlePrompt(escapedRows: $0) })
     }
     unstickTick(&l, awake: awake)
+    missedTurnTick(&l, awake: awake)
     let stalled = l.mainWatch.stalled()
     settle(relay.down ? .relayUnreachable(relay.closeCode) : nil, key: "relay", launch: &l)
     settle(notReading ? .notReading : nil, key: "unseen", launch: &l)

@@ -4,6 +4,8 @@
 // value written, and the same fate for a field the bridge does not know (a newer peer's), on disk and in memory.
 // One answer changed on purpose (2026-11, standing rule 1): a field the bridge does not know now STAYS on disk (disk_top_key,
 // disk_agent_key are true); in memory it is still not read.
+// Another changed on purpose (2026-11-19, thread sessions allowed by default): `dedicated: {}` on a config that never wrote the
+// switch now writes it ON (`enabled: true`), the switch as the owner was shown it (writeSwitchOnFirstUse); an explicit value is kept.
 // Refresh only on purpose: WRITE_GOLDEN=1 bun test apps/bridge/test/settings-parity.test.ts
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

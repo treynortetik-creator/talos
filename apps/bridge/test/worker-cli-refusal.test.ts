@@ -8,7 +8,13 @@ import { join } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { problemDirs } from '../src/problems/store.ts'
 import { COMMANDS, runTalos } from '../src/talos.ts'
-import { refusedForWorkers, WORKER_COMMANDS_OK, WORKER_READ_OK, workerCliRefusal } from '../src/worker/cli-refusal.ts'
+import {
+  refusedForWorkers,
+  WORKER_AGENT_OK,
+  WORKER_COMMANDS_OK,
+  WORKER_READ_OK,
+  workerCliRefusal,
+} from '../src/worker/cli-refusal.ts'
 
 const made: string[] = []
 afterEach(() => {
@@ -151,6 +157,25 @@ describe('commands that read across threads or the Talos home, from a thread ses
     ])
       expect(refusedForWorkers(argv), argv.join(' ')).toBe(false)
   })
+  test('peer create|add|list|remove|rotate|secret-forget and devices (list, revoke) are open to a thread session; the rest of the fence is unchanged', () => {
+    for (const argv of [
+      ['peer', 'create', 'work'],
+      ['peer', 'add', 'work'],
+      ['peer', 'list'],
+      ['peer', 'remove', 'work'],
+      ['peer', 'rotate', 'work'],
+      ['peer', 'secret-forget', 'work'],
+      ['devices'],
+      ['devices', 'list'],
+      ['devices', 'revoke', 'd_aaaaaaaaaaaaaaaaaaaa'],
+    ])
+      expect(refusedForWorkers(argv), argv.join(' ')).toBe(false)
+    expect(workerCliRefusal(['peer', 'list'], { TALOS_SESSION_ROLE: 'worker' }, plain())).toBeUndefined()
+    expect(workerCliRefusal(['enroll'], { TALOS_SESSION_ROLE: 'worker' }, plain())).toMatch(
+      /not available in a thread session/,
+    )
+    expect(workerCliRefusal(['trust', 'on'], { TALOS_SESSION_ROLE: 'worker' }, plain())).toMatch(/not available/)
+  })
   test('everything else is refused to a thread session: the mutators and the owner commands too', () => {
     for (const argv of [
       ['restore-last-good'],
@@ -166,7 +191,8 @@ describe('commands that read across threads or the Talos home, from a thread ses
       ['init'],
       ['adopt'],
       ['enroll'],
-      ['devices'],
+      ['peer'],
+      ['peer', 'bogus'],
       ['rotate'],
       ['lead'],
       ['lead', 'init', 'trip'],
@@ -189,7 +215,9 @@ describe('commands that read across threads or the Talos home, from a thread ses
       expect(
         refused,
         `talos-app ${c.name}: ${refused ? 'refused, but named safe' : 'allowed, but not named safe'}`,
-      ).toBe(!WORKER_COMMANDS_OK.includes(c.name) && !WORKER_READ_OK.includes(c.name))
+      ).toBe(
+        !WORKER_COMMANDS_OK.includes(c.name) && !WORKER_READ_OK.includes(c.name) && !WORKER_AGENT_OK.includes(c.name),
+      )
     }
     // the safe names are real commands (guard-hook is the one hook entry the list of commands does not carry)
     const known = new Set(COMMANDS.map((c) => c.name))

@@ -304,9 +304,12 @@ describe('sub-threads: effective options', () => {
       }
     }
   })
-  it('a parent with no folder of its own means its subs are refused', () => {
-    const all = [thread('p'), thread('s', { parent: 'p', opts: { cwd: '/home/alex/p/s' } })]
-    expect(launch(all[1] as Raw, all).refusal).toContain('give the parent a folder first')
+  // the owner, 2026-11-19: a sub-thread with its own folder under a parent with none was refused ("give the parent a folder first")
+  it('a parent with no folder of its own: a sub with a folder of its own starts, judged against the agent folder by the wiring', () => {
+    const all = [thread('p'), thread('s', { parent: 'p', opts: { cwd: '/home/alex/Desktop/reports' } })]
+    const l = launch(all[1] as Raw, all)
+    expect(l.refusal).toBeNull()
+    expect([l.ownCwd, l.shares, l.parentCwd]).toEqual([true, false, null])
     const junkParent = [
       thread('p', { opts: { cwd: 7 } }),
       thread('s', { parent: 'p', opts: { cwd: '/home/alex/p/s' } }),

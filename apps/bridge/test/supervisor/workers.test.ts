@@ -1012,6 +1012,41 @@ describe('what a worker’s pane tells the owner (P3d3, part 4b-i)', () => {
     await ticks(x, DIALOG_CARD_WAIT_MS / 1000 + 5)
     expect(x.posts).toHaveLength(1)
   })
+  it('after the owner’s "No, exit" on the trust question the session ends as that answer: failed with its own words, no crash, no restart', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    x.host().screen = TRUST
+    await ticks(x, WORKER_TIMING.dialog_settle_s + 1)
+    // what the tap's answer sets (worker-dialogs.ts, tested there): the Enter on "No, exit" was sent
+    const w = (x.m as unknown as { workers: Map<string, { offer: { declinedTrust: boolean } }> }).workers.get('trip')
+    if (!w) throw new Error('no worker')
+    w.offer.declinedTrust = true
+    x.host().exit(1)
+    await ticks(x, 3)
+    expect(x.m.state('trip')).toBe('failed')
+    expect(x.m.entry('trip')?.error?.code).toBe('start_failed')
+    expect(x.m.entry('trip')?.error?.detail).toContain('chose not to trust')
+    expect(x.m.entry('trip')?.restarts ?? []).toEqual([])
+    await ticks(x, 30)
+    expect(x.m.state('trip')).toBe('failed') // never restarted by itself
+  })
+  it('a "No" that was pressed but did not end the session is forgotten once the session runs: a later crash is a crash', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    const w = (x.m as unknown as { workers: Map<string, { offer: { declinedTrust: boolean } }> }).workers.get('trip')
+    if (!w) throw new Error('no worker')
+    w.offer.declinedTrust = true
+    x.host().exit(1) // the session runs again after its next start
+    await ticks(x, 3)
+    expect(x.m.entry('trip')?.error?.detail).toContain('chose not to trust')
+    w.offer.declinedTrust = true
+    freshWake(x, 'm_01HZZZZZZZZZZZZZZZZZZZZZZW')
+    await live(x)
+    expect(w.offer.declinedTrust).toBe(false)
+    x.host().exit(1)
+    await ticks(x, 3)
+    expect(x.m.entry('trip')?.error?.detail ?? '').not.toContain('chose not to trust')
+  })
   it('a start with no dialog still times out at ready_s (the hold is only for what is on screen)', async () => {
     const x = setup()
     await x.tick()

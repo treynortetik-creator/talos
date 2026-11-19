@@ -161,6 +161,8 @@ extension WorkerManager {
         else { return .nothing() }
         guard let sent = sendKey(id, tmux(id).sendDialogKey(.enter), intent), sent.ok || sent.timedOut else { return .nothing() }  // a timeout may have been delivered: counted, never repeated
         rt[id]?.offer.enterSentFor = offer.id
+        // only a delivery tmux confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
+        if offer.kind == .trust, !chosen.hasPrefix("Yes"), sent.ok { rt[id]?.offer.declinedTrust = true }
         return .init(outcome: .pressed, choice: choice, label: chosen)
       }
       guard let sent = sendKey(id, tmux(id).sendDialogKey(key), intent), sent.ok || sent.timedOut, moved(id, offer, key, from: from) else {

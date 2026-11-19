@@ -32,13 +32,22 @@ async function piped(args: string[], stdin = 'y\n') {
 const GATED: [string, string[]][] = [
   ['enroll', ['enroll', '--no-qr']],
   ['enroll --confirm', ['enroll', '--confirm']],
-  ['devices', ['devices']],
-  ['devices revoke', ['devices', 'revoke', 'd_aaaaaaaaaaaaaaaaaaaa']],
+  ['devices bogus', ['devices', 'bogus']],
   ['rotate', ['rotate']],
   ['trust on', ['trust', 'on']],
 ]
 
 describe('human-only commands refuse when stdio is not a terminal', () => {
+  // `devices list|revoke` and `peer ...` are the agent's unless the lock is on (agent-cli.test.ts); with no config.json to read the lock
+  // from, the agent is refused for that reason
+  test('devices and devices revoke, piped, are refused (no readable config: the lock cannot be read)', async () => {
+    for (const args of [['devices'], ['devices', 'revoke', 'd_aaaaaaaaaaaaaaaaaaaa']]) {
+      const r = await piped(args)
+      expect(r.code).toBe(1)
+      expect(r.err).toMatch(/config\.json/)
+    }
+  })
+
   test('printf y | talos-app enroll --confirm refuses', async () => {
     const r = await piped(['enroll', '--confirm'], 'y')
     expect(r.code).toBe(1)
@@ -117,7 +126,7 @@ describe('one table drives the gate and agent_may_run', () => {
       now: () => Date.now(),
     })
     const env = { TALOS_APP_HOME: home }
-    expect(await runCli(['devices'], io(false), env)).toBe(1)
+    expect(await runCli(['devices', 'bogus'], io(false), env)).toBe(1)
     expect(err.join('\n')).toMatch(TERMINAL_ONLY)
     expect(await runCli(['devices'], io(true), env)).toBe(0)
   })

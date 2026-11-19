@@ -9,7 +9,7 @@ import Foundation
 public struct ClaudeInstaller: Sendable {
   /// sha256 of the installer script as it was when this Talos was released (2026-11-19), and the Claude Code version it is asked for.
   /// `bundle-tools.sh` pins the same hash. Bump both together.
-  public static let pinnedScriptSHA256 = "3a68d3406cf674e17bed1733a4dcf37805e2e47d87417700007d7e1aa766a944"
+  public static let pinnedScriptSHA256 = "2c5506d110560bf618bbe88f678f2c2a0047c86a9c6585fc84976120b1de0b44"
   public static let pinnedVersion = "2.1.328"
 
   /// The copy inside the app; nil for a build that has none (a development build).

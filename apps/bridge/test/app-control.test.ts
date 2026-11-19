@@ -51,7 +51,9 @@ const thread = (id: string, name: string, extra: Record<string, unknown> = {}) =
 })
 
 // `lock` (default on): the card flow. Off, a change the owner asked for is made at once (settings-on-request.test.ts).
-async function start(o: { trust?: boolean; dedicated?: boolean; threads?: unknown[]; lock?: boolean } = {}) {
+async function start(
+  o: { trust?: boolean; dedicated?: boolean | 'unwritten'; threads?: unknown[]; lock?: boolean } = {},
+) {
   lines.length = 0
   h = await startHarness({
     relay: RELAY,
@@ -60,7 +62,9 @@ async function start(o: { trust?: boolean; dedicated?: boolean; threads?: unknow
       ...c,
       ...(o.trust ? { trust_mode: true } : {}),
       ...(o.lock === false ? {} : { settings_lock: true }),
-      ...(o.dedicated === false ? {} : { dedicated: { enabled: true } }),
+      ...(o.dedicated === 'unwritten'
+        ? {}
+        : { dedicated: o.dedicated === false ? { enabled: false, max_live: 2 } : { enabled: true } }),
       threads: [
         ...c.threads,
         thread('trip', 'Trip', { topic: 'Flights' }),
@@ -181,7 +185,19 @@ describe('rename, retopic, own session and the model list, through a card', () =
     expect(card.body).toContain('Thread sessions: off → on')
     await approve(x, card)
     await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(true))
+    expect(cfg(x).dedicated?.max_live).toBe(2)
     expect(await doneText(x, card)).toContain('To undo: Thread sessions back to off')
+  })
+
+  test('on a config that never wrote the switch, the agent reads it on, as the owner does: off is the card', async () => {
+    await start({ trust: true, dedicated: 'unwritten' })
+    const x = h as Harness
+    await ownerAsks(x)
+    expect((await propose(x, [{ path: 'dedicated', value: true }])).isError).toBe(true)
+    const card = await proposeCard(x, [{ path: 'dedicated', value: false }])
+    expect(card.body).toContain('Thread sessions: on → off')
+    await approve(x, card)
+    await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(false))
   })
 
   test('change a session model: the list on a card, then applied; the old list is in the result', async () => {

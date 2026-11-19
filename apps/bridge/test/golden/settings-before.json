@@ -3621,7 +3621,7 @@
         "r": {
           "ok": true,
           "at": {
-            "enabled": false,
+            "enabled": true,
             "max_live": 3,
             "governor": {
               "five_hour": 80,
@@ -3633,7 +3633,7 @@
           },
           "disk_rev": 1,
           "disk_at": {
-            "enabled": false,
+            "enabled": true,
             "max_live": 3,
             "governor": {
               "five_hour": 80,

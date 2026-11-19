@@ -54,6 +54,7 @@ talos-dl-
 talos-dotenv-
 talos-emb-
 talos-folder-
+talos-folder-trust-
 talos-guards-
 talos-hook-
 talos-hookapp-
@@ -161,3 +162,8 @@ talos-autoclone-
 talos-tools-
 talos-build-tools-
 talos-tools-test-
+talos-nested-test-
+talos-release-dryrun-
+talos-dryrun-wanted-
+talos-rpath-test-
+talos-rpath-out-

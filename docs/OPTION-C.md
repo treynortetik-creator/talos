@@ -1,8 +1,15 @@
 # Option C: a dedicated Claude Code session per thread (opt-in)
 
-Status: being built in work packages. This page grows with each one. Everything here is **off by default**: with the
-master switch off, or a thread left on `shared`, Talos behaves exactly as before (the main session answers every
-thread, option B in [CLAUDE-CODE.md](CLAUDE-CODE.md) C8).
+Status: being built in work packages. This page grows with each one. Every thread starts on `shared`: with a thread left
+on `shared`, or the master switch off, Talos behaves exactly as before (the main session answers every thread, option B in
+[CLAUDE-CODE.md](CLAUDE-CODE.md) C8).
+
+**Allowed by default (2026-11-19).** The master switch (`dedicated.enabled`) shows **on** for a config that never wrote it
+(every new install), so each ordinary thread's settings offer **Own session**, off, under its cost note
+(`threadSessionsAllowed`). Routing, and the Mac app, still read a missing switch as off; the first thread turned on writes
+it on (`writeSwitchOnFirstUse`: the bridge's `config.patch` and `update`, and the app's own patch for a Mac with an older
+bridge), and any thread already `dedicated` that the change does not name goes back to `shared`, since it never ran and was
+shown off. An explicit `enabled: false` stays off. The agent's settings row reads what runs (off until written).
 
 ## The idea
 
@@ -440,7 +447,7 @@ of the launch spec, so an update that changes them restarts sessions. The defaul
 | Store                      | `apps/web/src/features/thread-sessions/store.ts`                           | the last `workers.status` (also from `ready.workers_status`); `useThreadSessionView(id)` = offered / unsupported / dedicated / worker; park, resume, restart, fresh as signed `thread.session.control`, answered by `session.control.result`                                                                                                                                                                                                                 |
 | Own session                | `OwnSession.tsx`, in the thread settings sheet (`manage/ThreadEditor.tsx`) | the switch, shown only when `dedicated.enabled`, `workers.status.supported`, and `canBeDedicated` (never the default thread, General, Inbox); the cost note; the worker's state ("Live", "Parked 14:02", a failure in words); Park now, Restart, Start fresh                                                                                                                                                                                                 |
 | Status line                | `thread-sessions/words.ts`, `useSessionWords.ts`, `SessionStatus.tsx`      | what the session is doing in words (`sessionWords`): waiting on the owner and for what (a permission card, a usage limit with its reset, a prompt at the Mac with the step), working since when (amber after 2 h in one turn), parked and why, failed, Mac offline. The Threads screen row shows it instead of the last message unless the session is plain idle; the thread header's pill opens a sheet with the sentence, the step and "Open the request". |
-| Settings → Thread sessions | `ThreadSessionsSection.tsx`                                                | the master switch (off by default; `config.patch {dedicated: {enabled}}`, no step-up), one row per dedicated thread (parked ones too), the "Saving limits" banner when the governor pauses                                                                                                                                                                                                                                                                   |
+| Settings → Thread sessions | `ThreadSessionsSection.tsx`                                                | the master switch (on until the owner turns it off, where the Mac runs thread sessions; `config.patch {dedicated: {enabled}}`, no step-up), one row per dedicated thread (parked ones too), the "Saving limits" banner when the governor pauses                                                                                                                                                                                                              |
 | Session sheet              | `features/session/SessionPanel.tsx`, `store.ts`                            | the weekly bar says "all sessions" once thread sessions are allowed and shows the newest reading of any session, with "as of N min ago" past 2 min and dimmed past 15 (`rate_limits[].as_of`, sent only to a relay listing `usage-as-of/1`); a thread-scoped `session.state` never replaces main's                                                                                                                                                           |
 
 Rules the reviews added: the switch also needs `thread-sessions/1` in `presence.features`; the store starts at the app

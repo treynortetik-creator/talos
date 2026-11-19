@@ -190,7 +190,9 @@ public enum SubThreads {
           // a parent whose folder setting cannot be read is refused itself: a child must not fall back to the agent folder (Main's)
           refusal = "the parent thread's folder setting can't be read (\(bad)): fix it, so the sub-thread has a folder to follow"
         } else if let cwd = mine.cwd {
-          if let parentCwd { shares = sameFolder(cwd, parentCwd) } else { refusal = "the parent thread has no folder: give the parent a folder first" }
+          // under a parent with no folder (it runs in the agent folder) a folder of its own is judged against the agent folder:
+          // `DedicatedSettings.judgedAgainstAgentFolder` hands that on (`subthreads_folderless_parent`, the owner 2026-11-19)
+          if let parentCwd { shares = sameFolder(cwd, parentCwd) }
         } else {
           shares = true
         }

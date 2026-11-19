@@ -7,6 +7,7 @@ import { configSyncFrame } from './frames-out.ts'
 import type { Inbound } from './inbound.ts'
 import type { Item, Of } from './inbound-shared.ts'
 import { systemNotification } from './notify.ts'
+import { recordOwnerFolders } from './supervisor/owner-folders.ts'
 import { describeDefaultChange, describeThreadChanges } from './thread-changes.ts'
 import { keptInboxThreadIds, removeGoneInboxes } from './worker/inbox.ts'
 
@@ -27,6 +28,12 @@ export const configFrames = {
     }
     this.fire(configSyncFrame(ctx.clock.now(), r.config, f.id))
     ctx.config.markSynced(r.config)
+    // the folders this signed patch set are the owner's choice: the supervisor pre-accepts folder trust for those and no others
+    try {
+      recordOwnerFolders(ctx.paths.home, before.threads, r.config.threads, (rawPatch as { threads?: unknown }).threads)
+    } catch (e) {
+      ctx.log.warn('owner-folders.json not written: folder trust will ask on the phone', { why: (e as Error).message })
+    }
     ctx.permission.reconcile()
     ctx.log.info('config patched', { rev: r.config.rev })
     emitFolderEvents(ctx.log, before.threads, r.config.threads)

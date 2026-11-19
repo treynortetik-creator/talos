@@ -56,6 +56,30 @@ export function terminalOnly(argv: readonly string[], prog: 'talos' | 'talos-app
 }
 
 /**
+ * The commands the agent may run itself unless "Lock Talos settings" is on (owner ruling 2026-11-19), though their rows stay
+ * `needs_terminal`: the guards (when installed) deny them as before, and cli-main.ts skips its terminal gate for exactly these.
+ * `devices` alone is `devices list`. The name of the one `argv` runs, or undefined (`enroll`, `rotate`, `trust on`, an unknown
+ * subcommand: terminal-only as ever).
+ */
+export const AGENT_UNLESS_LOCKED = [
+  'peer create',
+  'peer add',
+  'peer list',
+  'peer remove',
+  'peer rotate',
+  'peer secret-forget',
+  'devices list',
+  'devices revoke',
+] as const
+export function agentUnlessLocked(argv: readonly string[]): (typeof AGENT_UNLESS_LOCKED)[number] | undefined {
+  const [a, b] = argv
+  const name = a === 'devices' && b === undefined ? 'devices list' : `${a} ${b}`
+  return (AGENT_UNLESS_LOCKED as readonly string[]).includes(name)
+    ? (name as (typeof AGENT_UNLESS_LOCKED)[number])
+    : undefined
+}
+
+/**
  * Commands only the Talos app runs, never a session: `guards refresh` (the Mac app, before each start of Main). Not terminal-only
  * (the app has no terminal), so they are kept from a session by the guards instead: the hook and a deny rule (guards/rules.ts).
  * The name of the one `argv` runs, or undefined.
@@ -210,12 +234,16 @@ export const COMMANDS: readonly CommandInfo[] = [
     summary: 'Create the home folder, bridge key and config',
   },
   ownerTerminal('enroll', 'Approve a new phone or browser', '[--label <name>] [--no-qr] [--confirm] [--json]'),
-  ownerTerminal('devices', 'List approved devices or revoke one', '[revoke <id>]'),
+  ownerTerminal(
+    'devices',
+    'List approved devices or revoke one (your agent may, unless settings are locked)',
+    '[list | revoke <id>]',
+  ),
   ownerTerminal('rotate', 'Replace the bridge key'),
   ownerTerminal(
     'peer',
-    'Link this Talos to another of yours: create, add, list, remove or rotate a peer',
-    'create <name> | add <name> --url <https url> | list | remove <name> | rotate <name>',
+    'Link this Talos to another of yours (your agent may, unless settings are locked)',
+    'create <name> | add <name> --url <https url> [--secret-file <file>] | list | remove <name> | rotate <name> | secret-forget <name>',
   ),
   {
     name: 'start',

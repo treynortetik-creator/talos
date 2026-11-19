@@ -164,6 +164,32 @@ struct NeedsYouPopupGuiTests {
     #expect(clicked.isEmpty, "NSApp.currentEvent is nil here, as it is for an Accessibility press")
   }
 
+  /// The "Trust this folder?" popup answers a safety prompt: only a person's own click at the Mac may answer it. Neither answer button
+  /// ("No, exit", "Yes, I trust this folder") reacts to an Accessibility press, an AppleScript press (no event), a click another program
+  /// posted (a screen or computer-use tool stamps its own process id), or one from the combined session state; a real click answers.
+  @Test func theTrustPopupIsAnsweredOnlyByARealClickNeverByAProgram() throws {
+    _ = NSApplication.shared
+    var clicked: [Int] = []
+    var event: NSEvent?
+    let panel = NeedsYouPopupController.makePanel(for: popup(item(idA, kind: .trust)), onClick: { clicked.append($0) }, onClose: {}, currentEvent: { event })
+    let answers = buttons(in: try content(panel)).filter { $0.tag >= 0 }.sorted { $0.tag < $1.tag }
+    #expect(answers.map(\.title) == ["No, exit", "Yes, I trust this folder"])
+    for b in answers {
+      event = nil
+      click(b)  // an Accessibility or AppleScript press: no event
+      event = try mouse(.leftMouseUp, on: b, pid: 4242)  // a click a program posted
+      click(b)
+      event = try mouse(.leftMouseUp, on: b, state: 0)  // posted from the combined session state
+      click(b)
+      event = try mouse(.leftMouseUp, on: b, age: 5)  // an old event
+      click(b)
+    }
+    #expect(clicked.isEmpty, "a program answered the trust question: \(clicked)")
+    event = try mouse(.leftMouseUp, on: answers[1])
+    click(answers[1])
+    #expect(clicked == [1], "the owner's own click answers")
+  }
+
   /// Main's development-channels popup: Accept (the one that seals the launch) is answered only by a real mouse click. A program that presses
   /// the button (Accessibility, AppleScript) sends no mouse event, and one that posts a click stamps its own process id on it, so nothing is
   /// asked, nothing is pressed, nothing is sealed.

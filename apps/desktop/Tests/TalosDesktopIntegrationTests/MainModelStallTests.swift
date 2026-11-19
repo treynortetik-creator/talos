@@ -327,6 +327,161 @@ struct MainModelStallTests {
     #expect(body["blank"] as? Bool == true)
   }
 
+  // MARK: the missed turn: an empty thinking block, then nothing, Main idle at its prompt
+
+  private let idlePane = ["❯ hello", "", "⏺ Read(file)", "", String(repeating: "─", count: 80), "❯ ", String(repeating: "─", count: 80), "  ⏵⏵ bypass permissions on"]
+  private let thinkingRecord = "{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{\"role\":\"assistant\",\"stop_reason\":null,\"content\":[{\"type\":\"thinking\",\"thinking\":\"\"}]}}"
+  private func missedAsked(_ r: Rig) -> Bool { r.audit.contains("missed_turn") }
+  private func idleFor(_ r: Rig, _ host: RedrawingHost, message: Date, pane: [String]? = nil, seconds: Double, stopWhenAsked: Bool = false) throws {
+    var left = seconds
+    while left > 0, !(missedAsked(r) && stopWhenAsked) {
+      host.show(pane ?? idlePane)
+      try r.pass(15, unseen: message)
+      left -= 15
+    }
+  }
+
+  @Test func aMissedTurnIsSentAgainOnceWithNoKeyAndTheOwnerIsToldInPlainWords() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    try append(try transcript(r), "{\"type\":\"system\",\"subtype\":\"away_summary\"}")
+    host.resetKeys()
+    let message = Date().addingTimeInterval(1)
+    try idleFor(r, host, message: message, seconds: MainRestartContract.stallBlankS - 30)
+    #expect(!missedAsked(r), "not before the wait: \(r.audit)")
+    try idleFor(r, host, message: message, seconds: 75, stopWhenAsked: true)
+    #expect(missedAsked(r), "audit: \(r.audit)")
+    let body = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: r.talosHome + "/main-resend.json"))) as? [String: Any])
+    #expect(body["missed"] as? Bool == true && body["blank"] == nil)
+    #expect(host.keys == 0, "no Esc, no key at all: \(host.keys)")
+    #expect(phoneLines(r, containing: "missed your message", wait: false) == 0, "nothing is claimed before the bridge answers")
+    try answer(r, message, outcome: "sent")
+    try r.pass(15, unseen: message)
+    #expect(phoneLines(r, containing: "Your agent missed your message; sent it again") == 1, "\(r.phonePosts)")
+    #expect(r.sup.status.needsYou == nil, "the stall alarm is not raised for this case: \(String(describing: r.sup.status.needsYou))")
+    try? FileManager.default.removeItem(atPath: r.talosHome + "/main-resend.json")
+    try idleFor(r, host, message: message, seconds: 900)  // same message, still nothing: never a second request
+    #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/main-resend.json"))
+    #expect(phoneLines(r, containing: "Your agent missed your message; sent it again", wait: false) == 1 && host.keys == 0, "keys \(host.keys), \(r.phonePosts)")
+    #expect(phoneLines(r, containing: "missed your message again", wait: false) == 1, "the one line for a second miss, not a second send: \(r.phonePosts)")
+  }
+
+  @Test func aSecondMissOfTheResentMessageIsOneLineAndNoSecondRequest() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    host.resetKeys()
+    let message = Date().addingTimeInterval(1)
+    try idleFor(r, host, message: message, seconds: MainRestartContract.stallBlankS + 45, stopWhenAsked: true)
+    #expect(missedAsked(r), "audit: \(r.audit)")
+    try answer(r, message, outcome: "sent")
+    try r.pass(15, unseen: message)
+    #expect(phoneLines(r, containing: "Your agent missed your message; sent it again") == 1, "\(r.phonePosts)")
+    // Main takes the resend in and ends on another empty thinking block: the same state is back
+    try append(try transcript(r), thinkingRecord)
+    try? FileManager.default.removeItem(atPath: r.talosHome + "/main-resend.json")
+    try idleFor(r, host, message: message, seconds: MainRestartContract.stallBlankS + 60)
+    #expect(phoneLines(r, containing: "Your agent missed your message again; please send it again or restart it") == 1, "\(r.phonePosts)")
+    try idleFor(r, host, message: message, seconds: 900)
+    #expect(phoneLines(r, containing: "missed your message again", wait: false) == 1, "once per message: \(r.phonePosts)")
+    #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/main-resend.json"), "no second request")
+    #expect(host.keys == 0)
+  }
+
+  /// Dante's two "stalls" of 2026-11-19: the owner pressed Stop in the app. Delivery, a thinking-only tail, the bridge's record of the
+  /// stop, 90 s and more of idle prompt: no request, no line, no key.
+  @Test func aStopTheOwnerPressedIsNeverAMissedTurn() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    host.resetKeys()
+    let message = Date().addingTimeInterval(1)
+    let stop = message.addingTimeInterval(3)
+    for _ in 0..<40 {
+      host.show(idlePane)
+      try r.pass(15, unseen: message, stop: stop)
+    }
+    #expect(!missedAsked(r), "audit: \(r.audit)")
+    #expect(!FileManager.default.fileExists(atPath: r.talosHome + "/main-resend.json"))
+    #expect(phoneLines(r, containing: "missed your message", wait: false) == 0, "\(r.phonePosts)")
+    #expect(host.keys == 0)
+  }
+
+  @Test func aStopForAnEarlierMessageLeavesALaterMissToBeSentAgain() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    let message = Date().addingTimeInterval(1)
+    var left = MainRestartContract.stallBlankS + 45
+    while left > 0, !missedAsked(r) {
+      host.show(idlePane)
+      try r.pass(15, unseen: message, stop: message.addingTimeInterval(-600))
+      left -= 15
+    }
+    #expect(missedAsked(r), "audit: \(r.audit)")
+  }
+
+  @Test func aMissedTurnTheBridgeRefusedIsToldAsNotSent() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    let message = Date().addingTimeInterval(1)
+    try idleFor(r, host, message: message, seconds: MainRestartContract.stallBlankS + 45, stopWhenAsked: true)
+    #expect(missedAsked(r), "audit: \(r.audit)")
+    try answer(r, message, outcome: "failed")
+    try r.pass(15, unseen: message)
+    #expect(phoneLines(r, containing: "couldn't send it again; please send it again") == 1, "\(r.phonePosts)")
+    #expect(phoneLines(r, containing: "sent it again", wait: false) == 0 || phoneLines(r, containing: "Your agent missed your message; sent it again", wait: false) == 0)
+  }
+
+  @Test func aThinkingRecordWithAWorkingLineIsNotAMissedTurn() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    try append(try transcript(r), thinkingRecord)
+    host.resetKeys()
+    let message = Date().addingTimeInterval(1)
+    try idleFor(r, host, message: message, pane: working(40), seconds: 200)  // a constant working line, past 90 s and 180 s
+    #expect(!missedAsked(r) && host.keys == 0, "audit: \(r.audit)")
+  }
+
+  @Test func aMainThatRepliedOrWasInterruptedIsNeverMissed() throws {
+    let box = Box()
+    let r = try rig(box)
+    defer { r.teardown() }
+    let host = try #require(box.host)
+    let file = try transcript(r)
+    try append(file, thinkingRecord)
+    try append(file, "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"[Request interrupted by user]\"}]}}")
+    let message = Date().addingTimeInterval(1)
+    try idleFor(r, host, message: message, seconds: 300)
+    #expect(!missedAsked(r), "an interrupt ends the turn: \(r.audit)")
+    // and a reply (the model's own text record) after the thinking record
+    try append(file, thinkingRecord)
+    try append(file, "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}")
+    try idleFor(r, host, message: message, seconds: 300)
+    #expect(!missedAsked(r), "audit: \(r.audit)")
+    // and a bridge that says the message was read has nothing unseen
+    try append(file, thinkingRecord)
+    for _ in 0..<20 {
+      host.show(idlePane)
+      try r.pass(15, unseen: nil)
+    }
+    #expect(!missedAsked(r), "audit: \(r.audit)")
+  }
+
   @Test func aSpinnerStallsRequestDoesNotClaimToBeTheBlankCase() throws {
     let box = Box()
     let r = try rig(box)

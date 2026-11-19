@@ -9,6 +9,7 @@ import {
   applyMergePatch,
   checkConfigPatch,
   clearArchivedSessions,
+  clearUnswitchedSessions,
   DRIVING_MAX_MS,
   HIGH_RISK_SETTING_PATHS,
   isInheritedName,
@@ -20,6 +21,7 @@ import {
   threadOptsIssue,
   threadPatchIssue,
   validateAgentConfig,
+  writeSwitchOnFirstUse,
 } from '@talos-app/protocol'
 import { saveConfigVersion } from './config-history.ts'
 import { mtimeMs, readJsonFile, writeJsonAtomic } from './fsutil.ts'
@@ -67,6 +69,22 @@ export function newInheritedThread(cur: AgentConfigT, next: AgentConfigT): strin
 const inheritedMessage = (id: string) =>
   `thread id "${id}" is a name every object already has; pick another id (the slug of the name gets _thread added)`
 
+type SubThreadFlag =
+  | 'subthreads_supported'
+  | 'subthreads_own_folder'
+  | 'subthreads_shared_folder'
+  | 'subthreads_folderless_parent'
+
+/** ConfigFile's sub-thread capability options, each read through `flag` (the supervisor's workers.json, while it is fresh). */
+export function supervisorFlagOpts(flag: (key: SubThreadFlag) => boolean) {
+  return {
+    subthreadsSupported: () => flag('subthreads_supported'),
+    subthreadsOwnFolder: () => flag('subthreads_own_folder'),
+    subthreadsSharedFolder: () => flag('subthreads_shared_folder'),
+    subthreadsFolderlessParent: () => flag('subthreads_folderless_parent'),
+  }
+}
+
 export class ConfigFile {
   private current!: AgentConfigT
   private seenMtime = -1
@@ -79,6 +97,7 @@ export class ConfigFile {
   private readonly macSubThreads: () => boolean
   private readonly macOwnFolder: () => boolean
   private readonly macSharedFolder: () => boolean
+  private readonly macFolderlessParent: () => boolean
 
   constructor(
     private readonly path: string,
@@ -92,12 +111,15 @@ export class ConfigFile {
       subthreadsOwnFolder?: () => boolean
       /** Does it also start a dedicated sub-thread with no folder, or its parent's own, in the parent's folder? Absent = no (the old refusal). */
       subthreadsSharedFolder?: () => boolean
+      /** Does it also start a dedicated sub-thread with a folder of its own under a parent with none? Absent = no (refused). */
+      subthreadsFolderlessParent?: () => boolean
     } = {},
   ) {
     this.roots = opts.roots ?? defaultWorkerRoots(path)
     this.macSubThreads = opts.subthreadsSupported ?? (() => false)
     this.macOwnFolder = opts.subthreadsOwnFolder ?? (() => false)
     this.macSharedFolder = opts.subthreadsSharedFolder ?? (() => false)
+    this.macFolderlessParent = opts.subthreadsFolderlessParent ?? (() => false)
     this.log = opts.log
     this.schema = opts.schema ?? AgentConfig
   }
@@ -108,7 +130,8 @@ export class ConfigFile {
     if (raw === undefined) throw new Error(`cannot read ${this.path}; run: talos-app init --relay-url <url>`)
     const r = parseConfig(raw, this.schema)
     if (!r.ok) throw new Error(r.message)
-    this.current = r.config
+    // no switch written, no thread on its own session (it never ran): written so on the next write (thread-sessions.ts)
+    this.current = clearUnswitchedSessions(r.config)
     this.seenMtime = mtimeMs(this.path)
     return this.current
   }
@@ -137,7 +160,13 @@ export class ConfigFile {
     if (!r?.ok) return false // keep the last good config; the owner is probably mid-edit
     if (jcs(r.config) === before) return false
     const prevRev = this.current ? this.current.rev : -1
-    this.current = clearArchivedSessions(r.config)
+    const unswitched = clearUnswitchedSessions(r.config)
+    if (unswitched !== r.config)
+      this.log?.warn(
+        'config.json: a thread was set to its own session with no dedicated.enabled; it stays shared until the switch is on',
+        { threads: r.config.threads.filter((t) => t.session === 'dedicated').map((t) => t.id) },
+      )
+    this.current = clearArchivedSessions(unswitched)
     if (this.current.rev <= prevRev || this.current !== r.config)
       this.write({ ...this.current, rev: Math.max(this.current.rev, prevRev + 1) })
     return true
@@ -153,7 +182,7 @@ export class ConfigFile {
     const raw = readJsonFile(this.path)
     const r = raw === undefined ? undefined : parseConfig(raw, this.schema)
     this.seenMtime = m
-    if (r?.ok) this.current = r.config
+    if (r?.ok) this.current = clearUnswitchedSessions(r.config)
   }
 
   markSynced(config: AgentConfigT) {
@@ -190,12 +219,22 @@ export class ConfigFile {
     }
   }
 
+  /** The supervisor starts a dedicated sub-thread with a folder of its own under a parent with none (judged against the agent folder). */
+  subthreadsFolderlessParent(): boolean {
+    try {
+      return this.macFolderlessParent()
+    } catch {
+      return false
+    }
+  }
+
   /** What the sub-thread rule is judged with. */
-  subThreadOpts(): { macSupports: boolean; ownFolder: boolean; sharedFolder: boolean } {
+  subThreadOpts(): { macSupports: boolean; ownFolder: boolean; sharedFolder: boolean; folderlessParent: boolean } {
     return {
       macSupports: this.subthreadsSupported(),
       ownFolder: this.subthreadsOwnFolder(),
       sharedFolder: this.subthreadsSharedFolder(),
+      folderlessParent: this.subthreadsFolderlessParent(),
     }
   }
 
@@ -213,7 +252,11 @@ export class ConfigFile {
     const sub = subThreadPatchIssue(base, checked.config, this.subThreadOpts())
     if (sub) throw new Error(sub)
     // archiving a thread (the agent's archive_thread) also turns its own session off (docs/OPTION-C.md 9.2)
-    this.write(clearArchivedSessions(checked.config), opts.setsTrustMode === true)
+    // a tool turning a thread on, on a config that never wrote the thread-sessions switch, writes it (thread-sessions.ts)
+    this.write(
+      clearUnswitchedSessions(writeSwitchOnFirstUse(base, clearArchivedSessions(checked.config))),
+      opts.setsTrustMode === true,
+    )
     return this.current
   }
 
@@ -258,12 +301,16 @@ export class ConfigFile {
     if (issue) return { ok: false, code: 'bad_frame', message: issue }
     // Option C (docs/OPTION-C.md 9.2), on exactly what gets written: archived threads go back to shared, then the
     // threads this change touches are judged and new thread folders are checked on disk
-    const next = clearArchivedSessions(checked.config)
-    const optionC = optionCPatchIssue(cur, next, this.roots)
+    // the switch is shown on until it is written: the first thread turned on writes it, so the Mac starts that session; with no
+    // switch written, no thread is on its own session (cur is read that way, and so is what is written), so it is the only one
+    // (thread-sessions.ts). Judged as asked: a thread that may never have its own session is refused in words, not cleared.
+    const asked = writeSwitchOnFirstUse(cur, clearArchivedSessions(checked.config), patch)
+    const optionC = optionCPatchIssue(cur, asked, this.roots)
     if (optionC) return { ok: false, code: 'thread_session_refused', message: optionC }
     // sub-threads (docs/THREADS.md "Sub-threads"): one level, folder and MCP list inside the parent's, Mac support first
-    const sub = subThreadPatchIssue(cur, next, this.subThreadOpts())
+    const sub = subThreadPatchIssue(cur, asked, this.subThreadOpts())
     if (sub) return { ok: false, code: 'bad_frame', message: sub }
+    const next = clearUnswitchedSessions(asked)
     // Trust mode is the one setting `write` keeps from the file rather than from memory. A patch that names it is the
     // owner's signed change (the relay already asked for the passkey on `true`), so its value is written as it stands, in the
     // same shape `talos-app trust off` leaves: on is `true`, off is no key at all.

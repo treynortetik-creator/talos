@@ -8,7 +8,15 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MAIN_RESTART } from '@talos-app/protocol'
 import { nullLogger } from '../src/log.ts'
-import { holdOwnerNotice, newResendMemory, parseRequest, STALL_BLANK_MIN_MS, STALL_MIN_MS } from '../src/main-resend.ts'
+import {
+  holdOwnerNotice,
+  newResendMemory,
+  parseRequest,
+  REDELIVERED_PREFIX,
+  redelivered,
+  STALL_BLANK_MIN_MS,
+  STALL_MIN_MS,
+} from '../src/main-resend.ts'
 import type { Notification } from '../src/notify.ts'
 import { type Harness, startHarness } from './helpers.ts'
 import { longTimeouts } from './schedules/harness.ts'
@@ -57,7 +65,11 @@ describe('main resend: the Mac asks, the bridge delivers the stalled owner messa
     request(h, { v: 1, unseen_at: unseen })
     expect(await look(h, STALLED)).toBe(1)
     expect(ids(h, id)).toHaveLength(2)
-    expect(ids(h, id)[1]).toEqual(first as never)
+    // the same message, owner trust and ids, marked as a resend (a normal delivery carries no marker)
+    expect(first?.meta.redelivered).toBeUndefined()
+    expect(ids(h, id)[1]?.meta).toEqual({ ...first?.meta, redelivered: 'stall' } as never)
+    expect(ids(h, id)[1]?.content).toBe(`${REDELIVERED_PREFIX}\n${first?.content}`)
+    expect(ids(h, id)[1]?.meta.trust).toBe(first?.meta.trust)
     expect(existsSync(join(h.home, 'main-resend.json'))).toBe(false)
     expect(result(h)).toMatchObject({ v: 1, unseen_at: unseen, outcome: 'sent', delivered: 1 })
     // a second request for the same message (a retry, a second process) is refused: one winner
@@ -128,6 +140,58 @@ describe('main resend: the Mac asks, the bridge delivers the stalled owner messa
     expect(result(h)).toMatchObject({ outcome: 'sent' })
   })
 
+  test('missed turn: `missed: true` is accepted at 90 s and not at 89 s; a stray value or a missing flag keeps the 180 s window', async () => {
+    h = await startHarness()
+    await h.app.sendMessage('general', 'answered by an empty thinking block')
+    await h.waitNotes(1)
+    const at = h.bridge.ctx.seen.oldestUnseenAt()
+    request(h, { v: 1, unseen_at: at, missed: true })
+    expect(await look(h, STALL_BLANK_MIN_MS - 1000)).toBe(0) // 89 s
+    expect(result(h)).toMatchObject({ outcome: 'failed', why: 'too_early' })
+    request(h, { v: 1, unseen_at: at, missed: 'yes' }) // only a real true counts
+    expect(await look(h, STALL_BLANK_MIN_MS + 1000)).toBe(0)
+    request(h, { v: 1, unseen_at: at, missed: true })
+    expect(await look(h, STALL_BLANK_MIN_MS)).toBe(1) // exactly 90 s
+    expect(result(h)).toMatchObject({ outcome: 'sent', delivered: 1 })
+    request(h, { v: 1, unseen_at: at, missed: true }) // once per message
+    expect(await look(h, STALLED)).toBe(0)
+    expect(result(h)).toMatchObject({ outcome: 'failed', why: 'already' })
+  })
+
+  test('a missed-turn resend is marked missed, a stall resend stall, and the held original is never changed', async () => {
+    h = await startHarness()
+    await h.app.sendMessage('general', 'did you get this')
+    await h.waitNotes(1)
+    const first = h.notes[0] as Notification
+    const copy = structuredClone(first)
+    request(h, { v: 1, unseen_at: h.bridge.ctx.seen.oldestUnseenAt(), missed: true })
+    expect(await look(h, STALL_BLANK_MIN_MS)).toBe(1)
+    const again = h.notes[1] as Notification
+    expect(again.meta.redelivered).toBe('missed')
+    expect(again.content.startsWith(REDELIVERED_PREFIX)).toBe(true)
+    expect(again.meta.message_id).toBe(first.meta.message_id)
+    expect(first).toEqual(copy) // the first delivery is untouched
+    expect(redelivered(first, 'stall').meta.redelivered).toBe('stall')
+    // the marked copy is never kept as the original
+    const m = newResendMemory()
+    holdOwnerNotice(m, again)
+    expect(m.held.size).toBe(0)
+  })
+
+  test('missed turn: a message that is not the oldest unseen one is refused, whatever the flag', async () => {
+    h = await startHarness()
+    await h.app.sendMessage('general', 'first')
+    await h.waitNotes(1)
+    const first = h.bridge.ctx.seen.oldestUnseenAt()
+    await h.app.sendMessage('general', 'second')
+    await h.waitNotes(2)
+    const second = new Date(Date.parse(first as string) + 5).toISOString()
+    request(h, { v: 1, unseen_at: second, missed: true })
+    expect(await look(h, STALLED)).toBe(0)
+    expect(result(h)).toMatchObject({ outcome: 'failed', why: 'not_oldest' })
+    expect(h.notes.filter((n) => n.meta.kind === 'text')).toHaveLength(2)
+  })
+
   test('R1-2: a message that is no longer held, or a delivery that fails, is answered failed, never sent', async () => {
     h = await startHarness()
     await h.app.sendMessage('general', 'one')
@@ -193,6 +257,7 @@ describe('main resend: the Mac asks, the bridge delivers the stalled owner messa
     expect(parseRequest('{"blank":true,"unseen_at":"2026-11-19T02:48:27.675Z","v":1}')?.blank).toBe(true)
     expect(parseRequest('{"unseen_at":"2026-11-19T02:48:27.675Z","v":1}')).toEqual({
       blank: false,
+      missed: false,
       unseenAt: Date.parse('2026-11-19T02:48:27.675Z'),
     })
     for (const bad of [
