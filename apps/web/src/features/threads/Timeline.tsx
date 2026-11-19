@@ -4,13 +4,11 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { dayLabel } from '../../lib/format.ts'
 import { editingInside } from '../../lib/keyboardViewport.ts'
-import { cn } from '../../ui/cn.ts'
 import { RowErrorBoundary } from '../../ui/ErrorBoundary.tsx'
 import { IconArrowDown } from '../../ui/icons.tsx'
 import { Button } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
-import { BugThreadButton, bugPlacement } from '../bugreport/BugButton.tsx'
 import { needsOwnerNow, placedAt } from '../cards/logic.ts'
 import { useNow } from '../cards/util.ts'
 import { ImageViewer, useVoiceOrder, VoiceOrderContext } from './Attachments.tsx'
@@ -117,7 +115,6 @@ export function Timeline({
 }) {
   const client = useTalosClient()
   const agent = useAgentName()
-  const bugInThread = bugPlacement() === 'b'
   const macOnline = useTalos((s) => s.presence.bridge_online)
   const inbox = useTalos((s) => s.inbox)
   // The Inbox (a system thread) shares its screen with the event list, so its empty copy differs. Its conversation below
@@ -506,12 +503,10 @@ export function Timeline({
               if (el.scrollHeight - el.scrollTop - el.clientHeight > 1) el.scrollTop = el.scrollHeight
             })
           }}
-          // placement B keeps its button in this timeline's bottom-right corner on a phone: room below the last row, so the
-          // newest message's own controls (time, Copy, the menu, Retry) are never under it
-          className={cn(
-            'relative flex-1 overflow-y-auto overscroll-contain pt-2',
-            bugInThread ? 'pb-16 md:pb-4' : 'pb-4',
-          )}
+          // A fixed 16 px under the last row. Jump-to-latest, the one corner button left, shows only away from the end, so no
+          // room is kept for it: room that grew when it appeared fed back into the follow logic and a streaming reply
+          // stopped being followed (red at e0b0d36 on WebKit).
+          className="relative flex-1 overflow-y-auto overscroll-contain pt-2 pb-4"
           data-testid="timeline"
         >
           {hasMore && (
@@ -604,7 +599,7 @@ export function Timeline({
             {lastAgent?.text ? `${agent}: ${lastAgent.text.slice(0, 200)}` : ''}
           </div>
         </ScrollRegion>
-        {/* bottom-right stack: jump-to-latest above the Report a bug button (placement B), both clear of the composer */}
+        {/* bottom-right corner: jump-to-latest, clear of the composer */}
         <div className="pointer-events-none absolute right-3 bottom-3 flex flex-col items-end gap-2 [&>*]:pointer-events-auto">
           {away && rows.length > 0 && (
             <button
@@ -626,7 +621,6 @@ export function Timeline({
               )}
             </button>
           )}
-          <BugThreadButton />
         </div>
       </div>
       <ImageViewer att={viewer} onClose={() => setViewer(null)} />

@@ -42,6 +42,14 @@ describe('the preamble', () => {
     expect(defaultPreamble('trip')).toBe(swiftDefault('trip'))
     expect(workerPreamble(agent(), 'trip')).toBe(swiftDefault('trip'))
   })
+  it('names the thread’s live state file, not the old thread file', () => {
+    const t = defaultPreamble('trip')
+    expect(t).toContain(
+      'Keep threads/trip.state.md current the same turn an owner ask, a decision, a landing or a hold changes (under 8,000 characters; history goes elsewhere), and read it first after a restart or compaction.',
+    )
+    expect(t).not.toContain('threads/trip.md')
+    expect(swiftDefault('trip')).toContain('threads/trip.state.md current')
+  })
   it('the thread’s WORKER.md as written, newlines and all', () => {
     expect(workerPreamble(agent('Work on the trip.\nBe brief.\n'), 'trip')).toBe('Work on the trip.\nBe brief.\n')
   })

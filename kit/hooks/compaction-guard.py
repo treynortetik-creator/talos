@@ -21,6 +21,8 @@ the file is missing or empty.
 The text is copied from .learnings (file text) and is injected inside the continuity block's data wrapper by
 session-start.py: it is context, never an instruction that can override CLAUDE.md or the user.
 
+A thread session whose own state hook is registered (TALOS_SESSION_ROLE=worker and TALOS_APP_THREAD_STATE=1) does nothing here: hooks/thread-state.py keeps its own carry.
+
 Never blocks, never writes outside <state>. FAILS OPEN, ALWAYS. Kill switch: compaction-guard.off
 """
 import os
@@ -89,7 +91,9 @@ def debt_note(session_id):
     return ""
 
 
-def save(data):
+def carry_text(data):
+    """The carry's text for this compaction, or '' when there is nothing to carry. Shared with thread-state.py (a thread's own
+    carry), so the two never drift."""
     lines = []
     c = corrections()
     if c:
@@ -98,19 +102,30 @@ def save(data):
     for note in (hands_free_note(), debt_note(data.get("session_id"))):
         if note:
             lines.append(note)
-    path = carry_path()
     if not lines:
+        return ""
+    return "Snapshotted %s before a context compaction.\n%s\n" % (time.strftime("%Y-%m-%d %H:%M"), "\n".join(lines))
+
+
+def save(data):
+    text = carry_text(data)
+    path = carry_path()
+    if not text:
         C.drop(path)             # nothing to carry: do not leave yesterday's carry behind
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = "%s.tmp.%d" % (path, os.getpid())
     with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write("Snapshotted %s before a context compaction.\n%s\n" % (time.strftime("%Y-%m-%d %H:%M"), "\n".join(lines)))
+        fh.write(text)
     os.replace(tmp, path)
 
 
 def main():
     role = sys.argv[1] if len(sys.argv) > 1 else ""
+    # a thread session's compaction is handled by thread-state.py, which keeps the thread's own carry: this one is Main's, and a
+    # worker must neither overwrite it nor read it
+    if os.environ.get("TALOS_SESSION_ROLE") == "worker" and os.environ.get("TALOS_APP_THREAD_STATE") == "1":
+        return
     if role == "show":
         try:
             sys.stdout.write(open(carry_path(), encoding="utf-8").read())

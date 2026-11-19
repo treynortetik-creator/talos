@@ -14,7 +14,7 @@ ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
 
 A="$T/agent"; mkdir -p "$A/hooks" "$A/scripts" "$A/templates" "$A/wiki" "$A/memory"
-cp "$KIT/hooks/session-start.py" "$KIT/hooks/_talos_session.py" "$A/hooks/"; cp "$KIT/scripts/onboarding-state.py" "$A/scripts/"
+cp "$KIT/hooks/session-start.py" "$KIT/hooks/_talos_session.py" "$KIT/hooks/_talos_common.py" "$A/hooks/"; cp "$KIT/scripts/onboarding-state.py" "$A/scripts/"
 cp "$KIT/templates/_onboarding-progress.md.tmpl" "$A/templates/"
 export CLAUDE_PROJECT_DIR="$A" TALOS_APP_HOME="$T/app"
 talos_test_sandbox "$T"
@@ -64,6 +64,17 @@ printf '{not json' > "$S"
 out=$(hook); rc=$?
 [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q -- '--- SETUP' && [ "$(cat "$S")" = '{not json' ] && ok "corrupt onboarding.json: session starts, no offer, file untouched" || bad "corrupt file mishandled"
 st status | grep -q corrupt && ok "the script says corrupt rather than guessing" || bad "script did not flag the corrupt file"
+
+# ---- a release missing hooks/_talos_common.py: the digest keeps a trust wrapper of its own, and the other blocks (here SETUP) stay ----
+rm -f "$S"
+printf '# STATE\nMAIN-STATE-MARKER\n' > "$A/memory/STATE.md"
+mv "$A/hooks/_talos_common.py" "$A/hooks/_talos_common.py.gone"
+out=$(hook); rc=$?
+mv "$A/hooks/_talos_common.py.gone" "$A/hooks/_talos_common.py"
+digest="$(sed -n '/=== WHERE YOU LEFT OFF (continuity digest) ===/,/=== end continuity ===/p' <<<"$out")"
+{ [ "$rc" -eq 0 ] && grep -q 'SETUP (offer once)' <<<"$out" && grep -q 'TRUST BOUNDARY' <<<"$digest" && grep -q 'MAIN-STATE-MARKER' <<<"$digest" \
+  && [ "$(grep -c 'MAIN-STATE-MARKER' <<<"$out")" = 1 ]; } \
+  && ok "helper missing: the digest is still shown, only inside its own trust wrapper, and the SETUP block is kept" || bad "helper-missing output wrong"
 
 echo; echo "onboarding: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

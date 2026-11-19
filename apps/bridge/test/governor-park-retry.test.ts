@@ -39,7 +39,7 @@ function writeWorkers(home: string, now: number, state: string) {
     join(home, 'workers.json'),
     JSON.stringify({
       v: 1,
-      supervisor: { pid: 1, heartbeat_at: new Date(now).toISOString(), workers_supported: true },
+      supervisor: { pid: 1, heartbeat_at: new Date(now).toISOString(), workers_supported: true, reads_control: true },
       threads: {
         trip: {
           state,
@@ -78,7 +78,7 @@ async function setup() {
     const w = takeWake(hh.home, 'trip') as WakeFileT | null
     return w ? { wake: w, d: wakeDecision({ wake: w, now, recentTaken: [], threadIdle: true }) } : null
   }
-  return { clock, hh, tick, reader, wakeFile: join(hh.home, 'workers', 'trip', 'wake') }
+  return { clock, hh, tick, reader, wakeFile: join(hh.home, 'workers', 'trip', 'control') }
 }
 
 describe('governor park-all: a park that did not take is written again', () => {

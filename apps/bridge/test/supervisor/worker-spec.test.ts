@@ -42,6 +42,7 @@ import {
   buildWorkerSpec,
   noChannelDir,
   permissionHookCommand,
+  THREAD_STATE_ENV,
   validateSpec,
   WORKER_EXTRA_DENY,
   type WorkerInputs,
@@ -679,4 +680,68 @@ describe('the rooted guards refusal and the computer-use deny hold together (kit
       expect(plain.deniedMcpServers).toContainEqual({ serverName: 'computer-use' })
     },
   )
+})
+
+describe('TALOS_APP_THREAD_STATE: set exactly when the thread-state hook is registered', () => {
+  const hook = (i: WorkerInputs, state: unknown) => ({ ...i.permissionHook, state })
+  onCaseExactTmp('a session with the staged hook has it, and its settings run the hook', () => {
+    const i = inputs()
+    const s = buildWorkerSpec({ ...i, permissionHook: hook(i, {}) })
+    expect(s.env.TALOS_APP_THREAD_STATE).toBe('1')
+    expect(settingsOf(s).hooks.SessionStart).toHaveLength(1)
+  })
+  onCaseExactTmp(
+    'a session without it (an older kit) has no variable and no hook, even if the login environment had one',
+    () => {
+      const i = inputs()
+      const s = buildWorkerSpec({ ...i, baseEnv: { ...i.baseEnv, TALOS_APP_THREAD_STATE: '1' } })
+      expect(s.env.TALOS_APP_THREAD_STATE).toBeUndefined()
+      expect(settingsOf(s).hooks?.SessionStart).toBeUndefined()
+    },
+  )
+  onCaseExactTmp('a rooted spec has no variable and no thread-state hook', () => {
+    const i = inputs({ rooted: true })
+    const s = buildWorkerSpec({ ...i, permissionHook: hook(i, {}) })
+    expect(s.env.TALOS_APP_THREAD_STATE).toBeUndefined()
+    expect(settingsOf(s).hooks?.SessionStart).toBeUndefined()
+    expect(settingsOf(s).permissions.allow).toBeUndefined()
+  })
+})
+
+describe('validateSpec: TALOS_APP_THREAD_STATE if and only if the settings run the thread-state hook', () => {
+  const trustedOf = (i: WorkerInputs) => ({
+    talosHome: i.talosHome,
+    main: i.main,
+    claudePath: i.claudePath,
+    cwd: realpathSync(i.agentDir),
+    settingSources: null,
+  })
+  const withState = (i: WorkerInputs) => ({ ...i, permissionHook: { ...i.permissionHook, state: {} } })
+  onCaseExactTmp('a spec built with the hook and the variable passes; a plain one passes', () => {
+    const a = withState(inputs())
+    expect(() => validateSpec(buildWorkerSpec(a), trustedOf(a))).not.toThrow()
+    const b = inputs()
+    expect(() => validateSpec(buildWorkerSpec(b), trustedOf(b))).not.toThrow()
+  })
+  onCaseExactTmp('the variable without the hook in the settings is refused', () => {
+    const i = inputs()
+    const s = buildWorkerSpec(i)
+    expect(() => validateSpec({ ...s, env: { ...s.env, [THREAD_STATE_ENV]: '1' } }, trustedOf(i))).toThrow(
+      /thread-state/,
+    )
+  })
+  onCaseExactTmp('the hook in the settings without the variable is refused', () => {
+    const i = withState(inputs())
+    const s = buildWorkerSpec(i)
+    const { [THREAD_STATE_ENV]: _gone, ...env } = s.env
+    expect(() => validateSpec({ ...s, env }, trustedOf(i))).toThrow(/thread-state/)
+  })
+  onCaseExactTmp('one of the two commands without the other, or a value other than 1, is refused', () => {
+    const i = withState(inputs())
+    const s = buildWorkerSpec(i)
+    const settings = settingsOf(s)
+    delete settings.hooks.PreCompact
+    expect(() => validateSpec({ ...s, settingsJSON: JSON.stringify(settings) }, trustedOf(i))).toThrow(/thread-state/)
+    expect(() => validateSpec({ ...s, env: { ...s.env, [THREAD_STATE_ENV]: 'yes' } }, trustedOf(i))).toThrow()
+  })
 })

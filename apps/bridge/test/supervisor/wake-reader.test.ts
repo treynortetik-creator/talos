@@ -27,7 +27,7 @@ import {
   type WakeSession,
 } from '../../src/supervisor/wake-reader.ts'
 import type { PostOutcome } from '../../src/supervisor/worker-notices.ts'
-import { workerDir } from '../../src/worker/files.ts'
+import { workerDir, writeControl, writeWake } from '../../src/worker/files.ts'
 
 const VECTORS = join(import.meta.dir, '../../../../packages/protocol/fixtures/wake-decision')
 
@@ -378,5 +378,167 @@ describe('takeWakeFile: the file itself', () => {
     x.wake('trip', { at: at(x.clock.now) })
     chmodSync(x.dir('trip'), 0o500)
     expect(takeWakeFile(x.home, 'trip')).toBeNull()
+  })
+})
+
+/** workers.json the way a supervisor that reads `control` writes it: the bridge then puts a tap in `control`. */
+const flagged = (home: string) =>
+  writeFileSync(
+    join(home, 'workers.json'),
+    JSON.stringify({
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true, reads_control: true },
+      threads: {},
+    }),
+  )
+
+describe('a control tap and a message wake that land before one take (BSUP-5)', () => {
+  const ctl = (action: WakeFileT['action'], atMs: number): WakeFileT => ({
+    v: 1,
+    thread_id: 'trip',
+    message_ids: [],
+    at: at(atMs),
+    reason: 'control',
+    action,
+  })
+  const ptr = (atMs: number): WakeFileT => ({
+    v: 1,
+    thread_id: 'trip',
+    message_ids: ['m_01ARZ3NDEKTSV4RRFFQ69G5FAV'],
+    at: at(atMs),
+    reason: 'message',
+    action: 'pointer',
+  })
+  it('a restart then a pointer: one take carries out both, the restart first', async () => {
+    const x = rig()
+    flagged(x.home)
+    writeControl(x.home, ctl('restart', x.clock.now))
+    writeWake(x.home, ptr(x.clock.now))
+    const acted: string[] = []
+    await x.reader.take(
+      'trip',
+      () => x.idle,
+      async (w) => {
+        acted.push(w.action)
+      },
+    )
+    expect(acted).toEqual(['restart', 'pointer'])
+  })
+})
+
+describe('the shared worker-wakes vectors (control first, then wake) through the Linux reader', () => {
+  const v = JSON.parse(
+    readFileSync(join(import.meta.dir, '../../../../packages/protocol/fixtures/worker-wakes/vectors.json'), 'utf8'),
+  )
+  type Vec = {
+    name: string
+    writes: Array<{ file: string; content: unknown }>
+    acts: string[]
+    audits: Array<{ event: string; why: string }>
+  }
+  it('there are vectors to run', () => expect(v.vectors.length).toBeGreaterThanOrEqual(14))
+  it('the starting state is an idle live session', () =>
+    expect(v.session).toMatchObject({ state: 'live', turn_wait: false }))
+  for (const c of v.vectors as Vec[]) {
+    it(c.name, async () => {
+      const x = rig(Date.parse(v.now))
+      x.dir(v.thread)
+      for (const w of c.writes)
+        writeFileSync(
+          join(x.dir(v.thread), w.file),
+          typeof w.content === 'string' ? w.content : JSON.stringify(w.content),
+        )
+      const acted: string[] = []
+      let session: WakeSession = { entry: { state: v.session.state } }
+      await x.reader.take(
+        v.thread,
+        () => session,
+        async (w) => {
+          acted.push(w.action)
+          session = { entry: { state: 'stopping' }, turnWait: { why: w.action } } // as the supervisor: the session moved
+        },
+      )
+      expect(acted).toEqual(c.acts)
+      expect(x.audit.filter(([e]) => e !== 'wake_notice').map(([e, f]) => ({ event: e, why: f?.why }))).toEqual(
+        c.audits,
+      )
+      const left = readdirSync(x.dir(v.thread))
+      expect(left.filter((f) => f === WORKER_FILES.control || f === WORKER_FILES.wake || f.includes('.taken'))).toEqual(
+        v.files_after,
+      )
+    })
+  }
+})
+
+describe('takeWakeFile on `control`: the same file handling as `wake`, and a pointer is refused', () => {
+  const C = WORKER_FILES.control
+  it('a link, a FIFO, a folder, a big file, bad JSON, bad shape, another thread: dropped, removed, the target untouched', () => {
+    const x = rig()
+    const good = JSON.stringify({ v: 1, thread_id: 'trip', at: at(x.clock.now), action: 'restart', reason: 'control' })
+    const target = join(x.home, 'elsewhere.json')
+    writeFileSync(target, good)
+    const p = join(x.dir('trip'), C)
+    symlinkSync(target, p)
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'unreadable' })
+    expect(readFileSync(target, 'utf8')).toBe(good)
+    expect(spawnSync('mkfifo', [p]).status).toBe(0)
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'unreadable' })
+    mkdirSync(p)
+    writeFileSync(join(p, 'x'), good)
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'unreadable' })
+    writeFileSync(p, good.replace('}', `,"pad":"${'x'.repeat(5000)}"}`)) // the size cap
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'unreadable' })
+    writeFileSync(p, '{')
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'not_json' })
+    writeFileSync(p, good.replace('"restart"', '"explode"'))
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'bad_shape', fields: 'action' })
+    writeFileSync(p, good.replace('"trip"', '"other"'))
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'other_thread' })
+    expect(readdirSync(x.dir('trip'))).toEqual([])
+  })
+  it('a pointer in `control` is dropped as bad_shape (never acted on), audited by the reader', async () => {
+    const x = rig()
+    writeFileSync(
+      join(x.dir('trip'), C),
+      JSON.stringify({
+        v: 1,
+        thread_id: 'trip',
+        message_ids: ['m_01ARZ3NDEKTSV4RRFFQ69G5FAV'],
+        at: at(x.clock.now),
+        action: 'pointer',
+      }),
+    )
+    expect(takeWakeFile(x.home, 'trip', C)).toEqual({ dropped: 'bad_shape', fields: 'action' })
+    writeFileSync(
+      join(x.dir('trip'), C),
+      JSON.stringify({
+        v: 1,
+        thread_id: 'trip',
+        message_ids: ['m_01ARZ3NDEKTSV4RRFFQ69G5FAV'],
+        at: at(x.clock.now),
+        action: 'pointer',
+      }),
+    )
+    expect(await x.take('trip', x.idle)).toBeNull()
+    expect(x.audit).toEqual([['wake_dropped', { thread: 'trip', why: 'bad_shape', fields: 'action' }]])
+  })
+  it('a control written while one is read is a new file, kept for the next take (the rename race)', () => {
+    const x = rig()
+    const put = (action: string) =>
+      writeFileSync(
+        join(x.dir('trip'), C),
+        JSON.stringify({ v: 1, thread_id: 'trip', at: at(x.clock.now), action, reason: 'control' }),
+      )
+    put('restart')
+    expect(takeWakeFile(x.home, 'trip', C)).toMatchObject({ wake: { action: 'restart' } })
+    put('park')
+    expect(takeWakeFile(x.home, 'trip', C)).toMatchObject({ wake: { action: 'park' } })
+    expect(takeWakeFile(x.home, 'trip', C)).toBeNull()
+  })
+  it('a folder it cannot rename in: nothing taken, nothing thrown', () => {
+    const x = rig()
+    writeFileSync(join(x.dir('trip'), C), '{}')
+    chmodSync(x.dir('trip'), 0o500)
+    expect(takeWakeFile(x.home, 'trip', C)).toBeNull()
   })
 })

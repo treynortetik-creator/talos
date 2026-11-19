@@ -339,6 +339,63 @@ Describe 'the gaming switch (Titan CI)' {
     (Get-Content (Join-Path $dir2 'paused.json') -Raw | ConvertFrom-Json).values.CI_TITAN_IMAGE | Should Be 'on'
   }
 
+  It 'a pause over a crashed resume puts the file back incomplete: a failed stop leaves it so, and no terminate' {
+    $dir = Join-Path $TestDrive 'cr'
+    $w = New-World @{ CI_TITAN_IMAGE = 'on' }
+    [void](Invoke-TPause $w $dir)
+    # the crashed resume: paused.json (complete:true) renamed, and that resume had set the variable back on
+    Move-Item (Join-Path $dir 'paused.json') (Join-Path $dir 'resuming.json')
+    $w.Vars['CI_TITAN_IMAGE'] = 'on'
+    $w.StopResult = Fail 1 'Failed to stop actions-runner.service: timed out'
+    $w.Calls.Clear()
+    $p = Invoke-TPause $w $dir
+    $p.Ok | Should Be $false
+    ($p.Failed -contains 'stop runners') | Should Be $true
+    (Find-TCall $w '--terminate*') | Should Be -1
+    (Get-Content (Join-Path $dir 'paused.json') -Raw | ConvertFrom-Json).complete | Should Be $false
+    Get-TitanCiPauseState $dir | Should Be 'incomplete'
+    $w.Vars['CI_TITAN_IMAGE'] | Should Be 'off'
+    # the saved values are the real ones, not the "off" the first pause set
+    (Get-Content (Join-Path $dir 'paused.json') -Raw | ConvertFrom-Json).values.CI_TITAN_IMAGE | Should Be 'on'
+    # once the stop works, the pause finishes and marks it complete
+    $w.StopResult = [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
+    (Invoke-TPause $w $dir).Ok | Should Be $true
+    Get-TitanCiPauseState $dir | Should Be 'paused'
+  }
+
+  It 'a pause over a crashed resume whose file cannot be written back changes nothing and keeps resuming.json' {
+    $dir = Join-Path $TestDrive 'cw'
+    $w = New-World @{ CI_TITAN_IMAGE = 'on' }
+    [void](Invoke-TPause $w $dir)
+    Move-Item (Join-Path $dir 'paused.json') (Join-Path $dir 'resuming.json')
+    $w.Vars['CI_TITAN_IMAGE'] = 'on'
+    # the temp file's name taken by a folder: the write throws
+    New-Item -ItemType Directory -Path (Join-Path $dir 'paused.json.tmp') | Out-Null
+    $w.Calls.Clear()
+    $p = Invoke-TPause $w $dir
+    $p.Ok | Should Be $false
+    ($p.Failed -contains 'unfinished resume') | Should Be $true
+    ($w.Calls -join "`n") | Should Not Match 'variable set|systemctl|--terminate'
+    Test-Path (Join-Path $dir 'resuming.json') | Should Be $true
+    Test-Path (Join-Path $dir 'paused.json') | Should Be $false
+    (Get-Content (Join-Path $dir 'resuming.json') -Raw | ConvertFrom-Json).values.CI_TITAN_IMAGE | Should Be 'on'
+    $w.Vars['CI_TITAN_IMAGE'] | Should Be 'on'
+  }
+
+  It 'a crashed resume of an unknown pause comes back unknown and incomplete' {
+    $dir = Join-Path $TestDrive 'cu'
+    $w = New-World @{ CI_TITAN_IMAGE = 'on' }
+    $w.ListFail = $true
+    [void](Invoke-TPause $w $dir)
+    Move-Item (Join-Path $dir 'paused.json') (Join-Path $dir 'resuming.json')
+    $w.StopResult = Fail 1 'timed out'
+    [void](Invoke-TPause $w $dir)
+    $j = Get-Content (Join-Path $dir 'paused.json') -Raw | ConvertFrom-Json
+    $j.unknown | Should Be $true
+    $j.complete | Should Be $false
+    Test-Path (Join-Path $dir 'resuming.json') | Should Be $false
+  }
+
   It 'writes complete:true only after all sets and the stop, and before the terminate' {
     $dir = Join-Path $TestDrive 'cm'
     $w = New-World @{ CI_TITAN_IMAGE = 'on' }

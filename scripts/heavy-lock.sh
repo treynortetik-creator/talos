@@ -96,11 +96,14 @@ CHECKOUTS
   return 1
 }
 hl_reaper() { # hl_reaper <pid>: 0 when it is what adopts an orphan: pid 1, or a subreaper (on Linux an orphan goes to the nearest one,
-  # systemd --user, tini; launchd on a Mac), by its command's name
+  # systemd --user, tini; launchd on a Mac; under WSL 2, the init of the wsl.exe session the shell came from, named "Relay(<pid>)"
+  # with /init for its command: a gate run from a Windows terminal), by its command's name
+  # A one-shot `wsl.exe -- bash -c` is its own group leader with Relay for parent, so a `vite preview` started that way by hand on a
+  # slot's port reads as an orphan, as one under systemd --user or tini does: slot ports are the slots' alone.
   local c
   [ "$1" = 1 ] && return 0
   c="$(ps -o comm= -p "$1" 2>/dev/null)"
-  case "${c##*/}" in systemd | init | tini | dumb-init | launchd) return 0 ;; esac
+  case "${c##*/}" in systemd | init | tini | dumb-init | launchd | 'Relay('[0-9]*')') return 0 ;; esac
   return 1
 }
 hl_reap_preview() { # the orphans on HL_PORT. What runs is `sh -c "vite build && pnpm exec vite preview ..."`, then pnpm, then node:

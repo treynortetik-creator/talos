@@ -1,0 +1,418 @@
+{
+  "_comment": "Worker wake files (BSUP-5): `workers/<id>/control` (the owner's tap: park, resume, restart, fresh; same JSON as a wake) and `workers/<id>/wake` (a message pointer; an older bridge also writes a tap there, and so does a newer one while the supervisor has not said it reads `control`, workers.json supervisor.reads_control). One tick of a reader takes `control` FIRST, then `wake`, each by rename, and carries out what it took in that order. Each vector: `writes`, applied in order to the thread's folder before the tick (a later write to the same file replaces the earlier one; a string `content` is written verbatim, an object as JSON). The tick is for thread `trip` (the starting state: `session`), with the reader's clock at `now` and no earlier capped wakes. `acts`: the ordered actions the reader carries out. `audits`: the reader's audit lines for what it dropped or refused, in order (event and why; notices are not listed). After the tick neither `control` nor `wake` exists in the folder, whatever happened to each. Read by apps/bridge/test/supervisor/wake-reader.test.ts and by the Mac supervisor's Swift twin. Hand-written: change a case only with the protocol.",
+  "thread": "trip",
+  "now": "2026-11-13T12:00:00.000Z",
+  "session": {
+    "description": "idle: the thread's session is live (state `live`), in no turn and with no park waiting for a turn to end",
+    "state": "live",
+    "turn_wait": false
+  },
+  "files_after": [],
+  "vectors": [
+    {
+      "name": "control only: a restart",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        }
+      ],
+      "acts": [
+        "restart"
+      ],
+      "audits": []
+    },
+    {
+      "name": "wake only: a pointer",
+      "writes": [
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "pointer"
+      ],
+      "audits": []
+    },
+    {
+      "name": "no files: nothing happens",
+      "writes": [],
+      "acts": [],
+      "audits": []
+    },
+    {
+      "name": "control and wake: control first",
+      "writes": [
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        },
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        }
+      ],
+      "acts": [
+        "restart",
+        "pointer"
+      ],
+      "audits": []
+    },
+    {
+      "name": "a park control, then a pointer written after it: both, park first",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "park"
+          }
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "park",
+        "pointer"
+      ],
+      "audits": []
+    },
+    {
+      "name": "two controls: the later write replaces the earlier, so only the park (its `at` is later)",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T11:59:58.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        },
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T11:59:59.000Z",
+            "reason": "control",
+            "action": "park"
+          }
+        }
+      ],
+      "acts": [
+        "park"
+      ],
+      "audits": []
+    },
+    {
+      "name": "a control in `wake` is accepted (an older bridge, or a supervisor not yet flagged: the fallback path)",
+      "writes": [
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        }
+      ],
+      "acts": [
+        "restart"
+      ],
+      "audits": []
+    },
+    {
+      "name": "a pointer in `control` is refused as bad_shape; the wake is still taken",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "pointer"
+      ],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "bad_shape"
+        }
+      ]
+    },
+    {
+      "name": "a malformed control is dropped (not_json); the wake is still taken",
+      "writes": [
+        {
+          "file": "control",
+          "content": "{not json"
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "pointer"
+      ],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "not_json"
+        }
+      ]
+    },
+    {
+      "name": "a control for another thread id is dropped (other_thread); the wake is still taken",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "other",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "pointer"
+      ],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "other_thread"
+        }
+      ]
+    },
+    {
+      "name": "a malformed wake next to a valid control: the control is carried out, the wake dropped",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "restart"
+          }
+        },
+        {
+          "file": "wake",
+          "content": "{not json"
+        }
+      ],
+      "acts": [
+        "restart"
+      ],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "not_json"
+        }
+      ]
+    },
+    {
+      "name": "another thread's wake next to a valid control: the control is carried out, the wake dropped",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "control",
+            "action": "park"
+          }
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "other",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "park"
+      ],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "other_thread"
+        }
+      ]
+    },
+    {
+      "name": "an empty (0-byte) control and an empty wake are each dropped (not_json); nothing happens",
+      "writes": [
+        {
+          "file": "control",
+          "content": ""
+        },
+        {
+          "file": "wake",
+          "content": ""
+        }
+      ],
+      "acts": [],
+      "audits": [
+        {
+          "event": "wake_dropped",
+          "why": "not_json"
+        },
+        {
+          "event": "wake_dropped",
+          "why": "not_json"
+        }
+      ]
+    },
+    {
+      "name": "a stale control (6 minutes old) is refused, the wake is still taken",
+      "writes": [
+        {
+          "file": "control",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [],
+            "at": "2026-11-13T11:54:00.000Z",
+            "reason": "control",
+            "action": "park"
+          }
+        },
+        {
+          "file": "wake",
+          "content": {
+            "v": 1,
+            "thread_id": "trip",
+            "message_ids": [
+              "m_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ],
+            "at": "2026-11-13T12:00:00.000Z",
+            "reason": "message",
+            "action": "pointer"
+          }
+        }
+      ],
+      "acts": [
+        "pointer"
+      ],
+      "audits": [
+        {
+          "event": "wake_stale",
+          "why": "too_old"
+        }
+      ]
+    }
+  ]
+}

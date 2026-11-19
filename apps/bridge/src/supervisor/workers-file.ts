@@ -65,6 +65,8 @@ export function buildWorkersFile(o: {
       subthreads_own_folder: true,
       // and one with no folder, or its parent's own, runs in the parent's folder (the agent folder when it has none)
       subthreads_shared_folder: true,
+      // this supervisor's reader takes `control` before `wake` (wake-reader.ts): the bridge may write the owner's taps there (BSUP-5)
+      reads_control: true,
       main_pane_pid: o.mainPanePid,
     },
     threads,
@@ -120,33 +122,42 @@ export function clearReady(home: string, threadId: string): void {
   if (isThread(threadId)) rmSync(join(workerDir(home, threadId), WORKER_FILES.ready), { force: true })
 }
 
-/** When a session ends: its nonce and ready go (the launch file deletes itself). The wake stays: the hub may be writing one. */
+/** When a session ends: its nonce and ready go (the launch file deletes itself). The wake and control stay: the hub may be writing one. */
 export function releaseWorkerFiles(home: string, threadId: string): void {
   if (!isThread(threadId)) return
   for (const f of [WORKER_FILES.nonce, WORKER_FILES.ready]) rmSync(join(workerDir(home, threadId), f), { force: true })
 }
 
 /**
- * Takes this thread's wake, once: renamed aside first (a wake the hub writes meanwhile is a new file, kept for the next take),
- * then read and deleted. One that does not parse or names another thread is dropped, never acted on.
+ * Takes this thread's pending request, once: the `control` file first, else the `wake` file (the reader takes both in a tick,
+ * wake-reader.ts; this one-at-a-time form is what the tests use). Renamed aside first (one the hub writes meanwhile is a new
+ * file, kept for the next take), then read and deleted. One that does not parse or names another thread is dropped, never acted on.
  */
 export function takeWake(home: string, threadId: string): WakeFileT | null {
   if (!isThread(threadId)) return null
   const dir = workerDir(home, threadId)
-  const taken = join(dir, `${WORKER_FILES.wake}.taken`)
-  try {
-    renameSync(join(dir, WORKER_FILES.wake), taken)
-  } catch {
-    return null // no wake
+  for (const file of [WORKER_FILES.control, WORKER_FILES.wake]) {
+    const taken = join(dir, `${file}.taken`)
+    try {
+      renameSync(join(dir, file), taken)
+    } catch {
+      continue // none in this file
+    }
+    let got: WakeFileT | null = null
+    try {
+      const r = WakeFile.safeParse(JSON.parse(readFileSync(taken, 'utf8')))
+      got =
+        r.success && r.data.thread_id === threadId && !(file === WORKER_FILES.control && r.data.action === 'pointer')
+          ? r.data
+          : null
+    } catch {
+      got = null
+    } finally {
+      rmSync(taken, { force: true })
+    }
+    if (got) return got // a dropped control goes on to the wake, as the real reader does
   }
-  try {
-    const r = WakeFile.safeParse(JSON.parse(readFileSync(taken, 'utf8')))
-    return r.success && r.data.thread_id === threadId ? r.data : null
-  } catch {
-    return null
-  } finally {
-    rmSync(taken, { force: true })
-  }
+  return null
 }
 
 /** A move the shared state machine allows; anything else is a bug in the manager. */

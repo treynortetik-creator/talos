@@ -30,7 +30,16 @@ import { folderChain, sessionFilesProblem } from '../worker/session-files.ts'
 import { INSTRUCTIONS_ENTRY, instructionsDigest, type LaunchSpecInputs, launchSpecHash } from './launch-spec.ts'
 import { rootedHookDir } from './rooted-kit.ts'
 import { strictlyInside } from './sub-thread-folder.ts'
-import { type HookPlace, installWorkerHook, kitVendor, releaseHook, rootedWorkerHook } from './worker-hook.ts'
+import { seedThreadState } from './thread-state-seed.ts'
+import {
+  type HookPlace,
+  installWorkerHook,
+  kitVendor,
+  releaseHook,
+  rootedWorkerHook,
+  STATE_FILES,
+  STATE_HOOK,
+} from './worker-hook.ts'
 import {
   claudeJsonHome,
   planWorkerMcp,
@@ -654,7 +663,7 @@ export function workerPlanner(given: PlannerInputs) {
           : null,
       })
       if (!p.dry) {
-        ensureDir(workerDir(i.talosHome, p.thread.id))
+        prepareWorkerFolder(i, p.thread, audit)
         if (mcp) writeWorkerMcp(mcp)
         writeFileAtomic(join(workerDir(i.talosHome, p.thread.id), 'settings.json'), spec.settingsJSON, 0o600)
       }
@@ -730,6 +739,20 @@ export function workerPlanner(given: PlannerInputs) {
   }
 }
 
+/**
+ * The worker's own folder in the Talos home, and its live state file in the agent folder (made if missing; a problem is audited
+ * and never stops the start).
+ */
+function prepareWorkerFolder(
+  i: PlannerInputs,
+  thread: { id: string; name?: string | null },
+  audit: PlannerInputs['audit'],
+): void {
+  ensureDir(workerDir(i.talosHome, thread.id))
+  const seeded = seedThreadState(i.agentDir, thread.id, thread.name)
+  if ('problem' in seeded) audit?.('worker_state_seed_failed', { thread: thread.id, why: seeded.problem })
+}
+
 /** The files of a launch's spec (launch-spec.ts): each file the start writes, by the bytes it computed, and its other inputs. */
 function specFiles(
   i: PlannerInputs,
@@ -757,6 +780,9 @@ function specFiles(
     // the permission hook's own bytes: a release that changes the hook restarts sessions for it
     'permission-hook': o.hook.hook,
     'permission-hook-helper': o.hook.helper,
+    // the thread-state hook's files, staged beside it: a release that changes them restarts sessions for it too
+    'thread-state-hook': o.hook.state?.[STATE_HOOK] ?? null,
+    'thread-state-compaction': o.hook.state?.[STATE_FILES[1]] ?? null,
   }
 }
 

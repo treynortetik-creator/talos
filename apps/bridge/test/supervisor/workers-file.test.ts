@@ -17,12 +17,21 @@ import {
   writeNonce,
   writeWorkersFile,
 } from '../../src/supervisor/workers-file.ts'
-import { workerDir, workersJsonPath, writeReady, writeWake } from '../../src/worker/files.ts'
+import { workerDir, workersJsonPath, writeControl, writeReady } from '../../src/worker/files.ts'
 
 const dirs: string[] = []
 const home = () => {
   const d = mkdtempSync(join(tmpdir(), 'talos-workers-file-'))
   dirs.push(d)
+  // a supervisor that reads `control`: the bridge writes a tap there (writeControl); the old-supervisor cases use bareHome
+  writeFileSync(
+    join(d, 'workers.json'),
+    JSON.stringify({
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true, reads_control: true },
+      threads: {},
+    }),
+  )
   return d
 }
 afterEach(() => {
@@ -68,6 +77,18 @@ describe('workers.json', () => {
   })
 })
 
+describe('the capability flag for `control` (BSUP-5)', () => {
+  it('the Linux supervisor says it reads `control` whenever it writes workers.json; a file without the flag reads as false', () => {
+    expect(buildWorkersFile({ pid: 1, nowMs: NOW, mainPanePid: 0, threads: {} }).supervisor.reads_control).toBe(true)
+    const old = {
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: '2026-11-10T12:00:00.000Z', workers_supported: true },
+      threads: {},
+    }
+    expect(parseWorkersFile(JSON.stringify(old))?.supervisor.reads_control).toBe(false)
+  })
+})
+
 describe('the owner’s switch for thread sessions', () => {
   afterEach(() => setWorkersOn(() => true))
   const build = () => buildWorkersFile({ pid: 1, nowMs: NOW, mainPanePid: 0, threads: {} }).supervisor
@@ -100,7 +121,7 @@ describe('the nonce and the ready file', () => {
     expect(readReady(h, 'trip')?.pid).toBe(4242)
     writeFileSync(join(workerDir(h, 'trip'), 'ready'), JSON.stringify({ v: 1, thread_id: 'other', pid: 1, at: 'x' }))
     expect(readReady(h, 'trip')).toBeNull()
-    writeWake(h, {
+    writeControl(h, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -111,7 +132,7 @@ describe('the nonce and the ready file', () => {
     releaseWorkerFiles(h, 'trip')
     expect(existsSync(join(workerDir(h, 'trip'), 'nonce'))).toBe(false)
     expect(existsSync(join(workerDir(h, 'trip'), 'ready'))).toBe(false)
-    expect(existsSync(join(workerDir(h, 'trip'), 'wake'))).toBe(true)
+    expect(existsSync(join(workerDir(h, 'trip'), 'control'))).toBe(true)
   })
 })
 
@@ -119,16 +140,16 @@ describe('the wake file', () => {
   const wake = { v: 1 as const, at: '2026-11-10T12:00:00.000Z', reason: 'control' as const, action: 'restart' as const }
   it('is taken once: read, then gone', () => {
     const h = home()
-    writeWake(h, { ...wake, thread_id: 'trip', message_ids: [] })
+    writeControl(h, { ...wake, thread_id: 'trip', message_ids: [] })
     expect(takeWake(h, 'trip')?.action).toBe('restart')
     expect(existsSync(join(workerDir(h, 'trip'), 'wake'))).toBe(false)
     expect(takeWake(h, 'trip')).toBeNull()
   })
   it('a wake naming another thread, or one that does not parse, is dropped, never acted on', () => {
     const h = home()
-    writeWake(h, { ...wake, thread_id: 'other', message_ids: [] })
+    writeControl(h, { ...wake, thread_id: 'other', message_ids: [] })
     mkdirSync(workerDir(h, 'trip'), { recursive: true })
-    writeFileSync(join(workerDir(h, 'trip'), 'wake'), readFileSync(join(workerDir(h, 'other'), 'wake')))
+    writeFileSync(join(workerDir(h, 'trip'), 'control'), readFileSync(join(workerDir(h, 'other'), 'control')))
     expect(takeWake(h, 'trip')).toBeNull()
     expect(existsSync(join(workerDir(h, 'trip'), 'wake'))).toBe(false)
     writeFileSync(join(workerDir(h, 'trip'), 'wake'), '{"v":1,')

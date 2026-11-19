@@ -48,7 +48,8 @@ struct FallbackPreambleTests {
     let p = try fallback("trip")
     #expect(p.contains("You are the dedicated session for the Talos thread \"trip\""))
     #expect(p.contains("call read_inbound"))
-    #expect(p.contains("threads/trip.md"))
+    #expect(p.contains("Keep threads/trip.state.md current"))  // the live state file (07ab2a06d), not the old threads/<id>.md log
+    #expect(p.contains("read it first after a restart or compaction"))
     #expect(p.contains("no git commands"))
   }
 }

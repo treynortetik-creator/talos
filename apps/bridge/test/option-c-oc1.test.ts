@@ -54,7 +54,11 @@ function writeWorkers(home: string, now: number, threads: Record<string, Entry>,
     }
   writeFileSync(
     join(home, 'workers.json'),
-    JSON.stringify({ v: 1, supervisor: { pid: 1, heartbeat_at: at, workers_supported: true }, threads: t }),
+    JSON.stringify({
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: at, workers_supported: true, reads_control: true },
+      threads: t,
+    }),
   )
 }
 function writeNonce(home: string, id: string) {
@@ -354,6 +358,7 @@ describe('OC1: routing and read_inbound', () => {
     const wake = WakeFile.parse(JSON.parse(readFileSync(wakePath, 'utf8')))
     expect(wake.message_ids).toEqual([sent.client_msg_id as string])
     expect(JSON.stringify(wake)).not.toContain('hotel') // ids only, never content
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'control'))).toBe(false) // a pointer never writes a control
     await sleep(100)
     expect(hh.notes.length).toBe(before)
     const r = JSON.parse((await w.callTool('read_inbound', {})).content[0]?.text ?? '{}')
@@ -458,7 +463,9 @@ describe('OC1: routing and read_inbound', () => {
     expect(hh.notes).toHaveLength(1)
     pct = 96
     hh.bridge.optionCTick()
-    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')))
+    // the governor's park goes to its own file: the pointer is still waiting beside it (BSUP-5)
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(true)
+    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'control'), 'utf8')))
     expect(wake).toMatchObject({ action: 'park', reason: 'governor' })
   })
 
@@ -635,8 +642,9 @@ describe('OC1: thread.session.control and workers.status', () => {
       direction: 'from_bridge',
     })
     expect(res.ok).toBe(true)
-    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')))
+    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'control'), 'utf8')))
     expect(wake).toMatchObject({ action: 'park', reason: 'control', message_ids: [] })
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false) // a control never writes a wake
     const g = await hh.app.sendThreadSessionControl('shared_one', 'restart')
     const no = await hh.relay.expectFrame('session.control.result', (x) => x.control_id === g.control_id, {
       direction: 'from_bridge',
@@ -654,18 +662,18 @@ describe('OC1: thread.session.control and workers.status', () => {
       })
     }
     expect((await result('restart')).ok).toBe(true)
-    const first = readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')
+    const first = readFileSync(join(hh.home, 'workers', 'trip', 'control'), 'utf8')
     const again = await result('restart')
     expect(again).toMatchObject({ ok: false, code: 'rate_limited' })
     expect(JSON.stringify(again)).toContain(wakeLimitText('restart'))
     expect(JSON.stringify(again)).not.toContain('Restarting')
     // the first wake still waits; nothing written over it
-    expect(readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')).toBe(first)
+    expect(readFileSync(join(hh.home, 'workers', 'trip', 'control'), 'utf8')).toBe(first)
   })
 
   test('a fresh start from the phone while the session is in a turn is refused up front in the reader’s words, no wake', async () => {
     const hh = await hub()
-    const wake = join(hh.home, 'workers', 'trip', 'wake')
+    const wake = join(hh.home, 'workers', 'trip', 'control')
     const result = async () => {
       const f = await hh.app.sendThreadSessionControl('trip', 'fresh')
       return hh.relay.expectFrame('session.control.result', (x) => x.control_id === f.control_id, {

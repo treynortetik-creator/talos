@@ -61,7 +61,7 @@ function writeWorkers(home: string, now: number, threads: Record<string, Entry>)
     join(home, 'workers.json'),
     JSON.stringify({
       v: 1,
-      supervisor: { pid: 1, heartbeat_at: new Date(now).toISOString(), workers_supported: true },
+      supervisor: { pid: 1, heartbeat_at: new Date(now).toISOString(), workers_supported: true, reads_control: true },
       threads: t,
     }),
   )
@@ -558,7 +558,7 @@ describe('PR65 review: usage governor', () => {
     })
     let pct = 96
     hh.bridge.ctx.mod.liveState = () => rl(pct, 0)
-    const wake = (t: string) => join(hh.home, 'workers', t, 'wake')
+    const wake = (t: string) => join(hh.home, 'workers', t, 'control')
     hh.bridge.optionCTick()
     for (const t of ['trip', 'garden'])
       expect(WakeFile.parse(JSON.parse(readFileSync(wake(t), 'utf8')))).toMatchObject({ action: 'park' })
@@ -587,7 +587,7 @@ describe('PR65 review: thread.session.control', () => {
       direction: 'from_bridge',
     })
     expect(first.ok).toBe(true)
-    rmSync(join(hh.home, 'workers', 'trip', 'wake'))
+    rmSync(join(hh.home, 'workers', 'trip', 'control'))
     const again = await hh.app.sign({
       ...mkFrame('thread.session.control'),
       control_id: f.control_id,
@@ -604,7 +604,7 @@ describe('PR65 review: thread.session.control', () => {
             (r.frame as { control_id?: string }).control_id === f.control_id,
         ).length >= 2,
     )
-    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false)
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'control'))).toBe(false)
   })
 
   test('trust mode: at 84 percent a resume starts with a warning; at 95 it is still refused; off, 84 is refused', async () => {
@@ -617,15 +617,15 @@ describe('PR65 review: thread.session.control', () => {
     })
     expect(ok).toMatchObject({ ok: true })
     expect(ok.text).toMatch(/Plan limits are close/)
-    await waitFor(() => existsSync(join(hh.home, 'workers', 'trip', 'wake')))
-    rmSync(join(hh.home, 'workers', 'trip', 'wake'), { force: true })
+    await waitFor(() => existsSync(join(hh.home, 'workers', 'trip', 'control')))
+    rmSync(join(hh.home, 'workers', 'trip', 'control'), { force: true })
     hh.bridge.ctx.mod.liveState = () => rl(95, 0)
     const g = await hh.app.sendThreadSessionControl('trip', 'resume')
     const no = await hh.relay.expectFrame('session.control.result', (x) => x.control_id === g.control_id, {
       direction: 'from_bridge',
     })
     expect(no).toMatchObject({ ok: false, code: 'usage_governor' })
-    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false)
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'control'))).toBe(false)
   })
 
   test('trust mode: three messages to a parked thread at 84 percent post the limits notice exactly once', async () => {
@@ -675,7 +675,7 @@ describe('PR65 review: thread.session.control', () => {
       direction: 'from_bridge',
     })
     expect(no).toMatchObject({ ok: false, code: 'worker_unavailable' })
-    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false)
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'control'))).toBe(false)
   })
 })
 

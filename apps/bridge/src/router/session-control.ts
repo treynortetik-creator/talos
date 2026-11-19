@@ -14,7 +14,7 @@ import {
 } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { say } from '../owner-words.ts'
-import { type WorkersReader, wakeCapTimes, writeWake } from '../worker/files.ts'
+import { type WorkersReader, wakeCapTimes, writeControl } from '../worker/files.ts'
 import { allowsStart, governorNow } from './governor.ts'
 
 type SessionControlAction = 'park' | 'resume' | 'restart' | 'fresh'
@@ -85,7 +85,7 @@ export function controlThreadSession(
       text: 'Plan limits are close, so thread sessions are paused. Main keeps answering.',
     }
   try {
-    writeWake(
+    writeControl(
       ctx.paths.home,
       {
         v: 1,

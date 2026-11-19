@@ -37,6 +37,13 @@ const HOOK = 'permission-relay.py'
 /** The helper the hook imports from its own folder (optional there: the hook runs without it, minus its kill-switch file). */
 const HELPER = '_talos_common.py'
 const PLUGIN = 'talos-kit'
+/**
+ * The thread-state hook (kit/hooks/thread-state.py) and the one it reuses for a thread's compaction carry, staged next to the
+ * permission hook the same way: only from the verified release, only those bytes. Both or neither: a release that lacks either (an
+ * older kit) gives a session without the thread-state hooks, never a start that fails, and no old copy is left to run in its place.
+ */
+export const STATE_HOOK = 'thread-state.py'
+export const STATE_FILES = [STATE_HOOK, 'compaction-guard.py'] as const
 
 /** The kit's vendor folder, exactly as kit/scripts/plugin-release.py vendor_default() finds it (an empty value is unset; absolute). */
 export function kitVendor(env: Record<string, string | undefined>, home: string = env.HOME || homedir()): string {
@@ -224,7 +231,7 @@ export function releaseContentSha(root: string): string {
 }
 
 /** A release checked once per supervisor run, by what its hook files look like on disk: an edit (even resealed) is a new key. */
-const verified = new Map<string, { hook: string; helper: string | null } | null>()
+const verified = new Map<string, { hook: string; helper: string | null; state: Record<string, string> | null } | null>()
 // ctime is in the key: userspace can set mtime back (touch -r), never ctime
 const fileKey = (p: string) => {
   try {
@@ -250,7 +257,12 @@ export function releaseOwnerOk(owner: number, rooted: { root: number } | null, m
  * copy is made only of exactly those bytes, so nothing can be swapped in between the check and the copy.
  */
 export type ReleaseHook =
-  | { source: string; release: string; verified: { hook: string; helper: string | null }; rooted?: true }
+  | {
+      source: string
+      release: string
+      verified: { hook: string; helper: string | null; state: Record<string, string> | null }
+      rooted?: true
+    }
   | { problem: string }
 
 /**
@@ -292,6 +304,9 @@ function checkRelease(
   const plugin = join(real, PLUGIN)
   const source = join(plugin, 'hooks', HOOK)
   const helper = join(plugin, 'hooks', HELPER)
+  const stateFiles = STATE_FILES.map((n) => join(plugin, 'hooks', n))
+  // the state files import the helper from their own folder: no helper, no state hook
+  const hasState = existsSync(helper) && stateFiles.every((f) => existsSync(f))
   const uid = process.getuid?.()
   // every folder from root's kit up to / root's (or a root-owned sticky one): a folder another account could write lets the
   // kit be renamed away and another put in its place (Fable R1-3)
@@ -313,7 +328,14 @@ function checkRelease(
     if (!releaseOwnerOk(st.uid, rooted, uid) || (!st.isSymbolicLink() && (st.mode & 0o022) !== 0))
       return { problem: `the kit's ${p} is not root's own; ${fix}` }
   }
-  for (const p of [real, plugin, join(plugin, 'hooks'), source, ...(existsSync(helper) ? [helper] : [])]) {
+  for (const p of [
+    real,
+    plugin,
+    join(plugin, 'hooks'),
+    source,
+    ...(existsSync(helper) ? [helper] : []),
+    ...(hasState ? stateFiles : []),
+  ]) {
     let st: ReturnType<typeof lstatSync>
     try {
       st = lstatSync(p)
@@ -335,7 +357,7 @@ function checkRelease(
     if (f && within(real, f))
       return { problem: `the kit release ${real} is inside ${f}, a folder a thread session works in; ${fix}` }
   }
-  const key = `${rooted ? `rooted:${rooted.sha}` : ''}|${plugin}|${fileKey(source)}|${fileKey(helper)}|${fileKey(join(plugin, '.talos-release'))}`
+  const key = `${rooted ? `rooted:${rooted.sha}` : ''}|${plugin}|${fileKey(source)}|${fileKey(helper)}|${stateFiles.map(fileKey).join('|')}|${fileKey(join(plugin, '.talos-release'))}`
   let ok = verified.get(key)
   if (ok === undefined) {
     // rooted: the digest root worked out and recorded (never the release's own record, which travels with it)
@@ -348,7 +370,10 @@ function checkRelease(
     // the hook's own bytes are read before the whole is hashed: if they change in between, the copy's check refuses them
     const hook = sha(readFileSync(source))
     const help = existsSync(helper) ? sha(readFileSync(helper)) : null
-    ok = recorded !== '' && releaseContentSha(plugin) === recorded ? { hook, helper: help } : null
+    const state = hasState
+      ? Object.fromEntries(STATE_FILES.map((n, k) => [n, sha(readFileSync(stateFiles[k] as string))]))
+      : null
+    ok = recorded !== '' && releaseContentSha(plugin) === recorded ? { hook, helper: help, state } : null
     verified.set(key, ok)
   }
   if (!ok)
@@ -390,7 +415,8 @@ export function rootedWorkerHook(
   try {
     const helperPath = join(dirname(source), HELPER)
     const helper = scriptProblem(helperPath) === null ? readFileSync(helperPath) : null
-    return { script: source, python, hook: readFileSync(source), helper }
+    // a Talos distro runs no thread-state hook yet (rootedHookOnly allows exactly one hook): no staged state files
+    return { script: source, python, hook: readFileSync(source), helper, state: null }
   } catch (e) {
     return { problem: `the permission hook ${source} cannot be read: ${(e as Error).message}` }
   }
@@ -400,7 +426,14 @@ export function rootedWorkerHook(
  * Where a session's permission hook runs, and its bytes (the hook and its helper): a release that changes the hook changes the
  * launch spec, so sessions restart for it on update (launch-spec.ts).
  */
-export type HookPlace = { script: string; python: string; hook: Buffer; helper: Buffer | null }
+export type HookPlace = {
+  script: string
+  python: string
+  hook: Buffer
+  helper: Buffer | null
+  /** The thread-state hook's files by name (STATE_FILES) as staged, or null: no thread-state hook for this session. */
+  state: Record<string, Buffer> | null
+}
 
 /**
  * Makes `dir` if it is missing (one level: its parent must already be there), never through a link (R1-9), then checks it is a
@@ -460,7 +493,7 @@ export function installWorkerHook(
   resolvePython: (env: Record<string, string>, outside: readonly string[]) => string | null = findPython3,
   outside: readonly string[] = [],
   /** The hashes releaseHook verified: only those exact bytes are copied. */
-  expect?: { hook: string; helper: string | null },
+  expect?: { hook: string; helper: string | null; state: Record<string, string> | null },
   /** Only what it would be (the update check's dry plan): no folder made or checked, nothing copied. */
   dry = false,
 ): HookPlace | { problem: string } {
@@ -482,19 +515,37 @@ export function installWorkerHook(
   }
   let hookBytes: Buffer
   let helperBytes: Buffer | null
+  let stateBytes: Record<string, Buffer> | null = null
   try {
     hookBytes = readFileSync(source)
     const helperPath = join(dirname(source), HELPER)
     helperBytes = scriptProblem(helperPath) === null ? readFileSync(helperPath) : null
-    if (expect && (sha(hookBytes) !== expect.hook || (helperBytes ? sha(helperBytes) : null) !== expect.helper))
+    // the thread-state files, only when every one is there (as in the release check)
+    const statePaths = STATE_FILES.map((n) => join(dirname(source), n))
+    if (helperBytes && statePaths.every((f) => scriptProblem(f) === null))
+      stateBytes = Object.fromEntries(STATE_FILES.map((n, k) => [n, readFileSync(statePaths[k] as string)]))
+    const stateShas = stateBytes ? Object.fromEntries(Object.entries(stateBytes).map(([n, b]) => [n, sha(b)])) : null
+    if (
+      expect &&
+      (sha(hookBytes) !== expect.hook ||
+        (helperBytes ? sha(helperBytes) : null) !== expect.helper ||
+        JSON.stringify(stateShas && sortedEntries(stateShas)) !==
+          JSON.stringify(expect.state && sortedEntries(expect.state)))
+    )
       return { problem: `the permission hook ${source} changed after its release was checked` }
-    if (dry) return { script, python, hook: hookBytes, helper: helperBytes }
+    if (dry) return { script, python, hook: hookBytes, helper: helperBytes, state: stateBytes }
     writeFileAtomic(script, hookBytes, 0o600)
     // a source with no helper leaves none here either: an old one would be imported in its place
     if (helperBytes) writeFileAtomic(join(dir, HELPER), helperBytes, 0o600)
     else rmSync(join(dir, HELPER), { force: true })
+    for (const n of STATE_FILES) {
+      if (stateBytes) writeFileAtomic(join(dir, n), stateBytes[n] as Buffer, 0o600)
+      else rmSync(join(dir, n), { force: true })
+    }
   } catch (e) {
     return { problem: `the permission hook could not be copied into ${dir}: ${(e as Error).message}` }
   }
-  return { script, python, hook: hookBytes, helper: helperBytes }
+  return { script, python, hook: hookBytes, helper: helperBytes, state: stateBytes }
 }
+
+const sortedEntries = (o: Record<string, string>) => Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1))

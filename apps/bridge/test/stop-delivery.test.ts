@@ -714,8 +714,9 @@ describe('a bridge that is stopping hands nothing over', () => {
   })
 
   test("a message the router falls back to main, caught by stop while it waits for main's point, gives its claim back: the restart routes it to the worker once", async () => {
-    // Main claims the message first (so a late read_inbound cannot take it too) and only then waits for its point. A claim that
-    // stayed, with no route row behind it, would make the restart's route unreadable by the worker and consumed all the same.
+    // A message with no route row is claimed for main only AFTER main has it (nothing can claim it meanwhile: a worker reads route
+    // rows only). A claim that stood from before the emit, with no route row behind it, would make the restart's route
+    // unreadable by the worker and consumed all the same.
     const clock = fakeClock(new Date().toISOString())
     const stop = slowStop()
     const { hh, main, worker } = await setup({ clock, stopDelay: stop.delay })
@@ -723,9 +724,8 @@ describe('a bridge that is stopping hands nothing over', () => {
     const sent = await hh.app.sendMessage('trip', 'for a session that is going down')
     const id = sent.client_msg_id as string
     await untilHeld(clock)
-    expect(hh.bridge.router?.store.claimedBy(id)).toBe('main')
+    expect(hh.bridge.router?.store.claimedBy(id)).toBeUndefined() // not claimed before main has it
     const stopping = hh.bridge.stop()
-    expect(hh.bridge.router?.store.claimedBy(id)).toBeUndefined() // given back before stop() first yields
     clock.advance(UNDO_HOLD_MS + 1000)
     await settled(hh)
     expectUntouched(hh, sent)

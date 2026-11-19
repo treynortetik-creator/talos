@@ -106,7 +106,7 @@ export function foldsCase(
   return false
 }
 
-function spellings(talosHome: string): string[] {
+export function spellings(talosHome: string): string[] {
   const given = trimSlash(talosHome)
   const real = realOrNull(given)
   return [...new Set([given, ...(real ? [trimSlash(real)] : [])])]
@@ -318,6 +318,34 @@ export const WORKER_WRITERS = ['Edit', 'Write', 'NotebookEdit'] as const
 export function workerFilesDenyRules(talosHome: string): string[] {
   const forms = spellings(talosHome)
   return WORKER_WRITERS.flatMap((tool) => forms.flatMap((f) => [`${tool}(/${f}/workers/**)`, `${tool}(/${f}/workers)`]))
+}
+
+/**
+ * The two rules that let a thread's session edit its own live state file (`<agentDir>/threads/<id>.state.md`) without a prompt:
+ * that exact path, as given and as it really is, for Edit and Write. No glob, no folder: a sibling (another thread's file, a
+ * `.bak`, a `..` path) is not covered. A folder name that holds a rule metacharacter, a quote or a control character gets none
+ * (the session then asks, the safe side), as `fenceSafe` refuses such a home.
+ */
+export function stateFileAllowRules(agentDir: string, threadId: string): string[] {
+  return stateFileRules(agentDir, threadId, '')
+}
+
+/**
+ * The matching deny rules: Claude Code reads a path rule gitignore-style, where a pattern that names a file also names everything
+ * under it, so the allow rule would let a session write `<id>.state.md/anything` (Write makes parent folders). Deny wins over allow,
+ * and `<file>/**` leaves the file itself alone.
+ */
+export function stateFileDenyRules(agentDir: string, threadId: string): string[] {
+  return stateFileRules(agentDir, threadId, '/**')
+}
+
+function stateFileRules(agentDir: string, threadId: string, tail: string): string[] {
+  if (!/^[a-z][a-z0-9_]{0,31}$/.test(threadId)) return []
+  const forms = spellings(trimSlash(agentDir))
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is refused
+    .filter((f) => f.startsWith('/') && !/[*?[\]{}()!\\"'`\0-\x1f\x7f]/.test(f))
+    .map((f) => `${f}/threads/${threadId}.state.md${tail}`)
+  return (['Edit', 'Write'] as const).flatMap((tool) => forms.map((f) => `${tool}(/${f})`))
 }
 
 /** `settings` with `rules` added to `permissions.deny` (a union, nothing repeats); null when either is a shape it can't add to. */

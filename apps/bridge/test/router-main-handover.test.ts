@@ -1,12 +1,13 @@
 // BSUP-4: a route the router claimed for main and was handing over when the bridge stopped must reach main on the next start,
 // once. Real hub bridge for the context and the store; two routers over the same store play "before" and "after" a restart.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pgidOf } from '../src/hub/server.ts'
 import type { Notification } from '../src/notify.ts'
 import { ThreadRouter } from '../src/router/router.ts'
 import { BridgeStopping } from '../src/stopping.ts'
-import { workerStoreOf } from '../src/tools/read-inbound.ts'
+import { readInbound, workerStoreOf } from '../src/tools/read-inbound.ts'
 import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 let h: Harness | undefined
@@ -240,7 +241,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     b.close()
   })
 
-  test("(g) a stop during route()'s own fallback: the restart does not hand it over, the relay replay does, once", async () => {
+  test("(g) a stop during route()'s own fallback: a route row exists, so its intent row stands: the restart hands it over once, the replay does not", async () => {
     const hh = await hub()
     const n = note('m-g', 'text')
     ;(n.meta as Record<string, unknown>).trust = 'owner'
@@ -265,8 +266,8 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const after = recorder()
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     b.resume()
-    await sleep(150)
-    await b.route(n) // the relay replays the frame the bridge never finished
+    await waitFor(() => after.got.length === 1, 4000, 'the restart handed it over')
+    await b.route(n) // the relay replays the frame the bridge never finished: main holds it
     await sleep(100)
     expect(after.got).toHaveLength(1)
     b.close()
@@ -348,5 +349,191 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     expect(after.got).toHaveLength(1)
     expect(store.pendingMainHandovers()).toHaveLength(0)
     b.close()
+  })
+})
+
+/** workers.json as the desktop supervisor writes it: the thread's session is live, so route() sends to the worker. */
+function liveWorker(hh: Harness) {
+  writeFileSync(
+    join(hh.home, 'workers.json'),
+    JSON.stringify({
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true },
+      threads: {
+        trip: {
+          state: 'live',
+          session_id: '6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41',
+          tmux: 't-trip',
+          pane_pid: pgidOf(process.pid) as number,
+          cwd: hh.home,
+          error: null,
+        },
+      },
+    }),
+  )
+}
+
+const ownerNote = (id: string): Notification => {
+  const n = note(id, 'text')
+  ;(n.meta as Record<string, unknown>).trust = 'owner'
+  return n
+}
+
+describe('BSUP-3: a message the relay sent twice is handled once', () => {
+  test('(a) routed to the thread (armed, unclaimed), replayed, then the worker reads: main has it, the worker does not', async () => {
+    const hh = await hub()
+    liveWorker(hh)
+    const store = workerStoreOf(hh.bridge.ctx)
+    const main = recorder()
+    const r = new ThreadRouter(hh.bridge.ctx, main.emit, { store })
+    const n = ownerNote('m-3a')
+    await r.route(n)
+    expect(main.got).toHaveLength(0) // the worker's to read
+    await r.route(n) // the relay replays the frame
+    expect(main.got).toHaveLength(1)
+    expect(store.claimedBy('m-3a')).toBe('main')
+    const read = readInbound(hh.bridge.ctx, 'trip')
+    expect(read.messages).toHaveLength(0) // the worker's claim is refused
+    expect(read.already_handled_by_main).toContain('m-3a')
+    r.close()
+  })
+
+  test('(b) the worker already claimed it: the replay gives main nothing', async () => {
+    const hh = await hub()
+    liveWorker(hh)
+    const store = workerStoreOf(hh.bridge.ctx)
+    const main = recorder()
+    const r = new ThreadRouter(hh.bridge.ctx, main.emit, { store })
+    const n = ownerNote('m-3b')
+    await r.route(n)
+    expect(readInbound(hh.bridge.ctx, 'trip').messages).toHaveLength(1)
+    await r.route(n)
+    await sleep(50)
+    expect(main.got).toHaveLength(0)
+    expect(store.claimedBy('m-3b')).toBe('worker:trip')
+    r.close()
+  })
+
+  test('(c) main already took it on the deadline path: the replay does not hand it over a second time', async () => {
+    const hh = await hub()
+    liveWorker(hh)
+    const n = ownerNote('m-3c')
+    const store = seed(hh, n) // past its deadline
+    const main = recorder()
+    const r = new ThreadRouter(hh.bridge.ctx, main.emit, { store })
+    r.resume()
+    await waitFor(() => main.got.length === 1, 4000, 'the deadline path delivered')
+    await waitFor(() => store.pendingMainHandovers().length === 0, 4000, 'recorded')
+    await r.route(n)
+    await sleep(100)
+    expect(main.got).toHaveLength(1)
+    r.close()
+  })
+
+  test("(d) a stop during this path's hand-over, then a restart and the relay replay: main gets it once", async () => {
+    const hh = await hub()
+    liveWorker(hh)
+    const store = workerStoreOf(hh.bridge.ctx)
+    const n = ownerNote('m-3d')
+    const before = held()
+    const a = new ThreadRouter(hh.bridge.ctx, before.emit, { store })
+    await a.route(n) // armed, unclaimed
+    const replay = a.route(n).catch(() => {})
+    await waitFor(() => before.got.length === 1, 4000, 'the hand-over began')
+    expect(store.pendingMainHandovers()).toHaveLength(1) // the claim and its intent row were written together
+    a.close()
+    before.release(new BridgeStopping())
+    await replay
+    const after = recorder()
+    const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
+    b.resume() // the row left behind: main gets it
+    await waitFor(() => after.got.length === 1, 4000, 'main got it after the restart')
+    await b.route(n) // the relay replays the frame the bridge never finished: main holds it, nothing more
+    await sleep(100)
+    expect(after.got).toHaveLength(1)
+    expect(readInbound(hh.bridge.ctx, 'trip').messages).toHaveLength(0)
+    b.close()
+  })
+
+  test("(e) a crash (no close) during this path's emit: the restart's resume delivers once, a further replay nothing", async () => {
+    const hh = await hub()
+    liveWorker(hh)
+    const store = workerStoreOf(hh.bridge.ctx)
+    const n = ownerNote('m-3e')
+    const before = held()
+    const a = new ThreadRouter(hh.bridge.ctx, before.emit, { store })
+    await a.route(n)
+    const replay = a.route(n).catch(() => {})
+    await waitFor(() => before.got.length === 1, 4000, 'the hand-over began') // the process dies here: a is never closed
+    const after = recorder()
+    const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
+    b.resume()
+    await waitFor(() => after.got.length === 1, 4000, 'resume delivered it')
+    await b.route(n)
+    b.resume()
+    await sleep(100)
+    expect(after.got).toHaveLength(1)
+    expect(readInbound(hh.bridge.ctx, 'trip').messages).toHaveLength(0)
+    before.release(new BridgeStopping())
+    await replay
+    b.close()
+  })
+
+  test("(f) a stop during route()'s own fallback emit, the thread reachable at the restart: the replay reaches the worker, once", async () => {
+    const hh = await hub() // no workers.json: the first route falls back
+    const store = workerStoreOf(hh.bridge.ctx)
+    const n = ownerNote('m-3f')
+    const before = held()
+    const a = new ThreadRouter(hh.bridge.ctx, before.emit, { store })
+    const routed = a.route(n).catch(() => {})
+    await waitFor(() => before.got.length === 1, 4000, 'the hand-over began')
+    a.close()
+    before.release(new BridgeStopping())
+    await routed
+    expect(store.claimedBy('m-3f')).toBeUndefined() // main never got it: no claim stands
+    liveWorker(hh) // the thread is reachable now
+    const after = recorder()
+    const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
+    b.resume()
+    await b.route(n) // the relay replays: routed to the worker
+    const read = readInbound(hh.bridge.ctx, 'trip')
+    await sleep(100)
+    expect(read.messages).toHaveLength(1) // the worker gets it
+    expect(after.got).toHaveLength(0) // and main does not
+    b.close()
+  })
+
+  test("(g) a crash between onDeadline's claim and the hand-over: resume delivers once", async () => {
+    const hh = await hub()
+    const store = seed(hh, note('m-3g')) // past its deadline
+    const ctx = hh.bridge.ctx as unknown as { undo: unknown }
+    const real = ctx.undo
+    ctx.undo = { restoring: { waitFor: () => new Promise(() => {}) }, mainFolder: () => 'main' } // the wait never ends
+    const a = new ThreadRouter(hh.bridge.ctx, recorder().emit, { store })
+    a.resume()
+    await waitFor(() => store.claimedBy('m-3g') === 'main', 4000, 'main took the claim') // the process dies here
+    ctx.undo = real
+    const after = recorder()
+    const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
+    b.resume()
+    await waitFor(() => after.got.length === 1, 4000, 'resume delivered it')
+    b.resume()
+    await sleep(100)
+    expect(after.got).toHaveLength(1)
+    b.close()
+  })
+
+  test('(h) an older build claimed for main before its emit and stopped: the frame is not done, the replay reaches main once', async () => {
+    const hh = await hub() // no workers.json: the message falls back
+    const store = workerStoreOf(hh.bridge.ctx)
+    const n = ownerNote('m-3h')
+    store.claim('m-3h', 'main', Date.now()) // what every earlier build left: a main claim, no route row, no intent row
+    const main = recorder()
+    const r = new ThreadRouter(hh.bridge.ctx, main.emit, { store })
+    await r.route(n)
+    expect(main.got).toHaveLength(1)
+    await sleep(50)
+    expect(main.got).toHaveLength(1)
+    r.close()
   })
 })

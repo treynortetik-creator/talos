@@ -1913,6 +1913,48 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       expect(r.stderr).toContain(`stopping an orphaned preview server (pid ${pid}) on port ${port}`)
     })
 
+    // Linux only: WSL's session init is a Linux process (a Mac never names a parent so)
+    it.runIf(process.platform === 'linux')(
+      'a leader adopted by the init of a WSL session ("Relay(<pid>)", a gate run from a Windows terminal) is an orphan too',
+      async () => {
+        const m = machine('1')
+        const port = await freePort()
+        mkdirSync(join(m.cache, 'bin'), { recursive: true })
+        const relay = join(m.cache, 'bin', 'Relay(4242)') // a shell under the name WSL gives its session init
+        symlinkSync(spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim(), relay)
+        const args = shape(m, port, port)
+        const sub = spawn(relay, [args[0], `${args[1]} wait`], { env: m.env, cwd: inRepo, stdio: 'ignore' })
+        kids.push(sub)
+        const pid = await pidOf(m, port)
+        const leader = Number(ps(pid, 'pgid'))
+        expect(ps(leader, 'ppid')).toBe(String(sub.pid))
+        const r = holdOn(m, port, pid)
+        expect(r.stdout.trim(), r.stderr).toBe('gone')
+        expect(r.stderr).toContain(`stopping an orphaned preview server (pid ${pid}) on port ${port}`)
+      },
+    )
+
+    it.runIf(process.platform === 'linux')(
+      'a parent merely named like one ("Relay(x)": no digit) is no reaper: its run is in progress',
+      async () => {
+        const m = machine('1')
+        const port = await freePort()
+        mkdirSync(join(m.cache, 'bin'), { recursive: true })
+        const fake = join(m.cache, 'bin', 'Relay(x)')
+        symlinkSync(spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim(), fake)
+        const args = shape(m, port, port)
+        const sub = spawn(fake, [args[0], `${args[1]} wait`], { env: m.env, cwd: inRepo, stdio: 'ignore' })
+        kids.push(sub)
+        const pid = await pidOf(m, port)
+        try {
+          const r = holdOn(m, port, pid)
+          expect(r.stdout.trim(), r.stderr).toBe('up')
+        } finally {
+          spawnSync('kill', ['-KILL', String(pid)])
+        }
+      },
+    )
+
     it('a preview server of a run in progress (its group’s leader has a living parent) is never touched, and the hold says loudly who has the port', async () => {
       const m = machine('1')
       const port = await freePort()

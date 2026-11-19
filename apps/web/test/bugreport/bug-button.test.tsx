@@ -1,5 +1,5 @@
 // The Report a bug button on every screen: B by default (a slot in the phone's tab bar, a row in the desktop sidebar's
-// footer, and in a thread on a phone the timeline's corner), A (an icon in each header) after `?bugbtn=a`, kept across
+// footer, and in a thread on a phone a button of the message box), A (an icon in each header) after `?bugbtn=a`, kept across
 // launches until `?bugbtn=b`; exactly one placement shows; a tap opens the reporter; the button is never in the picture.
 import { act, cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -86,6 +86,17 @@ describe('Report a bug button', () => {
     at('?bugbtn=a')
     render(<BugThreadButton />)
     expect(screen.queryByTestId('bug-button')).toBeNull()
+  })
+
+  it("the inline variant is the message box's plain icon button; the default stays the floating look", () => {
+    render(<BugThreadButton variant="inline" />)
+    const inline = screen.getByTestId('bug-button')
+    expect(inline.className).not.toMatch(/border|shadow|bg-surface/)
+    expect(inline.className).toContain('md:hidden')
+    expect(inline.hasAttribute('data-no-capture')).toBe(true)
+    cleanup()
+    render(<BugThreadButton />)
+    expect(screen.getByTestId('bug-button').className).toMatch(/shadow-md/)
   })
 
   it('?bugbtn=a still decides this load when storage refuses the write', () => {

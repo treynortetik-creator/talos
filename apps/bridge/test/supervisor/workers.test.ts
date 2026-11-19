@@ -49,7 +49,7 @@ import {
   type WorkerThread,
 } from '../../src/supervisor/workers.ts'
 import { dedicatedThreads, workerPlanner } from '../../src/supervisor/workers-wiring.ts'
-import { workerDir, workersJsonPath, writeReady, writeWake } from '../../src/worker/files.ts'
+import { workerDir, workersJsonPath, writeControl, writeReady, writeWake } from '../../src/worker/files.ts'
 import { cleanupReleases, sealedRelease } from './kit-release-fixture.ts'
 
 // The stand-in python3 files these tests build in temp folders are this user's own: the two trust rules (the system's folder
@@ -521,7 +521,7 @@ describe('the end of a session', () => {
 
 describe('wakes and the session id', () => {
   const wake = (x: ReturnType<typeof setup>, action: 'park' | 'restart' | 'fresh' | 'resume') =>
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -607,7 +607,7 @@ describe('wakes and the session id', () => {
     wake(x, 'park')
     await x.tick()
     expect(x.m.state('trip')).toBe('parking')
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'ghost',
       message_ids: [],
@@ -1540,7 +1540,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
   const parks = (x: ReturnType<typeof setup>, why: string) =>
     x.audit.filter(([e, f]) => e === 'worker_parked' && f?.why === why).map(([, f]) => f?.thread)
   const parkWake = (x: ReturnType<typeof setup>, reason: 'governor' | 'control' | 'message', id = 'trip') =>
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: id,
       message_ids: [],
@@ -1577,7 +1577,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
     const x = setup({ saved: () => true })
     await live(x)
     x.host().output = x.wall()
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -1596,7 +1596,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
     ;(y.m as unknown as { workers: Map<string, { notes: { needsYou: string | null } }> }).workers.get(
       'trip',
     )!.notes.needsYou = 'Bash command'
-    writeWake(y.home, {
+    writeControl(y.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -1628,7 +1628,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
     const x = setup({ saved: () => true })
     await live(x)
     x.host().output = x.wall()
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -1798,7 +1798,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
     const x = setup({ threads: ABC, maxLive: () => 2 })
     await live(x, 'a')
     await live(x, 'b')
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'c',
       message_ids: [],
@@ -1837,7 +1837,7 @@ describe('the live cap and the governor (P3d3, part 6)', () => {
     await new Promise((r) => setTimeout(r, 0))
   }
   const control = (x: ReturnType<typeof setup>, action: 'fresh' | 'resume') =>
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'c',
       message_ids: [],
@@ -2612,7 +2612,7 @@ describe('the P3d3 review’s lows (P3d4, part 3)', () => {
     x.host().output = x.wall() + 3600_000
     const w = internal(x, 'trip')
     if (w) w.notes.promptWatch.current = { signature: 'Allow this?', title: 'Allow this?' }
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -3189,7 +3189,7 @@ describe('status that tells the truth: stopped_why, needs_you and the turn field
   it('a park that waits for the turn keeps the reason it was asked for when the turn ends (the governor’s, not the owner’s)', async () => {
     const x = setup()
     await live(x)
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -3212,7 +3212,7 @@ describe('status that tells the truth: stopped_why, needs_you and the turn field
     expect(x.m.entry('trip')?.stopped_why).toBe('governor')
   })
   const governorPark = (x: ReturnType<typeof setup>) =>
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],
@@ -3288,7 +3288,7 @@ describe('status that tells the truth: stopped_why, needs_you and the turn field
     const x = setup()
     await live(x)
     x.host().output = x.wall()
-    writeWake(x.home, {
+    writeControl(x.home, {
       v: 1,
       thread_id: 'trip',
       message_ids: [],

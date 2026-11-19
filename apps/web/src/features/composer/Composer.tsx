@@ -10,6 +10,7 @@ import type { SocketClient } from '../../lib/socketClient.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
 import { SlashPicker, useSlashPicker } from '../session/SlashPicker.tsx'
 import { useSessionController } from '../session/store.ts'
+import { useWorkingStop } from '../threads/WorkingRow.tsx'
 import { CallErrorLine } from '../voice/CallErrorLine.tsx'
 import { ChipList, useChipUpkeep } from './ComposerChips.tsx'
 import { ErrorLine, NoteLine, ReplyBar, TooLongBar, UnsavedLine } from './ComposerNotices.tsx'
@@ -52,6 +53,7 @@ export function Composer({
   // CC-C3: the `/` picker and a calm note for session controls run from the box.
   const [note, setNote] = useState<Note | null>(null)
   const session = useSessionController()
+  const working = useWorkingStop(threadId)
   const picker = useSlashPicker(text, threadId)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const alive = useThreadAlive(threadId)
@@ -147,6 +149,11 @@ export function Composer({
         />
       )}
 
+      {working.stopError && (
+        <p role="alert" data-testid="working-row-error" className="m-0 pb-1.5 text-sm text-danger">
+          {working.stopError}
+        </p>
+      )}
       <CallErrorLine threadId={threadId} />
 
       {rec.mode === 'locked' ? (
@@ -186,6 +193,7 @@ export function Composer({
           canSend={canSend}
           tooLong={tooLong}
           macOnline={macOnline}
+          working={working}
           onSend={() => void send()}
           mic={mic}
         />

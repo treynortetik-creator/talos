@@ -72,7 +72,12 @@ function writeWorkers(home: string, now: number, threads: Record<string, Entry>,
     join(home, 'workers.json'),
     JSON.stringify({
       v: 1,
-      supervisor: { pid: 1, heartbeat_at: new Date(now).toISOString(), workers_supported: o.supported ?? true },
+      supervisor: {
+        pid: 1,
+        heartbeat_at: new Date(now).toISOString(),
+        workers_supported: o.supported ?? true,
+        reads_control: true,
+      },
       threads: t,
     }),
   )
@@ -109,7 +114,7 @@ const call = async (hh: Harness, args: Record<string, unknown>) => {
   const r = await hh.bridge.callTool('thread_session', args)
   return { error: r.isError === true, text: r.content[0]?.text ?? '' }
 }
-const wakePath = (hh: Harness, id: string) => join(hh.home, 'workers', id, 'wake')
+const wakePath = (hh: Harness, id: string) => join(hh.home, 'workers', id, 'control')
 const readWakeFile = (hh: Harness, id: string) => WakeFile.parse(JSON.parse(readFileSync(wakePath(hh, id), 'utf8')))
 const systemRows = (hh: Harness, id: string) =>
   hh.bridge.ctx.store.page({ thread_id: id, limit: 50 }).messages.filter((m) => m.author === 'system')
@@ -210,6 +215,8 @@ describe('thread_session wake and restart', () => {
     const r = await call(hh, { action: 'restart', thread_id: 'trip', why: 'stuck on a tool for 40 min' })
     expect(r.error, r.text).toBe(false)
     expect(r.text).toContain('Restarting this thread’s session')
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false) // a control never writes a wake
+    expect(existsSync(wakePath(hh, 'trip'))).toBe(true)
     // both supervisors cut a still-busy turn at the owner's stop limit (WORKER_TIMING.owner_stop_s, the Mac's stopLimit)
     expect(WORKER_TIMING.owner_stop_s).toBe(900)
     expect(r.text).toContain('when its turn ends, or after 15 minutes if it does not')

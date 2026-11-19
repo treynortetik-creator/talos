@@ -166,7 +166,16 @@ struct WorkerPrompt322Tests {
       unlink(a)
       unlink(b)
     }
-    let askOnPane = { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("Do you want to proceed") }
+    let capture = { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out }
+    let askOnPane = { capture().contains("Do you want to proceed") }
+    // The whole ask, drawn and holding still: the same capture twice, a moment apart, that the prompt watch reads as the prompt.
+    // Its words alone are not enough: on a loaded machine the manager's next look could catch the ask half drawn, see no prompt,
+    // and after the clock's jump let the held flag go or post the ask again (1 run in 6 under load, 11-18).
+    let askDrawn = { () -> Bool in
+      let one = capture()
+      Thread.sleep(forTimeInterval: 0.3)
+      return one == capture() && PromptDetector.detect(TmuxCommands.parseCapture(one)) != nil
+    }
     r.mgr.tune { $0.promptDebounce = 0 }  // the wall clock never hides a second post here: only the flicker rule can keep it back
     r.mgr.startTicking()
     try r.wake("trip")
@@ -179,7 +188,7 @@ struct WorkerPrompt322Tests {
     r.mgr.tickOnce()
     #expect(r.mgr.needsYou()["trip"] == "Bash command", "control: the flag is still held")
     FileManager.default.createFile(atPath: b, contents: nil)
-    #expect(r.wait(30) { askOnPane() }, "control: the ask is back")
+    #expect(r.wait(30) { askOnPane() && askDrawn() }, "control: the ask is back, whole and still")
     r.mgr.tickOnce()  // the manager sees it back
     clock.jump(61)  // past the settle: a second line would be posted by the next look
     r.mgr.tickOnce()

@@ -15,7 +15,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KIT_DIR, releaseContentSha } from '../../src/supervisor/worker-hook.ts'
+import { KIT_DIR, releaseContentSha, STATE_FILES } from '../../src/supervisor/worker-hook.ts'
 
 const made: string[] = []
 let shared: string | undefined
@@ -37,7 +37,9 @@ export const unseal = (root: string) => {
 }
 
 /** A vendor folder holding one sealed, active release of the checkout's real hooks. `fresh`: a new one, not the shared one. */
-export function sealedRelease(opts: { fresh?: boolean; helper?: boolean; under?: string } = {}): string {
+export function sealedRelease(
+  opts: { fresh?: boolean; helper?: boolean; state?: boolean; under?: string } = {},
+): string {
   if (!opts.fresh && !opts.under && shared) return shared
   // `under`: in that folder (a test's own), never in the system temp folder itself, which a test may then change
   const vendor = mkdtempSync(join(opts.under ?? tmpdir(), 'talos-kit-vendor-'))
@@ -46,6 +48,8 @@ export function sealedRelease(opts: { fresh?: boolean; helper?: boolean; under?:
   const hooks = join(release, 'talos-kit', 'hooks')
   mkdirSync(hooks, { recursive: true })
   cpSync(join(KIT_DIR, 'hooks', 'permission-relay.py'), join(hooks, 'permission-relay.py'))
+  // the thread-state hook and the guard it reuses (an older kit has neither: `state: false`)
+  if (opts.state !== false) for (const n of STATE_FILES) cpSync(join(KIT_DIR, 'hooks', n), join(hooks, n))
   if (opts.helper !== false) cpSync(join(KIT_DIR, 'hooks', '_talos_common.py'), join(hooks, '_talos_common.py'))
   const plugin = join(release, 'talos-kit')
   writeFileSync(

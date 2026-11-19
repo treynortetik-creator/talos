@@ -150,6 +150,34 @@ function commitOf(repo, hex) {
   }
 }
 
+/**
+ * A public clone is the squashed public repo: the build (TalosGitSha) and the relay's version name PRIVATE commits it does not
+ * have, and each snapshot commit names the private commit it was made from in a `Talos-Source:` trailer (publish-public.sh).
+ * The snapshot commits by the private hex they were made from, or undefined when this clone has no such trailers (a private
+ * clone). One `git log` for the whole history; a hex that two snapshots match (a short prefix) maps to neither.
+ */
+function snapshots(repo) {
+  let out
+  try {
+    out = git(repo, ['log', '--all', '--format=%H%x09%(trailers:key=Talos-Source,valueonly,separator=%x20)'])
+  } catch {
+    return undefined
+  }
+  const map = []
+  for (const line of out.split('\n')) {
+    const [pub, src] = line.split('\t')
+    const s = (src ?? '').trim()
+    if (HEX.test(pub ?? '') && /^[0-9a-f]{40}$/.test(s)) map.push([s, pub])
+  }
+  return map.length ? map : undefined
+}
+
+function snapshotOf(map, hex) {
+  if (!map || !HEX.test(hex)) return undefined
+  const hits = new Set(map.filter(([src]) => src.startsWith(hex)).map(([, pub]) => pub))
+  return hits.size === 1 ? [...hits][0] : undefined
+}
+
 /** Is a an ancestor of b? A git failure (anything but "no") throws. */
 function isAncestor(repo, a, b) {
   try {
@@ -182,7 +210,11 @@ async function main() {
   if (url === undefined) stop(`the relay address in this Mac's Talos settings is not one Talos can use; ${AGAIN}`)
   if (!buildSha)
     stop(`this build carries no git sha (TalosGitSha), so it can't be compared with the relay's version; ${AGAIN}`)
-  const build = commitOf(repo, hexOf(buildSha) ?? '')
+  const buildHex = hexOf(buildSha) ?? ''
+  let build = commitOf(repo, buildHex)
+  // in a public clone, the snapshot made from the build's private commit
+  const snaps = build === undefined ? snapshots(repo) : undefined
+  if (build === undefined) build = snapshotOf(snaps, buildHex)
   if (build === undefined) stop(`this build's commit ${buildSha} is not in the clone it was built from; ${AGAIN}`)
 
   const interval = seconds('TALOS_RELAY_WAIT_INTERVAL', 15_000)
@@ -204,7 +236,13 @@ async function main() {
       const hex = hexOf(got.version)
       if (hex === undefined)
         return say(`the relay reports version ${got.version}, not a commit, so it can't be compared; installing`)
-      const relayCommit = commitOf(repo, hex)
+      const relayCommit = commitOf(repo, hex) ?? snapshotOf(snaps, hex)
+      if (relayCommit === undefined && snaps)
+        // a relay deployed from a private commit no snapshot was made from: this public clone cannot order it, and fetching
+        // would not help (the public repo never has private commits)
+        return say(
+          `the relay is on version ${got.version}, a commit with no snapshot in this public clone, so it can't be compared; installing`,
+        )
       if (relayCommit === undefined)
         stop(
           `the relay is on version ${got.version}, which this clone does not have, so it can't tell which is newer; fetch, then ${AGAIN}`,

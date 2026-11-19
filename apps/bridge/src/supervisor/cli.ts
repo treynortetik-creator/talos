@@ -34,7 +34,7 @@ import { DeviceStore } from '../devices.ts'
 import { processStartTime } from '../proc-identity.ts'
 import { bridgeLiveness, readStatusFile } from '../status-file.ts'
 import { postSystemRow } from '../system-post.ts'
-import { writeWake } from '../worker/files.ts'
+import { writeControl } from '../worker/files.ts'
 import { ENV_MARKER, LoginEnvCache, loginShellEnvAsync, parseLoginEnv } from './login-env.ts'
 
 export { parseLoginEnv }
@@ -608,7 +608,7 @@ function superviseRestartThread(home: string, userHome: string, args: string[], 
     )
     return 1
   }
-  writeWake(
+  writeControl(
     home,
     {
       v: 1,
@@ -645,7 +645,7 @@ function releaseIdNow(): string {
   if ('refused' in a) return `${BRIDGE_COMMIT ?? 'none'}|kit-refused`
   if (a.mode === 'rooted') return `${BRIDGE_COMMIT ?? 'none'}|${a.version}|${a.sha}`
   const r = releaseHook(kitVendor(process.env))
-  return `${BRIDGE_COMMIT ?? 'none'}|${'verified' in r && r.verified ? `${r.verified.hook}|${r.verified.helper ?? ''}` : 'home'}`
+  return `${BRIDGE_COMMIT ?? 'none'}|${'verified' in r && r.verified ? `${r.verified.hook}|${r.verified.helper ?? ''}${r.verified.state ? `|${Object.values(r.verified.state).join('|')}` : ''}` : 'home'}`
 }
 
 async function runSupervisor(home: string, userHome: string, io: CliIO): Promise<number> {

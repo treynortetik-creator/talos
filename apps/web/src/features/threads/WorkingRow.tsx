@@ -1,11 +1,10 @@
-// D15: a visible "working" row between the timeline and the composer, with Stop beside it.
+// D15: the working indicator. The bar is a thin line on the top edge of the message box that takes no room (a zero-height
+// element, so nothing is pushed or covered); Stop is in the message box's buttons (useWorkingStop, ComposerToolbar).
 import { ownValue, type ThreadStatusT, threadSessionMode } from '@talos-app/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { useThreadStatus } from '../../lib/threadStatus.ts'
-import { Button } from '../../ui/button.tsx'
-import { StatusDot } from '../../ui/StatusDot.tsx'
 import { useSessionController } from '../session/store.ts'
 import { useModBusy } from '../session/useModBusy.ts'
 import { useAgentName } from './useThreads.ts'
@@ -31,15 +30,17 @@ export function useThreadState(threadId: string): ThreadStatusT['state'] | undef
   return status?.state
 }
 
-export function WorkingRow({ threadId }: { threadId: string }) {
-  const agent = useAgentName()
+/**
+ * What the message box needs to offer Stop: the same rule as SessionPanel (the mod is online and can stop, a turn is
+ * running, and we know which one). A dedicated thread's worker is a different session, so Stop there would hit main's turn
+ * and is not offered. The panel is closed when Stop is tapped here, so a refusal or a timeout is returned for the box to show.
+ */
+export function useWorkingStop(threadId: string) {
   const state = useThreadState(threadId)
   const dedicated = useDedicated(threadId)
   const ctl = useSessionController()
-  const busyCtl = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
-  // same rule as SessionPanel: the mod is online and can stop, a turn is running, and we know which one. A dedicated
-  // thread's worker is a different session: Stop here would hit main's turn, so it is not offered.
-  const showStop = useStore(
+  const busy = useStore(ctl.store, (s) => Object.keys(s.pending).length > 0)
+  const canStop = useStore(
     ctl.store,
     (s) =>
       s.modOnline &&
@@ -47,7 +48,8 @@ export function WorkingRow({ threadId }: { threadId: string }) {
       s.state.busy === true &&
       Boolean(s.state.turn_id),
   )
-  // the panel is closed when Stop is tapped here, so a refusal or a timeout is shown in the row
+  const working = state === 'working'
+  const showStop = canStop && !dedicated && working
   const [stopError, setStopError] = useState<string | null>(null)
   const alive = useRef(true)
   useEffect(() => {
@@ -59,30 +61,34 @@ export function WorkingRow({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (!showStop) setStopError(null)
   }, [showStop])
-  if (state !== 'working') return null
   const stop = async () => {
     setStopError(null)
     const o = await ctl.stopTurn(threadId)
     if (alive.current && o.kind === 'error') setStopError(o.text)
   }
+  return { working, showStop, busy, stop, stopError }
+}
+
+export type WorkingStop = ReturnType<typeof useWorkingStop>
+
+/**
+ * The bar: no height, margin, padding or border of its own, so it costs the screen nothing. Its line is drawn over the
+ * message box's top edge (3 px, never takes a tap); the text is for screen readers only.
+ */
+export function WorkingRow({ threadId }: { threadId: string }) {
+  const agent = useAgentName()
+  const state = useThreadState(threadId)
+  if (state !== 'working') return null
   return (
-    <div
-      data-testid="working-row"
-      role="status"
-      className="kb-hide-banner mx-3 mb-2 flex min-h-11 flex-wrap items-center gap-x-2 rounded-card border border-line bg-surface px-3 text-sm text-text-2"
-    >
-      <StatusDot shape="half" className="text-accent-text" />
-      <span className="min-w-0 flex-1 truncate">{agent} is working…</span>
-      {showStop && !dedicated && (
-        <Button variant="danger" className="border border-danger" disabled={busyCtl} onClick={() => void stop()}>
-          Stop
-        </Button>
-      )}
-      {stopError && (
-        <p role="alert" data-testid="working-row-error" className="m-0 basis-full pb-2 text-danger">
-          {stopError}
-        </p>
-      )}
+    <div data-testid="working-row" role="status" className="relative h-0 shrink-0">
+      <div
+        data-testid="working-line"
+        className="pointer-events-none absolute inset-x-0 -top-px h-[3px] overflow-hidden"
+        aria-hidden="true"
+      >
+        <div data-testid="working-line-fill" className="working-line-fill h-full" />
+      </div>
+      <span className="sr-only">{agent} is working…</span>
     </div>
   )
 }

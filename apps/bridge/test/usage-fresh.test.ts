@@ -57,7 +57,7 @@ function writeWorkers(home: string, threads: Record<string, { state: string; pan
     join(home, 'workers.json'),
     JSON.stringify({
       v: 1,
-      supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true },
+      supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true, reads_control: true },
       threads: t,
     }),
   )
@@ -158,7 +158,8 @@ describe('the governor acts on the newest reading, on every path that starts or 
     })
     writeUsage(hh.home, 'trip', 96)
     hh.bridge.optionCTick()
-    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'wake'), 'utf8')))
+    expect(existsSync(join(hh.home, 'workers', 'trip', 'wake'))).toBe(false) // the governor's park never writes a wake
+    const wake = WakeFile.parse(JSON.parse(readFileSync(join(hh.home, 'workers', 'trip', 'control'), 'utf8')))
     expect(wake).toMatchObject({ action: 'park', reason: 'governor' })
     // routing: an owner message to the parked thread is answered by main, with the reason
     await hh.app.sendMessage('garden', 'wake up')

@@ -28,6 +28,7 @@ Suspected: fixed waits against a real tmux and real processes, which lose under 
 | 27       | 11-16        | aCursorMovedByTheOwnerStillGetsTheLabelClickedAndNothingElse                                                | NeedsYouPopupTests.swift          |
 | 13       | 11-17        | switchedOffNothingRestartsAndSwitchedOnItWaitsForTheNextRelease                                             | WorkerUpdateRestartTests.swift    |
 | 7        | 11-17        | anUpdateRestartsEachStaleSessionOnceOneAtATime…                                                             | WorkerUpdateRestartTests.swift    |
+| 1        | 11-19        | theSameAskBackAfterAThreeSecondFlickerKeepsItsOneLine (FIXED 11-18, below)                                  | PromptRelay322Tests.swift         |
 | 9        | 11-17        | aWarmWorkersPointerIsDroppedAfter90Seconds                                                                  | PointerOwedTests.swift            |
 | 8        | 11-17        | FINDING_theCrashLoopCountSurvivesARelaunch                                                                  | ReviewOC3IntegrationTests.swift   |
 | 8+3+3    | 11-17        | aNeedsYouWorkerIsNotIdleParked, aDialogOnALiveWorkerIsFlaggedToo, aDialogThatHasNotHeldStillIsNotFlaggedYet | WorkerDialogTests.swift           |
@@ -40,6 +41,8 @@ Suspected: fixed waits against a real tmux and real processes, which lose under 
 | 2        | 11-17        | aLineThatIsGoneFromTheBoxIsTypedAgainNotEntered                                                             | PointerOwedEnterTests.swift       |
 | 1        | 11-18        | FINDING_aToolProcessThatLeftTheGroupDoesNotOutliveACrash                                                    | ReviewOC3R2IntegrationTests.swift |
 | 1-2 each | 11-14..11-17 | 22 more (FINDING_aCrashLeavesNothingInTheGroup, aTapWalksToTheSignedRowFirst, aKilledServerIsGone, …)       | same target                       |
+
+FIXED 11-18 (Delphi): `theSameAskBackAfterAThreeSecondFlickerKeepsItsOneLine` waited for the ask's words, not the whole ask held still; the manager's look could catch it half drawn. 1 run in 6 under load before, 0 in 16 after.
 
 Open: `FINDING_aToolProcessThatLeftTheGroupDoesNotOutliveACrash` (ReviewOC3R2IntegrationTests.swift, the "parked" wait at :453) failed once on CI at a8bd0ac, one failure in about 563 desktop logs. Hypothesis: the test killed the worker while its pointer was still owed, so `runQueued` (WorkerPark.swift:61-62) started it again in the tick that parked it and "parked" never showed; the same race as ff0bbffc0. Not reproduced: 105 local runs, quiet and under an 18-core burn, 0 failures. Changed: the test waits for the typed pointer before the kill, and both "parked" waits in the file print `r.why` (state, error, starts). Status OPEN: closed only by a repro, or by a CI failure whose message shows the state. Owner: Lemnos.
 
@@ -93,6 +96,9 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 | 1           | 11-15 | schedules.spec stall: a background run that never starts |
 | 1           | 11-15 | apps.spec E17 two apps each wait for their own card      |
 | 1 (3 total) | 11-14 | bridge-oversize-card: card.create over 256 KiB           |
+| 1           | 11-19 | apps.spec E10 fullscreen keeps the same frame (load)     |
+
+E10 (11-19, passed on retry): Titan, the e2e packages on 8 workers beside a live check-titan (a load measurement).
 
 ### Sleeps used as fixes
 

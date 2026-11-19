@@ -53,14 +53,21 @@ export function BugHeaderButton({ onChrome = false, className }: { onChrome?: bo
 }
 
 // B (Pantheon's pick, 2026-11-14): nothing floats over content. Off a thread it is a slot in the phone's bottom tab bar and
-// a row in the desktop sidebar's footer (Nav.tsx); in a thread on a phone (no tab bar there) it sits in the timeline's own
-// bottom-right corner, under jump-to-latest, with room kept below the last row (Timeline.tsx).
+// a row in the desktop sidebar's footer (Nav.tsx); in a thread on a phone (no tab bar there) it is one of the message box's
+// own buttons, on the left beside + (ComposerToolbar.tsx), so the conversation keeps all its height.
 
 /** The B button's look in a tab bar or a sidebar row is the caller's; this is the one shared action and name. */
 export const BUG_LABEL = 'Report a bug'
 
-/** B in a thread on a phone: rendered by the timeline in its bottom-right stack, under jump-to-latest. */
-export function BugThreadButton() {
+/** B in a thread on a phone. 'inline' is the message box's plain icon button (same size and ink as its mic); 'floating'
+ *  is the round bordered button used where no row holds it (BugCornerButton). Phones only (md:hidden). */
+export function BugThreadButton({
+  variant = 'floating',
+  className,
+}: {
+  variant?: 'floating' | 'inline'
+  className?: string
+}) {
   if (bugPlacement() !== 'b') return null
   return (
     <button
@@ -70,7 +77,13 @@ export function BugThreadButton() {
       data-testid="bug-button"
       data-no-capture=""
       onClick={() => void openBugReport()}
-      className="grid size-11 shrink-0 place-items-center rounded-pill border border-line bg-surface text-text-2 shadow-md hover:text-text md:hidden"
+      className={cn(
+        'grid shrink-0 place-items-center rounded-pill text-text-2 md:hidden',
+        variant === 'inline'
+          ? 'size-[min(2.75rem,52px)]'
+          : 'size-11 border border-line bg-surface shadow-md hover:text-text',
+        className,
+      )}
     >
       <IconBug width={20} height={20} />
     </button>

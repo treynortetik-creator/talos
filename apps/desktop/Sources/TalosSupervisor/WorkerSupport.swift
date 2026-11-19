@@ -50,8 +50,9 @@ extension WorkerManager {
       You do own this thread's schedules: propose, change or delete jobs for this thread only with schedule_propose (the owner \
       approves each as a card), and see them with schedules_list. A job of this thread fires here as a kind=schedule_run item \
       from read_inbound: call schedule_run_start with its run_id (stop if it says SKIP), do the work, reply in this thread, then \
-      call schedule_run_done. Anything that sends, posts, deploys, pays or deletes goes through card first. At the end of each task, \
-      update threads/\(id).md (goal, decisions, open items, last result, file paths). In the agent folder: no git commands.
+      call schedule_run_done. Anything that sends, posts, deploys, pays or deletes goes through card first. Keep threads/\(id).state.md current the same turn an owner ask, a decision, a landing or a hold changes \
+      (under 8,000 characters; history goes elsewhere), and read it first after a restart or compaction. \
+      In the agent folder: no git commands.
       """
   }
 

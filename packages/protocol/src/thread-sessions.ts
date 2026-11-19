@@ -467,6 +467,12 @@ export const WorkersFile = z.object({
     subthreads_own_folder: z.boolean().default(false).catch(false),
     /** This supervisor also starts a dedicated sub-thread with no folder, or its parent's own, in the parent's folder; without it that is refused. */
     subthreads_shared_folder: z.boolean().default(false).catch(false),
+    /**
+     * This supervisor's reader takes `workers/<id>/control` (WORKER_FILES.control) before `wake`. The bridge writes an owner's tap
+     * there only when this is true; absent (an older supervisor) or false, it writes the tap into `wake` as it always did, so no
+     * tap is ever left in a file nobody reads.
+     */
+    reads_control: z.boolean().default(false).catch(false),
     /** The pane pid of main's session (diagnostics). */
     main_pane_pid: z.number().int().nonnegative().default(0),
     /** Main's own dialog on its pane right now (the development-channels warning), published here because Main has no thread entry. A value that does not fit reads as none. */
@@ -572,13 +578,16 @@ export const WakeFile = z
 export type WakeFileT = z.infer<typeof WakeFile>
 
 /**
- * Files under `$TALOS_APP_HOME/workers/<thread>/`: `wake` (hub writes, supervisor consumes and deletes), `nonce` (the
+ * Files under `$TALOS_APP_HOME/workers/<thread>/`: `wake` and `control` (hub writes, supervisor consumes and deletes), `nonce` (the
  * supervisor writes it before each start, 0600, and passes the same value in the worker's env as
  * TALOS_APP_WORKER_NONCE; the hub refuses a `hello` without it), `ready` (hub writes it on a good `hello`; the
  * supervisor's start is done when it appears), `mcp.json` and `WORKER.md` (supervisor / main).
  */
 export const WORKER_FILES = {
   wake: 'wake',
+  // a control the owner tapped (park, resume, restart, fresh; the same WakeFile shape), apart from `wake` so a message pointer
+  // written after it can never replace it (BSUP-5). The reader takes it before `wake`, in the same tick.
+  control: 'control',
   nonce: 'nonce',
   ready: 'ready',
   // Needs-you prompts (dialog-files.ts): the card's state for the Mac, the signed answer to press and the Mac's result

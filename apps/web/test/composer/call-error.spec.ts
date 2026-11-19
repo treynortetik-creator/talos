@@ -1,6 +1,6 @@
 // The failed-call line in the real app (fake mode), at phone width, with the keyboard up, in both themes. The microphone
-// is refused so the real call button produces a real error. The line must never sit on the working row or its Stop
-// button, and it must go away.
+// is refused so the real call button produces a real error. The line must never sit on the working bar or its Stop
+// button (Stop is in the message box's buttons), and it must go away.
 import { expect, type Page, test } from '@playwright/test'
 import { expectAxeClean } from '../cards/e2e.ts'
 import { keyboard } from '../helpers/keyboard.ts'
@@ -39,8 +39,7 @@ async function working(page: Page) {
     })
     t.session.patch({ busy: true, turn_id: 'turn_7' })
   })
-  const row = page.getByTestId('working-row')
-  await expect(row.getByRole('button', { name: 'Stop' })).toBeVisible()
+  await expect(page.getByTestId('composer-stop')).toBeVisible()
 }
 
 const box = async (loc: ReturnType<Page['locator']>) => {
@@ -64,14 +63,16 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await expect(line).toContainText('Allow the microphone to start a call.')
 
     const row = page.getByTestId('working-row')
-    const stop = row.getByRole('button', { name: 'Stop' })
+    const stop = page.getByTestId('composer-stop')
     const [l, r, s] = [await box(line), await box(row), await box(stop)]
     expect(overlaps(l, r), 'error line on the working row').toBe(false)
     expect(overlaps(l, s), 'error line on Stop').toBe(false)
     // nothing is on top of Stop at its centre
     const top = await stop.evaluate((el) => {
       const b = el.getBoundingClientRect()
-      return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === el
+      // the icon inside the button counts as the button itself
+      const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+      return hit !== null && el.contains(hit)
     })
     expect(top, 'something covers Stop').toBe(true)
     // the line itself is inside the visible window

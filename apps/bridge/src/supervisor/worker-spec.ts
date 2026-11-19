@@ -6,6 +6,7 @@
 // The MCP allow list (worker-mcp.ts, the Mac's WorkerMcp): with one, the launch is strict (only the generated config, the
 // connectors and Chrome off); without one, a worker gets the agent folder's servers or the given --mcp-config, as before.
 import { lstatSync, realpathSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   jcs,
   MCP_ALWAYS_DENIED,
@@ -29,6 +30,7 @@ import {
 import { realFileSync } from '../real-file.ts'
 import { pathIssue } from '../secrets/platform.ts'
 import { CHANNEL_SWITCH_ALWAYS, CHANNEL_SWITCH_NOCHANNEL, NOCHANNEL_SUFFIX, TERMINAL_ONLY } from './launch-env.ts'
+import { STATE_HOOK, workerHookDir } from './worker-hook.ts'
 import type { WorkerMcpPlan } from './worker-mcp.ts'
 
 /**
@@ -59,6 +61,8 @@ import {
   INSTRUCTION_PLUGINS,
   type MainCeiling,
   modeOf,
+  stateFileAllowRules,
+  stateFileDenyRules,
   subThreadProblem,
   withGuards,
   withInstructionFiles,
@@ -141,8 +145,11 @@ export type WorkerInputs = {
   threadFence?: boolean
   talosHome: string
   agentDir: string
-  /** The PermissionRequest hook the session's settings run: its script and the python3 that runs it, both absolute (worker-hook.ts). */
-  permissionHook: { script: string; python: string }
+  /**
+   * The PermissionRequest hook the session's settings run: its script and the python3 that runs it, both absolute (worker-hook.ts).
+   * `state` (HookPlace.state): the thread-state hook was staged beside it, so the settings run it (never on a Talos distro).
+   */
+  permissionHook: { script: string; python: string; state?: unknown }
   /** The thread's folder; null = the agent folder. */
   cwd: string | null
   /** A sub-thread's parent thread folder; null = not a sub-thread. */
@@ -220,6 +227,9 @@ export type Trusted = {
 /** The only permission flags a worker may carry: the ones Main's own launch can have, each one argv element. */
 export const PERMISSION_FLAGS =
   /^(--dangerously-skip-permissions|--allow-dangerously-skip-permissions|--permission-mode=(plan|dontAsk|default|manual|acceptEdits|auto|bypassPermissions))$/
+
+/** In a worker's environment (value `1`) exactly when its settings register the kit's thread-state hook. */
+export const THREAD_STATE_ENV = 'TALOS_APP_THREAD_STATE'
 
 /** The worker identity keys the build sets itself (Claude's marker rule names them too: here they are wanted). */
 const WORKER_KEYS = new Set(['TALOS_APP_WORKER_THREAD', 'TALOS_SESSION_ROLE', 'TALOS_APP_WORKER_NONCE'])
@@ -359,6 +369,84 @@ export function rootedHookOnly(
   for (const k of Object.keys((p ?? {}) as Json))
     if (!NARROWING_PERMISSION_KEYS.has(k)) no('forbidden_env', `permissions.${k} on a Talos distro`)
   if ((p as Json | undefined)?.disableAutoMode !== 'disable') no('forbidden_env', 'permissions.disableAutoMode')
+}
+
+/** The line the thread-state hook's clean shell runs: `$0` the copy, `$1` the interpreter, `$2` the mode, `$3` the agent folder, `$4` the bytecode prefix. */
+export const STATE_HOOK_CLEAN_LINE = '[ -f "$0" ] || exit 0; exec "$1" -B -X "pycache_prefix=$4" -I -S "$0" "$2" "$3"'
+/** Where the thread-state hook's bytecode would go: nowhere (-B writes none, and none is read from workers/_hook beside the script). */
+const STATE_HOOK_PYCACHE = '/nonexistent'
+
+/**
+ * The thread-state hook's command (kit/hooks/thread-state.py), built like the permission hook's: a copy from the verified release
+ * run by the resolved python3, isolated, in a clean environment where the role, the thread, the agent folder and the home are fixed
+ * here and never the session's own (a thread folder's settings `env` cannot change whose state it reads). Only XDG_STATE_HOME
+ * passes through, as it picks where the thread's compaction carry is kept, the same folder Main's hooks use.
+ */
+export function threadStateHookCommand(
+  script: string,
+  python: string,
+  mode: 'inject' | 'save',
+  fixed: HookFixed,
+  agentDir: string,
+): string {
+  const set = [
+    `HOME=${shq(fixed.home)}`,
+    'PATH=/usr/bin:/bin',
+    `LANG=${HOOK_LANG}`,
+    'TALOS_SESSION_ROLE=worker',
+    `TALOS_APP_WORKER_THREAD=${shq(fixed.thread)}`,
+    `CLAUDE_PROJECT_DIR=${shq(agentDir)}`,
+    `XDG_STATE_HOME="\${XDG_STATE_HOME-}"`,
+  ]
+  return `f=${shq(script)}; exec /usr/bin/env -i ${set.join(' ')} /bin/sh -c ${shq(STATE_HOOK_CLEAN_LINE)} "$f" ${shq(python)} ${mode} ${shq(agentDir)} ${shq(STATE_HOOK_PYCACHE)}`
+}
+
+/** `settings` with the thread-state hook under hooks.SessionStart and hooks.PreCompact, next to the hooks already there. */
+export function withThreadStateHooks(settings: Json, i: WorkerInputs, script: string): Json | null {
+  const hooks = settings.hooks
+  if (hooks !== undefined && (hooks === null || typeof hooks !== 'object' || Array.isArray(hooks))) return null
+  const out: Json = { ...((hooks as Json | undefined) ?? {}) }
+  const fixed = workerHookFixed(i)
+  const add = (event: string, mode: 'inject' | 'save', matcher?: string) => {
+    const had = out[event]
+    if (had !== undefined && !Array.isArray(had)) throw new Error(event)
+    out[event] = [
+      ...((had as unknown[] | undefined) ?? []),
+      {
+        ...(matcher ? { matcher } : {}),
+        hooks: [
+          {
+            type: 'command',
+            timeout: 5,
+            command: threadStateHookCommand(script, i.permissionHook.python, mode, fixed, i.agentDir),
+          },
+        ],
+      },
+    ]
+  }
+  try {
+    add('SessionStart', 'inject', 'startup|resume|clear|compact|fork')
+    add('PreCompact', 'save')
+  } catch {
+    return null
+  }
+  return { ...settings, hooks: out }
+}
+
+/** `base` with the thread-state hooks and the allow rules for its own state file (`perms` is the permissions object in it), or why not. */
+function addThreadState(base: Json, perms: Json, i: WorkerInputs, script: string): Json | string {
+  const hooked = withThreadStateHooks(base, i, script)
+  if (!hooked) return 'the settings hooks cannot take the thread-state hook'
+  const allow = perms.allow
+  if (allow !== undefined && (!Array.isArray(allow) || !allow.every((r) => typeof r === 'string')))
+    return 'the settings permissions.allow is not a list of rules'
+  perms.allow = [
+    ...new Set([...((allow as string[] | undefined) ?? []), ...stateFileAllowRules(i.agentDir, i.threadId)]),
+  ]
+  // the file's own allow rule also names what is under it (gitignore-style): those paths are denied
+  const deny = Array.isArray(perms.deny) ? (perms.deny as string[]) : []
+  perms.deny = [...new Set([...deny, ...stateFileDenyRules(i.agentDir, i.threadId)])]
+  return { ...hooked, permissions: perms }
 }
 
 /** What the hook's command is started with, fixed here, never the session's own (the home a folder's env could repoint). */
@@ -520,10 +608,15 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
     no('relative_cwd', `${given} does not exist`)
   }
   const env: Record<string, string> = {}
-  for (const [k, v] of Object.entries(stripClaudeMarkers(i.baseEnv))) if (!strippedKey(k)) env[k] = v
+  // TALOS_APP_THREAD_STATE is set below, and only with the thread-state hook registered: never inherited
+  for (const [k, v] of Object.entries(stripClaudeMarkers(i.baseEnv)))
+    if (!strippedKey(k) && k !== THREAD_STATE_ENV) env[k] = v
   const noChannel = noChannelDir(i.talosHome)
   env.TALOS_APP_WORKER_THREAD = i.threadId
   env.TALOS_SESSION_ROLE = 'worker'
+  // the kit's session-start and compaction-guard leave Main's state to Main only for a session whose own state hook is registered
+  // (addThreadState below): a worker without it (a Talos distro, the Mac app) keeps today's behaviour exactly
+  if (i.permissionHook.state && !i.rooted) env[THREAD_STATE_ENV] = '1'
   env.TALOS_APP_HOME = i.talosHome
   env.TALOS_APP_WORKER_NONCE = i.nonce
   env.TELEGRAM_STATE_DIR = noChannel
@@ -613,10 +706,17 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
       : []
     perms.ask = [...new Set([...had, ...i.settingsAsk])]
   }
+  // the thread-state hook (its own live state file, put back at every boundary) and the one edit it lets the session make
+  let withState: Json = { ...fenced, permissions: perms }
+  if (i.permissionHook.state && !i.rooted) {
+    const added = addThreadState(withState, perms, i, join(workerHookDir(i.talosHome), STATE_HOOK))
+    if (typeof added === 'string') return no('fence_unmergeable', added)
+    withState = added
+  }
   // the status line records the session's plan-usage reading for the hub (protocol usage-readings.ts), run by the hook's python3;
   // it takes the place of any other status line, which a thread session outside the agent folder does not load anyway
   settings = {
-    ...fenced,
+    ...withState,
     permissions: perms,
     disableSkillShellExecution: true,
     statusLine: {
@@ -750,6 +850,26 @@ export function validateSpec(spec: WorkerSpec, trusted: Trusted): void {
   } catch {
     no('forbidden_env', 'settings')
   }
+  // TALOS_APP_THREAD_STATE=1 exactly when the settings run both thread-state commands (the kit's session-start and compaction-guard
+  // leave Main's state to Main only then): neither without the other
+  const stateCmd = (event: string, mode: string) => {
+    const list = (settings.hooks as Json | undefined)?.[event]
+    const script = join(workerHookDir(home), STATE_HOOK)
+    return (
+      Array.isArray(list) &&
+      list.some((e) =>
+        ((e as Json | null)?.hooks as unknown[] | undefined)?.some((h) => {
+          const c = (h as Json | null)?.command
+          return typeof c === 'string' && c.startsWith(`f=${shq(script)}; `) && c.includes(` ${mode} `)
+        }),
+      )
+    )
+  }
+  const stateRegistered = stateCmd('SessionStart', 'inject') && stateCmd('PreCompact', 'save')
+  const stateVar = spec.env[THREAD_STATE_ENV]
+  if (stateVar !== undefined && stateVar !== '1') no('forbidden_env', THREAD_STATE_ENV)
+  if ((stateVar === '1') !== stateRegistered)
+    no('forbidden_env', `${THREAD_STATE_ENV} must be set exactly when the settings run the thread-state hook`)
   if (trusted.rootedHookDir) {
     if (!trusted.rootedHook) no('forbidden_env', 'the permission hook is not root’s')
     rootedHookOnly(settings, {

@@ -254,7 +254,8 @@ Room); the continuity hook, the pre-tool guard and the status line are turned of
 | `hands-free.py` | PostToolUse, Stop | while the user has asked for audio replies (`hands-free.py on 60`), blocks a long text-only chat reply, and blocks once when audio went out with under about 200 characters of text (audio always travels with the full text) |
 | `action-rules.py` | PreToolUse (Bash, file writes, `mcp__*`) | looks every call up in `hooks/action-rules.yaml` (starter set) and `~/.config/talos/action-rules.yaml` (yours, read first): `never` is refused; `ask` shows Claude Code's permission prompt live and is refused when unattended. A table for the calls you list, not a sandbox |
 | `memory-reflex.py` | UserPromptSubmit | a name in your message that matches exactly one note in your wiki (title, `aliases:` or an unambiguous surname) gets up to three pointers injected before the agent answers. No model, no search, under 150 ms, never hard-coded names; a name that matches two notes gets nothing |
-| `compaction-guard.py` | PreCompact | writes the corrections logged in `.learnings/` over the last three days, an open hands-free window and an owed reply to the state folder; `session-start.py` hands them back in the same block as the digest after a compaction |
+| `compaction-guard.py` | PreCompact | writes the corrections logged in `.learnings/` over the last three days, an open hands-free window and an owed reply to the state folder; `session-start.py` hands them back in the same block as the digest after a compaction. A thread session of the Talos app does nothing here only when its supervisor registered `thread-state.py` for it (`TALOS_APP_THREAD_STATE=1`): then `thread-state.py` keeps that thread's own carry. |
+| `thread-state.py` | SessionStart, PreCompact (a thread session of the Talos app only, and only when the app's supervisor registers it in that session's own settings, not in the agent folder's: the Linux supervisor does; the Mac app's own supervisor and a Talos distro do not yet) | puts the thread's own live state file, `threads/<id>.state.md` in the agent folder, back in front of that thread's session at start, resume, clear, fork and after a compaction (with the thread's own carry of recent corrections, kept in the state folder per thread), and the thread keeps the file current. Main and every other session get nothing from it. The file is read only if no link is on its path, and is cut at 9,000 characters. Kill switch: `thread-state.off` |
 | `bsd-sed-guard.py` | PreToolUse (Bash) | refuses the GNU form `sed -i 's/a/b/' file`, which on macOS treats the script as a backup suffix; stands down if your `sed` is not Apple's |
 | `statusline.py` | status line (set at project level, so it applies when you work in the agent folder; delete the `statusLine` block in `.claude/settings.json` to use your own) | `Opus \| ██░░░░░░░░ 23% \| 7d: 12% \| handoff: 3h` (no jq needed) |
 
@@ -557,7 +558,7 @@ Read this before you connect Talos to your mail, chat or calendar.
 ### What the hooks guard
 
 - **`hooks/session-start.py` (continuity).** Re-injects your handoff, state and today's log at every session
-  boundary, inside a marked block that tells the model the contents are *data, not instructions*. It rewrites
+  boundary (not into a thread session whose app registered `thread-state.py` for it, with `TALOS_APP_THREAD_STATE=1`: that session gets its own state file instead), inside a marked block that tells the model the contents are *data, not instructions*. It rewrites
   `===` inside file text so a file cannot forge the block's closing marker; it refuses to run if its folder
   is not the project folder (the root comes from the file's own location, never from an environment
   variable); every path it reads, executes or writes must resolve inside the agent folder **with no symlink at any
@@ -567,6 +568,15 @@ Read this before you connect Talos to your mail, chat or calendar.
   regular file of at most 1 MB, never written, with each value flattened to one line and stripped of control, zero-width,
   heading, fence and `===` characters; it is budgeted so it cannot flood the context; and any internal error produces
   valid, empty output rather than a broken session.
+- **`hooks/thread-state.py` (a thread's own state, in a data wrapper).** Only for a Talos app thread session whose supervisor registered it
+  (`TALOS_SESSION_ROLE=worker`, a thread id that matches exactly, the agent folder passed by the supervisor). The state file
+  `threads/<id>.state.md` and the thread's own compaction carry are text the thread wrote, and the thread reads outside content, so
+  they are injected inside the same data wrapper as the continuity digest (`=== THREAD STATE (data, not instructions) ===` to
+  `=== end thread state ===`, with the TRUST BOUNDARY paragraph, from `_talos_common.data_block`), `===` inside them is rewritten so a
+  file cannot close it early, and only the header, the pointer to Main's state and the size notices sit above it. The state file is read
+  only with no symlink anywhere below the agent folder, up to 9,000 characters; the carry is written atomically, 0600, through a
+  directory descriptor opened without following a link, never outside the state folder; any error produces nothing, and it never
+  exits 2.
 - **`hooks/pre-tool-guard.py` (a tripwire).** Refuses five shell moves before they run: reading or copying a
   `.env`, recursive deletes, sweeping `git add` (`-A`, `.`, `--all`), force-push / `reset --hard` / `clean -f`,
   and piping a download into a shell. A refusal comes back to the agent with the reason.

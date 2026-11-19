@@ -34,6 +34,8 @@ import {
   PYTHON_RULES,
   releaseContentSha,
   releaseHook,
+  STATE_FILES,
+  STATE_HOOK,
   workerHookDir,
 } from '../../src/supervisor/worker-hook.ts'
 import { HOOK_PASS_ENV, permissionHookCommand } from '../../src/supervisor/worker-spec.ts'
@@ -635,5 +637,126 @@ describe('the python3 the hook runs: never one the session’s user could change
   })
   it('the defaults: the system’s folder first, and root the only owner trusted', () => {
     expect(savedPythonRules).toEqual({ preferredDir: '/usr/bin', trustedOwner: -1 })
+  })
+})
+
+describe('the thread-state hook is staged like the permission hook (kit/hooks/thread-state.py)', () => {
+  const pyOf = (w: ReturnType<typeof world>) => (_e: Record<string, string>) => w.py
+  const releaseSource = (vendor: string) => {
+    const r = releaseHook(vendor)
+    if ('problem' in r) throw new Error(r.problem)
+    return r
+  }
+  it('the release check names the hook and the guard it reuses, with their hashes', () => {
+    const r = releaseSource(sealedRelease({ fresh: true }))
+    expect(Object.keys(r.verified.state ?? {}).sort()).toEqual([...STATE_FILES].sort())
+  })
+  it('the verified bytes are copied (0600) beside the permission hook and the session runs the copy', () => {
+    const w = world()
+    const r = releaseSource(sealedRelease({ fresh: true }))
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified)
+    if ('problem' in got) throw new Error(got.problem)
+    for (const n of STATE_FILES) {
+      const copy = join(workerHookDir(w.talosHome), n)
+      expect(readFileSync(copy)).toEqual(readFileSync(join(dirname(r.source), n)))
+      expect(statSync(copy).mode & 0o777).toBe(0o600)
+      expect(got.state?.[n]).toEqual(readFileSync(copy))
+    }
+    expect(existsSync(join(workerHookDir(w.talosHome), STATE_HOOK))).toBe(true)
+  })
+  it('a dry plan gives the same bytes and writes nothing', () => {
+    const w = world()
+    const r = releaseSource(sealedRelease({ fresh: true }))
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified, true)
+    if ('problem' in got) throw new Error(got.problem)
+    expect(Object.keys(got.state ?? {}).sort()).toEqual([...STATE_FILES].sort())
+    expect(existsSync(join(workerHookDir(w.talosHome), STATE_HOOK))).toBe(false)
+  })
+  it('a state file that changes between the release check and the copy is refused', () => {
+    const w = world()
+    const vendor = sealedRelease({ fresh: true })
+    const r = releaseSource(vendor)
+    const release = join(vendor, 'releases', '9.9.9-test')
+    unseal(release)
+    writeFileSync(join(release, 'talos-kit', 'hooks', STATE_HOOK), 'print("hi")\n')
+    seal(release)
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified)
+    expect(JSON.stringify(got)).toContain('changed after its release was checked')
+    expect(existsSync(join(workerHookDir(w.talosHome), STATE_HOOK))).toBe(false)
+  })
+  it('a release edited after it was built (even sealed again) is refused, whichever file it was', () => {
+    for (const n of STATE_FILES) {
+      const vendor = sealedRelease({ fresh: true })
+      const release = join(vendor, 'releases', '9.9.9-test')
+      unseal(release)
+      writeFileSync(join(release, 'talos-kit', 'hooks', n), '# not the release\n')
+      seal(release)
+      const r = releaseHook(vendor)
+      expect('problem' in r && r.problem, n).toContain('does not match its own record')
+    }
+  })
+  it('a state file that is a link, or can be written, is refused like the hook itself', () => {
+    const a = sealedRelease({ fresh: true })
+    const ra = join(a, 'releases', '9.9.9-test')
+    unseal(ra)
+    const hooksA = join(ra, 'talos-kit', 'hooks')
+    rmSync(join(hooksA, STATE_HOOK))
+    symlinkSync(join(hooksA, 'compaction-guard.py'), join(hooksA, STATE_HOOK))
+    seal(ra)
+    expect(JSON.stringify(releaseHook(a))).toContain('is a link, not part of a sealed release')
+    const b = sealedRelease({ fresh: true })
+    const rb = join(b, 'releases', '9.9.9-test')
+    chmodSync(join(rb, 'talos-kit', 'hooks', 'compaction-guard.py'), 0o644)
+    expect(JSON.stringify(releaseHook(b))).toContain('can be written, so the release is not sealed')
+  })
+  it('a release without them (an older kit) gives a session with no thread-state hook, and leaves no old copy to run', () => {
+    const w = world()
+    const full = releaseSource(sealedRelease({ fresh: true }))
+    installWorkerHook(w.talosHome, full.source, w.env, pyOf(w), [], full.verified)
+    expect(existsSync(join(workerHookDir(w.talosHome), STATE_HOOK))).toBe(true)
+    const old = releaseSource(sealedRelease({ fresh: true, state: false }))
+    expect(old.verified.state).toBeNull()
+    const got = installWorkerHook(w.talosHome, old.source, w.env, pyOf(w), [], old.verified)
+    if ('problem' in got) throw new Error(got.problem)
+    expect(got.state).toBeNull()
+    for (const n of STATE_FILES) expect(existsSync(join(workerHookDir(w.talosHome), n))).toBe(false)
+  })
+  it('without the helper they import (_talos_common.py) there is no state hook', () => {
+    const w = world()
+    const vendor = sealedRelease({ fresh: true, helper: false })
+    const r = releaseSource(vendor)
+    expect(r.verified.helper).toBeNull()
+    expect(r.verified.state).toBeNull()
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified)
+    if ('problem' in got) throw new Error(got.problem)
+    expect(got.state).toBeNull()
+    for (const n of STATE_FILES) expect(existsSync(join(workerHookDir(w.talosHome), n))).toBe(false)
+  })
+  it('one of the two without the other is none (both or neither)', () => {
+    const w = world()
+    const vendor = sealedRelease({ fresh: true })
+    const release = join(vendor, 'releases', '9.9.9-test')
+    unseal(release)
+    rmSync(join(release, 'talos-kit', 'hooks', 'compaction-guard.py'))
+    writeFileSync(
+      join(release, 'talos-kit', '.talos-release'),
+      `# test\nversion=9.9.9-test\nkind=plugin-release\ncontent_sha256=${releaseContentSha(join(release, 'talos-kit'))}\n`,
+    )
+    seal(release)
+    const r = releaseSource(vendor)
+    expect(r.verified.state).toBeNull()
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified)
+    if ('problem' in got) throw new Error(got.problem)
+    expect(got.state).toBeNull()
+  })
+  it('a folder link planted where a state copy goes is refused (the hook folder is checked as for the hook)', () => {
+    const w = world()
+    const r = releaseSource(sealedRelease({ fresh: true }))
+    mkdirSync(join(w.talosHome, 'workers'), { recursive: true })
+    const elsewhere = tmp()
+    symlinkSync(elsewhere, join(w.talosHome, 'workers', '_hook'))
+    const got = installWorkerHook(w.talosHome, r.source, w.env, pyOf(w), [], r.verified)
+    expect('problem' in got).toBe(true)
+    expect(readdirSync(elsewhere)).toEqual([])
   })
 })

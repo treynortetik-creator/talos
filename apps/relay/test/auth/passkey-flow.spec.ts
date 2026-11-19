@@ -138,17 +138,26 @@ test('enroll with a valid code sets the exact cookie, binds the device key, and 
   page.on('response', async (r) => {
     if (r.url().endsWith('/enroll/verify')) seen.push(((await r.allHeaders())['set-cookie'] ?? '') as string)
   })
+  // The browser dates the cookie by the system clock (now + Max-Age). This process's Date may not be that clock: the hostile
+  // nightly shifts Date.now() 30 days ahead (scripts/ci-local/hostile-clock.cjs) and leaves performance alone, so the window is
+  // read from performance's clock, the system one, on both sides of the call that sets the cookie.
+  const systemNow = () => (performance.timeOrigin + performance.now()) / 1000
+  const setAt = systemNow()
   const reg = await page.evaluate(
     (c) => (window as unknown as { register(c: string): Promise<Reply> }).register(c),
     codeAuth,
   )
+  const setBy = systemNow()
   expect(reg).toEqual({ status: 200, body: { ok: true } })
 
   const cookies = (await ctx.cookies()).filter((c) => c.name === '__Host-talos_s')
   expect(cookies).toHaveLength(1)
   expect(cookies[0]).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Strict', path: '/' })
   expect(cookies[0]?.value).toMatch(/^[A-Za-z0-9_-]{43}$/)
-  expect((cookies[0]?.expires ?? 0) - Date.now() / 1000).toBeGreaterThan(89 * 86400) // 90 days since 2026-11-14
+  // 90 days since 2026-11-14: the expiry is the system clock at the call plus Max-Age, to the second
+  const expires = cookies[0]?.expires ?? 0
+  expect(expires).toBeGreaterThanOrEqual(Math.floor(setAt) + 90 * 86400 - 1)
+  expect(expires).toBeLessThanOrEqual(Math.ceil(setBy) + 90 * 86400 + 1)
   await expect.poll(() => seen.length).toBe(1)
   expect(seen[0]).toMatch(
     /^__Host-talos_s=[A-Za-z0-9_-]{43}; Max-Age=7776000; Path=\/; Secure; HttpOnly; SameSite=Strict$/,

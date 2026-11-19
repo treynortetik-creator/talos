@@ -1,0 +1,442 @@
+// A thread's own live state file: what the generated settings register for it (SessionStart and PreCompact, the one edit it may
+// make without a prompt), the seed the start makes, and the hook command run for real. Temp folders; nothing is launched.
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, posix } from 'node:path'
+import { seedThreadState, threadStatePath, threadStateTemplate } from '../../src/supervisor/thread-state-seed.ts'
+import { PYTHON_RULES, STATE_HOOK, workerHookDir } from '../../src/supervisor/worker-hook.ts'
+import { foldsCase, stateFileAllowRules, stateFileDenyRules } from '../../src/supervisor/worker-policy.ts'
+import { STATE_HOOK_CLEAN_LINE, threadStateHookCommand } from '../../src/supervisor/worker-spec.ts'
+import { workerPlanner } from '../../src/supervisor/workers-wiring.ts'
+import { cleanupReleases, sealedRelease } from './kit-release-fixture.ts'
+
+const savedPythonRules = { ...PYTHON_RULES }
+beforeEach(() => Object.assign(PYTHON_RULES, { preferredDir: null, trustedOwner: process.getuid?.() ?? 0 }))
+afterEach(() => Object.assign(PYTHON_RULES, savedPythonRules))
+afterAll(cleanupReleases)
+
+const NO_MANAGED = join(tmpdir(), 'talos-test-no-managed-settings')
+const onCaseExactTmp = it.skipIf(foldsCase(realpathSync(tmpdir())))
+
+const dirs: string[] = []
+const tmp = () => {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), 'talos-tstate-')))
+  dirs.push(d)
+  return d
+}
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+type Hook = { matcher?: string; hooks: Array<{ type: string; timeout: number; command: string }> }
+type Settings = { hooks: Record<string, Hook[]>; permissions: { allow?: string[]; deny: string[] } }
+
+/** One start of thread `trip` (in the agent folder, or in a folder of its own), and what it wrote. */
+function start(
+  o: { own?: boolean; dry?: boolean; state?: boolean; setup?: (agentDir: string) => void; name?: string } = {},
+) {
+  const root = tmp()
+  const userHome = join(root, 'home')
+  const agentDir = join(userHome, 'agent')
+  const talosHome = join(userHome, '.talos')
+  const own = join(userHome, 'trip')
+  for (const d of [agentDir, talosHome, own, join(userHome, '.claude')]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(agentDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'talos-app': {} } }))
+  o.setup?.(agentDir)
+  const events: Array<[string, Record<string, unknown>]> = []
+  const planner = workerPlanner({
+    threadFolders: () => [],
+    kitVendor: sealedRelease(o.state === false ? { fresh: true, state: false } : {}),
+    talosHome,
+    userHome,
+    agentDir,
+    claudeDir: join(userHome, '.claude'),
+    resolveClaude: () => '/usr/bin/claude',
+    mainArgs: () => ['--permission-mode=default'],
+    managedDir: NO_MANAGED,
+    audit: (e, d) => events.push([e, d ?? {}]),
+  })
+  const p = planner({
+    thread: {
+      id: 'trip',
+      cwd: o.own ? own : agentDir,
+      model: 'inherit',
+      effort: null,
+      parentCwd: null,
+      name: o.name ?? 'Trip',
+    },
+    sessionId: '11111111-2222-3333-4444-555555555555',
+    resume: false,
+    nonce: 'ab'.repeat(16),
+    baseEnv: { PATH: '/usr/bin', HOME: userHome, TALOS_APP_BRIDGE: '1' },
+    ...(o.dry ? { dry: true } : {}),
+  })
+  if ('refused' in p) throw new Error(p.refused.detail)
+  const settingsPath = join(talosHome, 'workers', 'trip', 'settings.json')
+  const settings = o.dry ? null : (JSON.parse(readFileSync(settingsPath, 'utf8')) as Settings)
+  return { p, settings, agentDir, talosHome, events }
+}
+
+const stateRules = (agentDir: string) => [
+  `Edit(/${agentDir}/threads/trip.state.md)`,
+  `Write(/${agentDir}/threads/trip.state.md)`,
+]
+
+describe('what the generated settings register', () => {
+  for (const own of [false, true]) {
+    onCaseExactTmp(
+      `${own ? 'a thread in a folder of its own' : 'a thread in the agent folder'}: SessionStart and PreCompact`,
+      () => {
+        const w = start({ own })
+        const s = w.settings as Settings
+        const script = join(workerHookDir(w.talosHome), STATE_HOOK)
+        const [ss] = s.hooks.SessionStart as Hook[]
+        const [pc] = s.hooks.PreCompact as Hook[]
+        expect(s.hooks.SessionStart).toHaveLength(1)
+        expect(s.hooks.PreCompact).toHaveLength(1)
+        expect(ss?.matcher).toBe('startup|resume|clear|compact|fork')
+        expect(ss?.hooks[0]?.timeout).toBe(5)
+        expect(pc?.matcher).toBeUndefined()
+        const inject = ss?.hooks[0]?.command as string
+        const save = pc?.hooks[0]?.command as string
+        for (const [cmd, mode] of [
+          [inject, 'inject'],
+          [save, 'save'],
+        ] as const) {
+          // the verified copy, never the checkout or the agent folder; the agent folder as an argument and in the fixed env
+          expect(cmd).toContain(`f='${script}'`)
+          expect(cmd).toContain(`${mode} '${w.agentDir}' '/nonexistent'`)
+          // no bytecode is written or read beside the staged script
+          expect(cmd).toContain('-B -X "pycache_prefix=$4"')
+          expect(cmd).toContain(`CLAUDE_PROJECT_DIR='${w.agentDir}'`)
+          expect(cmd).toContain('TALOS_SESSION_ROLE=worker')
+          expect(cmd).toContain("TALOS_APP_WORKER_THREAD='trip'")
+          expect(cmd).toContain('/usr/bin/env -i')
+        }
+        expect(inject.endsWith(`inject '${w.agentDir}' '/nonexistent'`)).toBe(true)
+        expect(save.endsWith(`save '${w.agentDir}' '/nonexistent'`)).toBe(true)
+        // the permission hook is still there, once, beside them
+        expect(s.hooks.PermissionRequest).toHaveLength(1)
+      },
+    )
+  }
+  onCaseExactTmp('the worker’s environment says the hook is registered (TALOS_APP_THREAD_STATE=1) only then', () => {
+    for (const own of [false, true]) {
+      const w = start({ own })
+      expect((w.p as { launch: { env: Record<string, string> } }).launch.env.TALOS_APP_THREAD_STATE).toBe('1')
+    }
+    const none = start({ state: false })
+    expect((none.p as { launch: { env: Record<string, string> } }).launch.env.TALOS_APP_THREAD_STATE).toBeUndefined()
+  })
+  onCaseExactTmp(
+    'the allow rules are exactly the state file, Edit and Write, nothing wider; what is under it is denied',
+    () => {
+      for (const own of [false, true]) {
+        const w = start({ own })
+        const perms = (w.settings as Settings).permissions
+        expect(perms.allow).toEqual(stateRules(w.agentDir))
+        for (const r of stateRules(w.agentDir)) expect(perms.deny).toContain(r.replace(/\)$/, '/**)'))
+      }
+    },
+  )
+  onCaseExactTmp('no deny rule of the generated settings covers the state file', () => {
+    const w = start()
+    const file = `${w.agentDir}/threads/trip.state.md`
+    for (const rule of (w.settings as Settings).permissions.deny) {
+      const m = /^(\w+)\(\/(.*)\)$/.exec(rule)
+      if (!m || !['Edit', 'Write'].includes(m[1] as string)) continue
+      const path = m[2] as string
+      // a literal path is the file itself or a folder above it; a /** is a prefix: either covers the file
+      const prefix = path.endsWith('/**') ? path.slice(0, -3) : path
+      expect(file === path || file.startsWith(`${prefix}/`), rule).toBe(false)
+    }
+  })
+  onCaseExactTmp('with the hook not staged (an older kit) there are no hook entries and no allow rules', () => {
+    const w = start({ state: false })
+    const s = w.settings as Settings
+    expect(s.hooks.SessionStart).toBeUndefined()
+    expect(s.hooks.PreCompact).toBeUndefined()
+    expect(s.permissions.allow).toBeUndefined()
+  })
+  onCaseExactTmp('the launch spec moves with the staged state hook (an update restarts sessions)', () => {
+    const a = start({ state: false }).p
+    const b = start().p
+    expect(a.specHash).not.toBe(b.specHash)
+  })
+})
+
+/**
+ * A minimal gitignore-semantics check for the `//abs` path rules (the `ignore` package is not in the lockfile, and no dependency is
+ * added for a test): a pattern names a path when the path is the pattern, or lies under it (a pattern that names a file names
+ * everything below it, as gitignore does for a folder); `<p>/**` names what lies under p. The path is normalised first.
+ */
+const names = (pattern: string, path: string) => {
+  const p = pattern.replace(/^\/\//, '/')
+  const x = posix.normalize(path)
+  const base = p.endsWith('/**') ? p.slice(0, -3) : p
+  return p.endsWith('/**') ? x.startsWith(`${base}/`) : x === base || x.startsWith(`${base}/`)
+}
+const rulePath = (r: string) => r.slice(r.indexOf('(') + 1, -1)
+/** Allowed by the rules: some allow rule of that tool names it and no deny rule does (deny wins). */
+const allowed = (allow: string[], deny: string[], tool: string, path: string) =>
+  allow.some((r) => r.startsWith(`${tool}(`) && names(rulePath(r), path)) &&
+  !deny.some((r) => r.startsWith(`${tool}(`) && names(rulePath(r), path))
+
+describe('the allow rules do not cover a sibling', () => {
+  const agent = '/home/user/agent'
+  const allow = stateFileAllowRules(agent, 'trip')
+  const deny = stateFileDenyRules(agent, 'trip')
+  it('exactly Edit and Write of the one absolute path, as the deny rules spell absolute paths', () => {
+    expect(allow).toEqual([
+      'Edit(//home/user/agent/threads/trip.state.md)',
+      'Write(//home/user/agent/threads/trip.state.md)',
+    ])
+    expect(deny).toEqual([
+      'Edit(//home/user/agent/threads/trip.state.md/**)',
+      'Write(//home/user/agent/threads/trip.state.md/**)',
+    ])
+  })
+  it('both spellings, in allow and in deny, when the folder is reached through a link', () => {
+    const root = tmp()
+    mkdirSync(join(root, 'real'))
+    symlinkSync(join(root, 'real'), join(root, 'link'))
+    for (const [rules, tail] of [
+      [stateFileAllowRules(join(root, 'link'), 'trip'), ''],
+      [stateFileDenyRules(join(root, 'link'), 'trip'), '/**'],
+    ] as const)
+      expect(rules).toEqual([
+        `Edit(/${join(root, 'link')}/threads/trip.state.md${tail})`,
+        `Edit(/${join(root, 'real')}/threads/trip.state.md${tail})`,
+        `Write(/${join(root, 'link')}/threads/trip.state.md${tail})`,
+        `Write(/${join(root, 'real')}/threads/trip.state.md${tail})`,
+      ])
+  })
+  it('no glob in an allow rule: one literal path', () => {
+    for (const r of allow) {
+      expect(r).not.toMatch(/[*?[\]{}]/)
+      expect(r).not.toContain('..')
+    }
+  })
+  const file = '/home/user/agent/threads/trip.state.md'
+  for (const tool of ['Edit', 'Write']) {
+    it(`${tool}: the file itself is allowed`, () => {
+      expect(allowed(allow, deny, tool, file)).toBe(true)
+    })
+    // the allow pattern alone names everything under the file (gitignore-style): it is the deny that closes that
+    for (const path of [`${file}/x`, `${file}/a/b`, `${file}/../x`]) {
+      it(`${tool}: ${path} is not allowed, and the allow rule alone would have named it only below the file`, () => {
+        expect(allowed(allow, deny, tool, path)).toBe(false)
+      })
+    }
+    for (const path of [
+      '/home/user/agent/threads/other.state.md', // another thread's file
+      `${file}.bak`, // a backup beside it
+      '/home/user/agent/threads/../memory/STATE.md', // Main's state, by a `..` path
+      '/home/user/agent/threads/trip/WORKER.md',
+      '/home/user/agent/threads/trip.md',
+      '/home/user/agent/memory/STATE.md',
+    ])
+      it(`${tool}: ${path} is not allowed`, () => {
+        expect(allowed(allow, deny, tool, path)).toBe(false)
+      })
+  }
+  it('the matcher itself: the allow pattern names what is under the file, the deny pattern names it too, the file alone only the allow', () => {
+    expect(names(rulePath(allow[0] as string), `${file}/x`)).toBe(true)
+    expect(names(rulePath(deny[0] as string), `${file}/x`)).toBe(true)
+    expect(names(rulePath(deny[0] as string), file)).toBe(false)
+    expect(names(rulePath(allow[0] as string), `${file}.bak`)).toBe(false)
+    expect(names(rulePath(deny[0] as string), `${file}/../x`)).toBe(false) // normalised to threads/x
+  })
+  it('a folder name with a rule metacharacter or a quote gets no rule (the session asks instead)', () => {
+    for (const bad of [
+      '/home/user/a*b',
+      '/home/user/a[b]',
+      '/home/user/a(b)',
+      "/home/user/a'b",
+      '/home/user/a"b',
+      '/home/user/a\\b',
+      '/home/user/a\nb',
+      '/home/user/a{b}',
+    ]) {
+      expect(stateFileAllowRules(bad, 'trip')).toEqual([])
+      expect(stateFileDenyRules(bad, 'trip')).toEqual([])
+    }
+  })
+  it('a thread id that is not a thread id gets no rule', () => {
+    for (const bad of ['../x', 'A', '', 'all x', 'a/b', 'a'.repeat(33)])
+      expect(stateFileAllowRules(agent, bad)).toEqual([])
+  })
+})
+
+describe('the seed', () => {
+  it('creates the template once (0600, threads/ 0700) and never overwrites it', () => {
+    const agent = tmp()
+    expect(seedThreadState(agent, 'trip', 'Trip')).toEqual({ ok: 'created' })
+    const file = threadStatePath(agent, 'trip')
+    expect(readFileSync(file, 'utf8')).toBe(threadStateTemplate('trip', 'Trip'))
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(statSync(join(agent, 'threads')).mode & 0o777).toBe(0o700)
+    writeFileSync(file, 'my notes\n')
+    expect(seedThreadState(agent, 'trip', 'Trip')).toEqual({ ok: 'exists' })
+    expect(readFileSync(file, 'utf8')).toBe('my notes\n')
+  })
+  it('the template is the agreed one, named by the display name, else the id', () => {
+    expect(threadStateTemplate('trip', 'Trip')).toBe(`# Trip live state (thread trip)
+READ FIRST after any restart or compaction. Rule: update THIS file the same turn anything here changes (an owner ask, a
+decision, a landing, a hold). Keep it under 8,000 characters; history goes in the thread or a log, not here.
+
+## Owner asks open (newest first, dated)
+## Waiting on the owner
+## In flight
+## CI (optional: leave empty if this thread does no builds)
+## Rules learned
+`)
+    expect(threadStateTemplate('trip', null).startsWith('# trip live state (thread trip)\n')).toBe(true)
+    expect(threadStateTemplate('trip', ' \n ').startsWith('# trip live state')).toBe(true)
+    // a name with a line break stays one heading line
+    expect(threadStateTemplate('trip', 'A\nB## x').split('\n')[0]).toBe('# A B## x live state (thread trip)')
+  })
+  it('refuses a symlinked threads/ and a symlinked state file, and writes through neither', () => {
+    const agent = tmp()
+    const out = tmp()
+    symlinkSync(out, join(agent, 'threads'))
+    expect('problem' in seedThreadState(agent, 'trip', 'Trip')).toBe(true)
+    expect(existsSync(join(out, 'trip.state.md'))).toBe(false)
+    rmSync(join(agent, 'threads'))
+    mkdirSync(join(agent, 'threads'))
+    symlinkSync(join(out, 'target.md'), join(agent, 'threads', 'trip.state.md'))
+    expect('problem' in seedThreadState(agent, 'trip', 'Trip')).toBe(true)
+    expect(existsSync(join(out, 'target.md'))).toBe(false)
+  })
+  it('an agent folder reached through a link still seeds (the realpath check is not fooled by the spelling)', () => {
+    const root = tmp()
+    mkdirSync(join(root, 'real'))
+    symlinkSync(join(root, 'real'), join(root, 'link'))
+    expect(seedThreadState(join(root, 'link'), 'trip', 'Trip')).toEqual({ ok: 'created' })
+    expect(existsSync(join(root, 'real', 'threads', 'trip.state.md'))).toBe(true)
+  })
+  it('a dry run writes nothing, not even threads/', () => {
+    const agent = tmp()
+    expect(seedThreadState(agent, 'trip', 'Trip', true)).toEqual({ ok: 'created' })
+    expect(existsSync(join(agent, 'threads'))).toBe(false)
+  })
+  onCaseExactTmp('a start makes it with the thread’s name; a dry plan makes nothing', () => {
+    const dry = start({ dry: true, name: 'Dry' })
+    expect(existsSync(threadStatePath(dry.agentDir, 'trip'))).toBe(false)
+    expect(existsSync(join(dry.agentDir, 'threads'))).toBe(false)
+    const w = start({ name: 'Ferry plans' })
+    expect(readFileSync(threadStatePath(w.agentDir, 'trip'), 'utf8').split('\n')[0]).toBe(
+      '# Ferry plans live state (thread trip)',
+    )
+  })
+  onCaseExactTmp('a start never overwrites an existing file', () => {
+    const w = start({
+      setup: (agentDir) => {
+        mkdirSync(join(agentDir, 'threads'))
+        writeFileSync(join(agentDir, 'threads', 'trip.state.md'), 'kept\n')
+      },
+    })
+    expect(readFileSync(threadStatePath(w.agentDir, 'trip'), 'utf8')).toBe('kept\n')
+  })
+  onCaseExactTmp('a seed failure is audited and never blocks the start', () => {
+    const out = tmp()
+    const w = start({ setup: (agentDir) => symlinkSync(out, join(agentDir, 'threads')) })
+    expect(w.p).toHaveProperty('launch')
+    expect(w.events.map((e) => e[0])).toContain('worker_state_seed_failed')
+    expect(existsSync(join(out, 'trip.state.md'))).toBe(false)
+  })
+  onCaseExactTmp('an unwritable agent folder is audited and never blocks the start', () => {
+    if (process.getuid?.() === 0) return
+    const w = start({ setup: (agentDir) => chmodSync(agentDir, 0o500) })
+    chmodSync(w.agentDir, 0o700)
+    expect(w.p).toHaveProperty('launch')
+    expect(w.events.map((e) => e[0])).toContain('worker_state_seed_failed')
+  })
+})
+
+describe('the command, run for real', () => {
+  // The start's own command, in a clean shell as Claude Code would start it: the copy staged from the sealed release, the python3
+  // resolved for it, the agent folder and the thread fixed by the command (a session's own environment says nothing here).
+  const py = spawnSync('/bin/sh', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim()
+  const run = (command: string, stdin: string, home: string, state: string) =>
+    spawnSync('/bin/sh', ['-c', command], {
+      input: stdin,
+      encoding: 'utf8',
+      env: {
+        PATH: '/usr/bin:/bin',
+        HOME: home,
+        XDG_STATE_HOME: state,
+        TALOS_SESSION_ROLE: 'main',
+        TALOS_APP_WORKER_THREAD: 'other',
+      },
+    })
+  onCaseExactTmp(
+    'SessionStart puts the thread’s file back, whatever the session’s own role and thread say; PreCompact saves its carry',
+    () => {
+      const w = start({ own: true })
+      const s = w.settings as Settings
+      const home = tmp()
+      const state = join(home, 'state')
+      mkdirSync(join(w.agentDir, '.learnings'), { recursive: true })
+      // the guard keeps corrections dated in the hook's own last 3 days (compaction-guard.py, time.localtime), and the hook runs
+      // under `env -i`: no TZ, so the machine's zone. Date the row the same way, not by this process's zone (CI's hostile run sets
+      // TZ to Kiritimati or Pago Pago for every process, which can be a day away from the machine's).
+      const day = spawnSync('/usr/bin/env', ['-i', '/bin/date', '+%Y-%m-%d'], { encoding: 'utf8' }).stdout.trim()
+      writeFileSync(
+        join(w.agentDir, '.learnings', 'LEARNINGS.md'),
+        `# L\n\n## ${day} — keep every row (correction)\n**What happened:** x.\n**Rule (apply every time):** y.\n`,
+      )
+      writeFileSync(
+        threadStatePath(w.agentDir, 'trip'),
+        '# Trip live state (thread trip)\n- 2026-11-18 book the ferry\n',
+      )
+      const inject = (s.hooks.SessionStart as Hook[])[0]?.hooks[0]?.command as string
+      const save = (s.hooks.PreCompact as Hook[])[0]?.hooks[0]?.command as string
+      // the PATH the session's python3 was resolved on is the fixed /usr/bin:/bin of the command: use a command with that python
+      const withPy = (c: string) =>
+        c.replace(/exec \/usr\/bin\/env -i/, `exec /usr/bin/env -i`).replace(/'[^']*python[^']*'/, `'${py}'`)
+      const out = run(withPy(inject), '{"source":"startup"}', home, state)
+      expect(out.status).toBe(0)
+      const ctx = JSON.parse(out.stdout).hookSpecificOutput.additionalContext as string
+      expect(ctx).toContain(
+        '# LIVE STATE for thread trip (from threads/trip.state.md; keep it current the same turn anything changes)',
+      )
+      expect(ctx).toContain('book the ferry')
+      expect(run(withPy(save), '{"session_id":"s1"}', home, state).status).toBe(0)
+      const after = run(withPy(inject), '{"source":"compact"}', home, state)
+      const ctx2 = JSON.parse(after.stdout).hookSpecificOutput.additionalContext as string
+      expect(ctx2).toContain('keep every row')
+      expect(ctx2).toContain('These were carried across a compaction by a hook')
+      // no bytecode was written beside the staged script
+      expect(readdirSync(workerHookDir(w.talosHome)).filter((n) => n.endsWith('.pyc') || n === '__pycache__')).toEqual(
+        [],
+      )
+    },
+  )
+  it('the command is a clean shell line: the copy, the python3, the mode and the folder only', () => {
+    const c = threadStateHookCommand(
+      '/h/_hook/thread-state.py',
+      '/usr/bin/python3',
+      'save',
+      { talosHome: '/h', home: '/u', thread: 'trip' },
+      "/a/it's",
+    )
+    expect(c).toContain(`'${STATE_HOOK_CLEAN_LINE}'`)
+    expect(c).toContain("'/a/it'\\''s'") // quoted safely
+    expect(c).toContain('"$f" \'/usr/bin/python3\' save')
+  })
+})

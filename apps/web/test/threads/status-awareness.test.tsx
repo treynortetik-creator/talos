@@ -68,8 +68,8 @@ describe('D15 working row', () => {
     }))
     openThread(client)
     act(() => client.session.patch({ busy: true, turn_id: 'turn_1' }))
-    const row = await screen.findByTestId('working-row')
-    await userEvent.click(await within(row).findByRole('button', { name: 'Stop' }))
+    await screen.findByTestId('working-row')
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }))
     // the click starts the send; the control reaches the session only after the owner frame is built and signed (async), so
     // wait for it rather than read it at once (a loaded machine read it before it arrived)
     await waitFor(() =>
@@ -85,12 +85,10 @@ describe('D15 working row', () => {
     }))
     openThread(client)
     act(() => client.session.patch({ busy: true, turn_id: 'turn_1', capabilities: ['compact'] }))
-    const row = await screen.findByTestId('working-row')
-    expect(within(row).queryByRole('button', { name: 'Stop' })).toBeNull()
+    await screen.findByTestId('working-row')
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
     act(() => client.session.patch({ capabilities: ['stop'], turn_id: undefined }))
-    await waitFor(() =>
-      expect(within(screen.getByTestId('working-row')).queryByRole('button', { name: 'Stop' })).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull())
   })
 
   it('a busy mod does not make an unrelated thread look busy (newest row is the agent)', async () => {
@@ -119,8 +117,8 @@ describe('D15 working row', () => {
     }))
     openThread(client)
     act(() => client.session.patch({ busy: false, turn_id: 'turn_1' }))
-    const row = await screen.findByTestId('working-row')
-    expect(within(row).queryByRole('button', { name: 'Stop' })).toBeNull()
+    await screen.findByTestId('working-row')
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
   it('the row goes away when the thread status goes idle', async () => {
@@ -148,6 +146,20 @@ describe('D15 working row: Stop honesty', () => {
       statuses: { [id]: { thread_id: id, state: 'working', since: new Date(Date.now() - ageMs).toISOString() } },
     }))
 
+  it('Stop lives in the composer, not in the working bar, and the bar still says who is working', async () => {
+    const client = setup()
+    working(client)
+    openThread(client)
+    act(() => client.session.patch({ busy: true, turn_id: 'turn_1' }))
+    const bar = await screen.findByTestId('working-row')
+    const stop = await screen.findByTestId('composer-stop')
+    expect(within(screen.getByTestId('composer')).getByRole('button', { name: 'Stop' })).toBe(stop)
+    expect(bar.contains(stop)).toBe(false)
+    expect(within(bar).queryByRole('button')).toBeNull()
+    expect(bar.textContent).toMatch(/is working/)
+    expect(bar.className).toMatch(/\bh-0\b/)
+  })
+
   it('a thread with its own session shows Working from its own status but offers no Stop (Stop would hit main)', async () => {
     const client = setup()
     thread(client, 'build', 'Build')
@@ -170,8 +182,8 @@ describe('D15 working row: Stop honesty', () => {
     working(client, 'build')
     openThread(client, 'build')
     act(() => client.session.patch({ busy: true, turn_id: 'turn_main' }))
-    const row = await screen.findByTestId('working-row')
-    expect(within(row).queryByRole('button', { name: 'Stop' })).toBeNull()
+    await screen.findByTestId('working-row')
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
   it('a dedicated thread does not read Working just because main is busy and the owner spoke last', async () => {
@@ -205,12 +217,10 @@ describe('D15 working row: Stop honesty', () => {
     working(client)
     openThread(client)
     act(() => client.session.patch({ busy: true, turn_id: 'turn_1' }))
-    const row = await screen.findByTestId('working-row')
-    await within(row).findByRole('button', { name: 'Stop' })
+    await screen.findByTestId('working-row')
+    await screen.findByRole('button', { name: 'Stop' })
     act(() => client.session.pushStale(10 * 60_000))
-    await waitFor(() =>
-      expect(within(screen.getByTestId('working-row')).queryByRole('button', { name: 'Stop' })).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull())
   })
 
   it('a refused Stop says why in the row, because the panel is closed', async () => {
@@ -219,8 +229,8 @@ describe('D15 working row: Stop honesty', () => {
     openThread(client)
     act(() => client.session.patch({ busy: true, turn_id: 'turn_1' }))
     client.session.failNext('turn_mismatch', 'That turn already ended.')
-    const row = await screen.findByTestId('working-row')
-    await userEvent.click(await within(row).findByRole('button', { name: 'Stop' }))
+    await screen.findByTestId('working-row')
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }))
     const err = await screen.findByTestId('working-row-error')
     expect(err.textContent).toMatch(/already ended/i)
     expect(err.getAttribute('role')).toBe('alert')

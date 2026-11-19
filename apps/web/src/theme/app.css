@@ -466,3 +466,23 @@ html[data-kb] :is(input, textarea, select, [contenteditable]):not(.composer-box)
   max-width: 100%;
   height: auto;
 }
+
+/* the working line on the message box's top edge: an accent stretch sweeping across; still and full width when motion is off */
+@keyframes working-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+.working-line-fill {
+  width: 100%;
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .working-line-fill {
+    width: 30%;
+    animation: working-sweep 1.4s linear infinite;
+  }
+}

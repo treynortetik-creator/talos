@@ -384,13 +384,34 @@ describe('supervise restart-thread and attach', () => {
     )
     return { home, env: { home, userHome: home } as never }
   }
+  const readsControl = (home: string) =>
+    writeFileSync(
+      join(home, 'workers.json'),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: new Date().toISOString(), workers_supported: true, reads_control: true },
+        threads: {},
+      }),
+    )
+  it('without the supervisor saying it reads `control`, the restart goes into `wake` as it always did', async () => {
+    const w = world()
+    expect(takeLock(w.home)).toBe(true)
+    expect(await cmdSupervise(w.env, ['restart-thread', 'trip'], io().io)).toBe(0)
+    expect(JSON.parse(readFileSync(join(w.home, 'workers', 'trip', 'wake'), 'utf8'))).toMatchObject({
+      action: 'restart',
+    })
+    expect(existsSync(join(w.home, 'workers', 'trip', 'control'))).toBe(false)
+    releaseLock(w.home)
+  })
   it('asks the running supervisor to restart one thread session: a control wake, its normal park-then-start', async () => {
     const w = world()
     expect(takeLock(w.home)).toBe(true)
+    readsControl(w.home)
     const c = io()
     expect(await cmdSupervise(w.env, ['restart-thread', 'trip'], c.io)).toBe(0)
-    const wake = JSON.parse(readFileSync(join(w.home, 'workers', 'trip', 'wake'), 'utf8'))
+    const wake = JSON.parse(readFileSync(join(w.home, 'workers', 'trip', 'control'), 'utf8'))
     expect(wake).toMatchObject({ thread_id: 'trip', action: 'restart', reason: 'control' })
+    expect(existsSync(join(w.home, 'workers', 'trip', 'wake'))).toBe(false) // a control never writes a wake
     releaseLock(w.home)
   })
   it('stop and start: said as taken only when the running supervisor took the request, else said not taken (Fable R1-4)', async () => {
@@ -470,7 +491,7 @@ describe('supervise restart-thread and attach', () => {
     expect(c.err.join('\n')).toContain('supervise stop / start')
     expect(await cmdSupervise(w.env, ['restart-thread', '../x'], io().io)).toBe(2)
     expect(await cmdSupervise(w.env, ['restart-thread'], io().io)).toBe(2)
-    expect(existsSync(join(w.home, 'workers', 'general', 'wake'))).toBe(false)
+    expect(existsSync(join(w.home, 'workers', 'general', 'control'))).toBe(false)
     releaseLock(w.home)
   })
   it('attach --print is the tmux command onto the thread’s own session, on this supervisor’s config', async () => {

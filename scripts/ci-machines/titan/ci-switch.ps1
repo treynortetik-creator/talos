@@ -238,8 +238,13 @@ function Suspend-TitanCi {
   $steps = New-Object Collections.ArrayList
   Write-CiSwitchLog 'pause started' $Dir
   # a resume that did not finish: its saved values come back as paused.json, and this pause goes on from them
-  $back = Restore-CiPaused $Dir
-  if ($back) { [void]$steps.Add((New-CiStep 'unfinished resume' $false $back)) }
+  $back = Restore-CiPaused $Dir -MarkIncomplete
+  if ($back) {
+    # stop here: going on would save the current values (after a crashed resume, maybe "off") beside resuming.json, and the next
+    # pause would delete resuming.json, the only copy of the real ones. Nothing has been changed yet.
+    [void]$steps.Add((New-CiStep 'unfinished resume' $false "$back; nothing changed, pause again"))
+    return (Complete-CiResult 'pause' $steps $false $Dir '')
+  }
   $state = Get-TitanCiState -Gh $Gh -Dir $Dir
   $already = $state.Paused
   $pausedAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')
@@ -286,14 +291,26 @@ function Suspend-TitanCi {
   Complete-CiResult 'pause' $steps $already $Dir ''
 }
 
-function Restore-CiPaused([string]$Dir) {
+function Restore-CiPaused([string]$Dir, [switch]$MarkIncomplete) {
   # resuming.json goes back to paused.json (a failed resume, or a pause over a resume that never finished); when both exist the
-  # paused.json is the newer and stays. Returns an empty string, or what went wrong.
+  # paused.json is the newer and stays. Returns an empty string, or what went wrong. -MarkIncomplete (a pause over a resume that
+  # never finished): the file put back says complete:false, because that resume may have started the runners and set variables
+  # back on. Until this pause has set them off and stopped the runners again, the tray shows "incomplete" and the keep-alive
+  # keeps holding the distro; the pause writes complete:true itself once its stop is done.
   $pf = Join-Path $Dir 'paused.json'; $rf = Join-Path $Dir 'resuming.json'
   try {
     if (Test-Path -LiteralPath $rf) {
       if (Test-Path -LiteralPath $pf) { Remove-Item -LiteralPath $rf -Force -ErrorAction Stop }
-      else { [IO.File]::Move($rf, $pf) }
+      else {
+        $s = $null
+        if ($MarkIncomplete) { $s = Read-CiSaved $Dir 'resuming.json' }
+        if ($s -and -not $s.Error) {
+          # paused.json is written complete:false first (a temp file and a rename), and only then does resuming.json go: no
+          # reader ever sees a complete:true copy, and a failed write leaves resuming.json, the only copy of the values, alone
+          Save-CiSaved $Dir $s.PausedAt $s.Values $s.Unknown $false
+          Remove-Item -LiteralPath $rf -Force -ErrorAction Stop
+        } else { [IO.File]::Move($rf, $pf) } # an unreadable one goes back as it is: the tray shows it as unreadable
+      }
     }
     ''
   } catch { "paused.json could not be put back: $($_.Exception.Message)" }

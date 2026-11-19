@@ -376,6 +376,11 @@ const FOLDER_ONLY: Record<string, string[]> = {
   'supervisor/worker-config.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'return realpathSync(p)'],
   // the agent folder and a session's launch folder (update-check.ts realOrSelf): folders only
   'supervisor/update-check.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'return realpathSync(p)'],
+  // the threads folder and the agent folder, compared (a link anywhere is refused): folders only
+  'supervisor/thread-state-seed.ts': [
+    'realpathSync,',
+    "fine = fine && !lstatSync(dir).isSymbolicLink() && realpathSync(dir) === join(realpathSync(agentDir), 'threads')",
+  ],
   'supervisor/worker-hook.ts': ['realpathSync,', 'return realpathSync(p)'],
   'supervisor/worker-launch.ts': ["import { realpathSync } from 'node:fs'", 'return realpathSync(cwd)'],
   'supervisor/worker-mcp.ts': ['realpathSync,', 'return realpathSync(p)'],

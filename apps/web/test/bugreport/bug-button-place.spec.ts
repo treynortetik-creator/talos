@@ -1,6 +1,6 @@
 // Where the Report a bug button (placement B, the default) sits, measured in a real browser. Nothing floats over content
-// (Pantheon, 2026-11-14): on a phone thread it is in the timeline's corner, never on jump-to-latest, the composer (also
-// with a four-line draft) or the newest message; off a thread it is a slot in the phone's tab bar, which still fits an
+// (Pantheon, 2026-11-14): on a phone thread it is one of the message box's buttons, beside + (also with a four-line
+// draft), never on jump-to-latest or the newest message, and the timeline keeps no room for it; off a thread it is a slot in the phone's tab bar, which still fits an
 // iPhone SE; on a computer it is a row in the sidebar's footer. The first try, a fixed button, covered all of those.
 // Screenshots land in test-results/shots/<project>-bug-*.png (test/bugreport/shots with TALOS_SHOTS=1).
 import { expect, type Locator, type Page, test } from '@playwright/test'
@@ -50,7 +50,7 @@ const apart = (a: { x: number; y: number; width: number; height: number }, b: ty
 
 const phone = (page: Page) => (page.viewportSize()?.width ?? 0) < 768
 
-test('in a thread: B sits in the timeline corner, clear of jump-to-latest and the composer, also with a long draft', async ({
+test('in a thread: B is a button of the message box, clear of jump-to-latest and the newest message, also with a long draft', async ({
   page,
 }, info) => {
   await open(page, '/t/general')
@@ -68,22 +68,21 @@ test('in a thread: B sits in the timeline corner, clear of jump-to-latest and th
   await tl.evaluate((el) => {
     el.scrollTop = 0
   })
-  const bug = tl.locator('..').getByRole('button', { name: 'Report a bug' })
-  const jump = page.getByTestId('jump-to-latest')
   const composer = page.getByTestId('composer')
+  const bug = composer.getByRole('button', { name: 'Report a bug' })
+  const jump = page.getByTestId('jump-to-latest')
   await expect(jump).toBeVisible()
   await expect(page.getByRole('button', { name: 'Report a bug' })).toHaveCount(1) // no tab bar in a thread: just this one
+  await expect(bug).toBeVisible()
   expect(apart(await box(bug), await box(jump)), 'bug button on jump-to-latest').toBe(true)
-  expect(apart(await box(bug), await box(composer)), 'bug button on the composer').toBe(true)
   await page.screenshot({ path: shot('bug-thread', info.project.name) })
 
   await composer.getByRole('textbox').fill('one\ntwo\nthree\nfour')
   await expect(bug).toBeVisible()
-  expect(apart(await box(bug), await box(composer)), 'bug button on a four-line composer').toBe(true)
   expect(apart(await box(bug), await box(jump)), 'bug button on jump-to-latest (long draft)').toBe(true)
   await page.screenshot({ path: shot('bug-thread-draft', info.project.name) })
 
-  // back at the bottom: the newest message's own row (its time, Copy and menu) is never under the button
+  // back at the bottom: the newest message's own row (its time, Copy and menu) has the plain 16 px under it
   await composer.getByRole('textbox').fill('')
   await page.getByTestId('jump-to-latest').click()
   await expect(jump).toHaveCount(0)

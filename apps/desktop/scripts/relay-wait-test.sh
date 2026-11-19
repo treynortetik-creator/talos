@@ -260,6 +260,37 @@ relay "http://relay.invalid.test:$PORT"
 inst --app "$APP"
 [ "$RC" = 8 ] && ! installed && has "not one Talos can use" && ok "plain http to another machine is refused (8)" || bad "http non-loopback: rc=$RC $OUT"
 
+# A public clone (the squashed public repo): the app and the relay name PRIVATE commits it does not have, and each snapshot
+# commit names its private commit in a `Talos-Source:` trailer. They are compared through those trailers.
+relay "http://127.0.0.1:$PORT"
+PUB="$T/public"; git init -q "$PUB"
+full() { git -C "$REPO" rev-parse "$1"; }
+pc() { git -C "$PUB" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m "$1" -m "Talos-Source: $2"; }
+pc "snapshot old" "$(full "$OLD")"; pc "snapshot build" "$(full "$BUILD_SHA")"; pc "snapshot new" "$(full "$NEW")"
+PRIV_ONLY="$(git -C "$REPO" -c user.name=t -c user.email=t@example.com commit-tree "$NEW^{tree}" -p "$NEW" -m between | cut -c1-9)"
+PAPP="$T/pub/Talos.app"; ( REPO="$PUB"; mk_app "$PAPP" "$(full "$BUILD_SHA" | cut -c1-9)" )
+answer 200 "{\"ok\":true,\"version\":\"$BUILD_SHA\"}"
+inst --app "$PAPP"
+[ "$RC" = 0 ] && installed && has "the same commit as this build" && ok "public clone, relay on the build's private commit: installs" || bad "public same: rc=$RC $OUT"
+answer 200 "{\"ok\":true,\"version\":\"$NEW\"}"
+inst --app "$PAPP"
+[ "$RC" = 0 ] && installed && has "newer than this build" && ok "public clone, relay on a newer snapshot's private commit: installs" || bad "public newer: rc=$RC $OUT"
+answer 200 "{\"ok\":true,\"version\":\"$OLD\"}"
+TALOS_RELAY_WAIT_LIMIT=0.5 inst --app "$PAPP"
+[ "$RC" = 8 ] && ! installed && has "still on version $OLD" && ok "public clone, relay on an older snapshot's private commit: waits, stops (8)" || bad "public older: rc=$RC $OUT"
+# a relay built from the public repo itself reports a public commit: compared directly
+answer 200 "{\"ok\":true,\"version\":\"$(git -C "$PUB" rev-parse HEAD)\"}"
+inst --app "$PAPP"
+[ "$RC" = 0 ] && installed && has "newer than this build" && ok "public clone, relay on a public commit: compared directly, installs" || bad "public direct: rc=$RC $OUT"
+# a private commit no snapshot was made from (a relay deployed between snapshots): not comparable here; say so and install
+answer 200 "{\"ok\":true,\"version\":\"$PRIV_ONLY\"}"
+inst --app "$PAPP"
+[ "$RC" = 0 ] && installed && has "no snapshot in this public clone" && ! has fetch && ok "public clone, relay on a private commit with no snapshot: says so, installs" || bad "public unknown: rc=$RC $OUT"
+# a private clone still says fetch for a commit it does not have
+answer 200 "{\"ok\":true,\"version\":\"abcdef1234\"}"
+inst --app "$APP"
+[ "$RC" = 8 ] && ! installed && has "this clone does not have" && ok "a private clone without the relay's commit still stops (8) and says fetch" || bad "private unknown: rc=$RC $OUT"
+
 case "$(cat "$ALL")" in
   *"$PORT"* | *"$DEAD"* | *127.0.0.1* | *relay.invalid* | *relay.example*) bad "the relay address appears in the output" ;;
   *) ok "the relay address never appears in the output ($(wc -l < "$ALL" | tr -d ' ') lines checked)" ;;

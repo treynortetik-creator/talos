@@ -1,16 +1,18 @@
 // The row under the notices: + menu, the text box (or the recording indicator), dictation, and Send / mic / live call.
 // On a phone the box takes a whole row of its own, the controls a row beneath it (+ and dictation left; mic, live call or
-// Send right), so the text gets the full width (the owner, 2026-11-14). Once the thread's column is 36rem (576 px) wide it
+// Send right; the Report a bug button, on a phone, sits right beside +), so the text gets the full width (the owner, 2026-11-14). Once the thread's column is 36rem (576 px) wide it
 // is one row again: the column's width (a container query), not the window's, so a narrow column beside the panes or the
 // sidebar on a desktop gets the roomy layout too. Only the visual order changes (CSS order): the DOM, so the tab order
-// and what a screen reader reads, stays plus, box, dictation, send.
+// and what a screen reader reads, stays plus, bug button, box, dictation, send.
 import { type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type RefObject, Suspense } from 'react'
 import { formatDuration } from '../../lib/format.ts'
 import { cn } from '../../ui/cn.ts'
-import { IconCamera, IconFile, IconImage, IconMic, IconPlus, IconSend } from '../../ui/icons.tsx'
+import { IconCamera, IconFile, IconImage, IconMic, IconPlus, IconSend, IconStop } from '../../ui/icons.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/index.ts'
+import { BugThreadButton } from '../bugreport/BugButton.tsx'
 import { LiveCallButton } from '../registry.ts'
 import type { useSlashPicker } from '../session/SlashPicker.tsx'
+import type { WorkingStop } from '../threads/WorkingRow.tsx'
 import type { Mode } from './useComposerVoice.ts'
 
 type Which = 'photos' | 'camera' | 'files'
@@ -44,6 +46,8 @@ export function ComposerToolbar(p: {
   canSend: boolean
   tooLong: boolean
   macOnline: boolean
+  /** Stop for the turn that is running (hidden when there is none to stop). */
+  working: WorkingStop
   onSend: () => void
   mic: {
     onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => void
@@ -140,6 +144,9 @@ export function ComposerToolbar(p: {
         </Popover>
       )}
 
+      {/* Report a bug (placement B, phones only): beside +. Same order slot as dictation, ahead of it in the DOM. */}
+      <BugThreadButton variant="inline" className="order-3 @min-[36rem]:order-none" />
+
       {recording ? (
         <div
           className="order-1 flex min-h-11 basis-full items-center gap-3 px-2 @min-[36rem]:order-none @min-[36rem]:flex-1 @min-[36rem]:basis-auto"
@@ -183,6 +190,20 @@ export function ComposerToolbar(p: {
       ) : null}
 
       <div className="order-4 ms-auto flex items-end gap-2 @min-[36rem]:order-none @min-[36rem]:ms-0">
+        {p.working.showStop && (
+          <button
+            type="button"
+            aria-label="Stop"
+            data-testid="composer-stop"
+            disabled={p.working.busy}
+            // keeps the keyboard up: a tap must not pull focus off the box
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void p.working.stop()}
+            className="grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill border border-danger text-danger disabled:opacity-40"
+          >
+            <IconStop fill="currentColor" />
+          </button>
+        )}
         {p.canSend && !recording ? (
           <button
             type="button"

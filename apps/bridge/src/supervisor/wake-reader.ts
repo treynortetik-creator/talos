@@ -1,4 +1,4 @@
-// The Linux reader of a thread's wake (workers/<id>/wake), on the shared decision (packages/protocol wake-decision.ts; the Mac's
+// The Linux reader of a thread's wake and control (workers/<id>/wake, workers/<id>/control; control first), on the shared decision (packages/protocol wake-decision.ts; the Mac's
 // WorkerWakes.takeWakes reads the same way). A wake is a request the bridge writes; any code running as the same user could write
 // one too, so the reader does not trust it for what it claims: it takes it once (renamed aside to a name nobody can guess, read
 // with one open that refuses a link, a small regular file only; anything dropped is audited), drops one too old or from the
@@ -42,11 +42,15 @@ export type WakeTake = { wake: WakeFileT } | { dropped: WakeDropWhy; fields?: st
  * next take), then read (no link, a regular file of at most 4096 bytes) and deleted. One that cannot be read, does not parse or
  * names another thread is dropped and never acted on, with why (for a bad shape, the names of the fields at fault, never values).
  */
-export function takeWakeFile(home: string, threadId: string): WakeTake {
+export function takeWakeFile(
+  home: string,
+  threadId: string,
+  file: typeof WORKER_FILES.wake | typeof WORKER_FILES.control = WORKER_FILES.wake,
+): WakeTake {
   const dir = workerDir(home, threadId)
-  const taken = join(dir, `${WORKER_FILES.wake}.taken.${randomBytes(8).toString('hex')}`)
+  const taken = join(dir, `${file}.taken.${randomBytes(8).toString('hex')}`)
   try {
-    renameSync(join(dir, WORKER_FILES.wake), taken)
+    renameSync(join(dir, file), taken)
   } catch {
     return null // no wake
   }
@@ -64,6 +68,7 @@ export function takeWakeFile(home: string, threadId: string): WakeTake {
     const fields = [...new Set(r.error.issues.map((i) => String(i.path[0] ?? 'file')))].slice(0, 5).join(',')
     return { dropped: 'bad_shape', fields: fields.replace(/[^A-Za-z0-9_,]/g, '').slice(0, 80) }
   }
+  if (file === WORKER_FILES.control && r.data.action === 'pointer') return { dropped: 'bad_shape', fields: 'action' } // a tap, never a message
   return r.data.thread_id === threadId ? { wake: r.data } : { dropped: 'other_thread' }
 }
 
@@ -138,12 +143,24 @@ export class WakeReader {
   /**
    * The thread's wake, if any: decided, carried out by `act` when it may be, and said. `session()`: the thread's session now, if
    * any; it is idle unless it is in a turn, or a park waits for its turn to end. Called for every thread each tick: a start held
-   * for a slot is said once it runs (or is dropped), and refused lines are tried again.
+   * for a slot is said once it runs (or is dropped), and refused lines are tried again. Two files, each taken by the same rename:
+   * `control` (the owner's tap) first, then `wake` (a message pointer), so a tap and a message that landed before one tick are both
+   * carried out, the tap first (BSUP-5). One that is dropped does not stop the other.
    */
   async take(threadId: string, session: () => WakeSession, act: (w: WakeFileT) => Promise<void>): Promise<void> {
     this.retryOwed()
     this.settleWaiting(threadId, session())
-    const got = takeWakeFile(this.d.home, threadId)
+    await this.takeFile(WORKER_FILES.control, threadId, session, act)
+    await this.takeFile(WORKER_FILES.wake, threadId, session, act)
+  }
+
+  private async takeFile(
+    file: typeof WORKER_FILES.wake | typeof WORKER_FILES.control,
+    threadId: string,
+    session: () => WakeSession,
+    act: (w: WakeFileT) => Promise<void>,
+  ): Promise<void> {
+    const got = takeWakeFile(this.d.home, threadId, file)
     if (got === null) return
     if ('dropped' in got) {
       const f: Record<string, string> = { thread: threadId, why: got.dropped }

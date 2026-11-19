@@ -70,7 +70,12 @@ function writeWorkers(home: string, heartbeatMs: number) {
     join(home, 'workers.json'),
     JSON.stringify({
       v: 1,
-      supervisor: { pid: 1, heartbeat_at: new Date(heartbeatMs).toISOString(), workers_supported: true },
+      supervisor: {
+        pid: 1,
+        heartbeat_at: new Date(heartbeatMs).toISOString(),
+        workers_supported: true,
+        reads_control: true,
+      },
       threads: {
         trip: {
           state: 'live',
@@ -144,7 +149,7 @@ const results = (x: Harness, controlId: string) =>
     )
     .map((r) => r.raw as { ok: boolean; code?: string })
 
-const wake = (x: Harness) => join(x.home, 'workers', 'trip', 'wake')
+const wake = (x: Harness) => join(x.home, 'workers', 'trip', 'control')
 
 describe('an owner control replayed after the history was reset', () => {
   test('session.control clear, dispatched before the crash, is not handed to the mod again; it is answered as stale', async () => {

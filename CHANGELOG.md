@@ -1,5 +1,16 @@
 # Changelog
 
+## Report a bug sits in the message box
+
+- On a phone, inside a conversation, the Report a bug button now sits in the message box's buttons, beside +, so the conversation gets the space it used to keep for it.
+## Installing the Mac app from a public clone no longer stops at the relay check
+
+- `install.sh` waits until your relay serves this build or a newer one. From a clone of the public repo it always stopped with "this build's commit is not in the clone it was built from", because the app and the relay name commits of the private repo. It now finds them through the public snapshots, which name the commit each was made from. A relay on a commit no snapshot was made from can't be ordered, so the install says so and goes ahead.
+
+## The working indicator takes no room
+
+- While the agent is working, a thin line now runs along the top of the message box instead of a row above it, so it never pushes or covers a message. Stop sits among the message box's buttons. The jump-to-latest and report-a-bug buttons keep exactly as much room under the newest message as they need.
+
 ## Signing in to Claude in the Mac app takes a long code
 
 - When you paste the sign-in code in the Mac app's first-run setup, Talos now types the code and then presses Return on its own a moment later. Claude Code treats a long burst of typing as a paste and could drop a Return sent with it, so a real code (longer than 64 characters) could leave the sign-in waiting.
@@ -7,6 +18,9 @@
 ## The Mac app says version 0.1.4
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.4, the release with Run in Terminal and the relay attestation the iPhone app needs.
+## A message the relay sent twice is answered once
+
+- A message the relay sent twice is no longer answered by both the main session and a thread session.
 
 ## A permission prompt shows one card on a slow connection
 

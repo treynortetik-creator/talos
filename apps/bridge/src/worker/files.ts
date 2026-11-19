@@ -1,5 +1,5 @@
 // The files the hub and the desktop supervisor share under $TALOS_APP_HOME (docs/OPTION-C.md "Files"). The supervisor
-// writes workers.json and each worker's nonce; the hub writes wake and ready. All 0600 in 0700 folders.
+// writes workers.json and each worker's nonce; the hub writes wake, control and ready. All 0600 in 0700 folders.
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -75,17 +75,13 @@ const cappedEntry = (w: WakeFileT): WakeTakenT | undefined =>
     ? { at: Date.parse(w.at), action: w.action as WakeTakenT['action'] }
     : undefined
 
-/**
- * Writes (replaces) a thread's wake file. The supervisor takes it by renaming, so a rewrite never loses a wake. Only the wake
- * itself can fail the call: the bridge's record of a capped wake is written after it, and a failure there goes to `warn`, so a
- * pointer wake or a park never waits on bookkeeping. A `counter` the caller passes is dropped: nothing uses it any more.
- */
-export function writeWake(home: string, wake: WakeFileT, warn: WakeWarn = () => {}): void {
+/** Writes `wake` into `file` (atomic replace, 0600); the record of a capped one follows, and its failure only goes to `warn`. */
+function writeWakeShape(file: string, home: string, wake: WakeFileT, warn: WakeWarn): void {
   const dir = workerDir(home, wake.thread_id)
   ensureDir(join(home, 'workers'))
   ensureDir(dir)
   const { counter: _ignored, ...parsed } = WakeFile.parse(wake)
-  writeFileAtomic(join(dir, WORKER_FILES.wake), `${JSON.stringify(parsed)}\n`, 0o600)
+  writeFileAtomic(join(dir, file), `${JSON.stringify(parsed)}\n`, 0o600)
   const entry = cappedEntry(parsed)
   if (!entry) return
   try {
@@ -97,6 +93,43 @@ export function writeWake(home: string, wake: WakeFileT, warn: WakeWarn = () => 
 }
 
 /**
+ * Writes (replaces) a thread's message wake file: a `pointer`, never a control (those go through writeControl, so a message can
+ * never replace an owner's tap, BSUP-5). The supervisor takes it by renaming, so a rewrite never loses a wake. A `counter` the
+ * caller passes is dropped: nothing uses it any more.
+ */
+export function writeWake(home: string, wake: WakeFileT, warn: WakeWarn = () => {}): void {
+  if (wake.action !== 'pointer') throw new Error('writeWake carries pointers only; a control goes through writeControl')
+  writeWakeShape(WORKER_FILES.wake, home, wake, warn)
+}
+
+/** Does the supervisor say, in workers.json (`supervisor.reads_control`), that its reader takes `control`? Missing, torn or unreadable: no. */
+export function supervisorReadsControl(home: string): boolean {
+  try {
+    return readWorkersFile(readFileSync(workersJsonPath(home), 'utf8'))?.supervisor.reads_control === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Writes (replaces) a thread's control: the owner's tap (park, resume, restart, fresh; the governor's park too), the same JSON as a
+ * wake, the same atomic replace and 0600. Only the control itself can fail the call; the record of a capped one (restart, fresh)
+ * is written after it, and a failure there goes to `warn`.
+ *
+ * WHERE IT GOES is decided here, at write time, from workers.json: when the supervisor says it reads `control`
+ * (`supervisor.reads_control`), the control goes to `workers/<id>/control`, a file a message pointer never touches (BSUP-5; the
+ * newest control replaces an older one, the last tap wins). When the flag is absent, false, or workers.json is missing or
+ * unreadable (an older supervisor, or a newer bridge running against a supervisor that was not restarted: a kit or hook release
+ * restarts the bridge only), the control goes to `wake` exactly as before, so a tap is never left in a file nobody reads. So this
+ * is safe to land before the Mac's reader: the old Swift supervisor never sets the flag, and the Mac keeps today's behaviour until
+ * its reader ships and sets it.
+ */
+export function writeControl(home: string, wake: WakeFileT, warn: WakeWarn = () => {}): void {
+  if (wake.action === 'pointer') throw new Error('writeControl carries controls only; a pointer goes through writeWake')
+  writeWakeShape(supervisorReadsControl(home) ? WORKER_FILES.control : WORKER_FILES.wake, home, wake, warn)
+}
+
+/**
  * The capped wakes the reader will count for a thread, as the bridge best knows before it writes another (the `at` of each, in
  * ms). With the reader's own state file (WORKER_FILES.wakeState): what it took, plus the wake still waiting in the file if that
  * one is capped, so a double tap is refused up front. Without one (an older reader, or none yet): the bridge's record of the
@@ -105,11 +138,19 @@ export function writeWake(home: string, wake: WakeFileT, warn: WakeWarn = () => 
 export function wakeCapTimes(home: string, threadId: string): number[] {
   const dir = workerDir(home, threadId)
   const state = WakeState.safeParse(readJsonFile(join(dir, WORKER_FILES.wakeState)))
-  const pending = readWake(home, threadId)
-  const waiting = pending ? cappedEntry(pending) : undefined
-  const entries = state.success ? [...state.data.taken, ...(waiting ? [waiting] : [])] : readWritten(dir)
+  // a capped wake still waiting: in `control` (where controls go now), or in `wake` (one an older bridge left there)
+  const waiting = [readControl(home, threadId), readWake(home, threadId)].flatMap((p) => {
+    const e = p ? cappedEntry(p) : undefined
+    return e ? [e] : []
+  })
+  const entries = state.success ? [...state.data.taken, ...waiting] : readWritten(dir)
   const seen = new Map(entries.map((e) => [`${e.at}:${e.action}`, e.at]))
   return [...seen.values()]
+}
+
+export function readControl(home: string, threadId: string): WakeFileT | undefined {
+  const r = WakeFile.safeParse(readJsonFile(join(workerDir(home, threadId), WORKER_FILES.control)))
+  return r.success ? r.data : undefined
 }
 
 export function readWake(home: string, threadId: string): WakeFileT | undefined {

@@ -6,7 +6,7 @@
 // Types and constants only, no runtime: this package also runs in the browser. The on-disk and socket formats this contract
 // relies on are defined where they already live and are only referenced here:
 //   workers.json        WorkersFile / WorkerEntry / WorkerState / WorkerFailure      (thread-sessions.ts)
-//   workers/<id>/wake   WakeFile; workers/<id>/ready WorkerReady; WORKER_FILES       (thread-sessions.ts)
+//   workers/<id>/wake, workers/<id>/control   WakeFile (a pointer; a tap); workers/<id>/ready WorkerReady; WORKER_FILES       (thread-sessions.ts)
 //   hub.sock            HubHello (the worker's first line) and the hub's checks      (thread-sessions.ts, bridge hub/server.ts)
 //   dialog files        WorkerDialog, DialogAnswer, DialogResult, DialogCardFile     (dialog-files.ts)
 // Timings shared with the bridge (heartbeat, staleness, backoff, crash loop) are the constants in thread-sessions.ts; the ones

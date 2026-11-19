@@ -62,7 +62,7 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          templates/dot-claude/settings.json wiki/README.md wiki/_index.md \
          .claude/agents/grunt.md .claude/agents/reviewer.md \
          hooks/action-rules.py hooks/action-rules.yaml hooks/compaction-guard.py hooks/memory-reflex.py hooks/bsd-sed-guard.py \
-         hooks/permission-relay.py scripts/test-permission-relay.sh \
+         hooks/permission-relay.py scripts/test-permission-relay.sh hooks/thread-state.py scripts/test-thread-state.sh \
          scripts/wiki-gazetteer.py scripts/settings-merge.py scripts/go-public.sh scripts/watcher.py \
          scripts/watcher-adapters/macos-calendar.sh scripts/memory/mem_rerank.py scripts/memory/fetch-reranker.sh \
          scripts/dream/common.py scripts/dream/collect.py scripts/dream/verify_quotes.py scripts/dream/apply.py \
@@ -484,7 +484,7 @@ _lo="$(bash "$L/scripts/claude-md-lint.sh" 2>&1)"; _lorc=$?
 cp "$L/CLAUDE.md.good" "$L/CLAUDE.md"
 
 # ---------- STATE.md ceiling: 31k characters warns, 29k does not ----------
-mkdir -p "$T/stateceil/memory" "$T/stateceil/hooks"; cp "$KIT/hooks/session-start.py" "$T/stateceil/hooks/"
+mkdir -p "$T/stateceil/memory" "$T/stateceil/hooks"; cp "$KIT/hooks/session-start.py" "$KIT/hooks/_talos_common.py" "$T/stateceil/hooks/"
 python3 -c "open('$T/stateceil/memory/STATE.md','w').write('# STATE\n\n## FUSES\n\n' + ('x' * 30900) + '\n')"
 _sw1=$(cd "$T/stateceil" && CLAUDE_PROJECT_DIR="$T/stateceil" python3 hooks/session-start.py 2>/dev/null | grep -c 'STATE TOO LARGE')
 python3 -c "open('$T/stateceil/memory/STATE.md','w').write('# STATE\n\n## FUSES\n\n' + ('x' * 29000) + '\n')"
@@ -522,7 +522,9 @@ reg = set()
 blob = json.dumps(d)
 for m in re.finditer(r"hooks/([A-Za-z0-9_.-]+\.py)", blob):
     reg.add(m.group(1))
-files = {f for f in os.listdir(os.path.join(kit, "hooks")) if f.endswith(".py") and not f.startswith("_")}
+# thread-state.py is registered by the Talos app in a thread session's own settings, never in the agent folder's template
+app_registered = {"thread-state.py"}
+files = {f for f in os.listdir(os.path.join(kit, "hooks")) if f.endswith(".py") and not f.startswith("_")} - app_registered
 missing_file = sorted(r for r in reg if not os.path.isfile(os.path.join(kit, "hooks", r)))
 unregistered = sorted(files - reg)
 sl = d.get("statusLine", {}).get("command", "")
@@ -582,6 +584,11 @@ suite "$KIT/scripts/test-extras.sh" \
 suite "$KIT/scripts/test-hooks.sh" \
   "enforcement hooks: claim gate, append-only guard, sub-agent log, statusline, channel debt (and every one fails open)" \
   "the hook suite fails -- run scripts/test-hooks.sh to see which check"
+
+# ---------- a thread session's own state file (the Talos app's dedicated threads) ----------
+suite "$KIT/scripts/test-thread-state.sh" \
+  "thread-state hook: a thread's own state file at every boundary, its own carry, and the worker branches of session-start and compaction-guard" \
+  "the thread-state suite fails -- run scripts/test-thread-state.sh to see which check"
 
 # ---------- the 1.2 features: each has its own suite ----------
 for _t in "action-rules:the never/ask action table (starter rules, your own file, approvals, fail-open live / closed unattended)" \

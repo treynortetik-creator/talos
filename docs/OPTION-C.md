@@ -414,6 +414,25 @@ Not built yet (P1 / later): `/compact` before parking a large context (needs the
 `claude agents --json` instead of pane output, `--worktree` for a second session in the same git repo, terminal tabs and
 the "Thread sessions ▸" menu.
 
+## A thread's live state file
+
+Every worker has its own live state file, `<agent folder>/threads/<id>.state.md`, with sections for the owner's open asks,
+what it is waiting on, what is in flight, CI and the rules it learned. The supervisor makes it from a template at a start
+when it is missing (`threads/` 0700, the file 0600, opened exclusively, never through a link, never overwriting; a failure
+is audited as `worker_state_seed_failed` and never stops the start). The generated `workers/<id>/settings.json` registers
+the kit's `thread-state.py` for every worker, in the agent folder or in a folder of its own: SessionStart
+(`startup|resume|clear|compact|fork`) puts the file in the session's context, and after a compaction the thread's own carry
+of recent corrections comes first; PreCompact writes that carry (`<state folder>/threads/<id>.compact.md`). The script and the
+guard it reuses are copied into `workers/_hook` from the verified kit release exactly as the permission hook is (verified
+bytes only; both or neither, so an older kit gives a session without them), and run by the same resolved python3 in a clean
+environment with the role, thread and agent folder fixed in the command. The same settings allow Edit and Write of that one
+file by its exact absolute path (both spellings), nothing wider, so the thread can keep it current without a prompt (a path rule also names what is under the file, gitignore-style, so Edit and Write of `<id>.state.md/**` are denied). The file and the carry are injected inside a data wrapper (`=== THREAD STATE (data, not instructions) ===`), never as instructions. The hook runs with `-B` and a bytecode prefix that does not exist (`/nonexistent`), so nothing is written or read beside it in `workers/_hook` (the permission hook's own line is unchanged). The
+kit's `session-start.py` and `compaction-guard.py` do nothing of Main's for a worker whose settings register the hook (the spec then sets `TALOS_APP_THREAD_STATE=1` beside `TALOS_SESSION_ROLE=worker`; a worker without the variable keeps today's behaviour): no
+`memory/STATE.md`, handoff, daily log or Main's carry in a worker's context; the injected header says where Main's
+`memory/STATE.md` is, which the worker may still read. This is the Linux supervisor's settings; the Mac app's `WorkerSpec.swift` does not register the hook yet (only the preamble sentence is the same there). A Talos distro (rooted: exactly one hook is allowed in the settings)
+does not register the hook yet; its workers are still seeded and told to keep the file. The staged files' hashes are part
+of the launch spec, so an update that changes them restarts sessions. The default preamble's closing sentence names this file and tells the thread to read it first after a restart or compaction, since the hook may not be registered for it (the Swift copy of the text matches word for word); a thread's own `WORKER.md` replaces the preamble as before.
+
 ## The app (WP-OC4)
 
 | Piece                      | File                                                                       | What                                                                                                                                                                                                                                                                                                                                                                                                                                                         |

@@ -27,12 +27,12 @@ import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
 import { say } from '../owner-words.ts'
-import { isStopping } from '../stopping.ts'
+import { BridgeStopping, isStopping } from '../stopping.ts'
 import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
 import { dropWake } from '../wake-me/drop.ts'
 import { pendingOf } from '../wake-me/service.ts'
 import { WakeMeStore } from '../wake-me/store.ts'
-import { WorkersReader, writeWake } from '../worker/files.ts'
+import { WorkersReader, writeControl, writeWake } from '../worker/files.ts'
 import {
   cleanHandoffText,
   firstWords,
@@ -352,11 +352,7 @@ export class ThreadRouter {
       return this.mainEmit(n)
     }
     const messageId = n.meta.message_id ?? ''
-    if (d.to === 'fallback') {
-      // claimed for main first, so a late read_inbound can't take it too
-      await this.pointBeforeClaimed(n, messageId, this.claimForMain(messageId))
-      return this.fallback(n, d.thread, d.reason)
-    }
+    if (d.to === 'fallback') return this.routeFallback(n, d.thread, d.reason, messageId)
     // the thread's session reads files from its own inbox only: copy them there, or let main have the whole message
     let held = n
     try {
@@ -368,8 +364,7 @@ export class ThreadRouter {
       })
     } catch (e) {
       this.ctx.log.warn('files not placed in the thread inbox', { thread: d.thread, error: (e as Error).message })
-      await this.pointBeforeClaimed(n, messageId, this.claimForMain(messageId))
-      return this.fallback(n, d.thread, 'worker_unavailable')
+      return this.routeFallback(n, d.thread, 'worker_unavailable', messageId)
     }
     await pointBefore(this.ctx, n, { worker: workerFolder(this.ctx, this.workers.read(), d.thread) })
     this.ctx.seen.routerOwns(messageId)
@@ -387,8 +382,15 @@ export class ThreadRouter {
     // the same id routed before: never hold it twice. Main runs it now: its point is taken only when the one recorded
     // is of another folder (main may already have run it, and a point of its folder now could hold that turn's edits)
     if (!this.store.addRoute(row)) {
-      await pointBefore(this.ctx, n, 'main', { replace: 'elsewhere' })
-      return this.mainEmit(held)
+      // the earlier route row may still wait for the thread's worker: main takes the claim first (with its intent row, in the
+      // same step), so only one of them runs it and a stop or crash mid-emit leaves the hand-over for `resume`
+      if (!this.claimLate(messageId)) return this.notHandedOver(messageId, d.thread)
+      await this.pointBeforeLate(n, messageId, { replace: 'elsewhere' })
+      // a failure of the emit that is not a stop leaves the claim and its row, and the caller's replay is refused: the message
+      // reaches main at the next start through `resume` (bounded at REDELIVER_ATTEMPTS): a delay, not a loss
+      await this.mainEmit(held)
+      this.endMainHandover(messageId)
+      return
     }
     this.wake(d.thread, n.meta.kind === 'card_action' ? 'card_action' : 'message')
     if (d.cold) {
@@ -452,13 +454,19 @@ export class ThreadRouter {
   }
 
   private async onDeadline(row: RouteRow) {
-    if (!this.claimForMain(row.message_id)) return // the worker got it
+    if (!this.claimLate(row.message_id)) return // the worker got it
     const entry = this.workers.read()?.threads[row.thread_id]
     const reason: ErrorCodeT = entry?.state === 'failed' ? failureReason(entry) : 'worker_unavailable'
     await this.fallbackLate(row.notification, row.thread_id, reason, row.message_id)
   }
 
-  /** Claims the message for main; true when this call took the claim, which is then given back if the bridge stops first. */
+  /**
+   * Claims the message for main; true when this call took the claim, which is then given back if the bridge stops first.
+   * INVARIANT: a main claim on a routed message (one with a worker_routes row) that has no main_handover row means main has the
+   * message. A claim for a routed message is therefore only taken through `claimLate`, which writes the row in the same
+   * synchronous step; a crash after it leaves the row, and `resume` repeats the hand-over. A message with no route row
+   * (`routeFallback`) is claimed after its emit and is at-least-once: a replay that finds the claim emits again.
+   */
   private claimForMain(messageId: string): boolean {
     if (this.ctx.closing) return false // `close()` already gave the claims back; a new one would never be
     const took = this.store.claim(messageId, 'main', this.ctx.clock.now())
@@ -466,19 +474,76 @@ export class ThreadRouter {
     return took
   }
 
-  /**
-   * main's point before a fallback hand-over, for a message this call may have claimed (`took`). The claim leaves `claiming`
-   * when the hand-over begins, or when the wait failed for a reason other than stopping (then it is as it always was); a
-   * refusal because the bridge is stopping leaves it for `close()` to give back.
-   */
-  private async pointBeforeClaimed(n: Notification, messageId: string, took: boolean): Promise<void> {
+  /** `claimForMain` for a message that has a route row: the hand-over intent row is written at once, before any await. */
+  private claimLate(messageId: string): boolean {
+    if (!this.claimForMain(messageId)) return false
     try {
-      await pointBefore(this.ctx, n, 'main')
+      this.store.beginMainHandover(messageId, this.ctx.clock.now())
     } catch (e) {
-      if (took && !isStopping(e)) this.claiming.delete(messageId)
+      this.ctx.log.warn('main hand-over not recorded', { error: (e as Error).message })
+    }
+    return true
+  }
+
+  /**
+   * A claim for main that was refused. Stopping: nothing was decided, so the frame is not marked done (BridgeStopping, as every
+   * other stop refusal) and the replay decides. Otherwise main or a worker holds it: main has it, or its intent row and
+   * `resume` own it, or the worker does; the frame is done and nothing is handed over again.
+   */
+  private notHandedOver(messageId: string, thread: string): void {
+    if (this.ctx.closing) {
+      this.ctx.log.info('routed message seen again, not handed over: stopping', { thread })
+      throw new BridgeStopping()
+    }
+    this.ctx.log.info('routed message seen again, not handed over', {
+      thread,
+      reason: `already claimed by ${this.store.claimedBy(messageId) ?? 'main'}`,
+    })
+  }
+
+  /**
+   * main's point before a hand-over of a message this call claimed with `claimLate`. The claim leaves `claiming` when the
+   * hand-over begins, or when the wait failed for a reason other than stopping (then it is as it always was); a refusal because
+   * the bridge is stopping leaves it for `close()` to give back.
+   */
+  private async pointBeforeLate(n: Notification, messageId: string, opts: { replace?: boolean | 'elsewhere' } = {}) {
+    try {
+      await pointBefore(this.ctx, n, 'main', opts)
+    } catch (e) {
+      if (!isStopping(e)) this.claiming.delete(messageId)
       throw e
     }
-    if (took) this.claiming.delete(messageId)
+    this.claiming.delete(messageId)
+  }
+
+  /**
+   * route()'s own fallback to main. A message that was routed before has a route row (armed, or its worker's): it is claimed now,
+   * with its intent row, like any late hand-over. One never routed has no row: nothing can claim it meanwhile (a worker reads
+   * route rows only), so main's claim is taken AFTER the emit returns, and a stop or crash mid-emit leaves nothing: the relay
+   * replays the frame and it is routed again (a duplicate only when main had it).
+   */
+  private async routeFallback(n: Notification, lead: string, reason: ErrorCodeT, messageId: string) {
+    if (messageId && this.store.route(messageId)) {
+      if (!this.claimLate(messageId)) return this.notHandedOver(messageId, lead)
+      await this.pointBeforeLate(n, messageId)
+      // a failed emit (not a stop) leaves claim and row and the replay is refused; the next start's `resume` hands it over
+      // (bounded at REDELIVER_ATTEMPTS): a delay, not a loss
+      return this.fallback(n, lead, reason, () => this.endMainHandover(messageId))
+    }
+    // Only a worker's claim refuses (it cannot stand without a route row; the guard stays). A MAIN claim here is emitted anyway:
+    // every earlier build claimed before its emit, so a stop or crash there left a main claim on a frame that is not done, and
+    // its replay must reach main. This build claims after the emit, and the frame is marked done at once after that, so a replay
+    // that finds the claim can only come from a crash between the two: a duplicate inside the documented window, never a loss.
+    if (messageId && this.store.claimedBy(messageId)?.startsWith('worker:')) return this.notHandedOver(messageId, lead)
+    await pointBefore(this.ctx, n, 'main')
+    return this.fallback(n, lead, reason, () => {
+      if (!messageId) return
+      try {
+        this.store.claim(messageId, 'main', this.ctx.clock.now())
+      } catch (e) {
+        this.ctx.log.warn('main claim not recorded', { error: (e as Error).message })
+      }
+    })
   }
 
   /**
@@ -487,19 +552,14 @@ export class ThreadRouter {
    * told about ends the card and tells the owner. Anything else is logged by the caller.
    * `again`: a start repeating a hand-over a stop cut short. main may already have run that turn, so its point is taken only
    * when the one recorded is of another folder (as `route` does for an id it saw before).
-   * While the hand-over runs a `main_handover` row stands (written when it begins, deleted when `mainEmit` returns); only a
-   * row left behind is repeated by `resume`, and only this path writes one: `route`'s own fallback is replayed by the relay.
+   * While the hand-over runs a `main_handover` row stands (written with the claim by `claimLate`, deleted when `mainEmit`
+   * returns); only a row left behind is repeated by `resume`.
    */
   private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT, claimed: string, again = false) {
     try {
       // main runs it now, in its own folder: that point replaces the one taken of the worker's
       await waitForRestore(this.ctx, 'main')
       await pointBefore(this.ctx, n, 'main', { replace: again ? 'elsewhere' : true })
-      try {
-        this.store.beginMainHandover(claimed, this.ctx.clock.now())
-      } catch (e) {
-        this.ctx.log.warn('main hand-over not recorded', { error: (e as Error).message })
-      }
       this.claiming.delete(claimed) // the hand-over begins: the claim stays
       await this.fallback(n, thread, reason, () => this.endMainHandover(claimed))
     } catch (e) {
@@ -590,7 +650,7 @@ export class ThreadRouter {
       const t = this.timers.get(row.message_id)
       if (t !== undefined) ctx.clock.clearTimeout(t)
       this.timers.delete(row.message_id)
-      if (!this.claimForMain(row.message_id)) continue
+      if (!this.claimLate(row.message_id)) continue
       void this.fallbackLate(row.notification, row.thread_id, 'worker_unavailable', row.message_id).catch((e) => {
         if (!isStopping(e)) ctx.log.error('switch-off fallback failed', { error: (e as Error).message })
       })
@@ -727,7 +787,7 @@ export class ThreadRouter {
         const sent = this.parkSentAt.get(id)
         if (sent !== undefined && sent <= now && now - sent < GOVERNOR_PARK_RETRY_MS) continue
         try {
-          writeWake(
+          writeControl(
             ctx.paths.home,
             {
               v: 1,
