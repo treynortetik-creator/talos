@@ -23,6 +23,9 @@ export const RUNNER_VARS = [
   'CI_STATUS_PREFIX',
   // the rest of what ci-runner.yml sets (its test checks the list): the outer run's event, its planned commit and its split.
   // A leaked CI_PLAN_SHA made ci-runner.sh under test refuse its own commit as "not the planned commit".
+  // the relay lists the relays job takes from repository variables: a test never reads the real ones
+  'CI_RELAY_DEPLOYS',
+  'CI_RELAY_HAND_DEPLOYS',
   'PR_NUMBER',
   'PR_HEAD_SHA',
   'PR_HEAD_REPO',
@@ -67,6 +70,8 @@ export const RUNNER_VARS = [
   // check on Titan: plan's switch and wait, the part's name for ci-local.sh, the shadow comparison's knobs, and the part's
   // worker count (check-titan's env: a test under it must pick its own)
   'CI_TITAN_CHECK',
+  // the hostile nightly's check and e2e packages on Titan too (plan's switch)
+  'CI_TITAN_HOSTILE',
   'CI_CHECK_WAIT',
   'CI_CHECK_PART',
   'CI_CHECK_SHADOW_WAIT',

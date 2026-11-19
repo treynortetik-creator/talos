@@ -37,7 +37,7 @@ describe('HEAD probes of media', () => {
     const fresh = await head(relay, `/media/${ref.media_id}`)
     expect(fresh.status).toBe(200)
     expect((await fresh.arrayBuffer()).byteLength).toBe(0)
-    c.advance(8 * 86_400_000)
+    c.jump(8 * 86_400_000)
     expect((await head(relay, `/media/${ref.media_id}`)).status).toBe(410)
     expect((await head(relay, '/media/md_00000000000000000000000000')).status).toBe(404)
   })
@@ -47,7 +47,7 @@ describe('HEAD probes of media', () => {
     relay = await startTestRelay({ clock: c })
     const ref = (await (await upload(relay, '<p>hi</p>', 'text/html', 'r.html')).json()) as { media_id: string }
     expect((await head(relay, `/media/${ref.media_id}/page`)).status).toBe(200)
-    c.advance(8 * 86_400_000)
+    c.jump(8 * 86_400_000)
     expect((await head(relay, `/media/${ref.media_id}/page`)).status).toBe(410)
   })
 
@@ -55,7 +55,7 @@ describe('HEAD probes of media', () => {
     const c = fakeClock(new Date().toISOString())
     relay = await startTestRelay({ clock: c })
     const ref = (await (await upload(relay, '<p>hi</p>', 'text/html', 'r.html')).json()) as { media_id: string }
-    c.advance(8 * 86_400_000)
+    c.jump(8 * 86_400_000)
     for (const path of [`/media/${ref.media_id}`, `/media/${ref.media_id}/page`]) {
       for (const method of ['GET', 'HEAD']) {
         const res = await fetch(`${relay.httpBase}${path}`, { method, headers: SESSION })

@@ -276,6 +276,26 @@ export const MAIN_RESTART = {
    */
   unseen_s: 300,
   unseen_quiet_s: 120,
+  /**
+   * An owner message told to Main with no bridge tool call since, while its working line shows no progress (the screen body with
+   * the elapsed counter masked, and its transcript file, unchanged) this long: the model request may be stuck. Told to the owner
+   * once per message. The Mac's watch (MainWatch.swift) follows it; its unstick setting (on by default) presses Esc once and asks the bridge
+   * (main-resend.json, advertised as status.json's `main_resend`) to deliver the message again, once the message has waited this long.
+   */
+  model_stall_s: 180,
+  /**
+   * The same wait while the working line's label says "thinking" (a long think can leave the screen unchanged for minutes). The
+   * wait runs from the newest user or tool_result record of Main's transcript that no assistant record follows; a Main running a
+   * tool or a sub-agent (its newest record is the model's own tool_use) is never counted.
+   */
+  model_stall_thinking_s: 300,
+  /**
+   * The same wait when the pane shows NO working line at all but Main's transcript says the model's turn is pending (its newest user or
+   * tool_result record, nothing from the model after it; a transcript that cannot be read never counts, that is an idle prompt). A
+   * frozen request that drew no spinner (the owner's Mac, 2026-11-19: 186 s of nothing after a tool result). The bridge's own age check
+   * for the Mac's resend request (apps/bridge/src/main-resend.ts) stays at `model_stall_s` unless the request says `blank: true`, then it accepts from this wait.
+   */
+  model_stall_blank_s: 90,
   /** `claude agents --json` this often; Main missing from it `hang_polls` times in a row = stuck. */
   agents_probe_s: 10,
   hang_polls: 2,

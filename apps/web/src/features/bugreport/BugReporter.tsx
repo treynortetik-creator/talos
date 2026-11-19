@@ -1,10 +1,12 @@
 // "Report a bug": the picture of the screen to mark up, what went wrong, what is attached, a preview of every byte, Send.
 // Mac, browser and phone share the state (`useReporter`); the phone gets its own full-screen layout. Nothing leaves until Send.
+
+import { useEffect } from 'react'
 import { cn } from '../../ui/cn.ts'
 import { Dialog, DialogContent } from '../../ui/index.ts'
 import { PHONE_QUERY } from '../phone/PhoneChrome.tsx'
 import { useMediaQuery } from '../settings/useMedia.ts'
-import { pictureFromFile } from './capture.ts'
+import { pictureFromFile, warmReadBack } from './capture.ts'
 import { DesktopLayout } from './DesktopLayout.tsx'
 import { PhoneLayout } from './PhoneLayout.tsx'
 import { useReporter } from './useReporter.ts'
@@ -12,6 +14,8 @@ import { useReporter } from './useReporter.ts'
 export function BugReporter() {
   const phone = useMediaQuery(PHONE_QUERY)
   const r = useReporter()
+  // mounted with the shell, before any open: the read-back question is answered by the time anyone taps (capture.ts)
+  useEffect(() => warmReadBack(), [])
   return (
     <Dialog open={r.open} onOpenChange={(o) => !o && r.close()}>
       <DialogContent

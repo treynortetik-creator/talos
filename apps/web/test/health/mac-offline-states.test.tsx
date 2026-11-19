@@ -2,6 +2,7 @@
 // could show two banners for one problem. One shared function (rows.ts macMessage) words every state; Banners (presence)
 // and HealthBanner (status) share it, so each state shows exactly one banner. Driven through the real components.
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bannerFor, MAC_GONE_MS, macMessage, presenceMacState } from '../../src/features/health/rows.ts'
@@ -74,6 +75,7 @@ function mount(presence: { online: boolean; lastSeen: string | null }) {
     </MemoryRouter>,
   )
 }
+const openMore = () => userEvent.click(screen.getByRole('button', { name: 'More' }))
 const statuses = () => screen.queryAllByRole('status').filter((n) => n.getAttribute('data-kind') !== null)
 
 describe('Banners + HealthBanner: one banner per state', () => {
@@ -91,6 +93,8 @@ describe('Banners + HealthBanner: one banner per state', () => {
     await waitFor(() => expect(screen.getByTestId('mac-banner')).toBeTruthy())
     expect(screen.getByTestId('mac-banner').getAttribute('data-kind')).toBe('dropped')
     expect(screen.getByText(/just dropped/)).toBeTruthy()
+    expect(screen.queryByText(/comes back on its own/)).toBeNull() // the next step is behind More
+    await openMore()
     expect(screen.getByText(/comes back on its own/)).toBeTruthy()
     await new Promise((r) => setTimeout(r, 50))
     expect(statuses()).toHaveLength(1)
@@ -124,6 +128,7 @@ describe('Banners + HealthBanner: one banner per state', () => {
     mount({ online: false, lastSeen: new Date(Date.now() - 20_000).toISOString() })
     await waitFor(() => expect(screen.getByTestId('health-banner').getAttribute('data-kind')).toBe('key_refused'))
     expect(screen.getByText(/turned away its key/)).toBeTruthy()
+    await openMore()
     expect(screen.getByText(/talos-app doctor/)).toBeTruthy()
     expect(screen.queryByTestId('mac-banner')).toBeNull()
     expect(statuses()).toHaveLength(1)
@@ -141,6 +146,7 @@ describe('Banners + HealthBanner: one banner per state', () => {
     mount({ online: true, lastSeen: new Date().toISOString() })
     await waitFor(() => expect(screen.getByTestId('health-banner').getAttribute('data-kind')).toBe('mod_quiet'))
     expect(screen.getByText('Your mod stopped reporting.')).toBeTruthy()
+    await openMore()
     expect(screen.getByText(/Talos mod loaded/)).toBeTruthy()
   })
 

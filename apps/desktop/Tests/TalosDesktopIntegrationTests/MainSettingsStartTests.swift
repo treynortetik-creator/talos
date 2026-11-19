@@ -96,8 +96,9 @@ struct MainSettingsStartTests {
     #expect(deny.contains("Read(/\(r.agentDir)/secrets/**)") && deny.contains("NotebookEdit(*)"), "\(shown)")
     // a main made read-only: its worker cannot edit anywhere, not only in the agent folder
     #expect(deny.contains("Edit(*)") && deny.contains("Write()"), "\(shown)")
-    // (the settings-file deny names the agent folder's .claude, .mcp.json and .env*: that is its own rule, not main's made narrower)
-    #expect(!deny.contains { rule in !WorkerFence.projectFiles.contains { rule.hasSuffix($0 + ")") } && !rule.contains("/hooks") && (rule.hasPrefix("Edit(/\(r.agentDir)") || rule.hasPrefix("Write(/\(r.agentDir)")) }, "\(shown)")
+    // (the settings-file deny names the agent folder's .claude, .mcp.json and .env*: that is its own rule, not main's made narrower; and the
+    // thread's own state file gets its `<file>/**` deny beside the allow for the file itself, WorkerHookState.swift)
+    #expect(!deny.contains { rule in !WorkerFence.projectFiles.contains { rule.hasSuffix($0 + ")") } && !rule.contains("/hooks") && !rule.hasSuffix("/threads/trip.state.md/**)") && (rule.hasPrefix("Edit(/\(r.agentDir)") || rule.hasPrefix("Write(/\(r.agentDir)")) }, "\(shown)")
     #expect(deny.contains("Read(/\(r.agentDir)/**/.env)"), "any depth: \(shown)")
     #expect(deny.contains("Bash(claude plugin:*)"), "the guards' rules stay")
   }

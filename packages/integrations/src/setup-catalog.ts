@@ -17,6 +17,7 @@ import { jiraSetup } from './jira/setup.ts'
 import { linearSetup } from './linear/setup.ts'
 import { makeSetup } from './make/setup.ts'
 import { n8nSetup } from './n8n/setup.ts'
+import { peerSetup } from './peer/setup.ts'
 import { rssSetup } from './rss/setup.ts'
 import { salesforceSetup } from './salesforce/setup.ts'
 import { slackSetup } from './slack/setup.ts'
@@ -43,10 +44,12 @@ export const setupCatalog: Record<IntegrationIdT, SetupSpecT> = {
   zoom: zoomSetup,
   salesforce: salesforceSetup,
   heartbeat: heartbeatSetup,
+  peer: peerSetup,
 }
 
+/** The wizard's list. `peer` (linked agents) is not a card in it: it has its own pairing flow, and until P2 nothing can connect. */
 export function listSetupSpecs(): SetupSpecT[] {
-  return Object.values(setupCatalog)
+  return Object.values(setupCatalog).filter((s) => s.id !== 'peer')
 }
 
 export { slackBotManifestUrl, slackManifestUrl } from './slack/manifest.ts'

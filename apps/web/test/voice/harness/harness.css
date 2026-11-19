@@ -1,3 +1,4 @@
-/* The shell's stylesheet (WP6) is not in this branch, so the harness pulls in Tailwind and scans the app source itself. */
-@import "tailwindcss";
+/* The app's own stylesheet (Tailwind, the token colours as utilities, the base rules), so the harness draws End, Mute and the
+   rest as the app does; plus a scan of the app source for the classes the components use. */
+@import "../../../src/theme/app.css";
 @source "../../../src";

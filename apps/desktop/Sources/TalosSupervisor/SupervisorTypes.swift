@@ -139,6 +139,10 @@ extension Supervisor {
     /// Main was told about an owner message and has not acted on it, with its pane silent since (the contract's `stuck` by
     /// `unseen_s`). Never restarted for it.
     case notReading
+    /// Main was told about an owner message (the time it carries) and has made no tool call, while its working line, screen and
+    /// transcript show no progress for `MainRestartContract.stallS`: the model request may be stuck. The second value is what the
+    /// auto-unstick did (`MainWatch.Unstick`; `.none` = nothing pressed or re-sent, the owner decides).
+    case stalled(Date, MainWatch.Unstick)
   }
 
   public enum Event: Equatable, Sendable {
@@ -258,6 +262,10 @@ extension Supervisor {
     var agentDir: String = ""
     /// A prompt of the CLI's nobody named on Main's screen: its stillness, and whether this run has looked at the screen yet.
     var promptWatch = PromptWatch()
+    /// Where Main's transcript was last found (SupervisorMainWatch.swift): the project folder, the newest file in it, and when it was last looked for.
+    var transcriptLook = TranscriptLook()
+    /// "The bridge cannot resend" was audited for this launch (once).
+    var noResendNoted = false
     var promptChecked = false
     /// The refused development-channels warning as a card for the owner, and what has been taken from it (SupervisorDevCard.swift).
     var devCard = DevCard()
@@ -296,4 +304,10 @@ enum AuditLog {
       close(fd)
     }
   }
+}
+
+struct TranscriptLook {
+  var folder: String?
+  var file: String?
+  var lookedAt: Double?
 }

@@ -1,15 +1,43 @@
 # Changelog
 
+## The Mac app says version 0.1.5
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.5, the release that sets itself up with no Terminal (it fetches its own Talos copy, pairs this Mac with the four words in a window of its own, and presses Esc for you once when Main's model request looks stuck).
+
+## Report a bug during a call
+
+- During a call on a phone, Report a bug is now in the call bar, a small icon beside Mute. On the narrowest phones the little mascot shrinks, and in hold-to-talk mode the Hands-free button shows just its icon, so End and the talk area keep their size.
+
+## State banners take one line
+
+- The notices at the top of a conversation (offline, can't reach the server, your Mac is away, waiting to confirm this device, sign in, health) now sit in one compact line with a small icon, so the conversation keeps the room. Retry and Health stay on the line; tap More (with a count when there are several) to read every notice in full, and Less to fold them again.
+
+## The needs-you count sits in the header
+
+- In a conversation, the "needs you" count moved from a row above the message box into the thread's header, as a small chip with the number. Tap it to go to the first card that needs you; the conversation gets the row's space back.
+## The Mac app tells you when Main's model request looks stuck
+
+- When Main has been told your message, has made no tool call, and the model has not answered the newest turn in its transcript, with its working line and screen unchanged, for 3 minutes (5 while it says it is thinking, or its only reply so far is a thinking block; never while it runs a tool or a sub-agent), the Mac app now says so once, with the time of your message and what to do (press Esc in its pane, then send again). Once told, the line stays until the model answers or the message is taken in. Before, the working line's ticking timer made a stuck request look like activity. Nothing is pressed or re-sent for you. The bridge log also now records when its relay socket opens and when the relay accepts it, not only when it closes.
+
 ## Report a bug sits in the message box
 
 - On a phone, inside a conversation, the Report a bug button now sits in the message box's buttons, beside +, so the conversation gets the space it used to keep for it.
 ## Installing the Mac app from a public clone no longer stops at the relay check
 
 - `install.sh` waits until your relay serves this build or a newer one. From a clone of the public repo it always stopped with "this build's commit is not in the clone it was built from", because the app and the relay name commits of the private repo. It now finds them through the public snapshots, which name the commit each was made from. A relay on a commit no snapshot was made from can't be ordered, so the install says so and goes ahead.
+## The talos-app command stays with the user who installed it
+
+- The installer no longer puts the `talos-app` command in a folder every user of the Mac shares (such as /opt/homebrew/bin next to a Homebrew bun). It uses a folder in your own home (~/.local/bin or ~/.bun/bin), so a second person on the same Mac with their own Talos keeps their own command. The command remembers who installed it: if another user runs it, it hands over to that user's own `talos-app` if they have one, otherwise it says it belongs to another user's Talos and how to install their own. After installing, if a different `talos-app` earlier on your PATH would still run instead, the installer names that file and how to fix it (it never deletes or edits it). If you already have an older `talos-app` of your own in a shared folder, installing again locks that one to you as well (nothing else in it changes), so other users of the Mac stop running your copy through it.
 
 ## The working indicator takes no room
 
 - While the agent is working, a thin line now runs along the top of the message box instead of a row above it, so it never pushes or covers a message. Stop sits among the message box's buttons. The jump-to-latest and report-a-bug buttons keep exactly as much room under the newest message as they need.
+## Thread sessions in the Mac app keep their own live state file
+
+- A dedicated thread's session in the Mac app now gets `threads/<id>.state.md` in the agent folder (made at its start if it is missing, never overwritten), and its own hook puts that file back in front of it at every start, resume, clear, fork and after a compaction. A thread's compaction no longer overwrites the main session's carry, and the thread is no longer handed the main session's state. The session may edit exactly that one file without a prompt. This is the same behaviour the Linux supervisor gained, and it takes effect once the app is rebuilt: the hook files ship inside the app, so an update restarts running thread sessions to pick it up.
+## Two of your Talos agents can message each other
+
+- Two of your Talos agents can now message each other (set up on each Mac with `talos-app peer create` and `peer add`).
 
 ## Signing in to Claude in the Mac app takes a long code
 

@@ -18,7 +18,7 @@ struct DesktopConfigSchemaTests {
   @Test func writesEverySpecKey() throws {
     let obj = try #require(jsonObject(String(decoding: try DesktopConfig.defaults.encoded(), as: UTF8.self)))
     for k in ["v", "host", "agent_dir", "claude_path", "args", "env", "session", "auto_restart", "auto_confirm_restart",
-      "start_session_on_launch", "open_terminal_on_dialog", "hotkeys", "relay_url"]
+      "start_session_on_launch", "open_terminal_on_dialog", "hotkeys", "relay_url", "unstick_main"]
     {
       #expect(obj[k] != nil, "missing \(k)")
     }

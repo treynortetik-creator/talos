@@ -12,6 +12,8 @@ export const BUG_TEXT = {
   toolsLabel: 'Annotation tools',
   inkLabel: 'Ink colour',
   canvasLabel: 'Screenshot. Draw on it to mark the problem.',
+  /** Under the picture on a phone once it is there (the line that said "Getting the screen…" keeps its place). */
+  drawHint: 'Draw on it to mark the problem.',
   textPrompt: 'Text to put on the screenshot',
   wentWrong: 'What went wrong?',
   wentWrongHint: 'Say what you did and what happened.',

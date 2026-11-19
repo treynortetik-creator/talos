@@ -16,12 +16,17 @@ afterEach(() => {
   for (const b of boxes.splice(0)) b.dispose()
 })
 
-/** The tick beat: `ageS` seconds ago, read from the file's time (Chronos falls back to it for a beat it can't parse). */
+/**
+ * The tick beat: `ageS` seconds ago, read from the file's time (Chronos falls back to it for a beat it can't parse). Chronos is
+ * Python and reads its age from the system clock, so the file's time is set from that clock (performance's), never from Date:
+ * the hostile nightly moves this process's Date 30 days ahead, and a beat dated from it was in the future, which Chronos read
+ * as beating (2026-11-18: "a tick that stopped beating" failed only there).
+ */
 const beat = (box: ChronosBox, ageS: number) => {
   const f = join(box.home, '.chronos', 'chronos.beat')
   mkdirSync(join(box.home, '.chronos'), { recursive: true })
   writeFileSync(f, 'beat')
-  const t = (Date.now() - ageS * 1000) / 1000
+  const t = (performance.timeOrigin + performance.now() - ageS * 1000) / 1000
   utimesSync(f, t, t)
 }
 let lastBox: ChronosBox

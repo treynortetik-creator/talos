@@ -1,6 +1,8 @@
 // Meta of `notifications/claude/channel` (spec 4.3). Keys match /^[A-Za-z0-9_]+$/ (a hyphen is silently dropped by
 // Claude Code) and every value is a string. WP5 builds it, FakeClaude and the contract tests assert it, WP8 checks it.
 import { z } from 'zod'
+import { PeerMessageId } from './ids.ts'
+import { PeerLabel, PeerName } from './peer.ts'
 
 export const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel' as const
 
@@ -26,12 +28,15 @@ export const CHANNEL_KINDS = [
   'handoff',
   // A `wake_me` timer the agent set for itself firing (docs/OPTION-C.md "Wake me"): always trust=agent, never the owner's word
   'wake',
+  // Linked agents (peer.ts): a message from the owner's other Talos install, always trust=external, never the owner's word
+  'peer_message',
 ] as const
 /** `agent` is another Talos session (main or a thread lead): never the owner's word, and it approves nothing. */
 export const CHANNEL_TRUSTS = ['owner', 'owner_voice', 'external', 'system', 'agent'] as const
 export const ChannelKind = z.enum(CHANNEL_KINDS)
 export const ChannelTrust = z.enum(CHANNEL_TRUSTS)
 
+const PEER_META_KEYS = ['peer', 'label', 'peer_msg_id', 'in_reply_to', 'chain', 'from_peer_task'] as const
 const META_KEY = /^[A-Za-z0-9_]+$/
 
 /** Always present. Other keys (spec 4.3 table) are optional strings. */
@@ -92,12 +97,33 @@ export const ChannelMeta = z
     // reaches main only as a report)
     wake_id: z.string().optional(),
     wake_for: z.enum(['main', 'thread', 'dropped']).optional(),
+    // peer_message: `peer` is the receiver's configured name for the CONNECTION, never the sender's own `from`
+    peer: PeerName.optional(),
+    label: PeerLabel.optional(),
+    peer_msg_id: PeerMessageId.optional(),
+    in_reply_to: PeerMessageId.optional(),
+    chain: z
+      .string()
+      .regex(/^[0-6]$/)
+      .optional(), // PEER_CHAIN_MAX is 6
+    from_peer_task: z.enum(['true', 'false']).optional(),
   })
   .catchall(z.string()) // file_path_2 ... file_path_10
   .superRefine((meta, ctx) => {
     for (const k of Object.keys(meta)) {
       if (!META_KEY.test(k))
         ctx.addIssue({ code: 'custom', path: [k], message: 'meta keys must match /^[A-Za-z0-9_]+$/' })
+    }
+    // linked agents: a peer's words are outside data, and the peer_* keys mean nothing on any other kind
+    if (meta.kind === 'peer_message') {
+      if (meta.trust !== 'external')
+        ctx.addIssue({ code: 'custom', path: ['trust'], message: 'peer_message must be trust external' })
+      for (const k of ['peer', 'peer_msg_id', 'chain'] as const)
+        if (meta[k] === undefined) ctx.addIssue({ code: 'custom', path: [k], message: `peer_message needs ${k}` })
+    } else {
+      for (const k of PEER_META_KEYS)
+        if (meta[k] !== undefined)
+          ctx.addIssue({ code: 'custom', path: [k], message: `${k} is only for kind peer_message` })
     }
     if (meta.thread_id !== meta.chat_id)
       ctx.addIssue({ code: 'custom', path: ['chat_id'], message: 'chat_id must equal thread_id' })

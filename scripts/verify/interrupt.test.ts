@@ -32,6 +32,14 @@ const alive = (pid: number) => {
     return false
   }
 }
+/** Stopped: no such process, or a zombie no one has reaped yet (its group was SIGKILLed; on a busy Linux runner the reaper can lag,
+ * and `kill(pid, 0)` still succeeds on a zombie). Waits a moment for it, as the kill itself is not instant. */
+const zombie = (pid: number) =>
+  /^Z/.test(spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim())
+const expectGone = async (pid: number) => {
+  await until(`process ${pid} to be gone`, () => !alive(pid) || zombie(pid), scaled(5000)).catch(() => {})
+  expect(!alive(pid) || zombie(pid)).toBe(true)
+}
 const until = async (what: string, f: () => boolean, ms = 60_000) => {
   const end = Date.now() + ms
   while (!f()) {
@@ -91,7 +99,7 @@ describe('SIGTERM mid-run', () => {
     expect(w.leftovers('talos-verify-bridge-')).toHaveLength(1)
     r.child.kill('SIGTERM')
     expect(await r.done).toBe(143)
-    expect(alive(step)).toBe(false)
+    await expectGone(step)
     expect(w.leftovers('talos-verify-bridge-')).toEqual([])
   })
 
@@ -120,8 +128,8 @@ describe('SIGTERM mid-run', () => {
     expect(alive(relay)).toBe(true)
     r.child.kill('SIGTERM')
     expect(await r.done).toBe(143)
-    expect(alive(relay)).toBe(false)
-    expect(alive(step)).toBe(false)
+    await expectGone(relay)
+    await expectGone(step)
     expect(w.leftovers('talos-verify-bridge-')).toEqual([])
   })
 
@@ -142,7 +150,7 @@ describe('SIGTERM mid-run', () => {
     expect(alive(build)).toBe(true)
     r.child.kill('SIGTERM')
     expect(await r.done).toBe(143)
-    expect(alive(build)).toBe(false)
+    await expectGone(build)
     expect(w.leftovers('talos-verify-web-')).toEqual([])
   })
 
@@ -163,7 +171,7 @@ describe('SIGTERM mid-run', () => {
     const step = Number(readFileSync(pidFile, 'utf8').trim())
     r.child.kill('SIGINT')
     expect(await r.done).toBe(130)
-    expect(alive(step)).toBe(false)
+    await expectGone(step)
     expect(w.leftovers('talos-verify-bridge-')).toEqual([])
   })
 })

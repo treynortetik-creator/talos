@@ -104,6 +104,9 @@ export function CheckRow({
   )
 }
 
+/** Every sentence the phone's line under the picture can show (it is as tall as the longest of them). */
+const CAPTURE_LINES = [BUG_TEXT.capturing, BUG_TEXT.drawHint, BUG_TEXT.captureUnsupported, BUG_TEXT.captureFailed]
+
 /**
  * The picture to mark up: "Getting the screen…" while it is taken (the sheet never waits for it), then the capture, or a line
  * saying why there is none. Add a picture takes one from the photo library or a file; pasting an image anywhere in the sheet
@@ -131,9 +134,11 @@ export function PicturePane({ r, fit }: { r: Reporter; fit?: boolean }) {
           fit={fit}
         />
       ) : (
-        // the size the picture will have, so nothing below it moves when it lands (a tap meant for Preview stays on Preview)
+        // the size the picture will have, so nothing below it moves when it lands (a tap meant for Preview stays on Preview); on a
+        // phone its words are in the line below, said once
         <div
-          role="status"
+          role={fit ? undefined : 'status'}
+          aria-hidden={fit ? true : undefined}
           data-testid="bug-capturing"
           style={{ aspectRatio: `${Math.max(1, innerWidth)} / ${Math.max(1, innerHeight)}` }}
           className={cn(
@@ -141,10 +146,31 @@ export function PicturePane({ r, fit }: { r: Reporter; fit?: boolean }) {
             fit ? 'mx-auto h-[min(330px,40dvh)] max-w-full' : 'w-full',
           )}
         >
-          {BUG_TEXT.capturing}
+          {fit ? null : BUG_TEXT.capturing}
         </div>
       )}
-      {r.capture && !r.capture.ok ? (
+      {fit ? (
+        // On a phone the line under the picture is always there and only its words change: "Getting the screen…", then why there
+        // is no picture, or what to do with the one there is. Every sentence it can show sits in the same grid cell, unseen, so
+        // the line is as tall as the longest of them at this width, whichever is showing. When it came and went, a late give-up
+        // or an iPhone's "can't take a picture" pushed Preview and the rest down 52 px under a finger on its way (2026-11-19).
+        <div data-testid="bug-capture-line" className="grid text-sm text-text-2">
+          {CAPTURE_LINES.map((t) => (
+            <span key={t} aria-hidden className="invisible col-start-1 row-start-1">
+              {t}
+            </span>
+          ))}
+          <p role="status" className="col-start-1 row-start-1">
+            {!r.capture
+              ? BUG_TEXT.capturing
+              : r.capture.ok
+                ? BUG_TEXT.drawHint
+                : r.capture.unsupported
+                  ? BUG_TEXT.captureUnsupported
+                  : BUG_TEXT.captureFailed}
+          </p>
+        </div>
+      ) : r.capture && !r.capture.ok ? (
         <p className="text-sm text-text-2">
           {r.capture.unsupported ? BUG_TEXT.captureUnsupported : BUG_TEXT.captureFailed}
         </p>

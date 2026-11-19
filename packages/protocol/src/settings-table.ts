@@ -594,6 +594,16 @@ export const SETTINGS_TABLE = defineSettingsTable({
     risk: 'mac',
     default: undefined,
   },
+  // Linked agents: the owner's other installs (peer.ts). Set at the computer only (never from a phone, never by the agent). `devices:
+  // false`: each URL may carry a token, so the relay uses it and never hands it back. No stand-in is sent: devices need no names yet.
+  peers: {
+    phone: false,
+    agent: false,
+    risk: 'mac',
+    refusedByName: true,
+    devices: false,
+    default: [],
+  },
 } as const)
 
 /**

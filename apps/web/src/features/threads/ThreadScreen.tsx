@@ -5,7 +5,6 @@ import { useTalos } from '../../lib/client.ts'
 import { useThreadStatus } from '../../lib/threadStatus.ts'
 import { IconBack } from '../../ui/icons.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
-import { StatusDot } from '../../ui/StatusDot.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
 import { FirstRunCard } from '../agent-config/FirstRun.tsx'
 import { SETUP_THREAD_ID } from '../agent-config/setupThread.ts'
@@ -26,6 +25,7 @@ import { useIsOnCall } from '../voice/controller.ts'
 import { ArchivedBanner } from './ArchivedBanner.tsx'
 import { Banners } from './Banners.tsx'
 import { ItemSheet } from './ItemSheet.tsx'
+import { NeedsYouChip } from './NeedsYouChip.tsx'
 import { StatusWord } from './StatusPill.tsx'
 import { ThreadSettings } from './ThreadSettings.tsx'
 import { Timeline } from './Timeline.tsx'
@@ -63,7 +63,6 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
   const session = rowShowsSession(sessionWords) ? sessionWords : null
   const firstCard = useAwaitingOwner(threadId).find((c) => c.kind === 'permission')
   const callActive = useIsOnCall(threadId)
-  const pending = useAwaitingOwner(threadId)
   const [item, setItem] = useState<InboxItemT | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const phone = useMediaQuery(PHONE_QUERY)
@@ -142,6 +141,7 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
                   </>
                 )}
               </div>
+              <NeedsYouChip threadId={threadId} />
             </div>
             <BugHeaderButton />
             <PaneToolbar threadId={threadId} cramped={cramped} />
@@ -174,18 +174,6 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
         </>
       ) : (
         <Timeline threadId={threadId} highlightCard={highlightCard} onOpenItem={setItem} scrollRef={scrollRef} />
-      )}
-      {pending.length > 0 && !isInbox && (
-        <button
-          type="button"
-          onClick={() =>
-            document.getElementById(`card-${pending[0]?.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-          }
-          className="kb-hide-banner kb-hide-short-landscape mx-3 mb-2 inline-flex min-h-11 items-center gap-2 self-start rounded-pill border border-line bg-surface px-3.5 text-sm font-medium text-text"
-        >
-          <StatusDot shape="solid" className="text-warn" />
-          {pending.length} needs you
-        </button>
       )}
       {!onCall && <WorkingRow threadId={threadId} />}
       {onCall ? (

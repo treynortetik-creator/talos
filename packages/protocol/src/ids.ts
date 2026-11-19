@@ -26,6 +26,8 @@ export const ThreadId = z
   .regex(/^[a-z][a-z0-9_]{0,31}$/)
   .refine((id) => id !== 'all') // 'all' is a view, not a thread
 export const MsgId = z.string().regex(new RegExp(`^m_${ULID_BODY}$`))
+/** Linked agents (peer.ts): the Standard Webhooks id the sender fixes per message, `msg_` + a ULID body (the house pattern above). */
+export const PeerMessageId = z.string().regex(new RegExp(`^msg_${ULID_BODY}$`))
 export const CardId = z.string().regex(new RegExp(`^c_${ULID_BODY}$`))
 export const EventId = z.string().regex(new RegExp(`^e_${ULID_BODY}$`))
 export const MediaId = z.string().regex(new RegExp(`^md_${ULID_BODY}$`))
@@ -78,6 +80,8 @@ export const IntegrationId = z.enum([
   'salesforce',
   /** Not an inbound integration: the owner-signed switch for work-class Heartbeat items (config.work.enabled). */
   'heartbeat',
+  /** Linked agents (peer.ts): the signed message from the owner's other Talos install. Inbound only; the relay module comes in P2. */
+  'peer',
 ])
 
 // ---- v2 features (docs/V2-FEATURES.md V1.1) -----------------------------------------------------------------------

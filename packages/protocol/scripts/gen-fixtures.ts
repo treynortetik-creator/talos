@@ -813,6 +813,24 @@ unsigned['problem.item'] = {
   },
 }
 
+unsigned['peer.message'] = {
+  ...env('peer.message', 124),
+  relay: { seq: 4192, received_at: TS },
+  conn_id: conn,
+  peer: 'work',
+  msg: {
+    v: 1,
+    id: `msg_${ulid(125)}`,
+    from: 'home',
+    label: 'TASK',
+    text: 'Please summarise the open pull requests',
+    chain: 0,
+    from_peer_task: false,
+    sent_at: TS,
+  },
+  received_at: TS,
+}
+
 // ---- MCP apps ---------------------------------------------------------------------------------------------------
 const viewId = `av_${ulid(120)}`
 const reqId = `ar_${ulid(121)}`

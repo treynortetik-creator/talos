@@ -24,6 +24,9 @@ public struct BridgeStatus: Equatable, Sendable {
   /// `last_owner_at`: when the owner's newest message arrived (as the bridge got it); nil for none, or from an older bridge. Only a
   /// change is read (the app updater's postponement), never the time against this Mac's clock.
   public var lastOwnerAt: String? = nil
+  /// `main_resend`: this bridge answers the Mac's `main-resend.json` request (`MainWatch`'s unstick). false from an older bridge: the Mac
+  /// then presses nothing, since it could not send the message again.
+  public var mainResend: Bool = false
   /// `started_at`: when this bridge process started; nil when unreadable.
   public var startedAt: Date? = nil
   public static let governorStates: Set<String> = ["ok", "paused", "park_all", "off", "unknown"]
@@ -36,7 +39,7 @@ public struct BridgeStatus: Equatable, Sendable {
       let connected = JSONValue.bool(relay["connected"]), let ua = o["updated_at"] as? String,
       let when = isoDate(ua)
     else { return nil }
-    return BridgeStatus(
+    var status = BridgeStatus(
       pid: Int32(pid), mode: mode, relayConnected: connected, lastConnectAt: relay["last_connect_at"] as? String,
       lastCloseCode: JSONValue.int(relay["last_close_code"]), queueDepth: JSONValue.int(o["queue_depth"]) ?? 0,
       permissionRelay: JSONValue.bool(o["permission_relay"]) ?? false, updatedAt: when,
@@ -46,6 +49,8 @@ public struct BridgeStatus: Equatable, Sendable {
         c.count <= 64 && c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) && $0.isASCII }) ? c : nil },
       lastOwnerAt: (o["last_owner_at"] as? String).flatMap { isoDate($0) == nil || $0.count > 64 ? nil : $0 },
       startedAt: (o["started_at"] as? String).flatMap(isoDate))
+    status.mainResend = JSONValue.bool(o["main_resend"]) == true
+    return status
   }
 
   static func isoDate(_ s: String) -> Date? {

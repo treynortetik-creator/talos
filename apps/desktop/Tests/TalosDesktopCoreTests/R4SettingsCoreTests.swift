@@ -109,3 +109,33 @@ struct OpenWindowAtLaunchTests {
     #expect(!MacSettingsText.applies(.openWindowAtLaunch).isEmpty)
   }
 }
+
+// "Unstick the agent" (2026-11-19): the stuck-Main watchdog presses Esc and sends the message again, unless switched off.
+@Suite("Unstick the agent setting")
+struct UnstickMainSettingTests {
+  @Test func onByDefaultAndRoundTripsOff() throws {
+    #expect(DesktopConfig.defaults.unstickMain)
+    var c = DesktopConfig.defaults
+    c.unstickMain = false
+    #expect(!(try DesktopConfig.decode(try c.encoded())).unstickMain)
+    #expect(String(decoding: try c.encoded(), as: UTF8.self).contains("\"unstick_main\" : false"))
+  }
+
+  @Test func anOldFileOrABadValueLoadsWithItOn() throws {
+    #expect(try DesktopConfig.decode(Data(#"{"v":1,"agent_dir":"~/a"}"#.utf8)).unstickMain)
+    let bad = try DesktopConfig.decode(Data(#"{"v":1,"agent_dir":"~/a","unstick_main":"yes","auto_restart":false}"#.utf8))
+    #expect(bad.unstickMain && !bad.autoRestart, "one bad value costs that setting only")
+  }
+
+  @Test func aChoiceMadeBeforeSetupIsHeldAndApplied() {
+    var off = DesktopConfig.defaults
+    off.unstickMain = false
+    #expect(PreSetup.snapshot(of: off).applied(to: .defaults).unstickMain == false)
+    #expect(PreSetup().applied(to: off).unstickMain == false, "nothing held leaves it as it is")
+  }
+
+  @Test func theSettingHasItsWordsAndItsNote() {
+    #expect(MacSettingsText.applies(.unstickMain).hasPrefix("Applies"))
+    #expect(MacSettingsText.unstickHelp.contains("Esc") && MacSettingsText.unstickHelp.contains("once per message"))
+  }
+}

@@ -3,10 +3,11 @@
 
 import { createHash } from 'node:crypto'
 import type { NormalizeConnection, RawDelivery } from '@talos-app/integrations'
-import { moduleExtras } from '@talos-app/integrations'
+import { moduleExtras, verifyStandard } from '@talos-app/integrations'
 import type { IntegrationIdT, NormalizedEventT } from '@talos-app/protocol'
 import { ConnId, IntegrationId, NormalizedEvent } from '@talos-app/protocol'
 import { effectiveToggles, keepEvent, withToggleState } from './filters.ts'
+import { handlePeerDelivery, isPeerInbox, PEER_BODY_MAX_BYTES } from './peer.ts'
 import { deliverPending, notifyNewItems, type RouteInput, storeEvents } from './route.ts'
 import {
   addDelivery,
@@ -152,7 +153,11 @@ export async function handleHookRequest(rt: HooksRuntime, req: HookRequest): Pro
   if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' })
   const idOk = IntegrationId.safeParse(req.integration)
   const connOk = ConnId.safeParse(req.connId)
-  const conn = idOk.success && connOk.success ? getConn(rt, req.connId) : null
+  const found = idOk.success && connOk.success ? getConn(rt, req.connId) : null
+  // A `peer` row that the Mac's own setup route did not make, or that is not active, is not an inbox: it is refused like an
+  // unknown connection, so a peer row can never answer an unsigned 200 (the `paused` answer below is for the other integrations).
+  const conn =
+    found && found.integration === 'peer' && (!isPeerInbox(found) || found.status !== 'active') ? null : found
   if (!conn || !idOk.success || conn.integration !== idOk.data) {
     return recordMiss(rt, req.ip) ? json(429, { error: 'too_many_requests' }) : json(404, { error: 'not_found' })
   }
@@ -162,11 +167,14 @@ export async function handleHookRequest(rt: HooksRuntime, req: HookRequest): Pro
     addDelivery(rt, conn.id, 200, 'paused')
     return json(200, { ok: true })
   }
-  if ((req.declaredLength ?? 0) > MAX_BODY_BYTES) return json(413, { error: 'payload_too_large' })
+  const bodyMax = conn.integration === 'peer' ? PEER_BODY_MAX_BYTES : MAX_BODY_BYTES
+  if ((req.declaredLength ?? 0) > bodyMax) return json(413, { error: 'payload_too_large' })
   const body = await req.readBody()
   if (body === 'busy') return json(429, { error: 'too_many_requests', retry_after_s: 5 })
   if (body === 'slow') return json(408, { error: 'request_timeout' })
-  if (!body) return json(413, { error: 'payload_too_large' })
+  if (!body || body.length > bodyMax) return json(413, { error: 'payload_too_large' })
+
+  if (conn.integration === 'peer') return peerRequest(rt, req, conn, body)
 
   const secrets = verifySecretsFor(rt, conn, mod)
   // `x-talos-*` headers are the relay's own (the poller marks its deliveries); a sender never gets to set one.
@@ -180,17 +188,7 @@ export async function handleHookRequest(rt: HooksRuntime, req: HookRequest): Pro
   if (hs) return { status: hs.status, contentType: hs.contentType, body: hs.body }
 
   const v = await mod.verify({ headers: req.headers, rawBody: body, url: req.url, now: rt.now() }, vconn)
-  if (!v.ok) {
-    // Verification comes first and is cheap. A failure is charged to the small failed-verify bucket only; it never
-    // counts toward the connection's verified budget, so junk cannot cost a real event.
-    const b = recordFailedVerify(rt, conn.id, req.ip)
-    if (b === 'ok') addDelivery(rt, conn.id, 401, v.reason)
-    else {
-      if (b === 'first_over') addDelivery(rt, conn.id, 429, 'bad_signature_flood') // one summary row, then silence
-      return json(429, { error: 'too_many_requests' })
-    }
-    return json(401, { error: 'unauthorized' }) // the reason stays in Recent deliveries, never in the response
-  }
+  if (!v.ok) return rejectUnverified(rt, conn, req.ip, v.reason)
 
   const admitted = req.admit?.(conn.id) ?? 'ok'
   if (admitted === 'global') return json(429, { error: 'too_many_requests', retry_after_s: 60 })
@@ -230,6 +228,40 @@ export async function handleHookRequest(rt: HooksRuntime, req: HookRequest): Pro
   const stored = persistRaw(rt, conn, raw, 'ok', keys.length ? { keys, ttl } : undefined)
   if (stored && rt.opts.autoProcess !== false) void kick(rt)
   return ack(rt, conn, mod)
+}
+
+/**
+ * Verification comes first and is cheap. A failure is charged to the small failed-verify bucket only; it never counts toward
+ * the connection's verified budget, so junk cannot cost a real event.
+ */
+function rejectUnverified(rt: HooksRuntime, conn: ConnRow, ip: string, reason: string | undefined): HookResponse {
+  const b = recordFailedVerify(rt, conn.id, ip)
+  if (b === 'ok') addDelivery(rt, conn.id, 401, reason)
+  else {
+    if (b === 'first_over') addDelivery(rt, conn.id, 429, 'bad_signature_flood') // one summary row, then silence
+    return json(429, { error: 'too_many_requests' })
+  }
+  return json(401, { error: 'unauthorized' }) // the reason stays in Recent deliveries, never in the response
+}
+
+/**
+ * A linked agent's message (peer.ts): Standard Webhooks ONLY (a Bearer token is not a credential here), the same failed-verify
+ * bucket and the same rate buckets as every other connection, then the peer path instead of the generic pipeline.
+ */
+async function peerRequest(rt: HooksRuntime, req: HookRequest, conn: ConnRow, body: Uint8Array): Promise<HookResponse> {
+  const v = verifyStandard(
+    { headers: req.headers, rawBody: body, url: req.url, now: rt.now() },
+    { secrets: secretsFor(rt, conn.id) },
+  )
+  if (!v.ok) return rejectUnverified(rt, conn, req.ip, v.reason)
+  const admitted = req.admit?.(conn.id) ?? 'ok'
+  if (admitted === 'global') return json(429, { error: 'too_many_requests', retry_after_s: 60 })
+  if (admitted === 'conn') return shed(rt, conn, rt.module(conn.integration))
+  return handlePeerDelivery(rt, conn, {
+    body,
+    webhookId: req.headers['webhook-id'] as string,
+    deliveryKey: v.deliveryKey as string,
+  })
 }
 
 const BODY_HASH_DEDUP = new Set<string>(['github', 'jira', 'linear'])

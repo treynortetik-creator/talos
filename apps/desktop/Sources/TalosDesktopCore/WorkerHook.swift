@@ -15,11 +15,15 @@ public enum WorkerHook {
     /// `permission-hook-helper`). Not part of `==`, which is where the session runs the hook from.
     public var hookBytes: Data?
     public var helperBytes: Data?
-    public init(script: String, python: String, hookBytes: Data? = nil, helperBytes: Data? = nil) {
+    /// The thread-state hook's files by name (`stateFileNames`) as staged beside the permission hook, or nil: the session gets no
+    /// thread-state hook (an app built without them). The settings register the hook exactly when this is there (WorkerHookState.swift).
+    public var stateBytes: [String: Data]?
+    public init(script: String, python: String, hookBytes: Data? = nil, helperBytes: Data? = nil, stateBytes: [String: Data]? = nil) {
       self.script = script
       self.python = python
       self.hookBytes = hookBytes
       self.helperBytes = helperBytes
+      self.stateBytes = stateBytes
     }
     public static func == (a: Installed, b: Installed) -> Bool { a.script == b.script && a.python == b.python }
   }
@@ -119,7 +123,7 @@ public enum WorkerHook {
     }
     let dir = dir(talosHome: talosHome)
     let script = dir + "/" + scriptName
-    let made = Installed(script: script, python: python, hookBytes: checked.script, helperBytes: checked.helper)
+    let made = Installed(script: script, python: python, hookBytes: checked.script, helperBytes: checked.helper, stateBytes: checked.state)
     // a dry plan (the update check): what would be written, checked as far as the folders exist, and nothing made or copied
     if dry {
       if let unsafe = folderProblem(talosHome: talosHome, dir: dir, existingOnly: true) { return .problem("the permission hook's folder \(unsafe)") }
@@ -139,6 +143,14 @@ public enum WorkerHook {
         try AtomicFile.write(helperText, to: dir + "/" + helper, mode: 0o600)
       } else if unlink(dir + "/" + helper) != 0, errno != ENOENT {
         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+      }
+      // the thread-state files the same way: the verified bytes, or no copy at all (an old one would run in the place of none)
+      for name in stateFileNames {
+        if let bytes = checked.state?[name] {
+          try AtomicFile.write(bytes, to: dir + "/" + name, mode: 0o600)
+        } else if unlink(dir + "/" + name) != 0, errno != ENOENT {
+          throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
       }
     } catch {
       return .problem("the permission hook could not be copied into \(dir): \(error.localizedDescription)")

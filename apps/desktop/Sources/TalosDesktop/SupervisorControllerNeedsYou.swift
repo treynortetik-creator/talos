@@ -5,7 +5,7 @@ import Foundation
 extension SupervisorController {
   func showThreadTerminal(_ thread: String) {
     TerminalWindowController.shared.attach(model: self)
-    TerminalWindowController.shared.show(takeFocus: false)
+    TerminalWindowController.shared.show(takeFocus: false, raise: true)
     TerminalWindowController.shared.select(thread, takeKeyboard: false)
   }
 }

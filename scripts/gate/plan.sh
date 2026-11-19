@@ -61,26 +61,68 @@ guards_reading() { # prints each guard with a gate-reads pattern that matches `f
 }
 web_smoke() { local t; for t in $WEB_SMOKE; do [ -e "apps/web/test/$t" ] && echo "test/$t"; done; }
 web_specs_in() { local d t; for d in "$@"; do for t in apps/web/test/"$d"/*.spec.ts; do [ -e "$t" ] && echo "${t#apps/web/}"; done; done; return 0; }
-# The change's own browser specs, which also run on WebKit (the iphone project): a changed spec, and the specs of a changed
-# feature or spec folder. Never the smoke set (shared code is not WebKit-specific; CI's browser job runs WebKit for all of
-# it), and never voice (the iphone project leaves voice out). A WebKit-only failure (Tab skips buttons there) reached main
-# when the gate ran Chromium alone.
+# The change's own browser specs, which also run on WebKit and on Pixel (the iphone and pixel projects): a changed spec, and the
+# specs of a changed feature or spec folder. Never the smoke set (shared code is not WebKit-specific; CI's browser job runs
+# every project for all of it), and never the voice folder's specs (the iphone and pixel projects leave a voice folder out at any
+# depth, the config's **/voice/**; voice-setup is another folder, and they take it). So: a change to the voice feature's source
+# owns the voice-setup specs only (the voice folder's own run on chromium-media, with the desktop step); a spec in a voice folder
+# owns nothing; a support file in a voice folder nested in another folder (cards/voice/helper.ts) is that top folder's support file,
+# so it owns that folder's specs; one in the top voice folder owns nothing. A WebKit-only failure (Tab skips buttons there) reached
+# main when the gate ran Chromium alone. The second count says the same in plan-check.cjs (webOwn).
 web_own_specs_for() {
   local f="$1" x
   case "$f" in
-    apps/web/test/voice*/*) ;;
+    apps/web/test/voice/* | apps/web/test/*/voice/*.spec.ts) ;; # the config's **/voice/** leaves these out (voice-setup is not one)
     apps/web/test/*.spec.ts) [ -e "$f" ] && echo "${f#apps/web/}" ;;
     apps/web/test/helpers/* | apps/web/test/*.test.ts | apps/web/test/*.test.tsx) ;;
     apps/web/test/*/*)
       x="${f#apps/web/test/}"
       web_specs_in "${x%%/*}"
       ;;
-    apps/web/src/*.test.ts | apps/web/src/*.test.tsx | apps/web/src/features/voice/*) ;;
+    apps/web/src/*.test.ts | apps/web/src/*.test.tsx) ;;
+    apps/web/src/features/voice/*) web_specs_in voice-setup ;; # the voice folder's specs are chromium-media's alone
     apps/web/src/features/*/*)
       x="${f#apps/web/src/features/}"
       web_specs_in "${x%%/*}"
       ;;
   esac
+}
+# web_spec_itself <changed path>: the spec relative to apps/web when the path is a browser spec that is still there, else nothing.
+# The fast gate runs exactly these (gate-fast.sh); a deleted spec is nothing to run.
+web_spec_itself() {
+  case "$1" in apps/web/test/*.spec.ts) [ ! -e "$1" ] || echo "${1#apps/web/}" ;; esac
+  return 0
+}
+# web_specs_max: the most browser specs a gate runs by name (WEB_SPECS_MAX, 40; a value that is not a number is the default)
+web_specs_max() {
+  local max="${WEB_SPECS_MAX:-40}"
+  case "$max" in '' | *[!0-9]*) max=40 ;; esac
+  echo "$max"
+}
+# The Playwright projects (apps/web/playwright.config.ts) the gate names for the lists. WEB runs on desktop and chromium-media (the
+# voice folder's only project); WEBKIT, the own specs, on iphone and pixel, and on iphone-se for the spec its testMatch names.
+# A project added to or changed in the config is changed here too: scripts/gate-web-specs.test.ts reads the config and checks.
+spec_on_iphone_se() { case "$1" in */cards/permission-sheet.spec.ts) return 0 ;; esac; return 1; }
+web_webkit_projects() { # the projects of the WebKit and Pixel step, one line
+  local s p="iphone pixel"
+  for s in "${WEBKIT[@]+"${WEBKIT[@]}"}"; do ! spec_on_iphone_se "$s" || p="iphone iphone-se pixel"; done
+  echo "$p"
+}
+web_projects_report() { # one "web projects: <spec> -> <projects>" line per planned spec (stderr of --plan; stdout stays the plan)
+  local s w all=() in_web in_wk p
+  uniq_into all "${WEB[@]+"${WEB[@]}"}" "${WEBKIT[@]+"${WEBKIT[@]}"}"
+  for s in "${all[@]+"${all[@]}"}"; do
+    in_web=0 in_wk=0 p=""
+    for w in "${WEB[@]+"${WEB[@]}"}"; do [ "$w" != "$s" ] || in_web=1; done
+    for w in "${WEBKIT[@]+"${WEBKIT[@]}"}"; do [ "$w" != "$s" ] || in_wk=1; done
+    if [ "$in_web" = 1 ]; then case "$s" in */voice/*) p=chromium-media ;; *) p=desktop ;; esac; fi
+    if [ "$in_wk" = 1 ]; then
+      p="${p:+$p }iphone"
+      ! spec_on_iphone_se "$s" || p="$p iphone-se"
+      p="$p pixel"
+    fi
+    printf 'web projects: %s -> %s\n' "$s" "$p"
+  done
 }
 web_specs_for() { # prints the specs, relative to apps/web, a changed (or deleted) web file runs
   local f="$1" x out
@@ -252,8 +294,8 @@ plan_suites() {
   uniq_into WEBKIT "${webkit[@]+"${webkit[@]}"}"
   # a change across many screens: the smoke set here, and CI's browser job runs them all (the whole set takes 7.5 min on
   # Cyclops on Chromium; this keeps a wide refactor's push near the smoke set's half minute)
-  local max="${WEB_SPECS_MAX:-40}"
-  case "$max" in '' | *[!0-9]*) max=40 ;; esac # a cap that is not a number is the default, never off
+  local max
+  max="$(web_specs_max)"
   if [ "${#WEB[@]}" -gt "$max" ]; then
     say "this change touches ${#WEB[@]} web browser specs: the gate runs the smoke set, and CI's browser job runs them all"
     uniq_into WEB $(web_smoke)
@@ -321,8 +363,24 @@ plan_records() { # the plan as NUL-separated NAME<US>value records, for the seco
   for v in "${WEBKIT[@]+"${WEBKIT[@]}"}"; do printf 'WEBKIT\037%s\0' "$v"; done
   printf 'BUN_ALL\037%s\0E2E_ALL\037%s\0OLD\037%s\0FAST\037%s\0COREPACK\037%s\0' "$BUN_ALL" "$E2E_ALL" "$OLD" "$FAST" "$COREPACK"
 }
+# refuse_regex_specs: Playwright takes the spec names on its command line as regular expressions (the web app's and e2e's), so a name with one of these
+# characters would match nothing (or another file) while the other specs on the same command run: the spec would never run, and
+# the gate would still say passed. No such spec exists; a new one is refused by name, not escaped (the gate and CI read the same
+# names, and a plain name is one anyone can run by hand). One point both counts and both gates (fast, planned) pass through: the
+# plan they made, checked here before the second count.
+refuse_regex_specs() {
+  local s
+  for s in "${WEB[@]+"${WEB[@]}"}" "${WEBKIT[@]+"${WEBKIT[@]}"}" "${E2E[@]+"${E2E[@]}"}"; do
+    case "$s" in
+      *'+'* | *'*'* | *'?'* | *'('* | *')'* | *'['* | *']'* | *'{'* | *'}'* | *'^'* | *'$'* | *'|'* | *'\'*)
+        refuse "the Playwright spec $s has a regular-expression character in its path (one of + * ? ( ) [ ] { } ^ \$ | and backslash): Playwright reads spec names on its command line as patterns, so it would run nothing for this file; rename it"
+        ;;
+    esac
+  done
+}
 plan_check() {
   local out
+  refuse_regex_specs
   command -v node >/dev/null 2>&1 || refuse "no node on PATH: the plan cannot be checked, so nothing runs"
   out="$(plan_records | node -e "$FAST_CHECK_JS$PLAN_CHECK_JS" -- "$BASE" "$ASK_FAST")"
   [ "$out" = "plan-check: ok" ] ||

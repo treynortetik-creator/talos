@@ -16,6 +16,15 @@ public enum MainRestartContract {
   public static let unseenS: Double = 300
   /// `MAIN_RESTART.unseen_quiet_s`: how long the pane must have printed nothing for that.
   public static let unseenQuietS: Double = 120
+  /// `MAIN_RESTART.model_stall_s`: a told message with no tool call whose working line, screen body (elapsed counter masked) and transcript
+  /// file all stood still this long is a model request that may be stuck.
+  public static let stallS: Double = 180
+  /// `MAIN_RESTART.model_stall_blank_s`: the same wait when NO working line is on the pane at all but the transcript says the model's turn is
+  /// pending (the newest user or tool_result record, nothing from the model after it): a frozen request that drew no spinner. Shorter, since
+  /// there is no line whose redraw could make a slow turn look alive.
+  public static let stallBlankS: Double = 90
+  /// `MAIN_RESTART.model_stall_thinking_s`: the same, while the working line's label says "thinking" (a long think is real work).
+  public static let stallThinkingS: Double = 300
   /// `MainStopReason` for that stop; the audit log's event name.
   public static let cleanExitLoop = "clean_exit_loop"
 }

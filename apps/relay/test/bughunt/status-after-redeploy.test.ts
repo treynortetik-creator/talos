@@ -22,7 +22,9 @@ it('the health status does not call a Mac that was online at the deploy "offline
   const a = await startTestRelay({ clock: c })
   relays.push(a)
   const b = await kit(a).bridge({ autoReply: false }).connect() // hello at 08:00 on the 27th...
-  c.advance(3 * day) // ...and the same socket is still up three days later
+  // ...and the deploy comes three days later. The hub's ping has given up on this socket by then (no pong comes in fake time),
+  // but its close is not handled before the deploy: what is tested is the stored hello time, three days old at the restart.
+  c.jump(3 * day)
   expect(a.runtime.hub.bridgeOnline()).toBe(true)
   const { dir, bridgeKey } = a
   await a.stopKeepData() // the deploy

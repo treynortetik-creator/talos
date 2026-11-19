@@ -8,6 +8,7 @@ import { claimsSecret, issueClaim } from './claim.ts'
 import { AdvancedFilters, defaultToggles, effectiveToggles } from './filters.ts'
 import { listInbox } from './inbox.ts'
 import { handleHookRequest, idle, integrationEnabled } from './ingest.ts'
+import { deletePeerConn } from './peer.ts'
 import { pollConnection, pollSoon } from './poller.ts'
 import { knownThreads } from './route.ts'
 import { runtimeFor } from './runtime.ts'
@@ -141,6 +142,9 @@ function missingRequired(spec: SetupSpecT, have: Set<string>): string | null {
   return null
 }
 
+/** Linked agents (peer) are set up from the Mac, not through this API. A `peer` row made here would get a secret P2 later trusts. */
+const PEER_REFUSAL = { error: 'peer_from_mac', detail: 'Linked agents are set up from the Mac.' } as const
+
 export function apiRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const rt = (c: { get(k: 'services'): AppEnv['Variables']['services'] }) => runtimeFor(c.get('services'))
@@ -152,12 +156,16 @@ export function apiRoutes(): Hono<AppEnv> {
 
   app.get(routes.catalog.path, (c) => {
     const r = rt(c)
-    return c.json(IntegrationId.options.map((id) => r.module(id).setup))
+    return c.json(IntegrationId.options.filter((id) => id !== 'peer').map((id) => r.module(id).setup))
   })
 
   app.get(routes.connectionsList.path, (c) => {
     const r = rt(c)
-    return c.json(listConns(r).map((x) => connectionJson(r, x)))
+    return c.json(
+      listConns(r)
+        .filter((x) => x.integration !== 'peer')
+        .map((x) => connectionJson(r, x)),
+    ) // peers: the Mac's, never shown here
   })
 
   app.get(routes.inboxList.path, (c) =>
@@ -180,6 +188,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const adv = advIn === undefined ? { success: true as const, data: [] } : AdvancedFilters.safeParse(advIn)
     if (!adv.success) return c.json({ error: 'bad_advanced_filters' }, 400)
     const input = body.data
+    if (input.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const mod = r.module(input.integration)
     if (!integrationEnabled(r, input.integration)) return c.json({ error: 'integration_disabled' }, 403)
     if (countConns(r) >= MAX_CONNECTIONS) return c.json({ error: 'too_many_connections' }, 409)
@@ -230,6 +239,7 @@ export function apiRoutes(): Hono<AppEnv> {
   app.get(routes.connectionGet.path, (c) => {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
+    if (conn?.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     return conn ? c.json(connectionJson(r, conn)) : c.json({ error: 'not_found' }, 404)
   })
 
@@ -237,6 +247,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
     if (!conn) return c.json({ error: 'not_found' }, 404)
+    if (conn.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const mod = r.module(conn.integration)
     const raw = await c.req.json().catch(() => null)
     const body = routes.connectionPatch.req.safeParse(raw)
@@ -272,8 +283,11 @@ export function apiRoutes(): Hono<AppEnv> {
 
   app.delete(routes.connectionDelete.path, (c) => {
     const r = rt(c)
-    if (!getConn(r, c.req.param('id'))) return c.json({ error: 'not_found' }, 404)
-    deleteConn(r, c.req.param('id'))
+    const gone = getConn(r, c.req.param('id'))
+    if (!gone) return c.json({ error: 'not_found' }, 404)
+    if (gone.integration === 'peer')
+      deletePeerConn(r, gone.id) // also what is still queued for the Mac
+    else deleteConn(r, gone.id)
     return c.body(null, 204)
   })
 
@@ -281,6 +295,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
     if (!conn) return c.json({ error: 'not_found' }, 404)
+    if (conn.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const secret = rotateSecret(r, conn.id)
     // The new secret of an Apps Script connection reaches a fresh script through its claim code, not this response.
     if (claimsSecret(r, conn.integration)) return c.json({ secret: '', claim_code: issueClaim(r, conn.id) })
@@ -291,6 +306,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
     if (!conn) return c.json({ error: 'not_found' }, 404)
+    if (conn.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const rows = r.services.db
       .prepare('select at, status, reason from hooks_deliveries where conn_id = ? order by id desc limit 20')
       .all(conn.id) as Array<{ at: number; status: number; reason: string | null }>
@@ -301,6 +317,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
     if (!conn) return c.json({ error: 'not_found' }, 404)
+    if (conn.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const mod = r.module(conn.integration)
     const body = routes.connectionCredentials.req.safeParse(await c.req.json().catch(() => null))
     if (!body.success) return c.json({ error: 'bad_request' }, 400)
@@ -354,6 +371,7 @@ export function apiRoutes(): Hono<AppEnv> {
     const r = rt(c)
     const conn = getConn(r, c.req.param('id'))
     if (!conn) return c.json({ error: 'not_found' }, 404)
+    if (conn.integration === 'peer') return c.json(PEER_REFUSAL, 403)
     const mod = r.module(conn.integration)
     if (!integrationEnabled(r, conn.integration))
       return c.json({ ok: false, detail: 'This integration is switched off.' })

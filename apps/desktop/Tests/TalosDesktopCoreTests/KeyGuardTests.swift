@@ -500,6 +500,8 @@ struct KeyGuardTests {
       ("Supervisor.swift", "public func hostSend(_ keys: [UInt8]) { host.send(keys: keys) }"),
       ("ShellClipboardGuard.swift", "inner.send(source: source, data: data)"),
       ("OwnerShellPane.swift", "v.send(data: bytes[...]); noteWrite(bytes)"),
+      // the owner's Confirm / Cancel on the four words, written to our own `talos-app enroll` pty (one place: `PairingController.write`)
+      ("Pairing.swift", "terminal?.send(data: bytes[...])"),
     ]
     var found = 0, ownersSeen = 0
     for target in ["TalosSupervisor", "TalosDesktop"] {
@@ -525,7 +527,82 @@ struct KeyGuardTests {
         }
       }
     }
+    // the stall auto-unstick's Escape is one of the gated senders, and it states the interrupt intent
+    let unstick = try String(contentsOf: root.appendingPathComponent("TalosSupervisor/SupervisorUnstick.swift"), encoding: .utf8)
+    #expect(unstick.contains("sendKey(intent) { $0.sendEscape() }") && unstick.contains(".interruptBlank") && unstick.contains(": .interrupt"),
+      "the unstick's one key goes through the gate with its own intents")
     #expect(ownersSeen == owners.count, "control: each named exception is still where it is named (\(ownersSeen))")
-    #expect(found >= 13, "control: the scan sees the senders (\(found))")
+    #expect(found >= 14, "control: the scan sees the senders (\(found))")
+  }
+
+  // MARK: the stall auto-unstick's Escape (`.interrupt`)
+
+  private static let working = ["❯ are you there?", "", "✻ Pondering… (19s · ↓ 77 tokens)", "", rule, "❯ ", rule,
+    "  ⏵⏵ bypass permissions on · esc to interrupt"]
+
+  @Test func anEscapeMeantAsInterruptGoesOnlyToARequestInFlightWithAnEmptyBox() {
+    #expect(KeyGuard.refusal(Self.working, intent: .interrupt) == nil)
+    #expect(KeyGuard.Intent.interrupt.name == "interrupt")
+  }
+
+  @Test func noEscapeWhileSomeoneIsTypingAPromptIsUpOrNothingIsRunning() {
+    var typing = Self.working
+    typing[5] = "❯\u{00A0}half a sentence"
+    #expect(KeyGuard.refusal(typing, intent: .interrupt)?.why == "box_not_empty")
+    let idle = ["❯ hello", "", "⏺ Hi.", "", Self.rule, "❯ ", Self.rule, "  ⏵⏵ bypass permissions on"]
+    #expect(KeyGuard.refusal(idle, intent: .interrupt)?.why == "not_working", "an idle Main gets no Escape")
+    let permission = ["⏺ Bash(ls)", "", Self.rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and don't ask again", "   3. No", "", " Esc to cancel"]
+    #expect(KeyGuard.refusal(permission, intent: .interrupt) != nil, "a permission dialog is answered by Escape: never sent")
+    #expect(KeyGuard.refusal(nil, intent: .interrupt)?.why == "unreadable")
+    #expect(KeyGuard.refusal(Self.working, intent: nil)?.why == "no_intent")
+  }
+
+  // MARK: Escape for a frozen request with no working line (`.interruptBlank`)
+
+  private static let blankIdle = ["❯ hello", "", "⏺ Read(file)", "", rule, "❯ ", rule, "  ⏵⏵ bypass permissions on"]
+
+  @Test func aBlankStallsEscapeGoesToTheIdlePromptOnly() {
+    #expect(KeyGuard.refusal(Self.blankIdle, intent: .interruptBlank) == nil)
+    #expect(KeyGuard.Intent.interruptBlank.name == "interrupt-blank")
+    // each intent wants its own screen: a spinner is `.interrupt`'s, the idle prompt is this one's
+    #expect(KeyGuard.refusal(Self.working, intent: .interruptBlank)?.why == "working_line")
+    #expect(KeyGuard.refusal(Self.blankIdle, intent: .interrupt)?.why == "not_working")
+  }
+
+  @Test func noBlankEscapeOverADraftADialogOrAnUnreadableScreen() {
+    var draft = Self.blankIdle
+    draft[5] = "❯\u{00A0}half a sentence"
+    #expect(KeyGuard.refusal(draft, intent: .interruptBlank)?.why == "box_not_empty")
+    let permission = ["⏺ Bash(ls)", "", Self.rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and don't ask again", "   3. No", "", " Esc to cancel"]
+    #expect(KeyGuard.refusal(permission, intent: .interruptBlank) != nil, "a dialog is answered by Escape: never sent")
+    #expect(KeyGuard.refusal(["⏺ Read(file)", "", "no box here"], intent: .interruptBlank)?.why == "no_input_box")
+    #expect(KeyGuard.refusal(nil, intent: .interruptBlank)?.why == "unreadable")
+  }
+
+  @Test func theBlankEscapeNeedsThisTicksPendingTurnAndTheWait() {
+    // the sender's side of the rule (the gate sees only the screen): a nil or an answered transcript, or a wait not yet passed, never picks it
+    func ready(_ tail: MainStall.Transcript?, at t: Double) -> Bool {
+      var w = MainWatch()
+      let told = Date(timeIntervalSince1970: 1_000)
+      var s = BridgeStatus(pid: 42, mode: .live, relayConnected: true, lastConnectAt: nil, lastCloseCode: nil, queueDepth: 0, permissionRelay: false, updatedAt: Date())
+      s.unseenOldestAt = told
+      s.mainResend = true
+      for i in 0...Int(t) {
+        w.observe(status: s, paneOutputAt: nil, awakeNow: Double(i))
+        w.observeStall(rows: Self.blankIdle, transcript: tail, awakeNow: Double(i))
+      }
+      return w.blankStallReady(awakeNow: t)
+    }
+    let pending = MainStall.Transcript(size: 100, tail: .awaitingModel(since: nil))
+    #expect(ready(pending, at: 90))
+    #expect(!ready(pending, at: 89), "the blank wait has not passed")
+    #expect(!ready(nil, at: 300), "an unreadable transcript with a blank pane is an idle prompt")
+    #expect(!ready(.init(size: 100, tail: .answered), at: 300))
+  }
+
+  @Test func theInterruptIntentIsNotOnTheSharedTable() {
+    // Escape for a stalled request is a Mac-only sender: the shared table (and its Linux twin) never lists it, and no other intent allows it
+    #expect(!Self.intents.contains { $0.1 == .interrupt || $0.1 == .interruptBlank })
+    for (name, intent) in Self.intents { #expect(!KeyGuard.allows(Self.working, intent: intent) || name == "box-empty", "\(name)") }
   }
 }

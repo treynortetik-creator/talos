@@ -26,15 +26,12 @@ extension SupervisorController {
       },
       checkout: {
         let plist = Bundle.main.object(forInfoDictionaryKey: "TalosCheckout") as? String
-        guard let repo = plist ?? AgentFolderSetup.recordedCheckout(supportDir: Self.supportDir) else { return nil }
-        if plist == nil {
-          let c = sup.currentConfig()
-          let unsafe = [home, c.expandedAgentDir(home: NSHomeDirectory()), Self.supportDir, NSTemporaryDirectory(), "/tmp"]
-          guard AgentFolderSetup.recordedCloneProblem(repo, recordFile: Self.supportDir + "/checkout", unsafe: unsafe) == nil else {
-            return nil
-          }
-        }
-        return repo
+        let c = sup.currentConfig()
+        let unsafe = [home, c.expandedAgentDir(home: NSHomeDirectory()), Self.supportDir, NSTemporaryDirectory(), "/tmp"]
+        // a recorded clone is used only when its path was accepted (the owner's yes, or this app's own after making it)
+        return AgentFolderSetup.updaterCheckout(
+          stamped: plist, record: AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory())),
+          accepted: KeychainCloneAcceptance().accepted(), unsafe: unsafe)
       },
       look: {
         var why: [String] = []
@@ -52,6 +49,18 @@ extension SupervisorController {
       },
       post: { text in sup.postAutoUpdateLine(text) },
       env: { box.manager?.loginEnvironment() ?? env })
+    // an existing install's recorded clone that was never accepted: ask once (the "Use this clone" card), never accept for them
+    hooks.unacceptedClone = {
+      let c = sup.currentConfig()
+      let unsafe = [home, c.expandedAgentDir(home: NSHomeDirectory()), Self.supportDir, NSTemporaryDirectory(), "/tmp"]
+      return AgentFolderSetup.unacceptedRecordedClone(
+        record: AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory())),
+        accepted: KeychainCloneAcceptance().accepted(), unsafe: unsafe)
+    }
+    hooks.offerClone = { clone in
+      Task { @MainActor in CloneConfirmCenter.shared.request(clone) }
+      sup.postAutoUpdateLine("Talos needs your OK before it can keep itself up to date: it has not used the Talos code folder \(clone) before. Open Talos's Set up window (Agent folder) and press Use this clone if it is the one you installed from.")
+    }
     // the owner's newest message, as the live bridge last wrote it: a change during the 2-minute notice postpones the update
     hooks.ownerActivity = { BridgeStatus.decode(FileManager.default.contents(atPath: home + "/status.json") ?? Data())?.lastOwnerAt }
     // the health gate: this app (the new version, once a pending update names it) reports healthy once Main runs under its supervisor

@@ -1,6 +1,6 @@
 // PR #82 review: the "Needs you" badge must drop a card when it expires, the way Home's tab does (useNow, 30 s).
 // useNeedsYouCount memoises `Date.now()` on the `cards` array, so a card that expires while nothing touches `cards`
-// keeps the badge, the tab title and the thread pill at 1 while Home says "Needs you (0)".
+// keeps the badge, the tab title and the thread chip at 1 while Home says "Needs you (0)".
 import { act, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BottomBar } from '../../src/features/threads/Nav.tsx'
@@ -35,12 +35,12 @@ describe('needs-you count after a card expires', () => {
     expect(screen.queryByRole('img', { name: /need you/ })).toBeNull()
   })
 
-  it('the thread pill clears within a minute of the card expiring', async () => {
+  it('the thread chip clears within a minute of the card expiring', async () => {
     renderWith(<ThreadScreen />, setup({ cards: [soon()] }), '/t/general', '/t/:thread')
-    expect(screen.getByText(/1 needs you$/)).toBeTruthy()
+    expect(screen.getByTestId('needs-you-chip').textContent).toBe('1')
     await act(async () => {
       vi.advanceTimersByTime(60_000)
     })
-    expect(screen.queryByText(/needs you$/)).toBeNull()
+    expect(screen.queryByTestId('needs-you-chip')).toBeNull()
   })
 })

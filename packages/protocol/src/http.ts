@@ -15,6 +15,7 @@ import { HealthStatus } from './health.ts'
 import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId, VoiceId } from './ids.ts'
 import { AttachmentRef, Device, InboxItem, isAgentCardKind, isAppMessage, JwkP256 } from './models.ts'
 import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.ts'
+import { PeerCreate, PeerCreated, PeerDeleted, PeerList, PeerRotated } from './peer.ts'
 import { Problem } from './problems.ts'
 import { ApnsRegistration, ApnsStatus } from './push.ts'
 import { NativeActWire, NativeGrant, NativeGrantRevoke } from './push-rich.ts'
@@ -822,6 +823,45 @@ export const routes = {
     owner: 'ORG-PAGES',
     res: PagePublished,
     note: 'raw HTML (UTF-8, 10 MiB) + X-Talos-Sha256; query thread_id, title, page_id? (signed with the request). 201 a new page or version, 200 the same bytes (unchanged); 404 not_found for a page_id this thread did not publish; 400 bad_request | bad_html; 413 too_large; 507 pages_full past PAGES_MAX_MB / PAGES_MAX',
+  },
+  // ---- linked agents, P2: the Mac sets up the peer inboxes on its own relay (the app API refuses `peer`) ----
+  peerCreate: {
+    id: 'peerCreate',
+    method: 'POST',
+    path: '/bridge/peers',
+    auth: 'bridge-sig',
+    owner: 'WP3',
+    req: PeerCreate,
+    res: PeerCreated,
+    note: 'makes one peer inbox (a hooks connection of integration peer, /hook/peer/<conn_id>, Standard Webhooks only) and returns its url and secret ONCE. 201; 400 bad_request; 409 peer_exists (the name has one) | too_many_peers (PEER_MAX)',
+  },
+  peersList: {
+    id: 'peersList',
+    method: 'GET',
+    path: '/bridge/peers',
+    auth: 'bridge-sig',
+    owner: 'WP3',
+    res: PeerList,
+    note: 'no secret; received_today counts the UTC day',
+  },
+  peerDelete: {
+    id: 'peerDelete',
+    method: 'DELETE',
+    path: '/bridge/peers/:name',
+    auth: 'bridge-sig',
+    owner: 'WP3',
+    res: PeerDeleted,
+    note: 'revokes at once (the sender gets 404 from then on); 200 whether or not the name existed',
+  },
+  peerRotate: {
+    id: 'peerRotate',
+    method: 'POST',
+    path: '/bridge/peers/:name/rotate',
+    auth: 'bridge-sig',
+    owner: 'WP3',
+    req: Empty,
+    res: PeerRotated,
+    note: 'a new secret, shown once; the old one verifies for 24 hours more. 404 not_found for an unknown name',
   },
   pagesList: {
     id: 'pagesList',

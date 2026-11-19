@@ -338,6 +338,8 @@ const FOLDER_ONLY: Record<string, string[]> = {
     'return realpathSync(p)',
   ],
   'files/wiring.ts': ["import { realpathSync } from 'node:fs'", 'return foldPath(realpathSync(p))'],
+  // the agent folder a plain-folder record names (start --no-kit, adopt): a folder only
+  'kit-marker.ts': ["import { realpathSync, statSync } from 'node:fs'", 'return realpathSync(dir)'],
   'folders/service.ts': [
     "import { promises as fsp, realpathSync } from 'node:fs'",
     "export type FolderFs = Pick<typeof fsp, 'opendir' | 'lstat' | 'realpath' | 'stat'>",

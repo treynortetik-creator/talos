@@ -7,6 +7,27 @@ Railway side.
   connection must stay up. Health check `/healthz`; restart on failure.
 - **One volume** mounted at `/data` (SQLite database and uploaded media). One gigabyte is enough. There is brief
   downtime on each deploy while the old container stops; the app and the bridge reconnect with backoff.
+- **Which branch a relay deploys from.** A relay service deploys on a push to its trigger branch, which is set in Railway (Service,
+  Settings, Source), not in this repository. A beta relay's trigger branch is `green`: main's newest commit that CI passed on all six
+  checks (the repository's CI keeps `green` pointing at it). The owner's own relay tracks `main` for now; whether it moves to `green` is his
+  call. Which relays exist, and which must run only six-green commits, is a list kept outside the repository (the repository variable
+  `CI_RELAY_DEPLOYS`, and `~/.config/talos-ci/relay-deploys.txt` on the lead's Mac; the format is `scripts/relay-deploys.example.txt`).
+  `ci-runner.sh relays` raises an alert when a `green` relay runs a commit whose own six CI statuses are not green.
+- **The lag.** A commit reaches a beta relay only after CI has passed on it and `green` has moved, about 25 to 35 minutes after it
+  lands on `main`, then the build and deploy. A fix is not live on a beta relay the moment it lands.
+- **Hotfixes.** (a) The normal way: the fix lands on `main`, CI goes green on all six checks, `green` moves by itself and the relay
+  deploys. If the fix is green but `green` did not move (the `green` job failed), the lead moves it with the CI job's own step, by hand
+  and with its checks: `bash scripts/ci-runner.sh green`, with the job's own variables (`GITHUB_EVENT_NAME=push`,
+  `GITHUB_REF=refs/heads/main`, `GITHUB_REPOSITORY`, `CI_PLAN_SHA=<the fix's full sha>`; never a bare `git push`, never forced).
+  `CI_GREEN_TRUST_RUN=<run id>` is added only when the fix's six passes came from a dispatch run rather than a push run.
+  The relays check trusts push runs only, so a relay that then runs that commit also needs a line in the hand-deploy list,
+  or the check reports it as not green.
+  (b) Emergency only: the lead deploys a commit that is not green yet by hand in Railway, adds a line for it to the hand-deploy list
+  (`<full sha>`, the environment, the date, the reason: the repository variable `CI_RELAY_HAND_DEPLOYS` and
+  `~/.config/talos-ci/relay-hand-deploys.txt`; format in `scripts/relay-hand-deploys.example.txt`), and says so in the landing note.
+  That line is what keeps the relays check quiet; there is no script that bypasses `green`. Deploy by hand through the service's GitHub
+  source (deploy that commit from the service in Railway), never with `railway up`: an upload by the CLI probably creates no GitHub
+  deployment, so the check cannot see it.
 - **Deploys only for relay changes.** `railway.json` `build.watchPatterns` lists what the image is built from (the relay,
   the web app, `packages/`, the workspace manifests and lockfile); a push touching nothing there does not redeploy.
   `apps/relay/test/deploy-watch.test.ts` fails if the Dockerfile copies something no pattern covers.

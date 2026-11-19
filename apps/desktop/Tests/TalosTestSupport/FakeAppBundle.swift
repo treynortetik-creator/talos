@@ -9,8 +9,12 @@ public struct FakeAppBundle: Sendable {
   public var script: String { hooks + "/permission-relay.py" }
   public var helper: String { hooks + "/_talos_common.py" }
 
-  /// `helper` nil: a bundle whose hook has no helper beside it.
-  public init(in base: String, script: Data, helper: Data?) throws {
+  /// Where one of the thread-state hook's files is (`thread-state.py`, `compaction-guard.py`).
+  public func stateFile(_ name: String) -> String { hooks + "/" + name }
+
+  /// `helper` nil: a bundle whose hook has no helper beside it. `state`: the thread-state hook's files by name, as build-app.sh puts them
+  /// beside the permission hook (nil: a bundle that has none, as one built before they were added).
+  public init(in base: String, script: Data, helper: Data?, state: [String: Data]? = nil) throws {
     let app = base + "/Talos.app"
     try FileManager.default.createDirectory(atPath: app + "/Contents/Resources/talos-hooks", withIntermediateDirectories: true)
     // realpath, not URL.resolvingSymlinksInPath: that one drops /private from /private/var, and the paths here are compared whole
@@ -19,6 +23,7 @@ public struct FakeAppBundle: Sendable {
     path = String(cString: r)
     try Self.put(script, at: self.script)
     if let helper { try Self.put(helper, at: self.helper) }
+    for (name, bytes) in state ?? [:] { try Self.put(bytes, at: hooks + "/" + name) }
   }
 
   /// A read-only file (0444), as the build leaves the bundled hook.

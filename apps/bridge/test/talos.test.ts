@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { ACCOUNT_HOME_TEST, COMMANDS, runTalos, terminalOnly } from '../src/talos.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { type Harness, startHarness, writeKit } from './helpers.ts'
 
 /** The terminal-only refusal, from a CLI this test spawns: it speaks for the computer it runs on (owner-words.ts), a Mac or not. */
 const TERMINAL_ONLY = /only runs in (?:Terminal|a terminal)/
@@ -187,6 +187,7 @@ describe('talos commands', () => {
     lead: { argv: ['lead'], says: /usage: talos-app lead/, code: 2 },
     'lead init': { argv: ['lead', 'init'], says: /usage: talos-app lead/, code: 2 },
     'lead check': { argv: ['lead', 'check'], says: /usage: talos-app lead/, code: 2 },
+    peer: { argv: ['peer', '--no-such-flag'], says: /usage: talos-app peer/, code: 2 },
     trust: { argv: ['trust', '--no-such-flag'], says: /usage: talos-app trust/, code: 2 },
     'trust on': { argv: ['trust', 'on', 'extra'], says: /usage: talos-app trust/, code: 2 },
     'install-mcp': { argv: ['install-mcp', '--no-such-flag'], says: unknown, code: 1 },
@@ -593,7 +594,7 @@ describe('talos doctor and status', () => {
 
   test('doctor --json returns the same checks as talos-app doctor, as rows', async () => {
     h = await startHarness({ startBridge: false })
-    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    const agent = writeKit(mkdtempSync(join(tmpdir(), 'talos-agent-')))
     await runCli(['install-mcp', '--agent-dir', agent], cliIO().io, envOf(h))
     const { claudeDir, deps } = hermetic()
     const text = cliIO()

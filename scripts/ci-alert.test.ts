@@ -113,6 +113,7 @@ function setup() {
       cpSync(join(here, 'ci-alerts.sh'), join(r, 'scripts/ci-alerts.sh'))
       cpSync(join(here, 'ci-alert-tests.pl'), join(r, 'scripts/ci-alert-tests.pl'))
       cpSync(join(here, 'ci-runner/alert.sh'), join(r, 'scripts/ci-runner/alert.sh'))
+      cpSync(join(here, 'ci-runner/gh-account.sh'), join(r, 'scripts/ci-runner/gh-account.sh'))
       cpSync(join(here, 'lead-inbox.sh'), join(r, 'scripts/lead-inbox.sh'))
     }
     return spawnSync('bash', ['scripts/ci-runner.sh', 'alert'], {
@@ -122,6 +123,7 @@ function setup() {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: T,
         TALOS_CI_CACHE: cache,
+        GH_TOKEN: 't',
         GITHUB_REPOSITORY: 'owner/talos-app',
         GITHUB_SERVER_URL: 'https://github.com',
         GITHUB_RUN_ID: '77',
@@ -149,6 +151,7 @@ function setup() {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: T,
         TALOS_CI_CACHE: cache,
+        GH_TOKEN: 't',
         TALOS_CI_ALERTS_EVERY: '0.2',
       },
       detached: true,
@@ -182,6 +185,7 @@ function setup() {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: T,
         TALOS_CI_CACHE: cache,
+        GH_TOKEN: 't',
         GITHUB_REPOSITORY: 'owner/talos-app',
       },
       encoding: 'utf8',
@@ -741,6 +745,35 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
     expect(rep).toContain('- none recorded (the run did not get as far as its slot)')
   })
 
+  it("Titan's report-only parts (CI_TITAN_HOSTILE=shadow) are listed, never in the result: a red one alone is no alert", () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      `${ROWS('hostile-ci/', () => 'success')}hostile-ci/report-check\tfailure\tfailed on titan; 2 failed\t2026-11-15T12:10:00Z\n` +
+        'hostile-ci/report-browser-e2e\tpending\trunning on titan\t2026-11-15T12:00:00Z\n' +
+        'hostile-ci/report-check\tpending\trunning on titan\t2026-11-15T11:50:00Z\n',
+    )
+    const r = s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(s.alerts()).toEqual([])
+    const rep = report(s.cache)
+    expect(rep).toMatch(/^## [0-9a-f]{7}, .*: green$/m)
+    expect(rep).toContain(
+      "\nReport-only, not in the result above (Titan: CI_TITAN_HOSTILE=shadow; its tests are in its job's logs):\n" +
+        '- hostile-ci/report-check: failure (failed on titan; 2 failed)\n' +
+        '- hostile-ci/report-browser-e2e: pending (running on titan)\n',
+    )
+    // none: no such section
+    const c2 = s.commit('next')
+    writeFileSync(
+      join(s.T, 'status', c2),
+      ROWS('hostile-ci/', () => 'success'),
+    )
+    expect(s.alert(c2, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    expect(report(s.cache).split(`## ${c2.slice(0, 7)}`)[1]).not.toContain('Report-only')
+  })
+
   it("a job the hostile run did not answer: its log (another run's, same commit) adds no flakes", () => {
     const s = setup()
     const c1 = s.commit('base')
@@ -826,7 +859,13 @@ describe('scripts/ci-alerts.sh: how a session on this Mac picks the messages up'
     await untilPrinted(w2, /CI ALERT 1-aaaaaaa-red:/)
     await untilPrinted(w2, /CI ALERT 2-bbbbbbb-red:/)
     await w2.kill()
-    expect(s.alerts().sort()).toEqual(['1-aaaaaaa-red.txt', '2-bbbbbbb-red.txt', '3-ccccccc-red.txt'])
+    // the watcher's 10-minute slot also runs the relays check, which (with no relay list here) rightly writes its own alert: not what this is about
+    expect(
+      s
+        .alerts()
+        .filter((f) => !f.includes('-relay-'))
+        .sort(),
+    ).toEqual(['1-aaaaaaa-red.txt', '2-bbbbbbb-red.txt', '3-ccccccc-red.txt'])
   }, 20_000)
 })
 
@@ -1068,6 +1107,7 @@ describe.skipIf(spawnSync('jq', ['--version']).status !== 0)(
             HOME: s.T,
             TALOS_CI_CACHE: s.cache,
             GITHUB_REPOSITORY: 'owner/talos-app',
+            GH_TOKEN: 't', // the inbox job's token
           },
           encoding: 'utf8',
         })
@@ -1111,6 +1151,7 @@ describe('ci-alerts.sh watch runs lead-inbox.sh flush in the background, at most
         PATH: `${bin}:${process.env.PATH}`,
         HOME: T,
         TALOS_CI_CACHE: cache,
+        GH_TOKEN: 't',
         TALOS_CI_ALERTS_EVERY: '0.05',
       },
       detached: true,

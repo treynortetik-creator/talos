@@ -72,6 +72,7 @@ talos-oc-
 talos-posts-
 talos-preamble-
 talos-problem-
+talos-ptywatch-
 talos-r2-
 talos-rules-
 talos-rv-
@@ -94,6 +95,8 @@ talos-tsp-
 talos-u-
 talos-wle-
 talos-wlg-
+talos-ts-
+talos-nostate-
 
 # Made by tests, not swept: names too generic to claim in a shared folder
 !agent-request-
@@ -152,3 +155,9 @@ talos-wlg-
 !worker-usage-
 !talos relay wait.
 !talos rv d6.
+!stall-
+!pairing-
+talos-autoclone-
+talos-tools-
+talos-build-tools-
+talos-tools-test-

@@ -18,9 +18,27 @@ const PLACEHOLDER_TOKEN = '--surface-2'
 /** `ok`: a real picture. `unsupported`: this browser cannot read back a drawn page (WebKit), so none was attempted. */
 export type Capture = { canvas: HTMLCanvasElement; ok: boolean; skipped: number; unsupported?: boolean }
 
-/** Elements copied between pauses, so the open sheet keeps answering taps while a big page is copied. */
-const YIELD_EVERY = 250
+/**
+ * The longest stretch of copying between pauses, in ms of the page's own clock, so the open sheet keeps answering taps while a
+ * big page is copied and the give-up (store.ts, CAPTURE_LIMIT_MS) can land. It was a count, 250 elements; each element copies
+ * its whole computed style, so on a slow phone 250 of them held the page for seconds, and a 400-message thread at a tenth of
+ * the speed settled after 22 s instead of 8 (2026-11-19). 40 ms, not less: each pause can let the page paint, and at 8 ms a
+ * 120-message thread's picture took 7.5 s where it took 5.7 s before (6.3 s at 40 ms), close to the give-up itself.
+ */
+const SLICE_MS = 40
 const pause = () => new Promise<void>((r) => setTimeout(r, 0))
+
+/** Thrown inside a copy whose caller gave up on it (its signal aborted): the copy stops at once instead of running on. */
+class CaptureAborted extends Error {}
+type CopyCtx = { count: number; skipped: number; token: string; sliceAt: number; signal?: AbortSignal }
+/** Pauses when the slice is used up, and stops the copy once it was given up. */
+async function slice(ctx: CopyCtx): Promise<void> {
+  if (performance.now() - ctx.sliceAt >= SLICE_MS) {
+    await pause()
+    ctx.sliceAt = performance.now()
+  }
+  if (ctx.signal?.aborted) throw new CaptureAborted()
+}
 
 const sameOrigin = (url: string, base = location.href): boolean => {
   try {
@@ -67,11 +85,11 @@ function placeholder(src: Element, token: string): HTMLElement {
 }
 
 /** Copies `src` and everything below it, styles inlined. Returns null for an element that is dropped. */
-async function copyNode(src: Node, ctx: { count: number; skipped: number; token: string }): Promise<Node | null> {
+async function copyNode(src: Node, ctx: CopyCtx): Promise<Node | null> {
   if (src.nodeType === Node.TEXT_NODE) return src.cloneNode(false)
   if (!(src instanceof Element)) return null
   if (++ctx.count > MAX_ELEMENTS) return null
-  if (ctx.count % YIELD_EVERY === 0) await pause()
+  await slice(ctx)
   const tag = src.tagName.toLowerCase()
   if (tag === 'script' || tag === 'style' || tag === 'link' || tag === 'noscript' || tag === 'template') return null
   if (src.hasAttribute('data-no-capture')) return null // the Report a bug button itself (BugButton.tsx)
@@ -187,6 +205,27 @@ export function blankCapture(width: number, height: number): HTMLCanvasElement {
 }
 
 let readBack: Promise<boolean> | null = null
+/** The probe's answer once it has one, else null (not asked yet, or still asking). */
+let readBackAnswer: boolean | null = null
+/** What canReadBackPage found, if it has finished: lets Report a bug open straight into its no-picture layout (store.ts). */
+export function readBackKnown(): boolean | null {
+  return readBackAnswer
+}
+let warmed = false
+/**
+ * Asks canReadBackPage once, when the page is idle, before anyone opens Report a bug: on an iPhone the sheet then opens already
+ * saying it takes no picture, instead of drawing "Getting the screen…" and swapping in that sentence a moment later, which
+ * moved Preview and the rest down 52 px under a finger already on its way (Titan, 2026-11-19). Called by BugReporter, mounted with the shell.
+ */
+export function warmReadBack(): void {
+  if (warmed || typeof window === 'undefined') return
+  warmed = true
+  const idle = (window as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number })
+    .requestIdleCallback
+  const ask = () => void canReadBackPage()
+  if (idle) idle(ask, { timeout: 3000 })
+  else setTimeout(ask, 1500)
+}
 /**
  * Can this browser read back a page drawn through an SVG <foreignObject>? WebKit (Safari, the iPhone app, the Mac app) marks
  * such a canvas unreadable, so a capture there is seconds of copying for nothing. Tried once on a tiny page, then remembered.
@@ -200,11 +239,16 @@ export function canReadBackPage(): Promise<boolean> {
       c.width = 2
       c.height = 2
       const c2d = c.getContext('2d')
-      if (!c2d) return false
+      if (!c2d) {
+        readBackAnswer = false
+        return false
+      }
       c2d.drawImage(img, 0, 0)
       c2d.getImageData(0, 0, 1, 1)
+      readBackAnswer = true
       return true
     } catch {
+      readBackAnswer = false
       return false
     }
   })()
@@ -236,15 +280,22 @@ export async function pictureFromFile(file: Blob): Promise<Capture | null> {
 }
 
 /** Captures what is on screen now. `root` defaults to the whole page. Never throws: a failure gives a blank canvas and `ok: false`. */
-export async function capturePage(root: HTMLElement = document.body): Promise<Capture> {
+export async function capturePage(root: HTMLElement = document.body, signal?: AbortSignal): Promise<Capture> {
   const width = Math.max(1, Math.round(window.innerWidth))
   const height = Math.max(1, Math.round(window.innerHeight))
   if (!(await canReadBackPage()))
     return { canvas: blankCapture(width, height), ok: false, skipped: 0, unsupported: true }
+  // `signal`: the caller gave up (store.ts, after CAPTURE_LIMIT_MS). The copy stops at its next slice, and the steps that cannot
+  // be paused (writing the copy out, drawing it) are not started after that.
+  const given = () => {
+    if (signal?.aborted) throw new CaptureAborted()
+  }
   try {
     const rootStyle = getComputedStyle(document.documentElement)
-    const ctx = { count: 0, skipped: 0, token: rootStyle.getPropertyValue(PLACEHOLDER_TOKEN).trim() || 'gray' }
+    const token = rootStyle.getPropertyValue(PLACEHOLDER_TOKEN).trim() || 'gray'
+    const ctx: CopyCtx = { count: 0, skipped: 0, token, sliceAt: performance.now(), signal }
     const copy = await copyNode(root, ctx)
+    given()
     if (!(copy instanceof HTMLElement)) throw new Error('nothing to draw')
     const pos = root.getBoundingClientRect()
     copy.style.setProperty('position', 'absolute')
@@ -259,7 +310,10 @@ export async function capturePage(root: HTMLElement = document.body): Promise<Ca
     wrap.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml')
     const xml = new XMLSerializer().serializeToString(wrap)
     const svg = `<svg xmlns="${SVG_NS}" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${xml}</foreignObject></svg>`
+    await pause() // the give-up may land between writing the copy out and drawing it
+    given()
     const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`)
+    given()
     const ratio = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / (width * height)))
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(width * ratio))

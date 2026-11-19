@@ -50,6 +50,25 @@ public enum SupervisorNotice {
     "Main isn't picking up messages: one has waited over \(Int(MainRestartContract.unseenS / 60)) minutes and its screen "
     + "hasn't changed. Look at the pane; nothing was restarted"
 
+  /// Main got an owner message (at `since`) and has shown no progress for `MainRestartContract.stallS`. With nothing done
+  /// (`did == .none`: the unstick is off, or was not allowed to act) nothing is pressed or re-sent, a long think can look the same,
+  /// so the owner decides; otherwise the line says what Talos did, in the minutes the request had been stuck.
+  public static func mainStalled(since: Date, did: MainWatch.Unstick = .none, timeZone: TimeZone = .current) -> String {
+    let lead = { (min: Int) in "Main looked stuck for \(min) min on your message; Talos pressed Esc" }
+    switch did {
+    case .awaiting(let min): return lead(min) + " and is sending it again"
+    case .resent(let min): return lead(min) + " and sent it again"
+    case .failed(let min): return lead(min) + " but couldn't send your message again; please resend it"
+    case .none: break
+    }
+    let f = DateFormatter()
+    f.timeStyle = .short
+    f.dateStyle = .none
+    f.timeZone = timeZone
+    return "Main got your message at \(f.string(from: since)) and has shown no progress for \(Int(MainRestartContract.stallS / 60)) min: its model "
+      + "request may be stuck (a long think can look the same). Press Esc in its pane to cancel, then send again"
+  }
+
   public static func recovery(_ o: AgentRecovery.Outcome) -> String {
     switch o {
     case .restartedOnRequest: return restartedOnRequest

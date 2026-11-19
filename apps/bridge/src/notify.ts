@@ -39,6 +39,7 @@ export type Kind =
   | 'app_message'
   | 'handoff'
   | 'wake'
+  | 'peer_message'
 
 const KEY = /^[A-Za-z0-9_]+$/
 
@@ -168,6 +169,8 @@ export function textNotification(a: {
       ...(a.run ? { run: RUN_META_VALUE } : {}),
       ...fileMeta(files, { withName: a.shareContent === undefined }),
       ...(shared ? { share_source: 'page' } : {}),
+      // shared material and none of the owner's own words (the rule of share-only.ts): not the owner speaking to the agent
+      ...(shared && !a.text.trim() ? { share_only: 'true' } : {}),
       ...a.extraMeta,
       ...a.clock,
       ...(a.replyTo
@@ -508,6 +511,7 @@ export function backlogNotification(a: {
     meta: base(a.defaultThread, newest.messageId, a.ts, 'backlog', 'owner', {
       user: 'owner',
       batch_count: a.items.length,
+      ...(a.items.every((i) => i.shared && !i.text.trim()) ? { share_only: 'true' } : {}),
       ...a.clock,
       ...fileMeta(a.files ?? [], { withName: false }), // a file from shared material has a stranger's name; each is named in its own line
     }),

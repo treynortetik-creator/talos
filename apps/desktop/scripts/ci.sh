@@ -17,15 +17,17 @@ fi
 cd "$(dirname "$0")/.."
 OUT="${1:-.build/ci-app}"
 STAMP="$(bash scripts/tests-green-stamp.sh || true)"  # the tree the suite runs on, taken before it runs
+# The main run is watched for pty masters its test process keeps (pty-watch.sh), around the retry so a rerun can't hide a bad peak.
 if [ "${TALOS_GUI_TESTS:-0}" = 1 ]; then
   # A logged-in session that allows windows: the window-opening suites run one process each (gui-tests.sh fails a process that ends
   # early), and the main run keeps the gate off so nothing runs twice.
-  TALOS_GUI_TESTS=0 bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
+  TALOS_GUI_TESTS=0 bash scripts/pty-watch.sh bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
   bash scripts/gui-tests.sh
 else
   # In CI (CI_FLAKE_FILE set) a failed test runs once more, alone; by hand ci-swift-retry.sh just runs test.sh.
-  bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
+  bash scripts/pty-watch.sh bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
 fi
+bash scripts/pty-watch-test.sh
 # green on this tree: guards-test.sh's control reuses it instead of running the whole suite again
 export TALOS_DESKTOP_TESTS_GREEN="$STAMP"
 # The tests that starve the dispatch pool run alone, so they cannot fail the suites beside them.
@@ -42,6 +44,7 @@ bash scripts/install-test.sh "$OUT/Talos.app"
 # SKIPPED line with the count, and CI never touches an identity (scripts/ci-local/jobs-swift.sh signs everything ad hoc).
 bash scripts/release-install-test.sh "$OUT/Talos.app"
 bash scripts/review-d6-install-test.sh
+bash scripts/bundle-tools-test.sh
 bash scripts/relay-wait-test.sh
 [ ! -f scripts/review-d0-test.sh ] || bash scripts/review-d0-test.sh
 [ ! -f scripts/review-d0-recheck-test.sh ] || bash scripts/review-d0-recheck-test.sh

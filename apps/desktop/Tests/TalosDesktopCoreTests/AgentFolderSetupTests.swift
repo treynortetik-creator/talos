@@ -264,10 +264,13 @@ struct AgentFolderSetupTests {
     let controller = try String(
       contentsOf: desktop.appendingPathComponent("Sources/TalosDesktop/SupervisorController.swift"), encoding: .utf8)
     let flow = try String(contentsOf: desktop.appendingPathComponent("Sources/TalosDesktop/AgentFolderFlow.swift"), encoding: .utf8)
-    #expect(install.contains(#"SUPPORT="$HOME/Library/Application Support/Talos""#))
-    #expect(install.contains(#"mv -f "$SUPPORT/.checkout.$$" "$SUPPORT/checkout""#))
+    // the new bundle-id folder (read first by the app) and the old one (read when the new is missing), each through a temp file and a rename
+    #expect(install.contains(#"SUPPORT="$HOME/Library/Application Support/app.talos.desktop""#))
+    #expect(install.contains(#"OLD_SUPPORT="$HOME/Library/Application Support/Talos""#))
+    #expect(install.contains(#"mv -f "$dir/.checkout.$$" "$dir/checkout""#))
+    #expect(AutoSetup.recordFolders(home: "/home/alex") == ["/home/alex/Library/Application Support/app.talos.desktop", "/home/alex/Library/Application Support/Talos"])
     #expect(controller.contains(#"static let supportDir = NSHomeDirectory() + "/Library/Application Support/Talos""#))
-    #expect(flow.contains("supportDir: SupervisorController.supportDir"))
+    #expect(flow.contains("AutoSetup.recordFolders(home: NSHomeDirectory())"))
   }
 
   @Test func chooseSendsAFolderWithoutTalosToAdopt() {

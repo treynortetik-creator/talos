@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { AlwaysAllowList } from './always-allow.ts'
 import { HttpsUrl, IntegrationId, IsoTs, ThreadId } from './ids.ts'
 import { cardKindFacts, Thread } from './models.ts'
+import { PEER_MAX, PeerConfig, type PeerConfigT } from './peer.ts'
 import { STOCK_THEME_IDS, type Theme, validateTheme } from './theme.ts'
 import { DedicatedConfig } from './thread-sessions.ts'
 
@@ -130,6 +131,33 @@ export const AgentConfig = z.object({
    * the relay (`stripDeviceHidden`) and never read by the Mac. A config.json that has it is ignored for it.
    */
   bug_webhook_host: z.string().max(253).optional().catch(undefined),
+  /**
+   * Linked agents: the owner's other Talos installs this one may message (peer.ts). Set by the owner at the Mac; the agent cannot
+   * write it. The signing SECRET is never in config: the bridge keeps it in its SecretStore. A URL can carry a path token, so
+   * the relay never sends this to phones or the web app (`devices: false`, `stripDeviceHidden`). Read leniently: an entry that
+   * is not valid is DROPPED (the other peers and the whole config survive; a dropped peer simply is not linked), a repeated
+   * name keeps its first entry (the name of a dropped entry stays taken), and entries past PEER_MAX are ignored.
+   */
+  peers: z
+    .array(z.unknown())
+    .transform((a) => {
+      const seen = new Set<string>()
+      const out: PeerConfigT[] = []
+      for (const x of a) {
+        // the raw name of EVERY entry is reserved, valid or not: a later entry cannot take over the name of one that was dropped
+        const raw = typeof x === 'object' && x !== null ? (x as { name?: unknown }).name : undefined
+        const taken = typeof raw === 'string' && seen.has(raw)
+        if (typeof raw === 'string') seen.add(raw)
+        if (taken) continue
+        const p = PeerConfig.safeParse(x)
+        if (!p.success) continue
+        out.push(p.data)
+        if (out.length === PEER_MAX) break
+      }
+      return out
+    })
+    .default([])
+    .catch([]),
 })
 export type AgentConfigT = z.infer<typeof AgentConfig>
 

@@ -159,6 +159,9 @@ export function redact(text: string, o: RedactOptions = {}): string {
       .replace(/(hooks\.slack\.com\/(?:services|workflows|triggers)\/)\S+/gi, '$1[redacted]')
       .replace(/(discord(?:app)?\.com\/api\/webhooks\/)\S+/gi, '$1[redacted]')
       .replace(/(hooks\.zapier\.com\/hooks\/(?:catch|standard)\/)\S+/gi, '$1[redacted]')
+      // a linked agent's inbox address: the connection id in its path is the capability to send to it
+      .replace(/(\/hook\/peer\/)\S+/gi, '$1[redacted]')
+      .replace(/(?<![A-Za-z0-9_])cn_[0-9A-Za-z]{22}(?![0-9A-Za-z])/g, 'cn_[redacted]')
       // a numeric id, a colon and a long token
       .replace(/(?<!\d)\d{6,}:[A-Za-z0-9_-]{30,}/g, '[redacted]')
       // anything that looks like a key or token: 32+ URL-safe or base64 characters in a row (a path has slashes, so it is safe)

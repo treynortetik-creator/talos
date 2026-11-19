@@ -59,5 +59,6 @@
   },
   "settings_lock": false,
   "always_allow": [],
-  "memory_browser": true
+  "memory_browser": true,
+  "peers": []
 }

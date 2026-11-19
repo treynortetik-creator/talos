@@ -16,6 +16,9 @@ test.afterEach(async () => {
 test('a card.create over 256 KiB must not knock the bridge socket into a reconnect loop', async () => {
   // Every field inside its own schema cap (body 20k, 12 fields x 20k, payload 64 KiB), so the card tool accepts it.
   const big = 'x'.repeat(19_000)
+  // Only what the card makes counts: a first dial that missed under load (the bridge retried, then connected, and startBridge
+  // returned) is already in the log as "reconnect scheduled", and was counted against the card before.
+  const logBefore = stack.bridgeLog().length
   const call = stack.claude.callTool('card', {
     thread_id: 'general',
     kind: 'generic',
@@ -40,6 +43,7 @@ test('a card.create over 256 KiB must not knock the bridge socket into a reconne
   }
   const reconnects = stack
     .bridgeLog()
+    .slice(logBefore)
     .split('\n')
     .filter((l) => l.includes('reconnect scheduled')).length
   // Expected: the tool refuses a card that cannot fit in one frame (or splits it), and the socket stays up.

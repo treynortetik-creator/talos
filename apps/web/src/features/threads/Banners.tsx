@@ -6,13 +6,11 @@ import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { useConnectionMeta } from '../../lib/connectionMeta.ts'
 import { hostSteps, PAIR_WAYS, PC_PAIR, placeWords, useHost, useHostWords } from '../../lib/hostWords.ts'
 import { useShownConnection, useShownMacOnline } from '../../lib/linkShown.ts'
-import { IconClock } from '../../ui/icons.tsx'
 import { Button } from '../../ui/index.ts'
-import { Mascot } from '../../ui/Mascot.tsx'
-import { HealthBanner, MacMessageText } from '../health/HealthBanner.tsx'
+import { HealthLink, useHealthBannerInfo } from '../health/HealthBanner.tsx'
 import { useRelayLimits } from '../health/limits.ts'
 import { macMessage, presenceMacState } from '../health/rows.ts'
-import { useAgentName } from './useThreads.ts'
+import { type BannerEntry, BannerLine } from './BannerLine.tsx'
 
 function Countdown({ at }: { at: number | null }) {
   const [now, setNow] = useState(Date.now())
@@ -36,7 +34,6 @@ export function Banners() {
   const retryAt = useConnectionMeta((m) => m.retryAt)
   const netDown = useConnectionMeta((m) => m.networkOffline)
   const netOffline = netDown && connection !== 'online'
-  const agent = useAgentName()
   const words = useHostWords()
   const host = useHost()
   // dropped turns into asleep with the clock, not only when a frame arrives
@@ -45,57 +42,47 @@ export function Banners() {
     const t = setInterval(() => setNowMs(Date.now()), 30_000)
     return () => clearInterval(t)
   }, [])
-  // what the health banner is already saying about the Mac (a refused key, or gone for a while): say it once
-  const [healthKind, setHealthKind] = useState<string | null>(null)
-  const healthOwnsMac = healthKind === 'key_refused' || healthKind === 'bridge_offline'
-  const rows: React.ReactNode[] = []
+  // the health notice (a refused key, or gone for a while) already says what the Mac banner would: say it once
+  const health = useHealthBannerInfo()
+  const healthOwnsMac = health?.kind === 'key_refused' || health?.kind === 'bridge_offline'
+  const entries: BannerEntry[] = []
 
   if (netOffline || connection === 'offline') {
-    rows.push(
-      <div key="net" role="status" className="flex items-center gap-3 bg-surface-2 px-4 py-2.5 text-sm">
-        <Mascot state="worried" size={28} name={agent} decorative animate={false} />
-        <span className="flex-1">You're offline. Messages will send when you're back.</span>
-        <Button variant="outline" onClick={() => client.reconnect()}>
-          Retry
-        </Button>
-      </div>,
-    )
+    entries.push({
+      key: 'net',
+      icon: 'worried',
+      cause: "You're offline. Messages will send when you're back.",
+      action: retryButton('Retry', () => client.reconnect()),
+    })
   } else if (connection === 'unreachable') {
-    rows.push(
-      <div key="relay" role="status" className="flex items-center gap-3 bg-surface-2 px-4 py-2.5 text-sm">
-        <Mascot state="worried" size={28} name={agent} decorative animate={false} />
-        <span className="flex-1">
-          Can't reach your server.
-          <Countdown at={retryAt} />
-        </span>
-        <Button variant="outline" onClick={() => client.reconnect()}>
-          Retry now
-        </Button>
-      </div>,
-    )
+    entries.push({
+      key: 'relay',
+      icon: 'worried',
+      cause: "Can't reach your server.",
+      detail: retryAt ? <Countdown at={retryAt} /> : undefined,
+      action: retryButton('Retry now', () => client.reconnect()),
+    })
   } else if (connection === 'online' && deviceId && !pinned) {
-    rows.push(
-      <div key="pin" role="status" className="flex items-start gap-3 bg-surface-2 px-4 py-2.5 text-sm">
-        <IconClock width={18} height={18} className="mt-0.5 shrink-0 text-text-2" />
-        <div className="flex flex-col gap-1">
-          <span>{placeWords('Waiting for your Mac to confirm this device.', host)}</span>
-          {host === 'windows' ? (
-            <span className="text-text-2">If your PC isn't asking: {PC_PAIR} Your PC needs to be on.</span>
-          ) : host === null ? (
-            <span className="text-text-2">
-              If your computer isn't asking: {PAIR_WAYS}. Open the new link here, and answer y at the prompt. Your
-              computer needs to be on.
-            </span>
-          ) : (
-            <span className="text-text-2">
-              {placeWords("If your Mac isn't asking: run ", host)}
-              <code>talos-app enroll</code>
-              {placeWords(' on it, open the new link here, and answer y at the prompt. Your Mac needs to be on.', host)}
-            </span>
-          )}
-        </div>
-      </div>,
-    )
+    entries.push({
+      key: 'pin',
+      icon: 'clock',
+      cause: placeWords('Waiting for your Mac to confirm this device.', host),
+      detail:
+        host === 'windows' ? (
+          <>If your PC isn't asking: {PC_PAIR} Your PC needs to be on.</>
+        ) : host === null ? (
+          <>
+            If your computer isn't asking: {PAIR_WAYS}. Open the new link here, and answer y at the prompt. Your
+            computer needs to be on.
+          </>
+        ) : (
+          <>
+            {placeWords("If your Mac isn't asking: run ", host)}
+            <code>talos-app enroll</code>
+            {placeWords(' on it, open the new link here, and answer y at the prompt. Your Mac needs to be on.', host)}
+          </>
+        ),
+    })
   }
   const macState =
     connection === 'online'
@@ -104,52 +91,38 @@ export function Banners() {
   const { bufferDays } = useRelayLimits(macState !== null) // fetched only once the Mac banner has something to say
   if (macState && !healthOwnsMac) {
     const m = macMessage(macState, { lastSeen: presence.last_seen, bufferDays, host })
-    rows.push(
-      <div
-        key="mac"
-        role="status"
-        data-testid="mac-banner"
-        data-kind={m.kind}
-        className="flex items-start gap-3 bg-surface-2 px-4 py-2.5 text-sm"
-      >
-        <Mascot state="worried" size={28} name={agent} decorative animate={false} />
-        <MacMessageText cause={m.cause} next={m.next} />
-      </div>,
-    )
+    entries.push({ key: 'mac', testId: 'mac-banner', kind: m.kind, icon: 'worried', cause: m.cause, detail: m.next })
   }
   if (connection === 'online' && presence.bridge_online && presence.main === 'signin' && words.signin) {
-    rows.push(
-      <div
-        key="signin"
-        role="status"
-        data-testid="signin-banner"
-        className="flex items-start gap-3 bg-surface-2 px-4 py-2.5 text-sm"
-      >
-        <Mascot state="worried" size={28} name={agent} decorative animate={false} />
-        <span className="flex-1">{words.signin}</span>
-      </div>,
-    )
+    entries.push({ key: 'signin', testId: 'signin-banner', icon: 'worried', cause: words.signin })
   }
   if (connection === 'online' && presence.bridge_online && presence.superseded) {
-    rows.push(
-      <div
-        key="two-bridges"
-        role="status"
-        data-testid="bridge-notice"
-        className="flex items-start gap-3 bg-surface-2 px-4 py-2.5 text-sm"
-      >
-        <IconClock width={18} height={18} className="mt-0.5 shrink-0 text-text-2" />
-        <MacMessageText
-          cause="Another bridge connected with your key and replaced an earlier one."
-          next={hostSteps(host).rotate}
-        />
-      </div>,
-    )
+    entries.push({
+      key: 'two-bridges',
+      testId: 'bridge-notice',
+      icon: 'clock',
+      cause: 'Another bridge connected with your key and replaced an earlier one.',
+      detail: hostSteps(host).rotate,
+    })
   }
+  if (health) {
+    entries.push({
+      key: 'health',
+      testId: 'health-banner',
+      kind: health.kind,
+      icon: 'worried',
+      cause: health.text,
+      detail: health.next,
+      action: <HealthLink className="inline-flex min-h-11 shrink-0 items-center px-1 font-semibold underline" />,
+    })
+  }
+  return <BannerLine entries={entries} />
+}
+
+function retryButton(label: string, onClick: () => void) {
   return (
-    <div className={rows.length > 0 ? 'border-b border-line' : undefined}>
-      {rows}
-      <HealthBanner onShowing={setHealthKind} />
-    </div>
+    <Button variant="outline" className="px-3" onClick={onClick}>
+      {label}
+    </Button>
   )
 }

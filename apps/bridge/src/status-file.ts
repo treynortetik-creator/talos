@@ -41,6 +41,8 @@ export type BridgeStatusFile = {
    * app's updater postpones a pending update when the owner writes during its 2-minute notice. Never the message, its thread or id.
    */
   last_owner_at: string | null
+  /** This bridge answers the Mac's `main-resend.json` request (main-resend.ts). Absent in an older bridge: the Mac then presses nothing. */
+  main_resend: boolean
   updated_at: string
 }
 export const GOVERNOR_STATES = ['ok', 'paused', 'park_all', 'off', 'unknown'] as const
@@ -62,6 +64,7 @@ export const STATUS_KEYS = [
   'claude_session_marker_inherited',
   'governor',
   'last_owner_at',
+  'main_resend',
   'updated_at',
 ] as const
 export const STATUS_RELAY_KEYS = ['connected', 'last_connect_at', 'last_close_code'] as const
@@ -127,6 +130,7 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
     // an older bridge never wrote it: null, "nothing known"
     last_owner_at:
       typeof o.last_owner_at === 'string' && !Number.isNaN(Date.parse(o.last_owner_at)) ? o.last_owner_at : null,
+    main_resend: o.main_resend === true,
     updated_at: o.updated_at,
   }
 }
@@ -271,6 +275,7 @@ export class StatusWriter {
         claude_session_marker_inherited: this.o.sessionMarkerInherited ?? false,
         governor: body.governor ?? null,
         last_owner_at: body.last_owner_at ?? null,
+        main_resend: true,
         updated_at: new Date(this.o.clock.now()).toISOString(),
       }
       writeJsonAtomic(this.o.path, file, 0o600)

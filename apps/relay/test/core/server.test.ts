@@ -177,7 +177,7 @@ describe('retention', () => {
     expect(count('select count(*) n from core_events')).toBeGreaterThan(0)
     expect(readdirSync(join(relay.dir, 'media'))).toHaveLength(1)
 
-    c.advance(6 * 86_400_000) // younger than the 7-day buffer: nothing goes
+    c.jump(6 * 86_400_000) // younger than the 7-day buffer: nothing goes
     expect(count('select count(*) n from core_events')).toBeGreaterThan(0)
     expect(readdirSync(join(relay.dir, 'media'))).toHaveLength(1)
 
@@ -187,7 +187,7 @@ describe('retention', () => {
     await b2.expectFrame('ack', (f) => f.seq !== undefined, { direction: 'in' })
     await b2.close()
 
-    c.advance(2 * 86_400_000 + 3_600_000) // day 8: the first rows are 8 days old
+    c.jump(2 * 86_400_000 + 3_600_000) // day 8: the first rows are 8 days old
     expect(count("select count(*) n from core_events where type = 'message'")).toBe(0)
     expect(count("select count(*) n from core_events where type = 'reply'")).toBe(1) // the one from day 6
     expect(count(`select count(*) n from core_dedup where created_at < ${c.now() - 8 * 86_400_000}`)).toBe(0)

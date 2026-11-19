@@ -20,7 +20,10 @@ export function MacMessageText({ cause, next }: { cause: string; next: string })
   )
 }
 
-export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInfo['kind'] | null) => void }) {
+/** The health notice, or null: polls /status every 60 s behind the feature flag. `onShowing` hears its kind before paint. */
+export function useHealthBannerInfo(
+  onShowing?: (kind: HealthBannerInfo['kind'] | null) => void,
+): HealthBannerInfo | null {
   const on = useFeature('health/1') === 'on'
   const config = useTalos((s) => s.config)
   const host = useHost()
@@ -53,7 +56,21 @@ export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInf
     onShowing?.(kind)
     return () => onShowing?.(null)
   }, [kind, onShowing])
+  return info
+}
 
+/** The Health link of the health notice. */
+export function HealthLink({ className }: { className?: string }) {
+  return (
+    <Link to="/settings/health" className={className ?? 'shrink-0 font-semibold underline'}>
+      Health
+    </Link>
+  )
+}
+
+/** The health notice on its own (Home). Thread-style screens fold it into the compact line (threads/Banners.tsx). */
+export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInfo['kind'] | null) => void }) {
+  const info = useHealthBannerInfo(onShowing)
   if (!info) return null
   return (
     <div
@@ -63,9 +80,7 @@ export function HealthBanner({ onShowing }: { onShowing?: (kind: HealthBannerInf
       className="flex items-start gap-3 bg-surface-2 px-4 py-2.5 text-sm"
     >
       <MacMessageText cause={info.text} next={info.next} />
-      <Link to="/settings/health" className="shrink-0 font-semibold underline">
-        Health
-      </Link>
+      <HealthLink />
     </div>
   )
 }

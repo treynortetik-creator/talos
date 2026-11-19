@@ -11,11 +11,13 @@ import { createCryptoService } from '../../src/core/crypto.ts'
 import { loadEnv, type RelayEnv } from '../../src/env.ts'
 import { type MigrateOptions, migrate } from '../../src/migrate.ts'
 import type { AppFrameContext, BridgeFrameContext, Bus, Logger, RelayServices } from '../../src/services.ts'
+import { capClockJumps } from './clock-cap.ts'
 
 export type SentFrame = { frame: Record<string, unknown>; opts?: object }
 export type LogLine = { level: 'debug' | 'info' | 'warn' | 'error'; obj: object | string; msg?: string }
 
 export class RecordingBus implements Bus {
+  constructor(private readonly db?: Database.Database) {}
   readonly toAppsLog: SentFrame[] = []
   readonly toBridgeLog: SentFrame[] = []
   private online = false
@@ -30,9 +32,23 @@ export class RecordingBus implements Bus {
     }
     this.toAppsLog.push({ frame, ...(opts ? { opts } : {}) })
   }
-  async toBridge(frame: Record<string, unknown>, opts: { durable: boolean; ttl_s?: number; resume?: boolean }) {
+  async toBridge(
+    frame: Record<string, unknown>,
+    opts: { durable: boolean; ttl_s?: number; resume?: boolean; alsoWrite?: () => void },
+  ) {
+    // the real hub runs it in the same transaction as the queue write
+    if (opts.alsoWrite) this.db ? this.db.transaction(opts.alsoWrite)() : opts.alsoWrite()
     this.toBridgeLog.push({ frame, opts })
     return { queued: !this.online }
+  }
+  dropBridgeFrames(frameIds: readonly string[], type: string): void {
+    for (const id of frameIds) {
+      this.db?.prepare('delete from core_outbox where frame_id = ? and type = ?').run(id, type)
+      this.db?.prepare('delete from core_events where frame_id = ? and type = ?').run(id, type)
+    }
+  }
+  storedFrameIds(frameIds: readonly string[]): Set<string> {
+    return new Set(frameIds.filter((id) => this.db?.prepare('select 1 from core_events where frame_id = ?').get(id)))
   }
   onAppFrame<T extends FrameType>(type: T, handler: (frame: FrameOf<T>, ctx: AppFrameContext) => void | Promise<void>) {
     this.appHandlers.set(type, [...(this.appHandlers.get(type) ?? []), handler as never])
@@ -113,7 +129,8 @@ export function createFakeServices(
   if (opts.migrate !== false) migrate(db, typeof opts.migrate === 'object' ? opts.migrate : {})
   const env = testEnv(opts.env)
   const clock = fakeClock()
-  const bus = new RecordingBus()
+  capClockJumps(clock) // an advance that replays days of timers fails, with what to use instead (clock-cap.ts)
+  const bus = new RecordingBus(db)
   const logs: LogLine[] = []
   const log: Logger = {
     debug: (obj, msg) => void logs.push({ level: 'debug', obj, ...(msg ? { msg } : {}) }),

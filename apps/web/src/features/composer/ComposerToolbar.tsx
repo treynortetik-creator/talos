@@ -13,6 +13,7 @@ import { BugThreadButton } from '../bugreport/BugButton.tsx'
 import { LiveCallButton } from '../registry.ts'
 import type { useSlashPicker } from '../session/SlashPicker.tsx'
 import type { WorkingStop } from '../threads/WorkingRow.tsx'
+import { useSendGuard } from './sendGuard.ts'
 import type { Mode } from './useComposerVoice.ts'
 
 type Which = 'photos' | 'camera' | 'files'
@@ -59,6 +60,7 @@ export function ComposerToolbar(p: {
 }) {
   const { mode, hint, elapsed, text, picker, dictationBusy } = p
   const recording = mode !== 'idle'
+  const sendGuard = useSendGuard(p.canSend && !recording)
   return (
     <div data-testid="composer-row" className="flex flex-wrap items-end gap-x-2 gap-y-1.5 @min-[36rem]:flex-nowrap">
       <input
@@ -211,7 +213,13 @@ export function ComposerToolbar(p: {
             aria-disabled={p.tooLong || undefined}
             // A click must not pull focus off the box (the button also unmounts once the text empties).
             onMouseDown={(e) => e.preventDefault()}
-            onClick={p.onSend}
+            onClick={(e) => {
+              sendGuard.sent(e)
+              p.onSend()
+              // From the keyboard (Enter or Space on Send: detail 0) focus would fall to the page once Send goes; it goes back to
+              // the box, so a second Enter or Space never reaches the mic or the call button that take Send's place
+              if (e.detail === 0) p.taRef.current?.focus({ preventScroll: true })
+            }}
             className={cn(
               'grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill bg-accent text-on-accent',
               p.tooLong && 'opacity-40',
@@ -220,7 +228,8 @@ export function ComposerToolbar(p: {
             <IconSend />
           </button>
         ) : (
-          <>
+          // the mic and the live-call button take Send's place: a second press of a send must not reach them (sendGuard.ts)
+          <div className="contents" {...sendGuard.handlers}>
             <button
               type="button"
               aria-label="Record a voice note"
@@ -246,7 +255,7 @@ export function ComposerToolbar(p: {
                 <LiveCallButton threadId={p.threadId} disabled={!p.macOnline || dictationBusy} />
               </Suspense>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

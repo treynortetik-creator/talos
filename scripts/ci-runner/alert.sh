@@ -9,8 +9,8 @@
 # already seen (a run that finished after a newer commit's). The streak, with the set last said (failing=, one a line;
 # failing_n= marks a file that keeps one), is ~/.cache/talos-ci/main-streak. The message is a file in
 # ~/.cache/talos-ci/alerts/: the runner can't send it, and must never open the live Talos home to post it. A session on this
-# Mac passes it on (scripts/ci-alerts.sh watch, as a Monitor). It decides nothing about the commit: any trouble here is a line
-# in the log and exit 0.
+# Mac passes it on (scripts/ci-alerts.sh watch, as a Monitor). It decides nothing about the commit. GitHub unreadable is an alert
+# of its own once it lasts (ci_gh_problem, scripts/ci-runner/gh-account.sh) and exit 1; any other trouble is a line in the log.
 ci_alert_age() { # ci_alert_age <seconds>: "2h 5m" or "5m"
   local m=$(($1 / 60))
   [ "$m" -ge 0 ] || m=0
@@ -34,7 +34,7 @@ ci_alert() {
   git fetch -q origin main </dev/null >/dev/null 2>&1
   git merge-base --is-ancestor "$sha" origin/main 2>/dev/null || { echo "ci-runner: alert: $short is not on main; nothing to say"; return 0; }
   # the hostile nightly (CI_HOSTILE): its own hostile-ci/* and report only, never main's verdict or streak (ci_alert_hostile)
-  [ "${CI_HOSTILE:-}" != 1 ] || { ci_alert_hostile "$repo" "$sha" "$cache"; return 0; }
+  [ "${CI_HOSTILE:-}" != 1 ] || { ci_alert_hostile "$repo" "$sha" "$cache"; return; }
   if [ -f "$file" ]; then
     prev="$(sed -n 's/^state=//p' "$file")" last="$(sed -n 's/^sha=//p' "$file")" first="$(sed -n 's/^first=//p' "$file")"
     first_at="$(sed -n 's/^first_at=//p' "$file")" green="$(sed -n 's/^green=//p' "$file")"
@@ -44,10 +44,14 @@ ci_alert() {
     echo "ci-runner: alert: $short is older than ${last:0:7}, which already counted; nothing to say"
     return 0
   fi
-  if ! rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>/dev/null)"; then
-    echo "ci-runner: alert: the statuses of $short could not be read; nothing said"
-    return 0
+  mkdir -p "$cache" 2>/dev/null # the error file's folder: a missing one would fail the read itself
+  if ! rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>"$cache/.alert-gh.err")"; then
+    # never a quiet "nothing said": a red main whose statuses cannot be read would go unannounced. At once, with no wait: this
+    # runs once a push, not every 10 minutes like the watcher
+    ci_gh_problem "$cache" alert-read "ci-runner: alert: the statuses of $short could not be read from $repo, so whether main went red is unknown ($(tail -1 "$cache/.alert-gh.err" 2>/dev/null))"
+    return 1
   fi
+  ci_gh_problem_clear "$cache" alert-read
   # the nightly (CI_NIGHTLY): its own nightly-ci/* only, never main's verdict or the streak (ci_alert_nightly)
   [ "${CI_NIGHTLY:-}" != 1 ] || { ci_alert_nightly "$repo" "$sha" "$rows" "$cache"; return 0; }
   line="$(printf '%s\n' "$rows" | ci_classify)"
@@ -131,12 +135,14 @@ ci_alert_nightly() {
 # test once) and each that failed once and passed on its retry (flaky, counted). A red run also writes ONE alert of its own kind
 # ("hostile"): a finding for a test fix, never "main is RED". It never reads or writes main-streak.
 ci_alert_hostile() {
-  local repo="$1" sha="$2" cache="$3" short="${2:0:7}" rows line cls jobs tests flaky nt nf rep now url j sum ran
+  local repo="$1" sha="$2" cache="$3" short="${2:0:7}" rows line cls jobs tests flaky nt nf rep now url j sum ran reps
   now=$(date +%s) rep="$cache/hostile/$(date -u +%F).md" url="${GITHUB_SERVER_URL:-https://github.com}/$repo/actions/runs/${GITHUB_RUN_ID:-}"
-  if ! rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>/dev/null)"; then
-    echo "ci-runner: alert: the statuses of $short could not be read; no hostile report"
-    return 0
+  mkdir -p "$cache" 2>/dev/null # the error file's folder: a missing one would fail the read itself
+  if ! rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>"$cache/.alert-gh.err")"; then
+    ci_gh_problem "$cache" hostile-read "ci-runner: alert: the statuses of $short could not be read from $repo, so the hostile nightly has no report ($(tail -1 "$cache/.alert-gh.err" 2>/dev/null))"
+    return 1
   fi
+  ci_gh_problem_clear "$cache" hostile-read
   line="$(printf '%s\n' "$rows" | awk -F'\t' 'BEGIN { OFS = "\t" } $1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ { sub(/^hostile-ci\//, "local-ci/", $1); print }' | ci_classify)"
   cls="${line%%$'\t'*}"
   jobs="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ && $2 == "failure" { sub(/^hostile-ci\//, "", $1); if (!s[$1]++) printf "%s ", $1 }')"
@@ -146,6 +152,8 @@ ci_alert_hostile() {
   flaky="$(for j in $ran; do sed -n 's/^passed on retry: //p' "$cache/logs/$short-$j.log" 2>/dev/null; done | awk 'NF && !s[$0]++')"
   nt="$(printf '%s' "$tests" | grep -c .)" nf="$(printf '%s' "$flaky" | grep -c .)"
   sum="$nt finding(s) (failed twice), $nf flaky (failed once)${jobs:+; red: ${jobs% }}"
+  # one line each: "<context>: <state> (<description>)", the description cut to one line of printable text
+  reps="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\/report-/ { d = $3; gsub(/[^[:print:]]/, " ", d); if (length(d) > 160) d = substr(d, 1, 160) "..."; if (!s[$1]++) print $1 ": " $2 (d != "" ? " (" d ")" : "") }')"
   mkdir -p "$cache/hostile" || return 0
   {
     printf '\n## %s, %s UTC: %s\n\nrun: %s\n\n' "$short" "$(date -u +%H:%M)" "$cls" "$url"
@@ -159,6 +167,12 @@ ci_alert_hostile() {
     if [ "$nt" -gt 0 ]; then printf '%s\n' "$tests" | sed 's/^/- /'; else echo "- none${jobs:+ named in the logs of the red job(s): ${jobs% } ($cache/logs/$short-<job>.log)}"; fi
     printf '\nFlaky, failed once and passed on retry (%s):\n' "$nf"
     if [ "$nf" -gt 0 ]; then printf '%s\n' "$flaky" | sed 's/^/- /'; else echo "- none"; fi
+    # report-only contexts (Titan's check and e2e packages with CI_TITAN_HOSTILE=shadow): as they stand when this step runs, never
+    # in the result above. Their findings are in that machine's own logs and its job's per-test artifact, not counted here.
+    if [ -n "$reps" ]; then
+      printf '\nReport-only, not in the result above (Titan: CI_TITAN_HOSTILE=shadow; its tests are in its job'"'"'s logs):\n'
+      printf '%s\n' "$reps" | sed 's/^/- /'
+    fi
   } >> "$rep"
   echo "ci-runner: alert: hostile run of $short is $cls: $sum; report: $rep"
   [ "$cls" = red ] || return 0
@@ -178,13 +192,16 @@ ci_alert_hostile() {
 # own alert). State: ~/.cache/talos-ci/main-report-<job> ("<state> <sha> <first red sha>").
 # Run by the alert step and, for a report that ends after Lemnos's run, every 10 minutes by scripts/ci-alerts.sh watch.
 ci_report_alert() {
-  local repo="${GITHUB_REPOSITORY:-treynortetik-creator/talos-app}" cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}" ctx f list
-  local sha rows st desc prev last first out now todo="report-ci/linux report-ci/check report-ci/browser-e2e" left
-  list="$(gh api "repos/$repo/commits?sha=main&per_page=20" --jq '.[] | [.sha, .commit.committer.date] | @tsv' </dev/null 2>/dev/null)" || { echo "ci-runner: report: main's commits could not be read"; return 0; }
+  local repo="${GITHUB_REPOSITORY:-${CI_REPO:-treynortetik-creator/talos-app}}" cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}" ctx f list
+  local sha rows st desc prev last first out now todo="report-ci/linux report-ci/check report-ci/browser-e2e" left err
+  err="$cache/.report-gh.err"
+  mkdir -p "$cache" || return 1
+  # GitHub unreadable is an error and an alert (ci_gh_problem, scripts/ci-runner/gh-account.sh), never a quiet "nothing to say"
+  list="$(gh api "repos/$repo/commits?sha=main&per_page=20" --jq '.[] | [.sha, .commit.committer.date] | @tsv' </dev/null 2>"$err")" || { ci_gh_problem "$cache" report-read "ci-runner: report: main's commits could not be read from $repo, so a red Linux report would go unseen ($(tail -1 "$err" 2>/dev/null))" "$(ci_gh_read_after)"; return 1; }
   now=$(date +%s)
   for sha in $(printf '%s\n' "$list" | cut -f1); do
     [ -n "$todo" ] || break
-    rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>/dev/null)" || { echo "ci-runner: report: the statuses of ${sha:0:7} could not be read"; return 0; }
+    rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>"$err")" || { ci_gh_problem "$cache" report-read "ci-runner: report: the statuses of ${sha:0:7} could not be read from $repo, so a red Linux report would go unseen ($(tail -1 "$err" 2>/dev/null))" "$(ci_gh_read_after)"; return 1; }
     left=""
     for ctx in $todo; do
       f="$cache/main-report-${ctx#report-ci/}" prev="" last="" first="" out=""
@@ -208,5 +225,6 @@ ci_report_alert() {
     done
     todo="${left# }"
   done
+  ci_gh_problem_clear "$cache" report-read
   return 0
 }

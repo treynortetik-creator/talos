@@ -2076,6 +2076,7 @@ describe('the workflows', () => {
       'check-titan': { statuses: 'write', contents: 'read' }, // nor does check's part
       close: { actions: 'write' }, // cancel the run; it checks nothing out, so no code under test meets this token
       green: { contents: 'write', statuses: 'read', actions: 'read' }, // push refs/heads/green; actions: read for the run behind each status
+      relays: { contents: 'read', deployments: 'read', statuses: 'read', actions: 'read' }, // reads each relay's deployments and the deployed commit's statuses after green; no write of any kind
       inbox: { contents: 'read', issues: 'write' }, // the lead's inbox issue; it runs only lead-inbox.sh flush, on main's code
     }
     const j = jobs()
@@ -2091,15 +2092,15 @@ describe('the workflows', () => {
   })
 
   itRunnerYml(
-    'only the steps that talk to GitHub get the token: superseded, dispatch-wait, run, fallback, alert, sweep, close, green and inbox',
+    'only the steps that talk to GitHub get the token: superseded, dispatch-wait, run, fallback, alert, sweep, close, green, relays and inbox',
     () => {
       const withToken = runnerYml.split('\n      - ').filter((s) => s.includes('GH_TOKEN'))
       // run and sweep in ci and in each of the six remote jobs, ci's superseded, dispatch-wait, fallback, alert, e2e-shadow,
-      // check-shadow and both pairs, close, green, and inbox
-      expect(withToken).toHaveLength(25)
+      // check-shadow and both pairs, close, green, relays, and inbox
+      expect(withToken).toHaveLength(26)
       for (const step of withToken)
         expect(step).toMatch(
-          /scripts\/ci-pair\.sh part|ci-runner\.sh e2e-shadow|ci-runner\.sh check-shadow|scripts\/ci-runner\.sh run|ci-runner\.sh superseded|ci-runner\.sh dispatch-wait|ci-runner\.sh fallback|ci-runner\.sh alert|ci-runner\.sh sweep|ci-runner\.sh green|lead-inbox\.sh flush|Cancel the run/,
+          /scripts\/ci-pair\.sh part|ci-runner\.sh e2e-shadow|ci-runner\.sh check-shadow|scripts\/ci-runner\.sh run|ci-runner\.sh superseded|ci-runner\.sh dispatch-wait|ci-runner\.sh fallback|ci-runner\.sh alert|ci-runner\.sh sweep|ci-runner\.sh green|ci-runner\.sh relays|lead-inbox\.sh flush|Cancel the run/,
         )
     },
   )
@@ -2378,7 +2379,12 @@ describe('the workflows', () => {
     () => {
       const j = jobs() as unknown as Record<string, Job & { 'runs-on': string[]; 'continue-on-error': boolean }>
       const part = j['browser-e2e'] as Job & { 'runs-on': string[]; 'continue-on-error': boolean; if: string }
-      expect(part['runs-on']).toEqual(j.titan?.['runs-on'])
+      // Titan's runner, or titan-b for the hostile nightly's report-only copies (plan's linux_label)
+      expect(part['runs-on']).toEqual([
+        'self-hosted',
+        'Linux',
+        "${{ needs.plan.outputs.linux_label || 'talos-ci-linux' }}",
+      ])
       expect(part['continue-on-error']).toBe(true)
       expect(part.env?.CI_RUN_PREFIX).toBe('${{ needs.plan.outputs.browser_e2e }}')
       expect(part.env?.CI_STATUS_WHERE).toBe('titan')
@@ -2400,7 +2406,7 @@ describe('the workflows', () => {
       const ci = j.ci as Job
       const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh e2e-shadow') as Step
       expect(shadow.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'report-ci' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.browser_e2e == 'report-ci' && env.CI_HOSTILE != '1' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       // the shadow step names the part's job and run step as the API lists them (when Titan's run began, for its wait)
@@ -2455,7 +2461,12 @@ describe('the workflows', () => {
       expect(part.env?.CI_RUN_PREFIX).toBe('${{ needs.plan.outputs.check_titan }}')
       expect(part.env?.CI_STATUS_WHERE).toBe('titan')
       expect(String(part.env?.CI_WORKERS)).toBe('6')
-      expect(part['runs-on']).toEqual(j.titan?.['runs-on'])
+      // Titan's runner, or titan-b for the hostile nightly's report-only copies (plan's linux_label)
+      expect(part['runs-on']).toEqual([
+        'self-hosted',
+        'Linux',
+        "${{ needs.plan.outputs.linux_label || 'talos-ci-linux' }}",
+      ])
       expect(part['continue-on-error']).toBe(true)
       const runs = part.steps.map((st) => st.run ?? st.uses ?? '')
       const run = runs.indexOf('exec bash scripts/ci-runner.sh run')
@@ -2478,7 +2489,7 @@ describe('the workflows', () => {
       const ci = j.ci as Job
       const shadow = ci.steps.find((st) => st.run === 'bash scripts/ci-runner.sh check-shadow') as Step
       expect(shadow.if).toBe(
-        "${{ !cancelled() && needs.plan.outputs.check_titan == 'report-ci' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
+        "${{ !cancelled() && needs.plan.outputs.check_titan == 'report-ci' && env.CI_HOSTILE != '1' && steps.dispatch.outputs.superseded != 'true' && steps.settled.outputs.superseded != 'true' }}",
       )
       expect((shadow as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       expect(mins(shadow)).toBeGreaterThan(0)

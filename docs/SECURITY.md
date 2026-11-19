@@ -284,7 +284,8 @@ has been misled by a message it read; they are not a boundary against one that i
 the backstop: it cannot stop a change, it tells the owner about one.
 
 - **Terminal check.** `enroll`, `devices` (and `devices revoke`), `rotate` and `trust on` refuse when stdin or stdout is not a
-  terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these four until he decides on adding devices). Everything
+  terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these four until he decides on adding devices). `peer`
+  (linking another Talos of his: create, add, list, remove, rotate) refuses the same way, so only he can link or unlink one. Everything
   else a person could ask the agent to do, it may (the kit's update, rollback and restore, adopt, apps scan, install-ask-rules,
   install-guards, supervise start and stop among them); `internal` rows (hook, start, supervise, guards refresh) are run by
   Talos itself, which nothing enforces. One thing stays the owner's inside `supervise start`: while his own Stop stands, a start

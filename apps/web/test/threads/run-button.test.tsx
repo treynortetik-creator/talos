@@ -954,9 +954,11 @@ describe('where a pane Run runs, and its witness', () => {
       const client = paneClient()
       mount(msg(fence('echo hi')), client)
       fireEvent.click(runButton() as HTMLElement)
-      await waitFor(() => expect(pane.witness).toHaveLength(1))
-      const id = (pane.witness[0] as { client_msg_id: string }).client_msg_id
-      expect(screen.getByTestId('run-status').textContent).toBe('Sent · waiting for Terminal')
+      await waitFor(() => expect(screen.getByTestId('run-status').textContent).toBe('Sent · waiting for Terminal'))
+      // This tap's own id, from the message it sent. Not "the first witness": a Run from the test before can still be on its
+      // way when that test ends, and its witness then lands in this test's (just emptied) list first.
+      const id = await sentRunId(client)
+      expect(pane.witness.map((w) => (w as { client_msg_id: string }).client_msg_id)).toContain(id)
       return id
     }
 

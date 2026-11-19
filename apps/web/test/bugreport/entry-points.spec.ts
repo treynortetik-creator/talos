@@ -2,8 +2,9 @@
 // computer, the menu on a phone, and Settings > Bug reports, which also holds where new reports are sent. The picture is of
 // the screen behind, never of the menu that opened the reporter. ⌘K and Help still work (bug-report.spec.ts).
 
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { BUG_WEBHOOK_URL_RULE } from '@talos-app/protocol'
+import { test } from '../helpers/ios-readback.ts'
 import { isPhoneWidth, openPhoneMenu } from '../helpers/phone.ts'
 
 test.use({ bypassCSP: true, serviceWorkers: 'block' })
@@ -16,6 +17,7 @@ const reporter = (page: Page) => page.getByRole('dialog', { name: 'Report a bug'
 
 test('from the thread menu (computer) or the menu (phone): the reporter opens with a picture of the screen behind', async ({
   page,
+  browserName,
 }, info) => {
   await open(page)
   if (isPhoneWidth(page)) {
@@ -28,10 +30,14 @@ test('from the thread menu (computer) or the menu (phone): the reporter opens wi
     await menu.getByRole('menuitem', { name: 'Report a bug' }).click()
   }
   await expect(reporter(page)).toBeVisible()
-  // the menu that opened it is gone, and the picture is a real one on every engine (WebKit included)
+  // the menu that opened it is gone, and the picture is a real one where the engine can read a drawn page back; WebKit, as on
+  // an iPhone (ios-readback.ts), takes none and says so (capture.ts canReadBackPage, 2026-11-15)
   await expect(page.getByRole('menu')).toHaveCount(0)
   await expect(page.getByTestId('phone-menu')).toHaveCount(0)
-  await expect(page.getByTestId('bug-canvas')).toHaveAttribute('data-capture', 'ok')
+  await expect(page.getByTestId('bug-canvas')).toHaveAttribute(
+    'data-capture',
+    browserName === 'webkit' ? 'failed' : 'ok',
+  )
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0)
   await page.screenshot({ path: info.outputPath('reporter-from-menu.png') })
 })

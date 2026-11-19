@@ -41,7 +41,7 @@ extension Supervisor {
     switch n {
     case .dialog(let label)?: return label
     case .confirmColdStart?, .restartNotConfirmed?: return MainRestartCheck.devWarningLabel
-    case .stuck?, .startStalled?, .bridgeNotLive?, .relayUnreachable?, .notReading?, nil: return nil
+    case .stuck?, .startStalled?, .bridgeNotLive?, .relayUnreachable?, .notReading?, .stalled?, nil: return nil
     }
   }
 

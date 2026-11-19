@@ -38,11 +38,11 @@ describe('the 401 says why the session ended', () => {
   it('idle for more than 14 days is "expired", and it is still "expired" after the relay tidies old rows', async () => {
     const cookie = await h.loginPinned()
     expect((await me(cookie)).status).toBe(200)
-    h.fake.clock.advance(15 * DAY)
+    h.fake.clock.jump(15 * DAY)
     expect(await me(cookie)).toMatchObject({ status: 401, body: { reason: 'expired' } })
 
     const second = await h.loginPinned()
-    h.fake.clock.advance(15 * DAY)
+    h.fake.clock.jump(15 * DAY)
     h.state.core.purge() // tidied before the owner ever opened the app again
     expect(await me(second)).toMatchObject({ status: 401, body: { reason: 'expired' } })
   })
@@ -50,9 +50,9 @@ describe('the 401 says why the session ended', () => {
   it('with a sign-in lasting 100 days, the idle-expired record is still there when the cookie comes back at day 75', async () => {
     const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100', SESSION_IDLE_DAYS: '14' } })
     const cookie = await long.loginPinned()
-    long.fake.clock.advance(15 * DAY)
+    long.fake.clock.jump(15 * DAY)
     long.state.core.purge() // ends the session as "expired"
-    long.fake.clock.advance(60 * DAY)
+    long.fake.clock.jump(60 * DAY)
     long.state.core.purge() // the cookie (100 days) is still alive; the record must be too
     const res = await long.app.request('/api/me', { headers: { Cookie: cookie } })
     expect(res.status).toBe(401)
@@ -62,21 +62,21 @@ describe('the 401 says why the session ended', () => {
   it('a lowered SESSION_TTL_DAYS does not shorten how long the end record is kept; the bound is 365 days', async () => {
     const long = await makeHarness({ env: { SESSION_TTL_DAYS: '100', SESSION_IDLE_DAYS: '14' } })
     const cookie = await long.loginPinned()
-    long.fake.clock.advance(15 * DAY)
+    long.fake.clock.jump(15 * DAY)
     long.state.core.purge() // ends the session as "expired"
     // the owner lowers the setting after this cookie was issued; the cookie still lives on its old 100 days
     ;(long.state.core as unknown as { ttlMs: number }).ttlMs = 1 * DAY
-    long.fake.clock.advance(75 * DAY) // day 90: past the old 45-day floor
+    long.fake.clock.jump(75 * DAY) // day 90: past the old 45-day floor
     long.state.core.purge()
     const res = await long.app.request('/api/me', { headers: { Cookie: cookie } })
     expect(await res.json()).toMatchObject({ reason: 'expired' })
     // the bound itself: kept at about 363 days old, gone at about 367
-    long.fake.clock.advance(287 * DAY) // the record is about 363 days old
+    long.fake.clock.jump(287 * DAY) // the record is about 363 days old
     long.state.core.purge()
     expect(await (await long.app.request('/api/me', { headers: { Cookie: cookie } })).json()).toMatchObject({
       reason: 'expired',
     })
-    long.fake.clock.advance(4 * DAY) // about 367 days old
+    long.fake.clock.jump(4 * DAY) // about 367 days old
     long.state.core.purge()
     expect(
       (await (await long.app.request('/api/me', { headers: { Cookie: cookie } })).json()) as { reason?: string },
@@ -86,7 +86,7 @@ describe('the 401 says why the session ended', () => {
   it('a session that expired and was tidied away is "revoked" once its device is revoked', async () => {
     const cookie = await h.loginPinned()
     const id = h.state.core.lookupSession(cookie.split('=')[1] ?? '')?.deviceId as string
-    h.fake.clock.advance(15 * DAY)
+    h.fake.clock.jump(15 * DAY)
     h.state.core.purge() // the record now says "expired"
     expect(await me(cookie)).toMatchObject({ status: 401, body: { reason: 'expired' } })
     h.state.core.revokeDevice(id)
@@ -95,7 +95,7 @@ describe('the 401 says why the session ended', () => {
 
   it('a session that expired and was tidied away is "logged_out_everywhere" after sign-out everywhere', async () => {
     const old = await h.loginPinned()
-    h.fake.clock.advance(15 * DAY)
+    h.fake.clock.jump(15 * DAY)
     h.state.core.purge()
     expect(await me(old)).toMatchObject({ status: 401, body: { reason: 'expired' } })
     const now = await h.loginPinned()

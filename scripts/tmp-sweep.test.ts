@@ -1,4 +1,5 @@
 // scripts/tmp-sweep.sh: the gate removes test folders that killed runs left directly in its $TMPDIR, once they are a day old.
+// gate-reads: e2e/*.ts apps/bridge/test-contract/*.ts apps/desktop/Tests/*.swift apps/desktop/scripts/*.sh kit/scripts/*.sh scripts/*.sh
 // That $TMPDIR may be the machine's shared one, also the live Talos app's, so only names on the allowlist
 // (scripts/tmp-sweep-prefixes.txt) go: never a fresh one, never another name, never what a link points at, never anything below
 // the top level. And the list cannot fall behind the tests: a test that makes a folder in the temp folder under a new prefix
@@ -199,6 +200,20 @@ describe('tmp-sweep-prefixes.txt', () => {
     expect(found.sort()).toEqual(Object.keys(BUILT_KNOWN).sort())
     for (const ps of Object.values(BUILT_KNOWN))
       for (const p of ps) expect(SWEPT.includes(p) || NOT_SWEPT.includes(p), p).toBe(true)
+  })
+
+  it('its gate-reads line covers every file it scans, so a change to one plans this test (a new Swift test once went unchecked)', () => {
+    const line = readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/^\/\/ gate-reads: (.+)$/m)?.[1] ?? ''
+    // the gate matches these as shell case patterns, where * crosses /
+    const globs = line
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`))
+    expect(globs.length).toBeGreaterThan(0)
+    const uncovered = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n')
+      .filter((f) => SCOPE.test(f) && !globs.some((g) => g.test(f)))
+    expect(uncovered).toEqual([])
   })
 
   it('names every prefix a test makes directly in the temp folder, as swept or as "!" not swept', () => {

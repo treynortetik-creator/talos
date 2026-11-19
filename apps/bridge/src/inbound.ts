@@ -28,6 +28,7 @@ import { configFrames } from './inbound-config.ts'
 import { eventsFrames } from './inbound-events.ts'
 import { backlogLanes, lanePlan, sessionLane } from './inbound-lanes.ts'
 import { messagesFrames } from './inbound-messages.ts'
+import { peerFrames } from './inbound-peer.ts'
 import { readsFrames } from './inbound-reads.ts'
 import { runsFrames } from './inbound-runs.ts'
 import { scheduleFrames } from './inbound-schedule.ts'
@@ -570,6 +571,8 @@ export class Inbound {
         return this.onShareItem(it, f)
       case 'problem.item':
         return this.onProblemItem(it, f)
+      case 'peer.message':
+        return this.onPeerMessage(it, f)
       case 'device.enrolled':
         await this.enroll.onEnrolled(f)
         return this.done(it)
@@ -729,6 +732,10 @@ export class Inbound {
 
   private onProblemItem(...args: Parameters<typeof eventsFrames.onProblemItem>) {
     return eventsFrames.onProblemItem.apply(this, args)
+  }
+
+  private onPeerMessage(...args: Parameters<typeof peerFrames.onPeerMessage>) {
+    return peerFrames.onPeerMessage.apply(this, args)
   }
 
   private onHookEvent(...args: Parameters<typeof eventsFrames.onHookEvent>) {

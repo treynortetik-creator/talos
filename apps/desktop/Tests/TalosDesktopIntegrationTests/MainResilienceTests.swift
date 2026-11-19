@@ -309,7 +309,7 @@ struct CleanExitTests {
     // the later steps are 30 s: only restarts at step 0 get three of them done inside this wait
     #expect(r.tickUntil(20) { r.starts.count == 4 && isRunning(r.phase()) }, "\(r.phase()), starts \(r.starts.count), audit: \(r.audit)")
     #expect(r.audit.contains(" exit ") && r.audit.contains("code=0"), "they were clean exits: \(r.audit)")
-    #expect(r.sup.status.restartsInWindow == 0, "none of it is the crash loop's: \(r.sup.status.restartsInWindow)")
+    #expect(r.sup.status.restartsInWindow == 0, "none of it is the crash loop's: \(r.sup.status.restartsInWindow), audit: \(r.audit)")
     #expect(!r.audit.contains(" crash_loop") && stopReason(r.phase()) == nil)
     let delays = r.allEvents.compactMap { e -> Double? in if case .restarting(let a, let d) = e { return a == 0 ? d : -1 } else { return nil } }
     #expect(delays == [0.3, 0.3, 0.3], "each at the first step: \(delays)")

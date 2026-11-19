@@ -97,6 +97,14 @@ extension WorkerManager {
     }
   }
 
+  /// The thread's live state file in the agent folder (`threads/<id>.state.md`), made when it is missing at a real start (never at a dry
+  /// plan; never overwritten, never through a link). A problem is audited and never stops the start.
+  func seedThreadState(_ id: String, name: String?) {
+    if case .problem(let why) = ThreadStateSeed.seed(agentDir: options.agentDir, id: id, name: name) {
+      audit("worker_state_seed_failed thread=\(id) why=\"\(WorkerNotice.logValue(why))\"")
+    }
+  }
+
   /// The least time between two new reasons told to one thread.
   static let hookNoticeGap: Double = 60
 

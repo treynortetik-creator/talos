@@ -65,8 +65,11 @@ public enum LoginShellEnv {
 
   /// shell env − denylist − inherited Claude Code markers (`ClaudeEnvScrub`), then `overrides` (desktop.json `env`) on
   /// top, then TERM and COLORTERM. THE one place every launch path builds the agent's environment.
-  public static func build(shellEnv: [String: String], overrides: [String: String]) -> [String: String] {
+  /// `bundledTools`: the app's own bun and tmux folder, added to the end of the PATH (a Mac's own copies come first); the owner's `PATH` in
+  /// `overrides` still replaces the whole thing.
+  public static func build(shellEnv: [String: String], overrides: [String: String], bundledTools: String? = BundledTools.dir) -> [String: String] {
     var env = ClaudeEnvScrub.scrub(shellEnv.filter { !denylist.contains($0.key) && !isWorkerChannelSwitch($0.key, $0.value) })
+    if let p = BundledTools.appending(toPath: env["PATH"], dir: bundledTools) { env["PATH"] = p }
     for (k, v) in overrides where !ClaudeEnvScrub.isSessionMarker(k) { env[k] = v }
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"

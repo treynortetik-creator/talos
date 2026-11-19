@@ -216,6 +216,7 @@ describe('stdio server', () => {
         ...MOD_BRIDGE_TOOLS,
         ...PAGE_BRIDGE_TOOLS,
         'handoff',
+        'peer_send',
         'thread_session',
         'restart_main',
         ...SCREEN_BRIDGE_TOOLS,

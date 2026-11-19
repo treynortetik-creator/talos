@@ -102,9 +102,10 @@ job_browser() {
   [ -z "${CI_BROWSER_E2E_PART:-}" ] || only=("${E2E_HERE[@]}")
   # CI_BROWSER_E2E_SHADOW (Lemnos in e2e-shadow, docs/CI-MACHINES.md, "The e2e packages on Titan"): every package here, as today,
   # web first and the others in a call of their own, so the shadow comparison (ci-runner.sh e2e-shadow) reads when web ended
-  # and the others' own result from the "e2e-shadow:" lines. With the part, the fold wins: those packages are the part's.
+  # and the others' own result from the "e2e-shadow:" lines. With the part, the fold wins: those packages are the part's. Never in
+  # the hostile nightly (CI_HOSTILE=1): Titan's copy there is report-only and nothing compares it, so the packages run in one call.
   local shadow=""
-  [ -z "${CI_BROWSER_E2E_SHADOW:-}" ] || [ -n "${CI_BROWSER_E2E_PART:-}" ] || { shadow=1 only=("${E2E_HERE[@]}"); }
+  [ -z "${CI_BROWSER_E2E_SHADOW:-}" ] || [ -n "${CI_BROWSER_E2E_PART:-}" ] || [ "${CI_HOSTILE:-}" = 1 ] || { shadow=1 only=("${E2E_HERE[@]}"); }
   # PW_PORT is this slot's own web preview port (exported above), so neither a builder's ad-hoc Playwright run on the
   # default 4173 nor a run in another slot can collide with it. The e2e suite and the relay specs pick free ports.
   # After the check job, not beside it: the e2e suite has the same 3-second waits on real processes, and the web specs want the

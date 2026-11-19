@@ -5,14 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Capture } from '../../src/features/bugreport/capture.ts'
 
 let pending: Array<(c: Capture) => void> = []
-const calls = { capture: 0 }
+const calls: { capture: number; signal?: AbortSignal } = { capture: 0 }
+let known: boolean | null = null
 vi.mock('../../src/features/bugreport/capture.ts', () => ({
-  capturePage: () => {
+  capturePage: (_root: unknown, signal?: AbortSignal) => {
     calls.capture++
+    calls.signal = signal
     return new Promise<Capture>((r) => pending.push(r))
   },
   blankCapture: () => document.createElement('canvas'),
   pictureFromFile: async () => ({ canvas: document.createElement('canvas'), ok: true, skipped: 0 }),
+  readBackKnown: () => known,
 }))
 
 import { blobFromDataUrl, CAPTURE_LIMIT_MS, useBugReport } from '../../src/features/bugreport/store.ts'
@@ -25,6 +28,7 @@ const flush = async () => {
 beforeEach(() => {
   pending = []
   calls.capture = 0
+  known = null
   useBugReport.getState().close()
   vi.stubGlobal('requestAnimationFrame', (f: FrameRequestCallback) => setTimeout(() => f(0), 0))
 })
@@ -33,6 +37,34 @@ afterEach(() => {
 })
 
 describe('Report a bug opens at once', () => {
+  it('closing the sheet, or adding a picture, stops the copy at once, not when the give-up comes', async () => {
+    void useBugReport.getState().start()
+    await flush()
+    expect(calls.capture).toBe(1)
+    expect(calls.signal?.aborted).toBe(false)
+    useBugReport.getState().close()
+    expect(calls.signal?.aborted).toBe(true)
+    void useBugReport.getState().start()
+    await flush()
+    expect(calls.capture).toBe(2)
+    const second = calls.signal
+    expect(second?.aborted).toBe(false)
+    useBugReport.getState().setPicture(pic())
+    expect(second?.aborted).toBe(true)
+    expect(useBugReport.getState()).toMatchObject({ open: true, capturing: false })
+  })
+
+  it('where the page is already known not to read back (an iPhone, asked on idle), it opens with no picture at once and copies nothing', async () => {
+    known = false
+    void useBugReport.getState().start()
+    const s = useBugReport.getState()
+    expect(s).toMatchObject({ open: true, capturing: false })
+    expect(s.capture).toMatchObject({ ok: false, unsupported: true })
+    await flush()
+    expect(calls.capture).toBe(0)
+    expect(useBugReport.getState().capture).toMatchObject({ ok: false, unsupported: true })
+  })
+
   it('the sheet is open before the picture exists; the picture lands after', async () => {
     void useBugReport.getState().start()
     expect(useBugReport.getState()).toMatchObject({ open: true, capture: null, capturing: true })

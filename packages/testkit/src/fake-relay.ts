@@ -38,6 +38,7 @@ import {
 import { WebSocket, WebSocketServer } from 'ws'
 import { CARD_CLOSED_ON_MAC, cardProblem, RelayCards } from './fake-relay-cards.ts'
 import { RelayHttp } from './fake-relay-http.ts'
+import { FakePeers } from './fake-relay-peers.ts'
 import {
   BRIDGE_DURABLE,
   BRIDGE_STORED,
@@ -100,6 +101,8 @@ export class FakeRelay {
   /** Cards this relay carried, with the relay's own rules about them. */
   private cards: RelayCards
   private httpRoutes: RelayHttp
+  /** The peer inboxes (linked agents): setup routes and /hook/peer/:connId. */
+  readonly peers: FakePeers
   /** Pairing-only app sockets: the device is not pinned yet (hub.ts `limited`). */
   private limited = new Set<WebSocket>()
   /** Per app socket: the device the session belongs to (X-Test-Device) and whether the Mac must pin it first (X-Test-Unpinned). */
@@ -132,7 +135,16 @@ export class FakeRelay {
     this.host = opts.host ?? 'relay.example.com'
     this.config = opts.agentConfig ?? loadExampleConfig('default')
     this.cards = new RelayCards(() => (this.opts.now ?? Date.now)())
+    this.peers = new FakePeers({
+      now: () => (this.opts.now ?? Date.now)(),
+      origin: () => this.httpUrl,
+      toBridge: (f) => this.sendToBridge(f),
+      recallQueued: (drop) => {
+        for (const [id, e] of this.buffer) if (!e.delivered && drop(e.frame)) this.buffer.delete(id)
+      },
+    })
     this.httpRoutes = new RelayHttp({
+      peers: this.peers,
       opts,
       bridgeKey: () => this.bridgeKey,
       rec: this.rec,

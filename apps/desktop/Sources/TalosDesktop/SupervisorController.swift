@@ -418,6 +418,7 @@ final class SupervisorController: ObservableObject {
     case .bridgeNotLive(let why): return SupervisorNotice.bridgeNotLive(why)
     case .relayUnreachable(let code): return SupervisorNotice.relayUnreachable(closeCode: code)
     case .notReading: return SupervisorNotice.mainNotReading
+    case .stalled(let at, let did): return SupervisorNotice.mainStalled(since: at, did: did)
     }
   }
 

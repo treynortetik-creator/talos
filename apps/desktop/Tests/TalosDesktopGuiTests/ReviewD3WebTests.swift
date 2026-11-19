@@ -392,15 +392,19 @@ struct ReviewD3WebTests {
       var cfg = DesktopConfig.defaults
       cfg.talosAppCommand = [home + "/talos-app"]
       let p = PairingController.shared
+      p.front = { _ in }
       p.start(config: cfg, web: c)
-      #expect(await pumpUntil(8) { allTerminalViews().contains { !$0.process.running } && !p.isRunning }, "first enroll ended")
+      #expect(await pumpUntil(8) { if case .failed = p.phase { return !p.isRunning } else { return false } }, "first enroll ended: \(p.phase)")
       await pump(0.3)
       p.start(config: cfg, web: c)
       #expect(await pumpUntil(8) { p.isRunning }, "second enroll is running")
       await pump(0.3)
-      // The agent viewer (tab 1 of the terminal window, from D2) is not a sign-in pane: count only the enroll ptys.
+      // The owner answers in the app's own sign-in window now, not in a pane: the second enroll has its window up, and only one pty runs.
       let live = allTerminalViews().filter { $0.process.running && !TerminalWindowController.shared.isAgentViewer($0) }
-      #expect(live.count == 1, "the running enroll pty is not in any window, so nobody can answer it: \(allTerminalViews().count) views")
+      #expect(live.count <= 1, "more than one enroll pty is running: \(live.count)")
+      #expect(p.panelFronted >= 2, "each enroll brought the sign-in window forward")
+      #expect(p.phase == .waiting, "the second enroll's window shows where it is: \(p.phase)")
+      p.cancel()
       p.closeForReview()
     }
   }

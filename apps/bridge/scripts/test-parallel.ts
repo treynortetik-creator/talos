@@ -205,11 +205,40 @@ function descendants(root: number): number[] {
 }
 
 /** SIGKILL, not SIGTERM: a process stuck in a system call never gets to handle a signal. Only ids this run started. */
-function killTree(root: number): void {
-  for (const pid of descendants(root)) {
+function killTree(tree: readonly number[]): void {
+  for (const pid of tree) {
     try {
       process.kill(pid, 'SIGKILL')
     } catch {}
+  }
+}
+
+/**
+ * The ids of `tree` still running: neither gone nor a zombie. A zombie has ended (it only waits for its parent, often init by
+ * now, to read its exit), so it counts as gone. One `ps` for the lot; a ps that fails leaves the answer at "none running", as
+ * the kill was sent.
+ */
+function stillRunning(tree: readonly number[]): number[] {
+  const ps = spawnSync('ps', ['-A', '-o', 'pid=,stat='], { encoding: 'utf8', timeout: 10_000 }).stdout ?? ''
+  const live = new Set<number>()
+  for (const line of ps.trim().split('\n')) {
+    const [pid, stat] = line.trim().split(/\s+/)
+    if (pid && stat && !stat.startsWith('Z')) live.add(Number(pid))
+  }
+  return tree.filter((pid) => live.has(pid))
+}
+
+/**
+ * Waits until every process of a killed tree has ended, for at most `graceMs`, and returns the ids still running then. The root's
+ * exit is not enough: SIGKILL ends each process when the kernel next runs it, and on a loaded machine a child of the file
+ * (a `sleep` it started) was still there, or a zombie that kill(pid, 0) calls alive, after the runner said the file was killed.
+ */
+export async function treeEnded(tree: readonly number[], graceMs: number): Promise<number[]> {
+  const until = Date.now() + graceMs
+  for (;;) {
+    const left = stillRunning(tree)
+    if (left.length === 0 || Date.now() >= until) return left
+    await new Promise((r) => setTimeout(r, 25))
   }
 }
 
@@ -253,14 +282,21 @@ async function runFile(root: string, file: string, tmp: string, limitSeconds: nu
   let code = await exitWithin(p.exited, limitSeconds * 1000)
   const timedOut = code === null
   // a kernel wait SIGKILL cannot break would hold this worker slot for ever: give up on the file instead
+  let survivors: number[] = []
   if (timedOut) {
-    killTree(p.pid)
+    const tree = descendants(p.pid) // before the kill: a child outlives its parent as an orphan
+    const started = Date.now()
+    killTree(tree)
     code = await exitWithin(p.exited, KILL_GRACE_MS)
+    // the whole tree within the same grace, not just the root: "killed with its children" is true once this returns
+    survivors = (await treeEnded(tree, Math.max(0, KILL_GRACE_MS - (Date.now() - started)))).filter(
+      (pid) => pid !== p.pid,
+    )
   }
-  const stuck = code === null
+  const stuck = code === null || survivors.length > 0
   if (!stuck) rmSync(runTmp, { recursive: true, force: true }) // a stuck one may still write there: a later run prunes it
   const killed = timedOut
-    ? `\n${file}: killed, it ran past the file limit of ${limitSeconds} s${stuck ? `; it did not die after SIGKILL (pid ${p.pid} left running)` : ''}\n`
+    ? `\n${file}: killed, it ran past the file limit of ${limitSeconds} s${code === null ? `; it did not die after SIGKILL (pid ${p.pid} left running)` : ''}${survivors.length ? `; ${survivors.length === 1 ? 'a process it started' : 'processes it started'} did not die after SIGKILL (pid ${survivors.join(', ')} left running)` : ''}\n`
     : ''
   if (junitDir && junit && !existsSync(junit)) writeFileSync(join(junitDir, `${name}.crashed`), `${file}\n`)
   const output = `${readFileSync(outPath, 'utf8')}${readFileSync(errPath, 'utf8')}${killed}`

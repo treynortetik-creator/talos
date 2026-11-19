@@ -99,6 +99,16 @@ describe('status.json written by a real live bridge', () => {
     expect(parseStatusFile({ ...JSON.parse(text), last_owner_at: 'not a time' })?.last_owner_at).toBeNull()
   })
 
+  test("main_resend: a live bridge says it answers the Mac's resend request; a file without the field (an older bridge) says it does not", async () => {
+    h = await startHarness()
+    const home = h.home
+    await waitFor(() => readStatusFile(statusPath(home))?.relay.connected === true, 3000, 'connected')
+    expect(raw(home).main_resend).toBe(true)
+    const { main_resend: _gone, ...older } = JSON.parse(readFileSync(statusPath(home), 'utf8'))
+    expect(parseStatusFile(older)?.main_resend).toBe(false)
+    expect(parseStatusFile({ ...older, main_resend: 'yes' })?.main_resend).toBe(false)
+  })
+
   test('unseen_oldest_at: any tool call clears it, not only one on that thread (a session calling tools is not hung)', async () => {
     h = await startHarness()
     const home = h.home

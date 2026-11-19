@@ -125,13 +125,15 @@ describe('discovery: one deadline for the whole discovery', () => {
     const pf = join(dir, 'v.pid')
     pidFiles.push(pf)
     const bin = join(d, 'chronos')
-    // 1 s for the `api` failure, then `version` stalls: on the 4 s per-call budget alone that is 1 + 4 = 5 s. The 3 s total
-    // leaves `version` 2 s to start and record its pid; with only 1 s, a busy CI Mac hit the total first (red main at f141a02).
+    // The `api` call fails at once, then `version` stalls: on its own 4 s per-call budget that is 4 s; the 3 s total stops it
+    // first. The `api` failure used to take 1 s of the total (a sleep), which left `version` 1 s, then 2 s, to start and record
+    // its pid, and a busy Mac hit the total before it started (red main at f141a02; 10 flakes to 11-14). A call that spends the
+    // total before the next one is the scutil test's to show; here `version` gets the whole total to start, whatever the load.
     const perCall = 4000
     const total = 3000
     writeFileSync(
       bin,
-      `#!/bin/sh\nif [ "$1" = api ]; then /bin/sleep 1; echo usage >&2; exit 2; fi\necho $$ >> '${pf}'\nexec /bin/sleep 30\n`,
+      `#!/bin/sh\nif [ "$1" = api ]; then echo usage >&2; exit 2; fi\necho $$ >> '${pf}'\nexec /bin/sleep 30\n`,
       { mode: 0o755 },
     )
     const e = env({ chronosBin: bin, chronosAutoDiscover: false })

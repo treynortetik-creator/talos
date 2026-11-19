@@ -18,6 +18,14 @@ import Foundation
 ///   A phrase on screen never names anything by itself.
 /// - `.devWarning(highlighted, channels)`: Main's auto-accept and its card and popup. The development-channels warning, with the cursor on
 ///   exactly the row the sender read and exactly the channel list it checked (`devWarning`): counts alone never name the row a key lands on.
+/// - `.interrupt`: Escape for a model request that stopped answering (the stall auto-unstick, `Supervisor.unstickMain`). Allowed only when
+///   Claude's input box is positively live and EMPTY (nobody is typing: a draft or a half-typed line refuses), the working line is on the
+///   pane (a request is in flight: an idle Main gets no Escape), and no select, prompt or dialog is live anywhere (an Escape would answer
+///   it: `prompt_on_pane`).
+/// - `.interruptBlank`: the same Escape for a request that froze with NO working line drawn (the sender has established, this tick, that the
+///   transcript's newest turn is the model's pending one and the blank wait has passed: `MainWatch.blankStallReady`). The gate allows it
+///   only on the idle prompt: Claude's input box live and EMPTY (nobody typing), no select, prompt or dialog anywhere, and no working line (a
+///   spinner is `.interrupt`'s case). One Escape per message: a second would open Claude Code's rewind menu (the sender never repeats it).
 /// - And, independently, never a key while Claude Code's usage-limit menu is anywhere on the pane (`UsageLimitScreen`), nor when the pane
 ///   cannot be read, nor with no intent stated.
 public enum KeyGuard {
@@ -39,6 +47,10 @@ public enum KeyGuard {
     /// The development-channels warning with the cursor on exactly `highlighted` (one of its two rows) and exactly `channels` on its
     /// `Channels:` line: the key lands on the row the sender read, for the launch the sender checked (Main's auto-accept and its card).
     case devWarning(highlighted: String, channels: [String])
+    /// Escape for a stalled model request on Main (the box empty, the working line up, no dialog or select anywhere).
+    case interrupt
+    /// Escape for a frozen request with no working line on the pane: the idle prompt, box empty, no dialog (the sender checks the transcript and the wait).
+    case interruptBlank
 
     /// For the audit: `box-empty`, `box-ours` or the dialog kind's name.
     public var name: String {
@@ -46,6 +58,8 @@ public enum KeyGuard {
       case .box(let h): return "box-\(h.rawValue)"
       case .dialog(let k): return k.rawValue
       case .devWarning: return DialogKind.devChannels.rawValue
+      case .interrupt: return "interrupt"
+      case .interruptBlank: return "interrupt-blank"
       }
     }
   }
@@ -84,6 +98,14 @@ public enum KeyGuard {
     case .box(let holds): return boxRefusal(escaped: all, rows: rows, holds: holds)
     case .dialog(let kind):
       return dialogLive(rows, kind) ? nil : Refusal("not_\(kind.rawValue)")
+    case .interrupt:
+      if let r = boxRefusal(escaped: all, rows: rows, holds: .empty) { return r }
+      if selectUp(rows) { return Refusal("prompt_on_pane") }
+      return MainStall.hasWorkingLine(rows: rows) ? nil : Refusal("not_working")
+    case .interruptBlank:
+      if let r = boxRefusal(escaped: all, rows: rows, holds: .empty) { return r }
+      if selectUp(rows) { return Refusal("prompt_on_pane") }
+      return MainStall.hasWorkingLine(rows: rows) ? Refusal("working_line") : nil
     case .devWarning(let highlighted, let channels):
       guard let d = devWarning(rows), ExactText.equal(d.highlighted ?? "", highlighted), d.channels == channels else {
         return Refusal("not_\(DialogKind.devChannels.rawValue)")

@@ -157,6 +157,7 @@ export function deleteConn(rt: HooksRuntime, id: string): void {
   db.transaction(() => {
     for (const t of ['hooks_inbound', 'hooks_deliveries', 'hooks_events', 'hooks_claims', 'hooks_poll_state'])
       db.prepare(`delete from ${t} where conn_id = ?`).run(id)
+    db.prepare('delete from hooks_peer_frames where conn_id = ?').run(id)
     db.prepare("delete from hooks_dedup where key like ? escape '\\'").run(`%:${id}:%`)
     db.prepare('delete from hooks_connections where id = ?').run(id)
   })()

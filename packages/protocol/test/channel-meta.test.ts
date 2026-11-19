@@ -26,12 +26,18 @@ describe('ChannelMeta', () => {
     ).toBe(true)
   })
   it('every kind and trust in the spec is accepted, nothing else', () => {
-    for (const kind of CHANNEL_KINDS) expect(ChannelMeta.safeParse({ ...ok, kind }).success, kind).toBe(true)
+    for (const kind of CHANNEL_KINDS) {
+      const more =
+        kind === 'peer_message'
+          ? { trust: 'external', peer: 'work', peer_msg_id: 'msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD', chain: '0' }
+          : {} // peer_message needs these (peer.test.ts)
+      expect(ChannelMeta.safeParse({ ...ok, kind, ...more }).success, kind).toBe(true)
+    }
     for (const trust of CHANNEL_TRUSTS) expect(ChannelMeta.safeParse({ ...ok, trust }).success, trust).toBe(true)
     expect(ChannelMeta.safeParse({ ...ok, kind: 'telepathy' }).success).toBe(false)
     expect(ChannelMeta.safeParse({ ...ok, trust: 'admin' }).success).toBe(false)
-    // 10 of spec 4.3 + schedule_run, schedule_held, spawn_request, share (V2 V1.3), handoff, wake (wake_me)
-    expect(CHANNEL_KINDS).toHaveLength(16)
+    // 10 of spec 4.3 + schedule_run, schedule_held, spawn_request, share (V2 V1.3), handoff, wake (wake_me), peer_message
+    expect(CHANNEL_KINDS).toHaveLength(17)
   })
   it('rejects hyphenated keys, non-string values and chat_id != thread_id', () => {
     expect(ChannelMeta.safeParse({ ...ok, 'thread-id': 'x' }).success).toBe(false)

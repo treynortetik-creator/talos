@@ -344,6 +344,8 @@ struct ReviewD2TerminalTests {
     let p = PairingController.shared
     p.start(config: cfg, web: web)
     #expect(await w.until(8) { p.isRunning })
+    p.front = { _ in }
+    p.showDetails()  // the pane is only a "Show details" option now; typing into it still has to work
     #expect(await w.until(5) { w.clients == 1 }, "the agent viewer started behind the sign-in tab")
     try await body(w, home)
     p.cancel()

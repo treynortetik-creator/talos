@@ -20,12 +20,22 @@ final class AgentFolderFlow: ObservableObject {
     /// A prebuilt app's recorded clone that the owner has not said yes to: shown with its path; Use this clone or Cancel. The yes
     /// binds this path: if the record names another one by then, nothing runs.
     case confirmClone(clone: String, then: CloneAction)
+    /// The Talos code is being fetched for this app (`ensureCheckout`): each step with how it stands, errors included.
+    case provisioning([ProvisionLine])
+    /// The fetch stopped at a step; Retry runs it again (a finished clone is kept and reused).
+    case provisionFailed([ProvisionLine], message: String)
     case done(String)
     case failed(String)
   }
 
+  struct ProvisionLine: Equatable, Sendable {
+    var step: CloneProvisioner.Step
+    /// nil: not reached yet.
+    var state: CloneProvisioner.State?
+  }
+
   /// What the owner pressed that needed the clone, to run once the clone card is answered.
-  enum CloneAction: Equatable { case create, adopt, choose }
+  enum CloneAction: Equatable { case create, adopt, choose, acceptOnly }
 
   /// What the flow needs from the world. The defaults are the app's own; tests hand in a scratch clone and environment.
   struct Deps: Sendable {
@@ -34,8 +44,30 @@ final class AgentFolderFlow: ObservableObject {
     var repoRoot: @Sendable () -> String? = { Bundle.main.object(forInfoDictionaryKey: "TalosCheckout") as? String }
     /// The clone `install.sh --from-release` recorded, read fresh each time. Any program of the owner's can write the record, so it
     /// is judged (`AgentFolderSetup.recordedCloneProblem`) and the owner confirms it before it is used.
-    var recordedRoot: @Sendable () -> String? = { AgentFolderSetup.recordedCheckout(supportDir: SupervisorController.supportDir) }
-    var recordFile: String = SupervisorController.supportDir + "/checkout"
+    var recordedRoot: @Sendable () -> String? = { AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory()))?.clone }
+    /// The record file to hold to the ownership rule. nil: the one `recordedRoot` read (the new folder's, else the old one's).
+    var recordFile: String? = nil
+    /// What fetches the Talos code when there is no stamped clone and no record. nil config: nothing can be fetched.
+    var provision: @Sendable () -> CloneProvisioner.Config? = {
+      let home = NSHomeDirectory()
+      let env = LoginShellEnv.build(shellEnv: LiveSystem().loginShellEnv() ?? ProcessInfo.processInfo.environment, overrides: [:])
+      let exec = FileManager.default.isExecutableFile
+      var c = CloneProvisioner.Config(
+        version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+        destination: AutoSetup.cloneFolder(home: home), recordFile: AutoSetup.appFolder(home: home) + "/checkout",
+        git: nil,
+        pnpm: TalosAppLocator.findProgram("pnpm", searchPath: env["PATH"], home: home, isExecutable: exec), env: env)
+      c.expectedCommit = Bundle.main.object(forInfoDictionaryKey: "TalosSourceCommit") as? String
+      c.expectedSourceSHA256 = Bundle.main.object(forInfoDictionaryKey: "TalosSourceSHA256") as? String
+      c.bun = TalosAppLocator.findProgram("bun", searchPath: env["PATH"], home: home, isExecutable: exec)
+      c.claudeFound = {
+        let ok = FileManager.default.isExecutableFile
+        return TalosAppLocator.findProgram("claude", searchPath: env["PATH"], home: home, isExecutable: ok) != nil || ok(home + "/.local/bin/claude")
+      }
+      c.claudeInstaller = ClaudeInstaller(
+        env: env, home: home, workDir: AutoSetup.appFolder(home: home), scriptPath: Bundle.main.path(forResource: "claude-install", ofType: "sh"))
+      return c
+    }
     /// The recorded clone the owner said yes to.
     var acceptance: any CloneAcceptance = KeychainCloneAcceptance()
     /// Folders a recorded clone may not be in. nil: `AgentFolderSetup.sessionFolders` (the Talos home, the agent folder, each
@@ -43,16 +75,33 @@ final class AgentFolderFlow: ObservableObject {
     var unsafeFolders: (@Sendable () -> [String])? = nil
     /// The environment the tools run in: the login shell's, as the checklist's other checks use. Blocks; called off the main thread.
     var environment: @Sendable () -> [String: String] = {
-      LoginShellEnv.build(shellEnv: LiveSystem().loginShellEnv() ?? ProcessInfo.processInfo.environment, overrides: [:])
+      // the app's own bun and tmux are on the PATH last; with no pnpm the installer uses bun (TALOS_JS_RUNTIME), and no git hook
+      // installer runs (it would run git, which on a Mac without the developer tools opens Apple's install dialog)
+      var e = BundledTools.jsRuntimeEnv(
+        LoginShellEnv.build(shellEnv: LiveSystem().loginShellEnv() ?? ProcessInfo.processInfo.environment, overrides: [:]))
+      e["TALOS_NO_HOOKS"] = "1"
+      if let p = BundledTools.appending(toPath: e["PATH"], dir: NSHomeDirectory() + "/.local/bin") { e["PATH"] = p }
+      return e
     }
   }
 
   @Published private(set) var step: Step = .idle
+  /// What the owner pressed when the Talos code had to be fetched first; Retry carries on with it.
+  private var pending: CloneAction?
+  private var autoTried = false
   /// The folder box.
   @Published var path: String
   /// Whether Claude is signed in, from the checklist's last check. false keeps the session from starting; nil does not.
   var signedIn: Bool?
-  var busy: Bool { if case .working = step { return true } else { return false } }
+  var busy: Bool {
+    switch step {
+    case .working, .provisioning: return true
+    default: return false
+    }
+  }
+  /// One fetch of the Talos code at a time, whoever asks (the automatic run, a button, a second press).
+  private let fetch = SingleFlight<CloneProvisioner.Result?>()
+  private var fetchSteps = LinesBox()
 
   private let model: SupervisorController
   private let deps: Deps
@@ -68,6 +117,7 @@ final class AgentFolderFlow: ObservableObject {
   /// A new agent from this clone's install.sh. The installer refuses a folder that is not empty and not a Talos agent, and a
   /// synced folder; it warns about Desktop, Documents and Downloads. A Talos agent that is already there is not touched.
   func create() async {
+    guard await ensureCheckout(then: .create) else { return }
     guard let (dir, repo) = target(for: .create) else { return }
     step = .working("Creating your agent in \(dir). This can take a few minutes.")
     let env = deps.environment
@@ -81,6 +131,7 @@ final class AgentFolderFlow: ObservableObject {
   /// Connect a Claude Code folder you already use: `talos-app adopt`, run through the pty human-only commands need. First the
   /// dry run, which becomes the card; the owner's yes runs it for real.
   func adopt() async {
+    guard await ensureCheckout(then: .adopt) else { return }
     guard let (dir, repo) = target(mustExist: true, for: .adopt) else { return }
     step = .working("Reading \(dir)…")
     switch await runAdopt(repo: repo, dir: dir, mode: .dryRun) {
@@ -93,6 +144,7 @@ final class AgentFolderFlow: ObservableObject {
   /// A Talos agent folder that is already set up. Nothing is written to it. A folder wired to another clone or another home is
   /// judged by the same dry run Adopt shows, and sent to Adopt, which asks before pointing it here.
   func choose() async {
+    guard await ensureCheckout(then: .choose) else { return }
     guard let repo = cloneRoot(for: .choose) else { return }
     let cfg = model.supervisor.currentConfig()
     switch AgentFolderSetup.choose(path, home: NSHomeDirectory(), currentAgentDir: model.configured ? cfg.agentDir : nil) {
@@ -128,6 +180,91 @@ final class AgentFolderFlow: ObservableObject {
   }
 
   func cancel() { step = .idle }
+
+  // MARK: automatic setup (what the onboarding screen calls)
+
+  /// Onboarding's one call: the Talos code, then the default agent folder, each only if it is not there. Tried once per window; a
+  /// failure stays on the card with Retry (`retryProvision`).
+  func autoSetup() async {
+    guard !autoTried, !busy, !model.configured else { return }
+    autoTried = true
+    guard await ensureCheckout() else { return }
+    _ = await ensureAgentFolder()
+  }
+
+  /// A clone to run scripts from: the one stamped in this app, the recorded one, or (a prebuilt app on a Mac with none) the public
+  /// repository fetched at this app's tag into `AutoSetup.cloneFolder`, its dependencies checked, and recorded. `progress` is told
+  /// each step as it happens (on the main thread); `step` carries the same for the built-in card. false: nothing usable yet, and
+  /// `step` says why.
+  @discardableResult
+  func ensureCheckout(then action: CloneAction? = nil, progress: (@Sendable (CloneProvisioner.Step, CloneProvisioner.State) -> Void)? = nil)
+    async -> Bool
+  {
+    if let s = deps.repoRoot(), !s.isEmpty { return true }
+    if let r = deps.recordedRoot(), !r.isEmpty { return true }
+    pending = action
+    var lines = CloneProvisioner.Step.allCases.map { ProvisionLine(step: $0, state: nil) }
+    step = .provisioning(lines)
+    if !fetch.isRunning { fetchSteps = LinesBox() }
+    let box = fetchSteps
+    let make = deps.provision
+    let outcome = await fetch.run {
+      await Task.detached { () -> CloneProvisioner.Result? in
+        guard let config = make() else { return nil }
+        return CloneProvisioner(config).run { s, st in
+          progress?(s, st)
+          let snapshot = box.set(s, st)
+          DispatchQueue.main.async { MainActor.assumeIsolated { self.showProvisioning(snapshot) } }
+        }
+      }.value
+    }
+    guard let result = outcome else {
+      step = .failed("Talos has no way to download its code on this Mac. Use Choose… to point at a clone of the Talos repository.")
+      return false
+    }
+    lines = box.lines
+    switch result {
+    case .ok(let clone):
+      guard deps.acceptance.accept(clone) else {
+        step = .provisionFailed(lines, message: "Talos couldn't remember its new copy in the Keychain. Check that the login keychain is unlocked, then press Retry.")
+        return false
+      }
+      step = .idle
+      return true
+    case .failed(_, let message):
+      step = .provisionFailed(lines, message: message)
+      return false
+    }
+  }
+
+  private func showProvisioning(_ lines: [ProvisionLine]) {
+    if case .provisioning = step { step = .provisioning(lines) }
+  }
+
+  /// Retry on the fetch card: run it again (a clone already made is reused), then whatever the owner had pressed.
+  func retryProvision() async {
+    guard case .provisionFailed = step else { return }
+    let action = pending
+    guard await ensureCheckout(then: action) else { return }
+    pending = nil
+    switch action {
+    case .create: await create()
+    case .adopt: await adopt()
+    case .choose: await choose()
+    case .acceptOnly: break
+    case nil: _ = await ensureAgentFolder()
+    }
+  }
+
+  /// The default agent folder, made with no question: Create on `AutoSetup.defaultAgentDir` unless an agent is already set up. An
+  /// installer refusal (a folder that is not empty and not a Talos agent) stays on the card; nothing is deleted. true: set up.
+  @discardableResult
+  func ensureAgentFolder() async -> Bool {
+    if model.configured { return true }
+    if path.trimmingCharacters(in: .whitespaces).isEmpty { path = AutoSetup.defaultAgentDir }
+    await create()
+    return model.configured
+  }
 
   /// Yes to the kit update card: run the update as a preview. It changes nothing; the real update is a command for Terminal.
   func showUpgrade() async {
@@ -178,7 +315,10 @@ final class AgentFolderFlow: ObservableObject {
       ?? AgentFolderSetup.sessionFolders(
         talosHome: model.workersHome, agentDir: model.supervisor.currentConfig().expandedAgentDir(home: NSHomeDirectory()),
         configJSON: FileManager.default.contents(atPath: model.workersHome + "/config.json"), supportDir: SupervisorController.supportDir)
-    return AgentFolderSetup.recordedCloneProblem(recorded, recordFile: deps.recordFile, unsafe: avoid)
+    let file = deps.recordFile
+      ?? AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory()))?.file
+      ?? AutoSetup.appFolder(home: NSHomeDirectory()) + "/checkout"
+    return AgentFolderSetup.recordedCloneProblem(recorded, recordFile: file, unsafe: avoid)
       ?? AgentFolderSetup.cloneProblem(recorded)
   }
 
@@ -203,7 +343,15 @@ final class AgentFolderFlow: ObservableObject {
     case .create: await create()
     case .adopt: await adopt()
     case .choose: await choose()
+    case .acceptOnly: step = .done("Talos will use \(shown) and can keep itself up to date.")
     }
+    CloneConfirmCenter.shared.clear()
+  }
+
+  /// The updater asked the owner to accept a clone: show the card (only when nothing else is on screen). Their press accepts.
+  func presentUpdaterRequest() {
+    guard let clone = CloneConfirmCenter.shared.pending, case .idle = step else { return }
+    step = .confirmClone(clone: clone, then: .acceptOnly)
   }
 
   /// The folder box as an absolute path, and the clone. A failure is already on the card.
@@ -291,6 +439,19 @@ final class AgentFolderFlow: ObservableObject {
     case .needsConfirm(let why): return .needsConfirm(why)
     case .failed(let why):
       return .failed(out == nil ? "Talos couldn't run talos-app. Is bun installed? Run ./install.sh in the clone Talos was built from." : why)
+    }
+  }
+}
+
+/// The fetch's steps as they stand, written from the background thread and read on the main one.
+private final class LinesBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var v = CloneProvisioner.Step.allCases.map { AgentFolderFlow.ProvisionLine(step: $0, state: nil) }
+  var lines: [AgentFolderFlow.ProvisionLine] { lock.withLock { v } }
+  func set(_ s: CloneProvisioner.Step, _ st: CloneProvisioner.State) -> [AgentFolderFlow.ProvisionLine] {
+    lock.withLock {
+      if let i = v.firstIndex(where: { $0.step == s }) { v[i].state = st }
+      return v
     }
   }
 }

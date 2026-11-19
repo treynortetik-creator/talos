@@ -86,7 +86,7 @@ describe('every settings row has a risk', () => {
 
   it('mac rows are the ones the agent must never set; none of them is an agent row', () => {
     const mac = rows.filter(([, r]) => r.risk === 'mac').map(([p]) => p)
-    expect(mac).toEqual(['permission_relay', 'trust_mode', 'bug_webhook_url', 'bug_webhook_host'])
+    expect(mac).toEqual(['permission_relay', 'trust_mode', 'bug_webhook_url', 'bug_webhook_host', 'peers'])
     for (const [path, r] of rows) if (r.risk === 'mac') expect(r.agent, path).toBe(false)
   })
 

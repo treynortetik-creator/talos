@@ -25,7 +25,7 @@
 # {"v":1,"ok":false,"step":"...","why":"<AutoUpdate.Failure>","restored":true|false} ("restored" only when the checkout had moved).
 # Exit codes: 0 done; 20 refused or failed with nothing moved; 21 failed after the checkout moved (put back, or "restored": false);
 # 22 the new app did not report healthy and was rolled back (or the rollback failed: see the result);
-# 64 bad arguments. git and pnpm come from PATH (the app passes its login shell's); git runs with no prompt and stdin from /dev/null.
+# 64 bad arguments. git and pnpm (or bun, when there is no pnpm) come from PATH (the app passes its login shell's); git runs with no prompt and stdin from /dev/null.
 set -uo pipefail
 MODE="" CHECKOUT="" COMMIT="" ZIP="" PIN="" TEAM="" DEST="" RESULT="" TO="" HEALTH="" HEALTH_WAIT=300 NEWV=""
 while [ $# -gt 0 ]; do
@@ -65,7 +65,13 @@ result() {  # result <ok true|false> [why] [restored true|false]
   ( umask 077; printf '%s\n' "$body" > "$tmp" ) && mv -f "$tmp" "$RESULT"
 }
 
-deps() { ( cd "$CHECKOUT" && pnpm install --frozen-lockfile </dev/null ); }
+# The packages: pnpm when the Mac has it, else bun (the app's own, last on the PATH it passes): the same choice the app made when it first
+# installed this clone (scripts/install-js.sh), with the same flags. TALOS_JS_RUNTIME=bun forces bun.
+deps() {
+  ( cd "$CHECKOUT" || exit 1
+    if [ "${TALOS_JS_RUNTIME:-}" = bun ] || ! command -v pnpm >/dev/null 2>&1; then TALOS_NO_HOOKS=1 bun install --frozen-lockfile --ignore-scripts </dev/null
+    else pnpm install --frozen-lockfile </dev/null; fi )
+}
 clean() { [ -z "$(g status --porcelain 2>/dev/null)" ] && g status --porcelain >/dev/null 2>&1; }
 
 # Back to REF: a branch name is checked out as that branch, anything else as a detached commit.

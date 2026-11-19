@@ -42,7 +42,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIT="$REPO/kit"; . "$REPO/scripts/install-memory.sh"   # a new agent's memory defaults
+KIT="$REPO/kit"; . "$REPO/scripts/install-memory.sh"; . "$REPO/scripts/install-js.sh"   # a new agent's memory defaults; how the packages are installed
 MOD="$REPO/plugins/talos-app-mod"
 CLI=(bun --no-env-file run "$REPO/apps/bridge/src/cli.ts")
 DESKTOP="${TALOS_INSTALL_DESKTOP_SCRIPTS:-$REPO/apps/desktop/scripts}"
@@ -226,16 +226,7 @@ else
   check python3 "$PY_NEED" python3 --version || rc=$?
   [ "$rc" = 0 ] || problem "python3 $PY_NEED or newer: $(got $rc). $CLT_FIX"
 fi
-rc=0; check node "$NODE_NEED" node -p 'process.versions.node' || rc=$?
-[ "$rc" = 0 ] || problem "Node $NODE_NEED or newer: $(got $rc). No admin needed: $ADMIN_FREE_NODE."
-# pnpm through corepack (a link to corepack's pnpm.js) is not asked its version: asking makes corepack download pnpm into
-# ~/.cache, and in this clone it runs the pnpm@$PNPM_NEED that package.json pins anyway. A standalone pnpm is asked.
-rc=0; PNPM_LINK=""; command -v pnpm >/dev/null 2>&1 && PNPM_LINK="$(link_end "$(command -v pnpm)")"
-case "$PNPM_LINK" in
-  *corepack*) say "   found pnpm through corepack: $(command -v pnpm) (this clone pins pnpm@$PNPM_NEED; corepack fetches it on first use)" ;;
-  *) check pnpm "$PNPM_NEED" pnpm --version || rc=$? ;;
-esac
-[ "$rc" = 0 ] || problem "pnpm $PNPM_NEED or newer: $(got $rc). No admin needed: corepack enable pnpm (corepack comes with Node $NODE_NEED from fnm; this clone pins pnpm@$PNPM_NEED)."
+check_node_pnpm   # node and pnpm, unless TALOS_JS_RUNTIME=bun (scripts/install-js.sh)
 rc=0; check bun "$BUN_NEED" bun --version || rc=$?
 [ "$rc" = 0 ] || problem "Bun $BUN_NEED or newer: $(got $rc). No admin needed: curl -fsSL https://bun.sh/install | bash (it installs into ~/.bun; an older Bun: bun upgrade)."
 rc=0; check claude "$CLAUDE_NEED" claude --version || rc=$?
@@ -516,7 +507,7 @@ if [ "$V1" = 1 ]; then
   DEPS=0; { [ -f "$REPO/node_modules/.modules.yaml" ] && [ -d "$REPO/apps/bridge/node_modules" ]; } && DEPS=1
   if [ "$APPLY" = 1 ]; then  # every --apply, a rerun too (KIT-8: a pulled fix must not run adopt on old packages)
     CURRENT="2b/7 dependencies of this clone"
-    (cd "$REPO" && pnpm install --frozen-lockfile --config.confirm-modules-purge=false) || fail 1 "pnpm install --frozen-lockfile failed in $REPO. Nothing in $AGENT_DIR was changed."
+    js_install || fail 1 "$JS_INSTALL_WORDS failed in $REPO. Nothing in $AGENT_DIR was changed."
     did "installed dependencies"; DEPS=1
   fi
   # adopt's own refusals (another clone's talos-app server, an mcpServers that is not an object, a catalog that does not parse,
@@ -650,10 +641,10 @@ fi
 step "3/7 Dependencies of this clone"
 # every run, a rerun too: after a `git pull` the lockfile may name new packages, and a fix must not run on the old ones (when
 # nothing changed pnpm says so in a second). A moved pnpm store makes pnpm rebuild this clone's node_modules, terminal or not.
-if [ "$DRY" = 1 ]; then plan "pnpm install --frozen-lockfile in $REPO"
+if [ "$DRY" = 1 ]; then plan "$JS_INSTALL_WORDS in $REPO"
 else
-  (cd "$REPO" && pnpm install --frozen-lockfile --config.confirm-modules-purge=false) || fail 1 "pnpm install --frozen-lockfile failed in $REPO."
-  say "   dependencies are as the lockfile says (pnpm install --frozen-lockfile)"
+  js_install || fail 1 "$JS_INSTALL_WORDS failed in $REPO."
+  say "   dependencies are as the lockfile says ($JS_INSTALL_WORDS)"
 fi
 
 # ---------------------------------------------------------------- 4. the kit
@@ -773,7 +764,7 @@ fi
 
 # ---------------------------------------------------------------- 5. MCP server
 step "5/7 The talos-app MCP server for this folder (and the bridge, with --relay-url)"
-BRIDGE_HOME="${TALOS_APP_HOME:-$HOME/.config/talos/app}"
+BRIDGE_HOME="${TALOS_APP_HOME:-$HOME/.config/talos/app}"; [ "${BRIDGE_HOME#/}" != "$BRIDGE_HOME" ] || BRIDGE_HOME="$PWD/$BRIDGE_HOME"
 # the agent folder shell-quoted: pasted as printed, a path with a space stays one argument
 BRIDGE_CMD="apps/bridge/scripts/install.sh --agent-dir $(printf '%q' "$AGENT_DIR") --relay-url https://<your relay host>"
 if [ "$DRY" = 1 ]; then
@@ -803,10 +794,10 @@ step "6/7 Launch script (the Talos mod via --plugin-dir)"
 LAUNCH="$AGENT_DIR/start-talos.sh"
 MARK="# Written by the Talos install.sh."
 launch_text() {
-  printf '#!/usr/bin/env bash\n%s Re-run ./install.sh to refresh it; delete it any time.\n' "$MARK"
-  printf '# talos-clone: %s\n' "$REPO"
-  printf '# Starts the agent with the talos-app channel and the Talos mod (--plugin-dir). Extra arguments go to claude.\n'
-  # --no-env-file: bun would load the .env of the folder this runs from (the agent's, secrets included) into claude
+  printf '#!/usr/bin/env bash\n%s Re-run ./install.sh to refresh it; delete it any time.\n# talos-clone: %s\n%s\n' "$MARK" "$REPO" '# Starts the agent with the talos-app channel and the Talos mod (--plugin-dir). Extra arguments go to claude.'
+  [ "$BRIDGE_HOME" = "$HOME/.config/talos/app" ] || printf 'export TALOS_APP_HOME=%q\n' "$BRIDGE_HOME"
+  [ -z "${TALOS_INBOX_ROOT:-}" ] || { IB="$TALOS_INBOX_ROOT"; [ "${IB#/}" != "$IB" ] || IB="$PWD/$IB"; printf 'export TALOS_INBOX_ROOT=%q\n' "$IB"; }
+  # exports: this install's homes, for a shell without them; --no-env-file: bun would load the agent's .env (secrets) into claude
   printf 'exec bun --no-env-file run %q start --agent-dir %q -- --plugin-dir %q "$@"\n' "$REPO/apps/bridge/src/cli.ts" "$AGENT_DIR" "$MOD"
 }
 if [ "$DRY" = 1 ]; then plan "write $LAUNCH: talos-app start --agent-dir $AGENT_DIR -- --plugin-dir $MOD"

@@ -1,0 +1,7 @@
+# An example of the relay list (CI_RELAY_DEPLOYS, or ~/.config/talos-ci/relay-deploys.txt, mode 600). The real one is NOT in this
+# repository. One line per relay: <GitHub deployment environment><TAB><green|main>.
+# green: must run only commits whose own six local-ci/* statuses are green (an alert otherwise).  main: tracks main on purpose; only reported.
+# List EVERY environment the repository deploys to: an environment missing from the list is an error. In a one-line variable write a tab as
+# backslash-t and a line break as backslash-n.
+beta-relay-1 / production	green
+owner-relay / production	main

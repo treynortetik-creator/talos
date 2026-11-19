@@ -53,7 +53,7 @@ it('a device that missed nothing gets no catchup.reset after the buffer aged out
   await b.close()
   await waitFor(() => !relay?.runtime.hub.bridgeOnline(), 10_000, 'bridge offline')
 
-  c.advance(8 * 86_400_000) // a week away: the hourly sweeps empty the buffer
+  c.jump(8 * 86_400_000) // a week away: the sweep (one, late, as after a sleep) empties the buffer
   expect(relay.runtime.store.floor()).toBe(have + 2)
 
   const mark = a.rec.frames.length

@@ -19,8 +19,10 @@
 #   --checks-only typecheck, lint, personal and size, no suites (gate-push.sh after a race whose new commits touch none of
 #                 this change's tests; CI runs everything after the merge)
 #   --fast        the checks, vitest related, and of the bridge tests only the changed ones, the ones that import a changed
-#                 file directly and the guards that read it (scripts/gate-fast.sh); no e2e, old-client or browser specs, and no heavy
-#                 lock: CI runs everything after the push. A change on the keep-out list (scripts/gate-fast-keepout.txt) or
+#                 file directly and the guards that read it (scripts/gate-fast.sh); no e2e or old-client step. Of the browser
+#                 specs only the changed spec files themselves, each on every Playwright project that takes it (desktop, iphone,
+#                 pixel; chromium-media for voice), under the heavy lock; with no changed spec there is no browser step and no
+#                 heavy lock. CI runs everything else after the push. A change on the keep-out list (scripts/gate-fast-keepout.txt) or
 #                 one the import scan cannot follow runs the full gate instead, and says why. A change to only test files
 #                 (*.test.ts, *.test.tsx, *.spec.ts, Swift Tests/) is fast too, wherever they are. Its personal step scans this change only (its files and commit messages, base..HEAD); the full gate, the whole tree
 # It checks the files on disk. Run from the pre-push hook, the hook first makes sure those are the ones being pushed.
@@ -52,7 +54,7 @@ while [ $# -gt 0 ]; do
       BASE="${1:-}"
       ;;
     -h | --help)
-      sed -n '2,24p' "$0"
+      sed -n '2,28p' "$0"
       exit 0
       ;;
     *)
@@ -194,7 +196,7 @@ GUARDS=""
 # a change under apps/web/src/features/<x>/ runs apps/web/test/<x>/*.spec.ts, a changed spec runs itself, and a change to
 # what every screen is built from (ui, lib, theme, the shell, the entry, the service worker, the build) runs this smoke
 # set, a few specs over the main paths. On Chromium (the desktop project, and chromium-media for voice); the change's own
-# specs also on WebKit (web_own_specs_for).
+# specs also on WebKit and Pixel (web_own_specs_for; the fast gate runs only the changed spec files, on every project: gate-fast.sh).
 WEB_SMOKE="threads/threads.spec.ts threads/message-row.spec.ts composer/send-leaves-no-text.spec.ts home/home.spec.ts \
 settings/settings-home.spec.ts session/session.spec.ts fake-mode.spec.ts"
 
@@ -219,8 +221,8 @@ fi
 # in both; the gate's own tests run every --plan case through both. No node, an empty answer, anything but "ok": refused.
 IFS= read -r -d '' PLAN_CHECK_JS < scripts/gate/plan-check.cjs || true
 
-# --fast asks; with --full, --checks-only or inside the lock it is not a fast gate (each says what it runs)
-{ [ "$FULL" = 1 ] || [ "$CHECKS_ONLY" = 1 ] || [ "$IN_LOCK" = 1 ]; } && FAST=0
+# --fast asks; with --full or --checks-only it is not a fast gate (each says what it runs)
+{ [ "$FULL" = 1 ] || [ "$CHECKS_ONLY" = 1 ]; } && FAST=0 # (inside the lock, a fast gate stays fast: the suites it chose run there)
 ASK_FAST="$FAST"
 if [ "$FULL" = 1 ]; then
   VIT_ALL=1 BUN_ALL=1 E2E_ALL=1 OLD=1 WEB_ALL=1
@@ -232,9 +234,10 @@ else
   plan_check
   plan_swift # outside the second count: it reads the same CHANGED list and nothing else
 fi
-if [ "$ASK_FAST" = 1 ]; then
+if [ "$ASK_FAST" = 1 ] && [ "$IN_LOCK" = 0 ]; then
   if [ "$FAST" = 1 ]; then
-    say "fast gate: of the bridge tests only the changed ones, their direct importers and their guards; no e2e, old-client or browser specs, and no heavy lock (CI runs everything after the push)"
+    if [ "${#WEB[@]}${#WEBKIT[@]}" = 00 ]; then FAST_LOCK_SAYS="no heavy lock"; else FAST_LOCK_SAYS="the heavy lock for its browser specs"; fi
+    say "fast gate: of the bridge tests only the changed ones, their direct importers and their guards; of the browser specs only the changed spec files, on every project that takes them; no e2e or old-client step; $FAST_LOCK_SAYS (CI runs everything after the push)"
   else
     say "full gate, not the fast one: $FAST_WHY"
     [ "$PLAN" = 0 ] && declare -F fast_fallback_log >/dev/null && fast_fallback_log # one line for the evidence (gate-fast.sh)
@@ -276,6 +279,8 @@ if [ "$PLAN" = 1 ]; then
   [ "$OLD" = 0 ] || echo old-client
   if [ "$WEB_ALL" = 1 ]; then echo web-specs-all; elif [ "${#WEB[@]}" -gt 0 ]; then echo web-specs; printf '\t%s\n' "${WEB[@]}"; fi
   if [ "$WEB_ALL" = 0 ] && [ "${#WEBKIT[@]}" -gt 0 ]; then echo web-specs-webkit; printf '\t%s\n' "${WEBKIT[@]}"; fi
+  # the Playwright projects each planned browser spec runs on
+  web_projects_report >&2
   # why each folder-listing test is there (on stderr: stdout stays the plan)
   [ "${#FOLDER_HITS[@]}" = 0 ] || { echo "folder readers:"; printf '  %s\n' "${FOLDER_HITS[@]}" | LC_ALL=C sort -u; } >&2
   echo "time factor: $TALOS_TEST_TIME_FACTOR (test budgets x$TALOS_TEST_TIME_FACTOR)" >&2
@@ -344,12 +349,12 @@ if command -v bun >/dev/null 2>&1; then
 else
   say "no bun on PATH"
 fi
-# the web app's Playwright and its Chromium, for its browser specs
-if [ "$WEB_ALL" = 1 ] || [ "${#WEB[@]}" -gt 0 ]; then
+# the web app's Playwright and its Chromium, for its browser specs (Pixel, in the WebKit step below, is Chromium too)
+if [ "$WEB_ALL" = 1 ] || [ "${#WEB[@]}" -gt 0 ] || [ "${#WEBKIT[@]}" -gt 0 ]; then
   (cd apps/web 2>/dev/null && node -e "const {chromium}=require('@playwright/test');process.exit(require('fs').existsSync(chromium.executablePath())?0:1)") >/dev/null 2>&1 ||
     refuse "the web app's Playwright or its Chromium is not installed, so its browser specs cannot run: pnpm install, then (in apps/web) pnpm exec playwright install chromium"
 fi
-# and its WebKit, for the change's own specs on the iphone project
+# and its WebKit, for the change's own specs on the iphone project (the iphone-se project is WebKit as well)
 if [ "$WEB_ALL" = 0 ] && [ "${#WEBKIT[@]}" -gt 0 ]; then
   (cd apps/web 2>/dev/null && node -e "const {webkit}=require('@playwright/test');process.exit(require('fs').existsSync(webkit.executablePath())?0:1)") >/dev/null 2>&1 ||
     refuse "the web app's WebKit is not installed, so this change's browser specs cannot run on it: (in apps/web) pnpm exec playwright install webkit"
@@ -446,8 +451,10 @@ fi
 # The tests are the heavy part. They run under the lock CI's suites take (scripts/heavy-lock.sh, one per machine), so a gate never
 # runs its tests beside CI's, and the light steps above stay outside it, as CI's do. One hold for all of them: this script runs
 # again, suites only, inside the lock. Inside a holder already (a CI job), heavy-lock.sh passes straight through.
-# The fast gate takes no lock: it runs a handful of test files beside whatever else runs, a few at a time (GATE_FAST_JOBS).
-if [ "$FAST" = 1 ]; then
+# The fast gate takes no lock when it has no browser specs: it runs a handful of test files beside whatever else runs, a few at a
+# time (GATE_FAST_JOBS). Its own browser specs (a changed spec file) run under the lock like the planned gate's: a web server
+# and up to two browsers beside CI's suites flake each other's timing, and take the preview port.
+if [ "$FAST" = 1 ] && [ "${#WEB[@]}${#WEBKIT[@]}" = 00 ]; then
   : # the suites run straight, below
 elif [ "$IN_LOCK" = 0 ] && [ "$VIT_ALL$BUN_ALL$E2E_ALL$OLD$WEB_ALL${#VIT[@]}${#BUN[@]}${#E2E[@]}${#VPROJ[@]}${#WEB[@]}${#WEBKIT[@]}" != 00000000000 ] && [ ! -f scripts/heavy-lock.sh ]; then
   say "no heavy-lock.sh here, suites run unlocked" # a copy of the gate alone (its own tests); the checkout always has it
@@ -487,7 +494,7 @@ elif [ "$FAST" = 1 ] && [ "${#BUN[@]}" -gt 0 ]; then
   FAST_LIST="$(mktemp "${TMPDIR:-/tmp}/gate-fast-XXXXXX")" || refuse "no temp file for the list of bridge test files"
   trap 'rm -f "$FAST_LIST"' EXIT
   printf '%s\n' "${BUN[@]#apps/bridge/}" >"$FAST_LIST"
-  tstep "tests (${#BUN[@]} bridge files, $FAST_JOBS at a time, no heavy lock)" \
+  tstep "tests (${#BUN[@]} bridge files, $FAST_JOBS at a time, $([ "$IN_LOCK" = 1 ] && echo 'under the heavy lock for the browser specs' || echo 'no heavy lock'))" \
     bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts --jobs "$0" --files "$1"' "$FAST_JOBS" "$FAST_LIST"
 elif [ "${#BUN[@]}" -gt 0 ]; then
   # the paths are relative to the repository; bun runs in apps/bridge
@@ -512,9 +519,11 @@ if [ "$WEB_ALL" = 1 ] || [ "${#WEB[@]}" -gt 0 ]; then
   [ "$WEB_ALL" = 1 ] && WEB=() # every spec: no file arguments
   tstep "tests (web browser specs, Chromium)" web_specs_run "$WEB_LIMIT" desktop chromium-media -- "${WEB[@]+"${WEB[@]}"}"
 fi
-# the change's own specs on WebKit too (the iphone project): a spec that only fails there (Tab skips buttons) reached main
+# the change's own specs on WebKit (the iphone project, and iphone-se for its one spec) and on Pixel too: a spec that only fails
+# there (Tab skips buttons) reached main
 if [ "$WEB_ALL" = 0 ] && [ "${#WEBKIT[@]}" -gt 0 ]; then
-  tstep "tests (web browser specs, WebKit)" web_specs_run "$WEB_LIMIT" iphone -- "${WEBKIT[@]}"
+  read -r -a WK_PROJECTS <<<"$(web_webkit_projects)"
+  tstep "tests (web browser specs, own specs on WebKit and Pixel)" web_specs_run "$WEB_LIMIT" "${WK_PROJECTS[@]}" -- "${WEBKIT[@]}"
 fi
 [ "$IN_LOCK" = 1 ] && exit 0 # the run outside says passed
 [ "$VIT_ALL$BUN_ALL$E2E_ALL$OLD$WEB_ALL${#VIT[@]}${#BUN[@]}${#E2E[@]}${#VPROJ[@]}${#WEB[@]}${#WEBKIT[@]}" != 00000000000 ] || say "no test suite is touched by this change"

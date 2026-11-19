@@ -9,25 +9,36 @@ import TalosSupervisor
 ///   3. Main was told about an owner message, has not acted on it for `unseen_s`, and its pane has printed nothing since.
 extension Rig {
   /// The live bridge's status.json with the relay and unseen fields set; stamped now, from Main's own process.
-  func writeLiveStatus(connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil) throws {
+  func writeLiveStatus(connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true) throws {
     let pid = sup.status.childPid ?? getpid()
     let at = ISOTime.string(clock.wallMs() / 1000)
     let code = closeCode.map(String.init) ?? "null"
     let u = unseen.map { "\"\(ISOTime.string($0.timeIntervalSince1970))\"" } ?? "null"
     let json =
       "{\"v\":1,\"pid\":\(pid),\"mode\":\"live\",\"relay\":{\"connected\":\(connected),\"last_close_code\":\(code)},"
-      + "\"queue_depth\":0,\"unseen_oldest_at\":\(u),\"updated_at\":\"\(at)\"}"
+      + "\"queue_depth\":0,\"main_resend\":\(mainResend),\"unseen_oldest_at\":\(u),\"updated_at\":\"\(at)\"}"
     try json.write(toFile: talosHome + "/status.json", atomically: true, encoding: .utf8)
   }
 
+  /// Main's transcript ends on the model's own record (a reply): the model's turn is not pending. These tests are about a Main that
+  /// stopped reading or that answered, not a request frozen in flight (`MainModelStallTests`), which a pending user turn on an idle pane now is.
+  func modelHasAnswered() throws {
+    let id = try #require(sup.status.sessionId)
+    let file = try #require(SessionTranscript.find(sessionId: id, folder: agentDir, claudeDir: home + "/.claude"))
+    let h = try FileHandle(forWritingTo: URL(fileURLWithPath: file))
+    try h.seekToEnd()
+    try h.write(contentsOf: Data("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n".utf8))
+    try h.close()
+  }
+
   /// Moves the clocks `seconds` on in steps, the bridge rewriting its status (every 15 s) as it goes.
-  func pass(_ seconds: Double, connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil) throws {
+  func pass(_ seconds: Double, connected: Bool = true, closeCode: Int? = nil, unseen: Date? = nil, mainResend: Bool = true) throws {
     var left = seconds
     while left > 0 {
       let step = min(15, left)
       clock.advance(step)
       left -= step
-      try writeLiveStatus(connected: connected, closeCode: closeCode, unseen: unseen)
+      try writeLiveStatus(connected: connected, closeCode: closeCode, unseen: unseen, mainResend: mainResend)
       sup.tickNow()
     }
   }
@@ -83,6 +94,7 @@ struct MainSilentFailureTests {
     let r = try Rig(kind, scenario: "dev-dialog-keys.sh", env: ["FAKE_RESUMED": "1"], checksBridge: true)
     defer { r.teardown() }
     try r.runningWithLiveBridge()
+    try r.modelHasAnswered()
     // the pane is idle from here on: the message is stamped after its last output, and nothing is printed for it
     let told = Date().addingTimeInterval(5)
     try r.pass(MainRestartContract.unseenS - 30, unseen: told)
@@ -106,6 +118,7 @@ struct MainSilentFailureTests {
     let r = try Rig(.direct, scenario: "dev-dialog-keys.sh", env: ["FAKE_RESUMED": "1"], checksBridge: true)
     defer { r.teardown() }
     try r.runningWithLiveBridge()
+    try r.modelHasAnswered()
     // stamped well before the pane's last output: the output after it is Main's turn
     try r.pass(MainRestartContract.unseenS + MainRestartContract.unseenQuietS + 60, unseen: Date().addingTimeInterval(-600))
     #expect(r.sup.status.needsYou == nil, "\(String(describing: r.sup.status.needsYou))")

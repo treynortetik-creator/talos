@@ -91,13 +91,14 @@ describe('one table drives the gate and agent_may_run', () => {
     expect(terminalOnly(['install-guards', '--dry-run', '--remove'])).toBe('install-guards --remove')
   })
 
-  test("only the four that wait for the owner's word on adding devices still need a terminal (2026-11-14)", () => {
+  test("only the four that wait for the owner's word on adding devices, and linking another Talos (peer), still need a terminal (2026-11-14)", () => {
     const gated = COMMANDS.filter((c) => c.needs_terminal)
     // plus turning the guards off (2026-11-14: a lock the agent may turn on, never off)
     expect(gated.map((c) => c.name).sort()).toEqual([
       'devices',
       'enroll',
       'install-guards --remove',
+      'peer',
       'rotate',
       'trust on',
     ])

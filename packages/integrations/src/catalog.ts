@@ -12,6 +12,7 @@ import { integration as jira } from './jira/index.ts'
 import { integration as linear } from './linear/index.ts'
 import { integration as make } from './make/index.ts'
 import { integration as n8n } from './n8n/index.ts'
+import { integration as peer } from './peer/index.ts'
 import { integration as rss } from './rss/index.ts'
 import { integration as salesforce } from './salesforce/index.ts'
 import { integration as slack } from './slack/index.ts'
@@ -39,6 +40,7 @@ export const catalog: Record<IntegrationIdT, IntegrationModule> = {
   zoom,
   salesforce,
   heartbeat,
+  peer,
 }
 
 export function getIntegration(id: IntegrationIdT): IntegrationModule {
@@ -46,5 +48,7 @@ export function getIntegration(id: IntegrationIdT): IntegrationModule {
 }
 
 export function listSetupSpecs(): SetupSpecT[] {
-  return Object.values(catalog).map((m) => m.setup)
+  return Object.values(catalog)
+    .map((m) => m.setup)
+    .filter((s) => s.id !== 'peer') // see setup-catalog.ts
 }

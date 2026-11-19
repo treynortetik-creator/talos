@@ -179,6 +179,18 @@ public enum RelayConfig {
     return RelayOrigin(v)
   }
 
+  /// The same, with bridge.env read from the Talos home the session actually uses: desktop.json `env` TALOS_APP_HOME,
+  /// then the process environment, then `~/.config/talos/app` (TalosHomeChange.home). An install with its own home
+  /// keeps its relay there; reading the default home's file left its relay empty.
+  public static func resolve(
+    configured: String, configEnv: [String: String], processEnv: [String: String], userHome: String,
+    read: (String) -> String?
+  ) -> RelayOrigin? {
+    let home = PathUtil.expandTilde(
+      TalosHomeChange.home(configEnv: configEnv, processEnv: processEnv, userHome: userHome), home: userHome)
+    return resolve(configured: configured, bridgeEnv: read(home + "/bridge.env"))
+  }
+
   /// `KEY=value` lines; optional `export`, quotes and a trailing comment are tolerated; the last assignment wins.
   public static func envValue(_ key: String, in text: String) -> String? {
     var found: String?

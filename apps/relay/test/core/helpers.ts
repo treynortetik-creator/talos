@@ -75,7 +75,13 @@ import { WebSocket } from 'ws'
 
 /** A bridge socket that authenticates and then does nothing: never acks, so the relay's resend schedule can be observed. */
 /** A bridge that answers pings and nothing else. `clockOffsetMs`: how far its clock is from the relay's (negative: slow). */
-export async function silentBridge(relay: { wsBase: string }, key: BridgeKeyPair, clockOffsetMs = 0) {
+export async function silentBridge(
+  relay: { wsBase: string },
+  key: BridgeKeyPair,
+  clockOffsetMs = 0,
+  /** What its hello lists (a Mac that can take linked-agent messages says `peer/1`). */
+  features: string[] = [],
+) {
   const received: Array<Record<string, unknown>> = []
   const ws = new WebSocket(`${relay.wsBase}/bridge`)
   let closeCode: number | null = null
@@ -93,7 +99,13 @@ export async function silentBridge(relay: { wsBase: string }, key: BridgeKeyPair
           JSON.stringify(
             mkFrame(
               'hello',
-              { role: 'bridge', key_id: key.keyId, sig, client: { name: 'silent', version: '0' }, agent_config_rev: 0 },
+              {
+                role: 'bridge',
+                key_id: key.keyId,
+                sig,
+                client: { name: 'silent', version: '0', features },
+                agent_config_rev: 0,
+              },
               new Date(Number(f.server_time) * 1000 + clockOffsetMs).toISOString(),
             ),
           ),

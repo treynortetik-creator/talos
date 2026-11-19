@@ -4,7 +4,7 @@
 // Capacitor plugin): that one is taken before the sheet opens, since a screenshot of pixels would show the sheet.
 import { create } from 'zustand'
 import { usePalette } from '../palette/store.ts'
-import { blankCapture, type Capture, capturePage, pictureFromFile } from './capture.ts'
+import { blankCapture, type Capture, capturePage, pictureFromFile, readBackKnown } from './capture.ts'
 
 type State = {
   open: boolean
@@ -27,6 +27,18 @@ export const CAPTURE_LIMIT_MS = 8000
 let round = 0
 /** The iPhone app's screenshot is being taken: taps meanwhile do nothing. */
 let starting = false
+/**
+ * The copy under way, if any: stopped (its signal, its give-up timer) as soon as nobody waits for it any more, the sheet closed
+ * or a picture added, not 8 s later, so a slow phone does not go on copying while the owner draws on a picture they added, and a
+ * second open never runs beside the first one's copy.
+ */
+let running: { stop: AbortController; limit: ReturnType<typeof setTimeout> | undefined } | null = null
+const stopRunning = () => {
+  if (!running) return
+  running.stop.abort()
+  clearTimeout(running.limit)
+  running = null
+}
 const frames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
 
 /**
@@ -87,22 +99,42 @@ export const useBugReport = create<State>((set, get) => ({
       starting = false
     }
     if (round !== mine) return
-    set({ open: true, capture: native, capturing: native === null, takenAt: new Date(), returnTo })
-    if (native) return
+    // a browser already known not to read a drawn page back (an iPhone, warmReadBack): the sheet opens in its final,
+    // no-picture layout, and nothing below the picture moves after its first frame
+    const unsupported: Capture | null =
+      native === null && readBackKnown() === false
+        ? { canvas: blankCapture(innerWidth, innerHeight), ok: false, skipped: 0, unsupported: true }
+        : null
+    const first = native ?? unsupported
+    set({ open: true, capture: first, capturing: first === null, takenAt: new Date(), returnTo })
+    if (first) return
     await frames() // the sheet is up before any copying starts
-    const giveUp = new Promise<Capture>((r) =>
-      setTimeout(() => r({ canvas: blankCapture(innerWidth, innerHeight), ok: false, skipped: 0 }), CAPTURE_LIMIT_MS),
-    )
-    const capture = await Promise.race([capturePage(document.body), giveUp])
+    if (round !== mine || !get().capturing) return // closed, or a picture added, in those frames
+    // the give-up stops the copy too (capturePage's signal), so a slow phone does not go on copying a picture nobody waits for
+    stopRunning()
+    const mineRun: NonNullable<typeof running> = { stop: new AbortController(), limit: undefined }
+    running = mineRun
+    const giveUp = new Promise<Capture>((r) => {
+      mineRun.limit = setTimeout(() => {
+        mineRun.stop.abort()
+        r({ canvas: blankCapture(innerWidth, innerHeight), ok: false, skipped: 0 })
+      }, CAPTURE_LIMIT_MS)
+    })
+    const capture = await Promise.race([capturePage(document.body, mineRun.stop.signal), giveUp])
+    clearTimeout(mineRun.limit)
+    if (running === mineRun) running = null
     if (round !== mine || !get().capturing) return
     set({ capture, capturing: false })
   },
   close: () => {
     round++
+    stopRunning()
     set({ open: false, capture: null, capturing: false, takenAt: null })
   },
   setPicture: (c) => {
-    if (get().open) set({ capture: c, capturing: false, takenAt: new Date() }) // a pick that lands after the sheet closed is dropped
+    if (!get().open) return // a pick that lands after the sheet closed is dropped
+    stopRunning()
+    set({ capture: c, capturing: false, takenAt: new Date() })
   },
 }))
 

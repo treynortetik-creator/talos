@@ -2,7 +2,7 @@
 // Windows PC, a Linux box and a computer not known yet (every first pairing) read no "Mac" (lib/hostWords.ts).
 import { HOST_LINUX_FEATURE, HOST_MAC_FEATURE, HOST_WINDOWS_FEATURE, type Host } from '@talos-app/protocol'
 import readyFixture from '@talos-app/protocol/fixtures/frames/ready.json'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -84,7 +84,10 @@ describe('rendered for each host', () => {
 
   it('the pairing wait banner names a way that exists on that computer, and never Mac elsewhere', () => {
     for (const host of HOSTS) {
-      const t = on(host, () => ({ connection: 'online', deviceId: 'd_test', devicePinned: false }))(<Banners />)
+      on(host, () => ({ connection: 'online', deviceId: 'd_test', devicePinned: false }))(<Banners />)
+      // the instructions are behind More on the compact banner line
+      fireEvent.click(screen.getByRole('button', { name: 'More' }))
+      const t = document.body.textContent ?? ''
       cleanup()
       if (host === 'mac') {
         expect(t).toContain(

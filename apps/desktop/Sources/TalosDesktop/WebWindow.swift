@@ -120,11 +120,12 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// The build number (`CFBundleVersion`), nil when the bundle has none (`swift run`).
   static let build: String? = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
 
-  /// desktop.json `relay_url`, else `TALOS_APP_RELAY_URL` in `$TALOS_APP_HOME/bridge.env`.
-  static func resolveRelay(configured: String, home: String = NSHomeDirectory()) -> RelayOrigin? {
-    let appHome = ProcessInfo.processInfo.environment["TALOS_APP_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.config/talos/app"
-    let env = try? String(contentsOfFile: appHome + "/bridge.env", encoding: .utf8)
-    return RelayConfig.resolve(configured: configured, bridgeEnv: env)
+  /// desktop.json `relay_url`, else `TALOS_APP_RELAY_URL` in bridge.env of the Talos home the session uses (desktop.json
+  /// `env` first, then the process environment).
+  static func resolveRelay(configured: String, configEnv: [String: String], home: String = NSHomeDirectory()) -> RelayOrigin? {
+    RelayConfig.resolve(
+      configured: configured, configEnv: configEnv, processEnv: ProcessInfo.processInfo.environment, userHome: home,
+      read: { try? String(contentsOfFile: $0, encoding: .utf8) })
   }
 
   /// Opens a link in the default browser. Tests replace it with a spy.
@@ -163,7 +164,9 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   private var downloadTargets: [ObjectIdentifier: (part: URL, final: URL)] = [:]
   private var downloadDeclined: Set<ObjectIdentifier> = []
 
-  func configure(relayUrl: String) { configure(relay: Self.resolveRelay(configured: relayUrl)) }
+  func configure(relayUrl: String, configEnv: [String: String]) {
+    configure(relay: Self.resolveRelay(configured: relayUrl, configEnv: configEnv))
+  }
 
   func configure(relay r: RelayOrigin?) {
     guard r != relay else { return }

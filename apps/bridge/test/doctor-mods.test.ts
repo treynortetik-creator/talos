@@ -7,7 +7,7 @@ import { t } from '@talos-app/testkit'
 import { runCli } from '../src/cli.ts'
 import { runTalos } from '../src/talos.ts'
 import { installFakeClaude, withoutClaude } from './fake-claude.ts'
-import { type Harness, startHarness, waitFor } from './helpers.ts'
+import { type Harness, startHarness, waitFor, writeKit } from './helpers.ts'
 
 type Row = { level: string; name: string; detail: string }
 
@@ -50,6 +50,7 @@ async function doctor(
   h = await startHarness({ startBridge: false })
   const env = { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: h.relay.httpUrl }
   await runCli(['install-mcp', '--agent-dir', agent], mkIO().io, env)
+  writeKit(agent)
   const claudeDir = opts.claudeDir ?? mkdtempSync(join(tmpdir(), 'cd'))
   const deps = { processes: () => [] as string[] }
   const args = opts.noClaudeDir ? ['--agent-dir', agent] : ['--agent-dir', agent, '--claude-dir', claudeDir]

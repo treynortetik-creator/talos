@@ -22,7 +22,7 @@
 #             TALOS_RELEASE_TEAM), never from the app itself. The signature, Gatekeeper and requirement checks run again on the
 #             staged copy inside the lock, after the relay wait, just before it is moved into place. Any failure: exit 9,
 #             nothing installed. codesign, spctl, shasum, ditto and curl are called by full path. After the install it records this clone as the one the app uses
-#             (~/Library/Application Support/Talos/checkout), because a prebuilt app carries no clone path of its own.
+#             (~/Library/Application Support/app.talos.desktop/checkout, and the old Talos folder's for an older app), because a prebuilt app carries no clone path of its own.
 #     --check-only  with --from-release: run every check on the release (sha256, the zip's contents, codesign, Gatekeeper, the team)
 #             and stop there, exit 0 when it checks out; nothing is installed, quit, opened or recorded. The app's own updater runs
 #             this before it waits for a quiet moment, so a release that would be refused is never waited for.
@@ -469,11 +469,18 @@ fi
 if [ "$MODE" = install ] && [ -z "$(plist_val "$TARGET" TalosCheckout)" ]; then
   CLONE="$(cd "$HERE/../.." && pwd -P)"
   if [ -f "$CLONE/install.sh" ] && [ -f "$CLONE/apps/bridge/src/cli.ts" ] && [ -d "$CLONE/plugins/talos-app-mod" ]; then
-    SUPPORT="$HOME/Library/Application Support/Talos"
-    if mkdir -p "$SUPPORT" && printf '%s\n' "$CLONE" > "$SUPPORT/.checkout.$$" && mv -f "$SUPPORT/.checkout.$$" "$SUPPORT/checkout"; then
+    # The bundle-id folder is the record's home (the app reads it first); the old Talos folder is written too, for an older app.
+    SUPPORT="$HOME/Library/Application Support/app.talos.desktop"
+    OLD_SUPPORT="$HOME/Library/Application Support/Talos"
+    record_clone() {
+      local dir="$1"
+      if mkdir -p "$dir" && printf '%s\n' "$CLONE" > "$dir/.checkout.$$" && mv -f "$dir/.checkout.$$" "$dir/checkout"; then return 0; fi
+      rm -f "$dir/.checkout.$$"; return 1
+    }
+    if record_clone "$SUPPORT"; then
       echo "install: Talos will use this clone ($CLONE) for its agent folder setup"
+      record_clone "$OLD_SUPPORT" || echo "install: note: could not also record it in $OLD_SUPPORT/checkout (only an older Talos reads that one)" >&2
     else
-      rm -f "$SUPPORT/.checkout.$$"
       echo "install: warning: could not record this clone in $SUPPORT/checkout; Create, Adopt and Choose in Talos will say they cannot find a clone" >&2
     fi
   else

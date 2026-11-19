@@ -2,14 +2,18 @@
 // The live bridge uses it as a fallback when the socket is down; headless processes and the CLI use nothing else.
 import {
   type Frame,
+  type PeerCreatedT,
+  type PeerRow,
   RELAY_DESCRIPTOR_PATH,
   RelayDescriptorRead,
   type RelayDescriptorReadT,
   signBridgeHttp,
 } from '@talos-app/protocol'
+import type { z } from 'zod'
 import { assertSecureRelayUrl } from './config.ts'
 import type { KeyMaterial } from './keys.ts'
 
+export type PeerRowT = z.infer<typeof PeerRow>
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>
 
 /** The reason a relay error body carries (`{message}` or `{error}`), one clean line of at most 200 characters. */
@@ -141,6 +145,27 @@ export class RelayHttp {
     if (!res.ok)
       throw new RelayHttpError(res.status, `DELETE /bridge/share/tokens -> ${res.status}`, await relayReason(res))
     return true
+  }
+
+  /** POST /bridge/peers: a new inbox for a linked agent; the secret is in the answer, once. */
+  createPeer(a: { name: string; daily_cap?: number }) {
+    return this.json<PeerCreatedT>('POST', '/bridge/peers', a)
+  }
+
+  async listPeers(): Promise<PeerRowT[]> {
+    const res = await this.request('GET', '/bridge/peers')
+    if (!res.ok) throw new RelayHttpError(res.status, `GET /bridge/peers -> ${res.status}`, await relayReason(res))
+    return (await res.json()) as PeerRowT[]
+  }
+
+  /** DELETE /bridge/peers/:name: revokes at once; 200 whether or not it existed. */
+  async deletePeer(name: string): Promise<void> {
+    const res = await this.request('DELETE', `/bridge/peers/${encodeURIComponent(name)}`)
+    if (!res.ok) throw new RelayHttpError(res.status, `DELETE /bridge/peers -> ${res.status}`, await relayReason(res))
+  }
+
+  rotatePeer(name: string) {
+    return this.json<{ secret: string }>('POST', `/bridge/peers/${encodeURIComponent(name)}/rotate`, {})
   }
 
   async putMedia(

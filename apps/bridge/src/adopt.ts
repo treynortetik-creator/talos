@@ -11,6 +11,7 @@ import { cmdInstallAppHooks, homeAsAgentDir } from './apps/cli.ts'
 import { appPaths } from './apps/paths.ts'
 import type { CliIO } from './cli-main.ts'
 import { type BridgeEnv, defaultHome } from './config.ts'
+import { hasTalosKit, recordPlainFolder } from './kit-marker.ts'
 import { installMcp, mcpEntry, mcpProtectedRoots } from './mcp-config.ts'
 
 const BRIDGE_DIR = resolve(import.meta.dir, '..')
@@ -200,6 +201,9 @@ export async function cmdAdopt(env: BridgeEnv, argv: string[], io: CliIO): Promi
       return 1
     }
   }
+  // A plain Claude Code folder on purpose: remembered in the bridge home (not the folder), so doctor warns rather than fails
+  // and `talos-app start` takes it with no --no-kit.
+  if (!hasTalosKit(dir)) recordPlainFolder(env.home, dir)
   io.out(`connected: ${dir}`)
   return 0
 }

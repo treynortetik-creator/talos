@@ -185,6 +185,10 @@ export const HELP_SECTIONS: Section[] = [
             ],
           },
           {
+            q: 'Have Talos unstick the agent when it stops answering',
+            where: [w('mac', 'Session', 'Unstick the agent when it stops answering')],
+          },
+          {
             q: 'The relay address, or sign this Mac in',
             where: [w('mac', 'Connection', 'Relay address'), w('mac', 'Connection', 'Sign in…')],
           },
@@ -228,9 +232,9 @@ export const HELP_SECTIONS: Section[] = [
         kind: 'steps',
         items: [
           'Open the Setup checklist: Window menu or Menu bar, then [[Setup checklist…]]. Its first row, Agent folder, is the step that makes your setup. Type or browse to a folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its .mcp.json, plus the hooks of any MCP apps you have, changes) or Choose (a Talos agent folder you already have). Talos then starts the session itself, unless Claude is not signed in. Until you do this, nothing starts and no setup file exists. To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import: it saves, starts the session and tells you so.',
-          'Sign in: [[Sign in…]] in the Window menu, in the Menu bar, or in ((Mac settings → Connection)). Talos shows four words; type y in the small terminal pane when they match the Talos window. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
+          'Sign in: [[Sign in…]] in the Window menu, in the Menu bar, or in ((Mac settings → Connection)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
           'Allow the macOS permissions in ((Mac settings → Permissions)).',
-          'Start the agent: ((Menu bar → Start session)). The first start of an agent folder shows a confirmation screen in the terminal that you answer yourself.',
+          'Start the agent: ((Menu bar → Start session)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
           'Add your phone: run {{talos-app enroll}} in Terminal. For a phone browser, open the link it prints on the phone. For the iPhone app, copy the link and paste it into the app with [[Paste a setup link]] on its sign-in screen: opening the link on the iPhone opens Safari, which sets up a Home Screen copy instead.',
         ],
       },

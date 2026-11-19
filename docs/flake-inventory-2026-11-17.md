@@ -50,6 +50,12 @@ Fixed (11-18): `aWarmWorkersPointerIsDroppedAfter90Seconds` (PointerOwedTests.sw
 
 Fixed in the test, cause not proven (11-18): `afterTheWallClockIsSetBackTheSessionInUseIsNotTheCapsChoice` (WorkerFollowupsTests.swift). 5 failing CI logs: 4 at the "both quiet" precondition (`aa` read busy; e7d0f69 11-12, a641326 11-17, daf32f6 11-18, and c9a606d 11-18, which was pty-exhausted and is no evidence) and 1 (3d2d125, 11-17) where the cap parked `aa`, the session in use. The test slept a fixed 7 s of real time so tmux's real output times would catch up with a wall clock set back 5 s, then read one state snapshot, which is whichever tick last finished. The app's ranking is right (the cap ranks on the awake clock, `WorkerManager.swift:519`); a run with the ranking put back on the wall clock still fails this test. Not reproduced: about 35 parallel runs under a 14-core burn and one full-suite run under a 10-core burn, 0 failures, and the busy reading that failed the runs was not found. Change: the clocks are moved on in one step (`c.pass(7)`, no sleep) and the test waits for both states to read live. Status: test no longer waits on time; if it fails again its message shows the states, and the cause is still open.
 
+Fixed (11-19), test only: `anUpdateRestartsEachStaleSessionOnceOneAtATimeResumingItAndNeverAsACrash` (WorkerUpdateRestartTests.swift). 28 failing CI desktop logs, 11-14 to 11-19. The 12 since the failure dump (`updateDump`, 3e0f70504) all read the same (the 16 earlier have no dump): one session `parked`, pgid 0, no pane, `afterPark nil`, `stopped_why restart`, an empty update queue, and `update_restart_queued thread=trip` twice in the audit. Cause (reproduced with a pause, and what all 12 dumps show): the test sets `release.value = "r2"` while the first update manager is still ticking, and only then makes the second one (`updatingManager` detaches the old one). In that gap the old manager sees the new release itself, queues both threads, SIGTERMs one for its restart (`update_restart`, `worker_parked`) and is detached; the restart that was to follow lives only in its memory (`afterPark`), so the second manager adopts a session parked with nobody left to restart it and says "restarted" for the other. The app is right: a manager that dies between the park and the start leaves the session to its next start, which takes the new spec anyway. Reproduced: a 0.7 s pause after `release.value = "r2"` (what a loaded Mac gives the gap) fails the old test every time with the CI signature (`starts 3`, one `parked`, trip queued twice); with the fix the same pause passes. Change: the old manager is detached before the release changes (the app quits before the new release exists), also before `r3`.
+
+Fixed (11-19), test only: `theAutoConfirmEnterIsNotSwallowedByCopyMode` (ReviewD2ViewerTests.swift). 3 failing CI logs (04e36b9 11-11, 4c83073 11-15, 2df28d5 11-18), always `Expectation failed: sawMode`, which is the first assertion (the Enter assertion after it passed). Not the tmux SIGCHLD change 8db54967 (the earliest failing log, 11-11, predates it, and the nudge only delays a crash's report). Cause (shown by the instrumented reproduction below; the CI logs show only `sawMode`): the fake crashed 1 s after it started (`FAKE_CRASH_SECONDS`), the test attached the viewer after that, and on a loaded Mac attaching took longer than the crash: the whole crash-restart-Enter ran before the first wheel-up, the loop (`while starts < 2 || !running`) never ran, and the pane never entered copy mode (instrumented run: `iters=0 startsAtLoop=2`). The test's premise was never made. A run that does hit it is what the app's own guard turns into a long one (`auto_confirm_refused reason=clientsMayBeTyping`: the wheel counts as the owner typing, the Enter waits for it to stop). Reproduced: a 4 s pause before the attach fails the old test every time (`iters=0`, `sawMode=false`); 25 runs under a 3-core burn did not fail it without the pause. Change: the crash waits for a file (`FAKE_CRASH_ON_FILE`, the way MainResilienceTests do) which the test creates only once a wheel-up has put the pane in copy mode. The test cannot pass without its premise, and the Enter assertion is unchanged.
+
+Open, not reproduced (11-19): `cleanExitsRestartAtTheFirstStepWithoutSpendingTheCrashLoop(kind: .tmux)` (MainResilienceTests.swift). One real failing CI log (2df28d5, 11-18): only `restartsInWindow == 0` failed (it was 1); the run reached 4 starts and running, the audit had its clean exits and the delays were [0.3, 0.3, 0.3]. The 11-11 failure (2fb1397, `start_failed: the agent exited immediately`) is another, older fault. A restart is counted (`Supervisor.doRestart`) only for an exit that was not read as a clean one and is not a retry; one such exit at attempt 0 has the same 0.3 s delay and so passes every other line. The likeliest reading is the tmux host reporting one exit with no code (the pane read dead before tmux had reaped it, 5 polls, `TmuxPtyHost.deadStatusPolls`, or the host read as lost) which Main takes for a crash. That is app behaviour under load, and not shown here: 12 runs under a 10-core burn and 53 under a 16-core burn (beside CI's other jobs), 0 failures. Pty exhaustion is possible but not shown: both failing runs (2df28d5 and 2fb1397, the 11-11 one a `start_failed`) peaked at 500 of 511 ptys (kern.tty.ptmx_max), but 84 of 184 desktop logs peak at 480 or more and most are green, and neither log has a fork or pty error near the failure. Change so far: the failed assertion now prints the audit, to tell these apart. Open: no load runs until the pty leak (swiftpm-testing-helper holding 498 of 511 ptys) is fixed; then check whether the failures stop.
+
 ### B. Bridge (bun) — file watches and slow `ps`
 
 Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restarted it 11-16) and `ps` slow under load.
@@ -78,6 +84,8 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 | 2+1     | 11-16     | threads/copy-button.spec.ts [iphone] dense rows; 44x44 hit area                                                             | layout timing                           |
 | 1 each  | 11-16..17 | schedules offline cold start, themes 375 px, composer scroll-end, review/v2-drive-review F7, Developer page fence           |                                         |
 | 1       | 11-17     | cards/permission-explain.test.tsx (vitest) Deny sends the kill                                                              |                                         |
+| 1       | 11-19     | bugreport/bug-open-speed.spec.ts:51 [iphone] one tap: the sheet is up at once                                               | load only; Titan root-causing           |
+| 1       | 11-19     | schedules/relay.spec.ts:78 [iphone] a change on the Mac pushes one schedule.status, one re-fetch                            | load only; Titan root-causing           |
 
 ### D. Scripts (gate and CI tooling)
 
@@ -100,12 +108,35 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 
 E10 (11-19, passed on retry): Titan, the e2e packages on 8 workers beside a live check-titan (a load measurement).
 
+### Fixed 11-19 (Titan)
+
+Each reproduced, or reasoned through where it would not reproduce, beside a 14-core burner; fixed at the cause, with no retries
+and no longer limits. TEST unless said.
+
+- schedules/discovery-budget (592144d9): the fake slept 1 s of the 3 s total, so the stalled sometimes never
+  started; it fails at once now (15 of 15 under load).
+- apps/reference-servers, system monitor (5f750623): the free port was closed before the monitor bound it; a monitor that finds
+  it taken (it exits in 0.4 s) gets another port. Not reproduced.
+- e2e bridge-oversize-card (61abe2b8): reconnects were counted over the whole bridge log, a first dial that missed under load
+  included; counted from the card now. Not reproduced.
+- web bugreport/bug-open-speed (b0caad35, 39e44684): a stopwatch, now frames and "picture not ready yet"; and two APP bugs: the
+  8 s give-up could not land on a slow phone, and Preview moved 52 px on an iPhone.
+- web schedules/relay.spec.ts:78 (ab4facd8, d9ae039b): the specs took a false "offline" flash for the page; and the APP drew
+  that flash on every open.
+- relay peer rotate, red main at 50b976cb (3a019fc3; the guard a634916c, 7d1846cf, 34540b43): a long fake-clock advance replayed
+  days of relay timers past the server keep-alive; a test relay now keeps idle sockets, and an advance over 20,000 timers fails.
+
+### Runner verdicts (not test flakes)
+
+- **main d7d2d96, check, 11-19 (Lemnos): RUNNER, pty exhaustion.** The commit was Swift only; 5 bridge tests timed out (pane Run x2, file-card emoji 60 s, undo-card jcs 60 s, rollback killed at 20 s). The run's timings.tsv row says `pty=507/511`: the parallel desktop Swift run beside it leaked ptys. Root cause and fix: 9c0f495e7 (Delphi; parallel Swift Testing parked every cooperative thread, so SwiftTerm's closes never ran; now a width cap at cores-2 and a pty-watch guard). No rerun-to-green.
+
 ### Sleeps used as fixes
 
 Sonnet survey of about 1,400 sleep and waitForTimeout hits; about 70 read in context, the rest screened. Classes: B = a fixed wait
 for something that has a condition (should poll it); A = a negative window ("nothing more arrives"); C = the timing is the behaviour.
 
 B, to convert to conditions (about 40 sites):
+
 - bridge `lifecycle.test.ts:196` (poll psInfo); bridge sleep-before-`eventually` in notify, security, messages, review-fixes,
   v2-v0, health tests; `voice.test.ts:135` asserts nothing (delete)
 - relay core: sleep-before-`vi.waitFor` in session, health, health-recheck, health-review, schedules, disk-low tests (delete the sleep)
@@ -116,6 +147,7 @@ B, to convert to conditions (about 40 sites):
 - kit: `test-permission-relay.sh:412-446` fixed sleep 1.5-4 s (poll the hub log)
 
 A, negative windows (about 550 bridge/relay, about 80 e2e/web at 1500 ms, Swift 1.5-4 s "well past the settle time"):
+
 - queue-kill-reopen (`e2e/tests/journeys/queue-kill-reopen.spec.ts`): not flake fixes (one commit, 96a389bbb). Line 31 "dead app
   delivered nothing" is weak: the renderer is gone, and a live app reconnects at about 1 s with jitter, so 1500 ms would not catch
   it reliably; replace it with "the relay has no app socket". Lines 48 and 67 "only once": wait for pendingForBridge() === 0

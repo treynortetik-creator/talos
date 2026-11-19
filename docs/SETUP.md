@@ -93,7 +93,15 @@ Do not turn on Railway's "sleep when idle" setting. The Mac's connection has to 
 
 If you ran the root `./install.sh`, the agent folder is `~/talos-agent` and its `talos-app` server is already registered, so
 this step only adds the bridge key and your relay address (or run `./install.sh --relay-url https://<your relay address>` again, which
-runs the same script). Otherwise pick the agent folder you want to talk to (it can be any folder you use with Claude Code), then:
+runs the same script). To put the agent somewhere else, run `./install.sh --agent-dir /path/to/a/new/folder` from the
+repository root: it builds a new agent there with the Talos kit (CLAUDE.md, memory, hooks) and runs this step for you. It
+refuses a folder that already has files in it and is not a Talos agent.
+
+**Advanced: a plain Claude Code folder.** To connect a folder you already use with Claude Code, without the Talos kit,
+run only the bridge part below (or `talos-app adopt --agent-dir <folder>`), then start it once with
+`talos-app start --no-kit` (step 4). The bridge remembers the folder: later starts need no flag, and `talos-app doctor`
+warns that the agent's replies rely on the `talos-app` server's instructions alone. A folder with no kit that was never
+connected this way is refused by `start` and failed by `doctor`. The bridge part:
 
 ```bash
 apps/bridge/scripts/install.sh --agent-dir /path/to/your/agent-folder --relay-url https://<your relay address>
@@ -121,11 +129,13 @@ If you used the root `./install.sh`, start the agent with the launch script it w
 ~/talos-agent/start-talos.sh
 ```
 
-For any other agent folder, the short way: from anywhere, run
+For another agent folder, the short way: from anywhere, run
 
 ```bash
 talos-app start --agent-dir /path/to/your/agent-folder -- <your existing flags>
 ```
+
+For a plain Claude Code folder (no Talos kit, the advanced case in step 3), add `--no-kit` before the `--` the first time.
 
 It runs `claude` in that folder with the two variables and the development-channel flag added after your flags (add
 `--dry-run` to see the command without starting it). Everything after the `--` goes to `claude` as it is. `talos-app` never loads the agent folder's `.env` file into

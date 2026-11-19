@@ -69,7 +69,8 @@ run_dev() { HOME="$FAKEHOME" TMPDIR="$T/tmp" PATH="$STUB:$PATH" bash "$INSTALL_D
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 snap() { find "$1" -mindepth 1 -exec stat -f '%N|%z|%m|%HT|%Y' {} + 2>/dev/null | LC_ALL=C sort | shasum | cut -d' ' -f1; }
 no_temp_left() { [ -z "$(ls -A "$T/tmp")" ]; }
-CHECKOUT_FILE="$FAKEHOME/Library/Application Support/Talos/checkout"
+CHECKOUT_FILE="$FAKEHOME/Library/Application Support/app.talos.desktop/checkout"
+OLD_CHECKOUT_FILE="$FAKEHOME/Library/Application Support/Talos/checkout"
 
 # --- build-app.sh: no silent ad hoc ----------------------------------------------------------------------------------------------
 # A stub swift logs and stops the build (exit 3), so each case shows whether the identity check let it reach the build at all.
@@ -354,8 +355,10 @@ else
   count; if [ "$rc" = 0 ] && codesign --verify --strict --deep "$D/Talos.app" 2>/dev/null && no_temp_left; then
     ok "Apple Development as Developer ID, past Gatekeeper: the right team installs, the copy verifies, the temp folder is gone"
   else bad "the right team: exit $rc: $OUT"; fi
-  count; [ "$(cat "$CHECKOUT_FILE" 2>/dev/null)" = "$CLONE" ] && ok "the clone it was run from is recorded for the app (Application Support/Talos/checkout)" \
+  count; [ "$(cat "$CHECKOUT_FILE" 2>/dev/null)" = "$CLONE" ] && ok "the clone it was run from is recorded for the app (Application Support/app.talos.desktop/checkout)" \
     || bad "the recorded clone is '$(cat "$CHECKOUT_FILE" 2>/dev/null)', wanted '$CLONE'"
+  count; [ "$(cat "$OLD_CHECKOUT_FILE" 2>/dev/null)" = "$CLONE" ] && ok "and in the old Application Support/Talos folder, for an older app" \
+    || bad "the old record is '$(cat "$OLD_CHECKOUT_FILE" 2>/dev/null)', wanted '$CLONE'"
   count; case "$OUT" in *"checks out"*"signed by team $TEAM"*) ok "it says what was checked" ;; *) bad "no line about the checks: $OUT" ;; esac
 
   # Swapped during the relay wait: the app in the private folder is replaced by an ad hoc one between the first checks and the

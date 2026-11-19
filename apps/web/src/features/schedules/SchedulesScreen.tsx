@@ -3,7 +3,7 @@
 import { SCHEDULES_FEATURE_V2, threadSessionMode } from '@talos-app/protocol'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useTalos, useTalosClient } from '../../lib/client.ts'
+import { EMPTY_PRESENCE, useTalos, useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconPlus } from '../../ui/icons.tsx'
 import { Button, Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
@@ -34,6 +34,8 @@ export function useTellAgent() {
 /** What the owner set on the list (groups opened or shut, chips, search), per app session: see SchedulesScreen. */
 type View = { openBy: Record<string, boolean>; filters: ReadonlySet<JobFilter>; query: string }
 const SESSION = new WeakMap<object, View>()
+/** Clients whose relay could not be reached at least once while no presence had come: see `presenceKnown` below. */
+const RELAY_FAILED = new WeakSet<object>()
 
 export function SchedulesScreen() {
   const client = useTalosClient()
@@ -42,6 +44,15 @@ export function SchedulesScreen() {
   const nav = useNavigate()
   const slice = useTalos((s) => s.schedules)
   const macOnline = useTalos((s) => s.presence.bridge_online)
+  // Whether the relay has said where the Mac is. Until its first ready or presence frame the client holds EMPTY_PRESENCE, whose
+  // bridge_online is false only because nothing is known yet: read as "offline", that drew "Your computer is offline" for up
+  // to half a second on every open with the Mac online. A relay that could not be reached is an answer of its own, and it
+  // stays one (RELAY_FAILED) through the retries' own "connecting", so a relay that is down reads offline throughout instead
+  // of Loading on every dial, until a presence arrives.
+  const connection = useTalos((s) => s.connection)
+  const noPresence = useTalos((s) => s.presence === EMPTY_PRESENCE)
+  if (connection === 'offline' || connection === 'unreachable') RELAY_FAILED.add(client)
+  const presenceKnown = !noPresence || RELAY_FAILED.has(client)
   const t = useSchedTime(slice.snapshot?.health ?? null)
   const [notice, setNotice] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
@@ -130,8 +141,9 @@ export function SchedulesScreen() {
   // pull to refresh: a downward drag from the very top of the list
   const pull = useRef<number | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
-  // while the Mac is away the saved copy is still being read: say Loading, not "Your Mac is offline" with no list
-  const loading = !snap && kind === null && (macOnline || !slice.cacheChecked)
+  // while the Mac is away the saved copy is still being read: say Loading, not "Your Mac is offline" with no list; and the same
+  // before the relay has said whether the Mac is there at all
+  const loading = !snap && kind === null && (macOnline || !slice.cacheChecked || !presenceKnown)
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="schedules-screen">

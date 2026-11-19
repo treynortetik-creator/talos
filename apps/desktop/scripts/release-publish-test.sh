@@ -81,6 +81,11 @@ SIGNARGS=(--public-url "$PUBGIT" --source-repo "$SRCREPO")
 release_dir() {  # release_dir <dir> [notarized true|false]: what release-app.sh leaves
   rm -rf "$1"; mkdir -p "$1"
   printf 'zip bytes' > "$1/Talos-1.5.0-universal.zip"
+  if [ -n "${ZIP_STAMP:-}" ]; then  # a real zip whose app carries TalosSourceSHA256
+    rm -rf "$T/zapp"; mkdir -p "$T/zapp/Talos.app/Contents"
+    /usr/libexec/PlistBuddy -c "Add :TalosSourceSHA256 string $ZIP_STAMP" "$T/zapp/Talos.app/Contents/Info.plist" >/dev/null
+    rm -f "$1/Talos-1.5.0-universal.zip"; (cd "$T/zapp" && zip -qr "$1/Talos-1.5.0-universal.zip" Talos.app)
+  fi
   local s; s="$(shasum -a 256 "$1/Talos-1.5.0-universal.zip" | awk '{print $1}')"
   printf '%s  Talos-1.5.0-universal.zip\n' "$s" > "$1/Talos-1.5.0-universal.zip.sha256"
   cat > "$1/Talos-1.5.0-universal.manifest.json" <<J
@@ -201,6 +206,25 @@ OUT="$(pub --dry-run)"; rc=$?
 OUT="$(pub)"; rc=$?
 [ "$rc" = 0 ] && [ "$OUT" = "release 1.5.0: ok" ] && grep -q "release create v1.5.0 --repo treynortetik-creator/talos --verify-tag .*Talos-1.5.0-universal.zip .*Talos-1.5.0-universal.zip.sha256 .*latest.json .*latest.json.sig" "$GHLOG" \
   && ok "for real (stub gh): the four files go up on the public repo" || bad "publish: exit $rc: $OUT; $(cat "$GHLOG")"
+# the source tarball of an app that carries TalosSourceSHA256 (R2-2)
+printf 'source bytes' > "$T/src.tar"; SRCSHA="$(shasum -a 256 "$T/src.tar" | awk '{print $1}')"
+mkstamped() {  # mkstamped <dir> <stamp>: a signed release folder whose zip holds an app with that stamp
+  ZIP_STAMP="$2" release_dir "$1"
+  TALOS_RELEASE_KEY="$T/rel.key" bash "$SIGN" --tag v1.5.0 "${SIGNARGS[@]}" --dir "$1" >/dev/null 2>&1
+}
+R="$T/rel-stamped"; mkstamped "$R" "$SRCSHA"
+OUT="$(pub --dry-run)"; rc=$?
+[ "$rc" = 1 ] && case "$OUT" in *"talos-source-v1.5.0.tar.gz must be published"*) true ;; *) false ;; esac \
+  && ok "an app that carries TalosSourceSHA256 and no source tarball in the folder: the publish is refused" || bad "missing source asset: exit $rc: $OUT"
+printf 'different bytes' > "$R/talos-source-v1.5.0.tar.gz"
+OUT="$(pub --dry-run)"; rc=$?
+[ "$rc" = 1 ] && case "$OUT" in *"is not the file the app's TalosSourceSHA256 names"*) true ;; *) false ;; esac \
+  && ok "a source tarball whose sha256 is not the stamped one: refused" || bad "mismatched source asset: exit $rc: $OUT"
+cp "$T/src.tar" "$R/talos-source-v1.5.0.tar.gz"
+OUT="$(pub)"; rc=$?
+[ "$rc" = 0 ] && [ "$OUT" = "release 1.5.0: ok" ] && grep -q "talos-source-v1.5.0.tar.gz" "$GHLOG" \
+  && ok "the matching source tarball is published with the release" || bad "matching source asset: exit $rc: $OUT; $(cat "$GHLOG")"
+R="$T/rel"
 OUT="$(: > "$GHLOG"; PATH="$STUB:$PATH" bash "$REAL_PUBLISH" v1.5.0 --dir "$R" --ci-repo owner/private --dry-run 2>&1)"; rc=$?
 [ "$rc" = 1 ] && case "$OUT" in *"does not verify with the pinned release key (unknown_kid)"*) true ;; *) false ;; esac \
   && ok "the real publisher refuses a manifest signed by a key the real tree does not pin" || bad "real publisher, unpinned key: exit $rc: $OUT"

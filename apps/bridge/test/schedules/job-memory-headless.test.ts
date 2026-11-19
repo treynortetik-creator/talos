@@ -546,7 +546,11 @@ describe('ingest', () => {
 describe('what no run came back for', () => {
   test('an old receipt, out file or scratch folder is swept, a fresh one is not (a wipe while a run was still writing leaves one)', () => {
     const r = rig()
-    const old = new Date(Date.now() - 9 * 24 * 3600_000)
+    // file times are the system clock's, so the dates the sweep compares them with are too (performance's clock): the hostile
+    // nightly moves this process's Date 30 days ahead, and a cutoff from it was in the future, which swept the fresh files as
+    // well (2026-11-18). Production has one clock for both.
+    const systemNow = performance.timeOrigin + performance.now()
+    const old = new Date(systemNow - 9 * 24 * 3600_000)
     r.receipt('a-job', 1)
     r.out('a-job', 1, 'orphan')
     mkdirSync(join(r.dir, 'run', `a-job.${rid(1)}`), { recursive: true })
@@ -558,7 +562,7 @@ describe('what no run came back for', () => {
       utimesSync(f, old, old)
     r.receipt('b-job', 2)
     r.out('b-job', 2, 'fresh')
-    r.mem.sweepRuns(Date.now() - 8 * 24 * 3600_000)
+    r.mem.sweepRuns(systemNow - 8 * 24 * 3600_000)
     expect(readdirSync(join(r.dir, 'receipts'))).toEqual([`b-job.${rid(2)}.json`])
     expect(readdirSync(join(r.dir, 'out'))).toEqual([`b-job.${rid(2)}.txt`])
     expect(readdirSync(join(r.dir, 'run'))).toEqual([])

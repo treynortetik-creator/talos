@@ -6,8 +6,20 @@ export interface Clock {
 }
 
 export type FakeClock = Clock & {
-  /** Moves time forward and fires every timer that comes due, in order, including timers they schedule. */
-  advance(ms: number): void
+  /**
+   * Moves time forward and fires every timer that comes due, in order, including timers they schedule. `replay`: the caller
+   * means every firing in between to run (a test relay refuses an advance that fires over its cap without it).
+   */
+  advance(ms: number, opts?: { replay?: boolean }): void
+  /**
+   * A long jump as a machine waking from sleep sees it: time moves at once, then every timer already due fires once, late, in
+   * order (a repeating timer re-arms from the new time and does not fire again). advance() instead replays every firing in
+   * between: a 5 s ping across 8 days is 135,000 callbacks and seconds of real time, which raced a live server's keep-alive
+   * (red main at 50b976cb). Use set() when no timer has to run at all. One limit: a wait the code splits into hops (the relay's
+   * longTimeout, 2^31-1 ms each, for waits past 24.8 days) fires its first hop late and re-arms the rest from the jump's end, so
+   * its end does not come inside a longer jump; reach such a deadline with advance() in steps, or set() then advance().
+   */
+  jump(ms: number): void
   set(ms: number): void
   readonly pending: number
   /** How many timers have fired so far (a test can bound it to prove a long jump did not replay days of timers). */
@@ -49,6 +61,10 @@ export function fakeClock(startIso = '2026-10-28T15:00:00.000Z'): FakeClock {
         best[1].fn()
       }
       t = target
+    },
+    jump(ms) {
+      t += ms
+      clock.advance(0) // each timer due by now fires once; one it re-arms is due later, so it does not fire again
     },
     set(ms) {
       t = ms

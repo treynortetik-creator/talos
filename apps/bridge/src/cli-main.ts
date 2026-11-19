@@ -25,10 +25,12 @@ import {
   loadKeyFile,
   prepareRotation,
 } from './keys.ts'
+import { hasTalosKit, isPlainFolder, noKitMessage, recordPlainFolder } from './kit-marker.ts'
 import { formatLogLine, tailLines } from './log-tail.ts'
 import { installMcp, mcpEntry, mcpProtectedRoots, readMcpEntry } from './mcp-config.ts'
 import { hookDigestNotification } from './notify.ts'
 import { say } from './owner-words.ts'
+import { readHidden } from './peer/read-hidden.ts'
 import {
   AskRulesError,
   describePlan,
@@ -70,6 +72,8 @@ export type CliIO = {
   now(): number
   /** `enroll --json`: one event line, written at once. Absent: a synchronous write to stdout (enroll-cli.ts). */
   emit?(line: string): void
+  /** Asks for a secret on the terminal without echoing it (`peer add`). Absent: `prompt`. */
+  readSecret?(question: string): Promise<string>
 }
 
 const BRIDGE_DIR = resolve(dirname(import.meta.path), '..')
@@ -527,6 +531,8 @@ export type CliDeps = {
   /** `share shortcut`: the OS (default `process.platform`) and the signer (default `shortcuts sign`); tests inject both. */
   platform?: NodeJS.Platform
   sign?: (input: string, output: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** `peer ...`: the key store (default this machine's); tests inject one. */
+  peer?: import('./peer/cli.ts').PeerCliDeps
   /** `apps ...` (MCP apps): the status source, Keychain, connector and so on; tests inject all of them. */
   apps?: import('./apps/cli.ts').AppsCliDeps
   /** `update`: the checkout to update (default: the one this CLI runs from) and how to run a command there; tests inject both. */
@@ -553,6 +559,7 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
       'claude-dir': { type: 'string' },
       deep: { type: 'boolean' },
       json: { type: 'boolean' },
+      'no-kit': { type: 'boolean' },
     },
     strict: true,
   })
@@ -563,6 +570,7 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
       ...(values['agent-dir'] ? { agentDir: values['agent-dir'] } : {}),
       ...(values['claude-dir'] ? { claudeDir: values['claude-dir'] } : {}),
       ...(values.deep ? { deep: true } : {}),
+      ...(values['no-kit'] ? { noKit: true } : {}),
     },
     io,
     deps,
@@ -594,16 +602,29 @@ async function cmdStart(args: string[], io: CliIO, deps: CliDeps, home: string):
   const claudeFlags = dd < 0 ? [] : args.slice(dd + 1)
   const { values } = parseArgs({
     args: own,
-    options: { 'agent-dir': { type: 'string' }, 'dry-run': { type: 'boolean' } },
+    options: { 'agent-dir': { type: 'string' }, 'dry-run': { type: 'boolean' }, 'no-kit': { type: 'boolean' } },
     strict: true,
   })
   const agentDir = resolve(values['agent-dir'] ?? process.cwd())
-  const usage = 'usage: talos-app start [--agent-dir <dir>] [--dry-run] [-- <your claude flags>]'
+  const usage = 'usage: talos-app start [--agent-dir <dir>] [--no-kit] [--dry-run] [-- <your claude flags>]'
   if (!existsSync(agentDir)) throw new CliError(`agent folder does not exist: ${agentDir}\n${usage}`)
+  // Only the bridge in the folder (its own install.sh ran, the root one never did): the agent would start with none of Talos.
+  // --no-kit says that is the point: a plain Claude Code folder, connected to the app (SETUP.md step 3). Once said (or once
+  // adopt connected it) the bridge home remembers it, so doctor warns instead of failing and the flag is not needed again.
+  const kit = hasTalosKit(agentDir)
+  if (!kit && !values['no-kit'] && !isPlainFolder(home, agentDir)) throw new CliError(noKitMessage(agentDir))
   if (!readMcpEntry(agentDir))
     throw new CliError(
       `no talos-app server in ${join(agentDir, '.mcp.json')}. Run: apps/bridge/scripts/install.sh --agent-dir ${agentDir} --relay-url <url>`,
     )
+  if (!kit && values['no-kit'] && !values['dry-run']) {
+    // bookkeeping only: a home it cannot write to never stops the start (the next one just needs --no-kit again)
+    try {
+      recordPlainFolder(home, agentDir)
+    } catch (e) {
+      io.err(`talos-app: could not remember ${agentDir} as a plain folder (${(e as Error).message}); starting anyway`)
+    }
+  }
   const claude = (deps.which ?? ((n: string) => Bun.which(n)))('claude')
   if (!claude && !values['dry-run'])
     throw new CliError(
@@ -1193,6 +1214,8 @@ export async function runCli(
         break
       case 'trust':
         return cmdTrust(env, rest, io)
+      case 'peer':
+        return (await import('./peer/cli.ts')).cmdPeer(env, rest, io, () => httpFor(env), deps.peer)
       case 'theme':
         return cmdTheme(env, rest, io)
       case 'lead':
@@ -1265,5 +1288,6 @@ export function terminalIO(): CliIO {
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: () => Date.now(),
+    readSecret: readHidden,
   }
 }

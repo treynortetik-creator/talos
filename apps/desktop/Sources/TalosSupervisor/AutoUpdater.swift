@@ -64,6 +64,10 @@ public final class AutoUpdater: @unchecked Sendable {
     public var settings: @Sendable () -> (on: Bool, feed: String?)
     /// The bridge checkout (the owner's clone of the public repo); nil when none can be used.
     public var checkout: @Sendable () -> String?
+    /// A recorded clone that is sound but whose path the owner (or this app) never accepted: the update cannot use it until they do.
+    public var unacceptedClone: @Sendable () -> String? = { nil }
+    /// Asks the owner, once per such clone, to accept it (the app's existing "Use this clone" card). Never accepts by itself.
+    public var offerClone: @Sendable (_ clone: String) -> Void = { _ in }
     /// Why the Mac is not quiet now (empty: quiet): sessions and background work.
     public var look: @Sendable () -> [String]
     /// One line into the default thread.
@@ -142,6 +146,7 @@ public final class AutoUpdater: @unchecked Sendable {
   var phase: Phase
   private var timer: DispatchSourceTimer?
   private var saidOff = false
+  private var offeredClones = Set<String>()
   private var saidNoKey = false
   /// When the swap of this process's own pending update was asked to stop (over `applyCap`).
   private var stopAskedAt: Double?
@@ -415,7 +420,15 @@ public final class AutoUpdater: @unchecked Sendable {
     if ["/Applications", "/System", "/Library", "/usr"].contains(where: { canon == $0 || canon.hasPrefix($0 + "/") }) {
       return refuse(m, .location)
     }
-    guard let co = hooks.checkout() else { return refuse(m, .checkout) }
+    guard let co = hooks.checkout() else {
+      // a recorded clone that was never accepted is a question for the owner, not a failure: asked once, and not held against this
+      // release (accepting it lets the next check go ahead at once)
+      if let clone = hooks.unacceptedClone() {
+        offerUnacceptedCloneOnce(clone)
+        return audit("awaiting_clone_acceptance", ["version": m.version])
+      }
+      return refuse(m, .checkout)
+    }
     guard let clean = checkoutClean(co) else { return refuse(m, .checkout) }
     guard clean else { return refuse(m, .dirty) }
     // the release's public commit, fetched now (nothing moves): the swap later needs no network for the code
@@ -492,8 +505,22 @@ public final class AutoUpdater: @unchecked Sendable {
     }
   }
 
+  /// An existing install whose recorded clone was never accepted would never update, silently. The first time a check meets such a clone
+  /// the owner is asked once (the card), and the question is remembered across launches; an answer is theirs, never assumed.
+  private func offerUnacceptedCloneOnce(_ clone: String) {
+    let file = dir + "/clone-offered"
+    let seen = ((try? String(contentsOfFile: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    guard !seen.contains(clone), !offeredClones.contains(clone) else { return }
+    offeredClones.insert(clone)
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try? (seen + [clone]).joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8)
+    hooks.offerClone(clone)
+  }
+
   /// nil: not a git checkout that git can read.
   private func checkoutClean(_ co: String) -> Bool? {
+    // the checkout must be a repository of its own: a folder with no .git inside another repository would otherwise be read as that one
+    guard let top = git(co, ["rev-parse", "--show-toplevel"]), PathUtil.canonical(top) == PathUtil.canonical(co) else { return nil }
     let r = hooks.run(["/usr/bin/env", "git", "-C", co, "status", "--porcelain"], scriptEnv(), options.gitTimeout)
     guard r.ok else { return nil }
     return r.stdout.isEmpty
@@ -523,6 +550,7 @@ public final class AutoUpdater: @unchecked Sendable {
       e[k] = nil
     }
     e["GIT_TERMINAL_PROMPT"] = "0"
+    if let p = BundledTools.appending(toPath: e["PATH"], dir: BundledTools.dir) { e["PATH"] = p }  // the app's own bun, last
     return e
   }
 

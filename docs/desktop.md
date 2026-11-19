@@ -62,7 +62,19 @@ apps/desktop/scripts/install.sh --from-release <https URL or path> --sha256 <sha
 ```
 
 - `release-app.sh` writes the zip, its `.sha256` and a manifest (version, git sha, sha256, architectures, team id). The app
-  carries no clone path; `install.sh` records the clone it runs from in `~/Library/Application Support/Talos/checkout`. Any program
+  carries no clone path. With no clone recorded, the app fetches one itself: the public repository at the tag for its own version
+  (`mac-v<version>`, not main) into `~/Library/Application Support/app.talos.desktop/talos` (outside the folders macOS protects).
+  First, if `xcode-select -p` fails (no Command Line Tools), it asks macOS to install them (`xcode-select --install`), shows "One quick Apple install first: click Install when macOS asks (about 5 minutes)", and polls until they are there (30 minutes at most; closing Apple's window is a failure with Try again); no git or python3 runs before that. The code is pinned by the signed app: release-app.sh makes the release's own source tarball (`talos-source-mac-v<version>.tar.gz`, from the public commit the tag names, checked against the public tag; `TALOS_PUBLIC_COMMIT`), stamps its sha256 and that commit into Info.plist (`TalosSourceSHA256`, `TalosSourceCommit`), and release-publish.sh uploads it as a release asset. First setup downloads that asset over https and checks its sha256 before unpacking (no git needed). A build with a commit stamp but no tarball hash clones with git instead, requiring the tag and HEAD to be the stamped commit; a build with no stamp (a development build) will not fetch code by itself. After the hash check the unpacked copy is made a git checkout of the stamped commit (`git init`, `fetch --depth 1 origin <commit>`, `reset`) and must show no difference and no extra file against that commit (`git status --porcelain --ignored` empty), so the git updater can move it; the updater also refuses a folder whose `git rev-parse --show-toplevel` is not itself. A recorded clone that was never accepted (an install from before this) is not silently skipped: the updater asks once, in a message and the Set up window's "Use this clone" card, and never accepts for the owner. release-publish.sh refuses a release whose app carries TalosSourceSHA256 unless the matching source tarball is in the folder. It installs
+  Claude Code only when missing, with Anthropic's installer script: the exact pinned copy shipped inside the signed app (`Contents/Resources/claude-install.sh`, fetched and sha256-checked at build time; nothing is downloaded at install time, and a copy whose checksum differs is not run), checks
+  the prerequisites with that clone's own `install.sh --dry-run`, installs the packages with `pnpm install --frozen-lockfile` or,
+  when there is no pnpm, the app's own bundled bun (`bun install --frozen-lockfile --ignore-scripts`, also what the updater uses, which installs what `pnpm-lock.yaml` pins;
+  `TALOS_JS_RUNTIME=bun` tells the clone's installer to ask for neither node nor pnpm), and records the clone last in
+  `~/Library/Application Support/app.talos.desktop/checkout`. The onboarding card shows each step and a Retry. It never deletes a
+  folder it did not make. A release app carries bun and tmux in `Contents/Helpers` (pinned and sha256-checked in
+  `apps/desktop/scripts/bundle-tools.sh`, signed with the app's identity, licences in `Contents/Resources/licenses` and
+  `THIRD_PARTY_NOTICES.md`); they sit last on the PATH Main and the workers get, so a Mac's own copies win. `install.sh` writes the
+  same record (and the old `Application Support/Talos/checkout`, which the app still reads when the new one is missing). A clone the app made is accepted by the app; any other recorded clone is
+  asked about as below. Any program
   of the owner's can write that file, so the app uses it for Create, Adopt and Choose only when the clone is outside the Talos
   home, the agent folder, every thread folder, the temp folders and the app's support folder, has no link in its path, and is
   owned by the owner and writable by no one else; and only after the owner says yes to that exact path on a card (the yes is kept
@@ -220,6 +232,7 @@ apps/desktop/scripts/install.sh --rollback
    press Import; it saves and starts the session. **Find a running session** reads the folder, flags and session id of a
    session that is already running in Terminal; it cannot read environment variables, so Import the command first if
    yours sets any.
+
 3. **Permissions**: press each **Ask now** and approve; add Talos to Full Disk Access, Accessibility and Screen Recording
    if you want the agent to use them.
 4. **Sign in**: menu, **Sign in...** pairs the Talos window with your relay as another device. It runs
@@ -265,7 +278,6 @@ apps/desktop/scripts/install.sh --rollback
 
 While the same agent is still running in Terminal, Talos refuses to start a second one ("another session holds the
 channels"), so a chat channel does not lose its connection by accident.
-
 
 ### The rest of the setup screen (no Terminal needed)
 

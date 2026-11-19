@@ -1,8 +1,9 @@
 // The bug reporter in a real browser (fake mode, production build): opened from the palette and from Help, desktop and 375 x 812,
 // both themes with axe, the keyboard (focus in, Esc out and back), Blur drawn on the real capture, the preview is the payload,
 // and Send reaches the client with a picture. The fake Mac answers `context` from made-up data.
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { expectAxeClean } from '../cards/e2e.ts'
+import { test } from '../helpers/ios-readback.ts'
 import { openPalette } from '../helpers/keys.ts'
 
 test.use({ bypassCSP: true, serviceWorkers: 'block' })
@@ -55,9 +56,22 @@ test('nothing is sent without Send, an empty report is refused, and Send needs t
   await expect(d.getByText('Sent. Thank you.')).toHaveCount(0)
 })
 
-test('the screen is really captured, on every engine (WebKit draws the page picture too)', async ({ page }) => {
+// WebKit on an iPhone, in Safari and in the Mac app cannot read a drawn page back (capture.ts canReadBackPage, 2026-11-15), so
+// there it takes no picture and says so; this said WebKit drew one only because Playwright's Linux WebKit can (ios-readback.ts)
+test('the screen is really captured where the engine can read it back; WebKit takes none and says so', async ({
+  page,
+  browserName,
+}) => {
   await openFromPalette(page)
-  await expect(page.getByTestId('bug-canvas')).toHaveAttribute('data-capture', 'ok')
+  if (browserName === 'webkit') {
+    await expect(page.getByTestId('bug-canvas')).toHaveAttribute('data-capture', 'failed')
+    await expect(
+      page
+        .getByRole('dialog', { name: 'Report a bug' })
+        .getByText(/can.t take a picture of its own screen here/)
+        .filter({ visible: true }), // the phone line also holds every sentence unseen, for its height
+    ).toBeVisible()
+  } else await expect(page.getByTestId('bug-canvas')).toHaveAttribute('data-capture', 'ok')
 })
 
 test('Blur is drawn on the picture, the preview shows the payload, Send finishes', async ({ page, isMobile }) => {

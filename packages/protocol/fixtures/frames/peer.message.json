@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "type": "peer.message",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T43W",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "relay": {
+    "seq": 4192,
+    "received_at": "2026-10-28T15:32:10.120Z"
+  },
+  "conn_id": "cn_8fK2aBcDeFgHiJkLmNoPqR",
+  "peer": "work",
+  "msg": {
+    "v": 1,
+    "id": "msg_01JBF3V7Q8K2M4N6P8R0S2T43X",
+    "from": "home",
+    "label": "TASK",
+    "text": "Please summarise the open pull requests",
+    "chain": 0,
+    "from_peer_task": false,
+    "sent_at": "2026-10-28T15:32:10.120Z"
+  },
+  "received_at": "2026-10-28T15:32:10.120Z"
+}

@@ -20,7 +20,7 @@ import {
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
 import { parseStatusFile, readStatusFile, STATUS_KEYS } from '../src/status-file.ts'
-import { type Harness, startHarness, waitFor } from './helpers.ts'
+import { type Harness, startHarness, waitFor, writeKit } from './helpers.ts'
 
 const POLLUTED: Record<string, string> = {
   CLAUDE_CODE_CHILD_SESSION: '1',
@@ -72,6 +72,7 @@ describe('talos-app start, as a real process', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cenv-'))
     const agent = join(dir, 'agent')
     Bun.spawnSync(['mkdir', '-p', agent])
+    writeKit(agent)
     writeFileSync(
       join(agent, '.mcp.json'),
       JSON.stringify({

@@ -1,6 +1,7 @@
 // scripts/gate.sh --fast: the pre-push gate that CI backs up. Of the bridge tests it runs the changed ones, the ones whose own
-// quoted relative paths name a changed bridge file (direct importers only), and the guards that read it; no e2e, old-client
-// or browser specs and no heavy lock. Anything on the keep-out list, or anything the scan cannot follow, runs the full gate
+// quoted relative paths name a changed bridge file (direct importers only), and the guards that read it; no e2e or old-client
+// step, and of the browser specs only the changed spec files (scripts/gate-web-specs.test.ts); no heavy lock unless it has
+// such a spec. Anything on the keep-out list, or anything the scan cannot follow, runs the full gate
 // and says why. Every --plan here also goes through the node second count, which must agree or the gate refuses.
 import { spawnSync } from 'node:child_process'
 import {
@@ -156,7 +157,7 @@ describe('gate.sh --fast: which bridge tests it picks', () => {
     expect(t.plan('--fast').lines).toEqual(['fast', ...CHECKS, 'bun', '\tapps/bridge/test/b.test.ts'])
   })
 
-  it('no e2e, old-client or browser specs: those are CI after the push', () => {
+  it('no e2e or old-client step, and no browser spec for a source change: those are CI after the push', () => {
     const r = repo()
     r.commit({
       'apps/bridge/src/handshake.ts': 'export const h = 2\n',

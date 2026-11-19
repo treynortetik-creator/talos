@@ -149,12 +149,15 @@ const specsIn = (...ds) => {
   return out
 }
 const first = (s) => s.split('/')[0]
+// webOwn is web_own_specs_for's twin: a voice feature source owns the voice-setup specs; a spec in a voice folder (any depth), and
+// any file in the top voice folder, owns nothing; a support file in a nested voice folder is its top folder's
 const webOwn = (f) => {
-  if (glob('apps/web/test/voice*/*')(f)) return []
+  if (glob('apps/web/test/voice/*', 'apps/web/test/*/voice/*.spec.ts')(f)) return []
   if (glob('apps/web/test/*.spec.ts')(f)) return exists(f) ? [f.slice('apps/web/'.length)] : []
   if (glob('apps/web/test/helpers/*', 'apps/web/test/*.test.ts', 'apps/web/test/*.test.tsx')(f)) return []
   if (glob('apps/web/test/*/*')(f)) return specsIn(first(f.slice('apps/web/test/'.length)))
-  if (glob('apps/web/src/*.test.ts', 'apps/web/src/*.test.tsx', 'apps/web/src/features/voice/*')(f)) return []
+  if (glob('apps/web/src/*.test.ts', 'apps/web/src/*.test.tsx')(f)) return []
+  if (glob('apps/web/src/features/voice/*')(f)) return specsIn('voice-setup')
   if (glob('apps/web/src/features/*/*')(f)) return specsIn(first(f.slice('apps/web/src/features/'.length)))
   return []
 }
@@ -309,11 +312,11 @@ if (want.WEB.length > max) {
 // the installer's core tests again with a corepack pnpm first on PATH: whenever the plan runs the root installer's test
 want.COREPACK = [want.VIT.includes('scripts/root-install.test.ts') ? '1' : '0']
 
-// --fast: fastPlan (scripts/gate-fast.sh, FAST_CHECK_JS, run ahead of this script) gives the bridge tests, or null for the full
-// gate. Without that file both counts say full.
+// --fast: fastPlan (scripts/gate-fast.sh, FAST_CHECK_JS, run ahead of this script) gives the bridge tests and the change's own browser specs, or
+// null for the full gate. Without that file both counts say full.
 want.FAST = ['0']
 if (process.argv[2] === '1' && typeof fastPlan === 'function') {
-  const bun = fastPlan({
+  const fast = fastPlan({
     base,
     changed,
     want,
@@ -328,16 +331,16 @@ if (process.argv[2] === '1' && typeof fastPlan === 'function') {
     BRIDGE_TEST,
     BRIDGE_ALL,
   })
-  if (bun)
+  if (fast)
     Object.assign(want, {
       FAST: ['1'],
-      BUN: bun,
+      BUN: fast.bun,
       BUN_ALL: ['0'],
       E2E: [],
       E2E_ALL: ['0'],
       OLD: ['0'],
-      WEB: [],
-      WEBKIT: [],
+      WEB: fast.web,
+      WEBKIT: fast.webkit,
     })
 }
 

@@ -3,7 +3,8 @@
 // draft), never on jump-to-latest or the newest message, and the timeline keeps no room for it; off a thread it is a slot in the phone's tab bar, which still fits an
 // iPhone SE; on a computer it is a row in the sidebar's footer. The first try, a fixed button, covered all of those.
 // Screenshots land in test-results/shots/<project>-bug-*.png (test/bugreport/shots with TALOS_SHOTS=1).
-import { expect, type Locator, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
+import { test } from '../helpers/ios-readback.ts'
 
 const shot = (name: string, project: string) =>
   process.env.TALOS_SHOTS ? `test/bugreport/shots/${project}-${name}.png` : `test-results/shots/${project}-${name}.png`

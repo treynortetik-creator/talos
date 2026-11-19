@@ -17,7 +17,7 @@ extension Supervisor {
     switch n {
     // a dialog never to be answered (computer use: Enter opens System Settings) is not brought forward, so no stray key can reach it
     case .dialog(let label): return !DialogMatcher.Screen.answerless(label: label)
-    case .stuck, .startStalled, .notReading: return true
+    case .stuck, .startStalled, .notReading, .stalled: return true
     case .confirmColdStart, .restartNotConfirmed, .bridgeNotLive, .relayUnreachable: return false
     }
   }

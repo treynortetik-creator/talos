@@ -30,10 +30,12 @@ struct TalosApp: App {
   @NSApplicationDelegateAdaptor(TalosAppDelegate.self) private var appDelegate
 
   init() {
+    // A fresh install (no desktop.json yet) starts with the companion and the Dock icon on; checked before anything makes the file.
+    AutoSetup.seedFreshInstall(.standard, isFresh: !FileManager.default.fileExists(atPath: SupervisorController.configPath))
     // Without desktop.json, settings changed before setup come back (U8): the same start the controller makes.
     let start = SupervisorController.startupConfig(store: DefaultsStore())
     let cfg = start.config
-    WebController.shared.configure(relayUrl: cfg.relayUrl)
+    WebController.shared.configure(relayUrl: cfg.relayUrl, configEnv: cfg.env)
     KeepAwake.shared.start(enabled: cfg.keepAwakeOnAC)
     WebController.shared.prepare()
     HotkeyController.shared.bootstrap(configured: cfg.hotkeys.compose)

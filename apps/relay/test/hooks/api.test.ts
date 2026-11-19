@@ -2,6 +2,7 @@ import { signStandard } from '@talos-app/integrations'
 import { Connection, ConnectionCreated, Delivery, SetupSpec } from '@talos-app/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resetAuthImplementation } from '../../src/auth/contract.ts'
+import { insertConn } from '../../src/hooks/store.ts'
 import { framesOf, setup } from './harness.ts'
 
 afterEach(() => resetAuthImplementation())
@@ -341,5 +342,44 @@ describe('credentials', () => {
       detail: string
     }
     expect(out).toEqual({ ok: false, detail: 'GitHub answered 401' })
+  })
+})
+
+describe('linked agents (peer) are not made through the connection API', () => {
+  const refused = async (res: Response) => {
+    expect(res.status).toBe(403)
+    const j = (await res.json()) as { error: string; detail: string }
+    expect(j.error).toBe('peer_from_mac')
+    expect(j.detail).toBe('Linked agents are set up from the Mac.')
+    expect(JSON.stringify(j)).not.toContain('whsec_')
+  }
+  const peerRow = (s: ReturnType<typeof setup>) =>
+    insertConn(s.rt, {
+      integration: 'peer',
+      name: 'x',
+      thread: 'inbox',
+      filters: {},
+      advanced: [],
+      extra: {},
+      creds: {},
+    })
+  it('create makes no row and returns no secret', async () => {
+    const s = setup()
+    await refused(await s.api('POST', '/api/connections', { integration: 'peer', name: 'work' }))
+    expect(s.count('hooks_connections')).toBe(0)
+  })
+  it('patch (to active or anything), rotate, credentials and test are refused on a peer row', async () => {
+    const s = setup()
+    const { id } = peerRow(s)
+    await refused(await s.api('PATCH', `/api/connections/${id}`, { status: 'active' }))
+    await refused(await s.api('PATCH', `/api/connections/${id}`, { name: 'y' }))
+    await refused(await s.api('POST', `/api/connections/${id}/rotate`, {}))
+    await refused(await s.api('POST', `/api/connections/${id}/credentials`, { fields: {} }))
+    await refused(await s.api('POST', `/api/connections/${id}/test`, {}))
+  })
+  it('a peer row can still be deleted', async () => {
+    const s = setup()
+    const { id } = peerRow(s)
+    expect((await s.api('DELETE', `/api/connections/${id}`)).status).toBe(204)
   })
 })

@@ -20,6 +20,16 @@ import { testTempDir } from './temp-dirs.ts'
 
 export const fixture = (name: string) => join(import.meta.dir, 'fixtures', name)
 
+/**
+ * What the root ./install.sh leaves in an agent folder that `start` and `doctor` look for (src/kit-marker.ts): the stamp and
+ * a CLAUDE.md. A test of a healthy agent folder adds it; returns the folder.
+ */
+export function writeKit(agentDir: string): string {
+  writeFileSync(join(agentDir, '.talos-version'), '2.0.0\n')
+  writeFileSync(join(agentDir, 'CLAUDE.md'), '# agent\n')
+  return agentDir
+}
+
 /** A throw-away bridge home, removed once the test file that made it has finished (temp-dirs.ts). */
 export function tempHome(prefix = 'talos-bridge-test-'): string {
   return testTempDir(prefix)

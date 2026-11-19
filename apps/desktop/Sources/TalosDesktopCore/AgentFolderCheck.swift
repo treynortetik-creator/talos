@@ -22,7 +22,7 @@ public enum AgentFolderCheck {
       case .ok: return "Folder found."
       case .okProtected(let f): return "Folder found. It is inside \(f), a folder macOS protects, so macOS asks Talos once."
       case .empty: return "Choose a folder, or leave the default."
-      case .missing(let p): return "No folder at \(p). Talos will not create it."
+      case .missing(let p): return "No folder at \(p) yet. Talos makes it when it sets up your agent; Adopt and Choose need one that exists."
       case .notAFolder(let p): return "\(p) is a file, not a folder."
       case .notAccessible(let p): return "Talos can't open \(p). Check its permissions."
       }

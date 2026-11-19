@@ -9,6 +9,19 @@ repository). Copied code keeps a header comment naming its source file and licen
 | -------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
 | `third_party/chronos/` (bin, lib, LICENSE, two test stand-ins) | github.com/treynortetik-creator/chronos tag `v0.5.0` @ `a85c0875` | MIT, same owner as this repository |
 
+## Programs bundled inside the prebuilt Mac app
+
+`Talos.app` from a release carries these in `Contents/Helpers`, so a Mac with nothing installed can run Talos. The pinned versions
+and sha256 checks are in `apps/desktop/scripts/bundle-tools.sh`; each licence text is also inside the app, in
+`Contents/Resources/licenses`. They are signed with the app's identity and notarized with it.
+
+| Program  | Version | Upstream                         | Licence                                    |
+| -------- | ------- | -------------------------------- | ------------------------------------------ |
+| bun      | 1.4.4   | github.com/oven-sh/bun           | MIT                                        |
+| tmux     | 3.8     | github.com/tmux/tmux             | ISC                                        |
+| libevent | 2.1.13  | github.com/libevent/libevent     | BSD 3-clause (linked statically into tmux) |
+| utf8proc | 2.12.0  | github.com/JuliaStrings/utf8proc | MIT (linked statically into tmux)          |
+
 ## Sources no longer vendored
 
 These upstream files were once copied into `third_party/` for reference and have been removed from the repository. The

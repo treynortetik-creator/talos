@@ -112,6 +112,10 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   /// Open the main Talos window once each time the app starts (a start at login included) when a relay is set up. On by
   /// default: the owner launched Talos, saw nothing, and could not find it (2026-11-02).
   public var openWindowAtLaunch: Bool
+  /// When Main's model request looks stuck on an owner message (`MainWatch.stalled`), Talos presses Esc once in Main's pane (through the
+  /// key gate, only when nobody is typing and no dialog is up), asks the bridge to deliver that message again, and says so in the
+  /// thread. Once per message. On by default; a desktop.json without the key reads as on. Off: the stall line only.
+  public var unstickMain: Bool
   /// The launch fingerprint (`launchFingerprint`: folder, resolved program, flags without the resume id, env) of the last start that got
   /// through the dev-channel dialog. The auto-accept presses Enter only while this start's fingerprint equals it; a changed launch (or none
   /// stored yet) waits for the owner, and his confirmation stores the new one. Here, not in `session`, because a new conversation
@@ -148,6 +152,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     case notifyThread = "notify_thread"
     case keepAwakeOnAC = "keep_awake_on_ac"
     case openWindowAtLaunch = "open_window_at_launch"
+    case unstickMain = "unstick_main"
     case confirmedLaunch = "confirmed_launch"
     case confirmedLaunchParts = "confirmed_launch_parts"
     case confirmedLaunchMac = "confirmed_launch_mac"
@@ -161,7 +166,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     session: Session, autoRestart: Bool, autoConfirmRestart: Bool, startSessionOnLaunch: Bool,
     openTerminalOnDialog: Bool, hotkeys: Hotkeys = Hotkeys(compose: "ctrl+opt+space"),
     relayUrl: String, talosAppCommand: [String] = [], notifyThread: String? = nil, keepAwakeOnAC: Bool = false,
-    openWindowAtLaunch: Bool = true, autoUpdate: Bool = false
+    openWindowAtLaunch: Bool = true, autoUpdate: Bool = false, unstickMain: Bool = true
   ) {
     self.v = v
     self.host = host
@@ -180,6 +185,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     self.notifyThread = notifyThread
     self.keepAwakeOnAC = keepAwakeOnAC
     self.openWindowAtLaunch = openWindowAtLaunch
+    self.unstickMain = unstickMain
     self.autoUpdate = autoUpdate
   }
 
@@ -205,6 +211,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     keepAwakeOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnAC) ?? d.keepAwakeOnAC
     // A value of the wrong type costs this one setting, not the file.
     openWindowAtLaunch = ((try? c.decodeIfPresent(Bool.self, forKey: .openWindowAtLaunch)) ?? nil) ?? d.openWindowAtLaunch
+    unstickMain = ((try? c.decodeIfPresent(Bool.self, forKey: .unstickMain)) ?? nil) ?? d.unstickMain
     confirmedLaunch = (try? c.decodeIfPresent(String.self, forKey: .confirmedLaunch)) ?? nil
     confirmedLaunchParts = (try? c.decodeIfPresent([String: String].self, forKey: .confirmedLaunchParts)) ?? nil
     confirmedLaunchMac = (try? c.decodeIfPresent(String.self, forKey: .confirmedLaunchMac)) ?? nil
@@ -233,6 +240,7 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
     try c.encode(notifyThread, forKey: .notifyThread)
     try c.encode(keepAwakeOnAC, forKey: .keepAwakeOnAC)
     try c.encode(openWindowAtLaunch, forKey: .openWindowAtLaunch)
+    try c.encode(unstickMain, forKey: .unstickMain)
     try c.encode(confirmedLaunch, forKey: .confirmedLaunch)
     try c.encodeIfPresent(confirmedLaunchParts, forKey: .confirmedLaunchParts)
     try c.encodeIfPresent(confirmedLaunchMac, forKey: .confirmedLaunchMac)

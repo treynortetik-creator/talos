@@ -166,6 +166,7 @@ describe('ci-runner.sh plan: one commit, and which machine runs what', () => {
       shard_tools: '',
       check_titan: '',
       check_wait: '',
+      linux_label: '',
     })
   })
 

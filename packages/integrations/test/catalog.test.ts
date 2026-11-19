@@ -10,6 +10,13 @@ describe('integration catalog (seam)', () => {
   it('every setup spec is valid', () => {
     for (const s of listSetupSpecs()) expect(SetupSpec.safeParse(s).success, s.id).toBe(true)
   })
+  it('peer has a module and a spec but is not a card in the wizard list', async () => {
+    const { listSetupSpecs: browserList, setupCatalog } = await import('../src/setup-catalog.ts')
+    expect(getIntegration('peer').setup.id).toBe('peer')
+    expect(setupCatalog.peer.id).toBe('peer')
+    expect(listSetupSpecs().map((s) => s.id)).not.toContain('peer')
+    expect(browserList().map((s) => s.id)).not.toContain('peer')
+  })
   it('work sources are the five in spec 7.5, plus the Heartbeat work switch, and route to the work thread', () => {
     const work = listSetupSpecs()
       .filter((s) => s.category === 'work')

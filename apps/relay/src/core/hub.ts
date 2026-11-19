@@ -6,8 +6,7 @@
 //   hub-bridge-conn.ts    the bridge socket: challenge, signed hello, supersede, close
 //   hub-bridge-frames.ts  what each bridge frame type does, the durable writes, error routing
 //   hub-status.ts         the derived `queued` status and stale `working` rows
-//   hub-ready.ts          the `ready` frame
-//   hub-helpers.ts        pure helpers
+//   hub-ready.ts          the `ready` frame;  hub-helpers.ts  pure helpers;  bridge-frames.ts  recalling queued frames for a module
 import {
   FILES_PUT_ANSWER_MS,
   type Frame,
@@ -28,6 +27,7 @@ import { RateLimiter } from '../auth/limits.ts'
 import type { AppFrameContext, BridgeFrameContext, Bus, RichPushInput } from '../services.ts'
 import { AppRouter } from './apps.ts'
 import { BridgeAlarms } from './bridge-alarms.ts'
+import { dropBridgeFrames as dropFrames, storedFrameIds as storedIds } from './bridge-frames.ts'
 import { markNeedsYouOwed, needsYouRefused } from './card-reminder.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import { EphemeralRouter } from './ephemeral.ts'
@@ -504,12 +504,10 @@ export class Hub implements Bus {
     }
     const ttlMs = Math.min((opts.ttl_s ?? this.d.env.BUFFER_DAYS * 86_400) * 1000, this.d.env.BUFFER_DAYS * DAY_MS)
     const store = this.d.store
-    // The event and its outbox row are one transaction: a failed write leaves no event behind, so the caller's retry
-    // with the same frame id is a first attempt. `resume` is for a caller that generated the id itself and keeps it until
-    // the send is confirmed (the hook pass): its retry may come after the commit, or after an older build stored the
-    // event and lost the outbox row, and then finds its own event of the same type and only finishes the row; a frame
-    // that is already queued is left alone. Anyone else, and any id that belongs to a different kind of frame, gets the
-    // unique-index error: an id someone else chose is never taken for a retry.
+    // The event and its outbox row are one transaction: a failed write leaves no event behind, so a retry with the same frame id is
+    // a first attempt. `resume` is for a caller that made the id itself and keeps it until the send is confirmed (the hook pass): its
+    // retry may find its own event of the same type (an older build lost the outbox row) and only finishes the row; a frame already
+    // queued is left alone. Anyone else, and an id of a different kind of frame, gets the unique-index error.
     const queuedNow = store.db.transaction((): StoredFrame | null => {
       opts.alsoWrite?.() // the caller's own writes (a spent token, a seen mark) commit or roll back with the event
       const found = store.getEventByFrameId(String(full.id))
@@ -527,6 +525,11 @@ export class Hub implements Bus {
     return { queued: !this.bridgeOnline() }
   }
 
+  dropBridgeFrames = (ids: readonly string[], type: string): void => {
+    dropFrames(this.d.store.db, ids, type)
+    this.broadcastPresence()
+  }
+  storedFrameIds = (ids: readonly string[]): Set<string> => storedIds(this.d.store.db, ids)
   private complete(frame: Record<string, unknown>): Record<string, unknown> {
     return { ...mkFrame(this.d.clock, String(frame.type)), ...frame }
   }
@@ -626,10 +629,7 @@ export class Hub implements Bus {
     this.sendBridge(out)
   }
 
-  /**
-   * The resend loop ticks every second while the outbox has frames and every 30 s while it is empty (`afterEnqueue` brings it
-   * back to a second), so an idle relay does almost nothing.
-   */
+  /** The resend loop ticks every second while the outbox has frames, every 30 s while it is empty (`afterEnqueue` speeds it up). */
   private armResend(delayMs = 1000): void {
     if (this.stopped) return
     if (this.resendTimer) this.d.clock.clearTimeout(this.resendTimer)
@@ -746,10 +746,9 @@ export class Hub implements Bus {
   }
 
   /**
-   * Stores an owner frame (never its step-up token), queues it for the bridge, and only then acks it. The event, the seen
-   * ids, any `alsoWrite` change and the outbox row are one transaction: if the write fails nothing is left behind, so
-   * the app's retry is a first attempt, not a duplicate. The app gets an `error` tied to the frame (it keeps the message
-   * and offers a retry) and this returns null. Sends happen after the commit.
+   * Stores an owner frame (never its step-up token), queues it for the bridge, and only then acks it. The event, seen ids, any
+   * `alsoWrite` change and the outbox row are one transaction: a failed write leaves nothing, so the app's retry is a first attempt.
+   * The app gets an `error` tied to the frame (it keeps the message and offers a retry) and this returns null. Sends follow the commit.
    */
   private acceptOwner(
     a: AppConn,

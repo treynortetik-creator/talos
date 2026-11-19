@@ -10,6 +10,9 @@
 #   TALOS_RELEASE_SIGN_ID  the signing identity, as `security find-identity -v -p codesigning` lists it, e.g.
 #                          "Developer ID Application: <name> (<TEAM>)". Required. Only a Developer ID Application identity can be
 #                          notarized; another one is fine for --no-notarize.
+#   TALOS_PUBLIC_COMMIT    the commit the public snapshot repository tags as mac-v<version> (the snapshot of the private commit this is built
+#                          from, scripts/publish-public.sh; release-publish.sh requires the same). It is stamped into the app
+#                          (TalosSourceCommit) before signing, and checked here against the public tag. Required unless --no-notarize.
 #   ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID  the App Store Connect API key notarytool signs in with: the path of the .p8 file,
 #                          its key id and the issuer id. Required unless --no-notarize. Only the path is passed on; the key's
 #                          contents are never read or printed here.
@@ -51,15 +54,45 @@ if [ "$NOTARIZE" = 1 ]; then
   [ -z "$(git -C "$REPO" status --porcelain 2>/dev/null)" ] || die "the working tree has uncommitted changes; commit them first (or --no-notarize for a trial)" 65
 fi
 
+# The public commit to pin: the public tag for this version must name it (checked against the public repository, https only).
+PUB_COMMIT="${TALOS_PUBLIC_COMMIT:-}"
+if [ "$NOTARIZE" = 1 ] || [ -n "$PUB_COMMIT" ]; then
+  [[ "$PUB_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "set TALOS_PUBLIC_COMMIT to the 40-digit public commit the tag names (the app pins it)" 65
+  PKG_VERSION="$(node -p 'require(process.argv[1]).version' "$REPO/package.json")"
+  PUB_URL="${TALOS_PUBLIC_REPO_URL:-https://github.com/treynortetik-creator/talos}"
+  case "$PUB_URL" in https://*) ;; *) die "TALOS_PUBLIC_REPO_URL must be an https address" 65 ;; esac
+  TAGLINES="$(GIT_TERMINAL_PROMPT=0 git -c protocol.allow=never -c protocol.https.allow=always ls-remote --tags "$PUB_URL" "refs/tags/mac-v$PKG_VERSION" "refs/tags/mac-v$PKG_VERSION^{}" </dev/null 2>/dev/null)" \
+    || die "could not read the tags of $PUB_URL to check mac-v$PKG_VERSION" 65
+  TAGSHA="$(printf '%s\n' "$TAGLINES" | awk -v t="refs/tags/mac-v$PKG_VERSION" '$2==t"^{}"{p=$1} $2==t{l=$1} END{print (p!=""?p:l)}')"
+  [ "$TAGSHA" = "$PUB_COMMIT" ] || die "the public tag mac-v$PKG_VERSION names '${TAGSHA:-nothing}', not $PUB_COMMIT; push the public snapshot and its tag first" 65
+fi
+
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd -P)"
+# The release's own source tarball, made here from the public commit (git archive, then gzip without a timestamp: the same commit gives the
+# same bytes), so the app's first setup downloads OUR asset and checks its sha256, not GitHub's generated archive. It is uploaded as a
+# release asset by release-publish.sh and its sha256 is stamped into the app before signing.
+SRC_SHA=""
+if [ -n "$PUB_COMMIT" ]; then
+  SRC_TAR="$OUT/talos-source-mac-v$PKG_VERSION.tar.gz"
+  SRC_TMP="$(mktemp -d "${TMPDIR:-/tmp}/talos-source-XXXXXX")"
+  GIT_TERMINAL_PROMPT=0 git -c protocol.allow=never -c protocol.https.allow=always clone --quiet "$PUB_URL" "$SRC_TMP/pub" </dev/null \
+    || { rm -rf "$SRC_TMP"; die "could not clone $PUB_URL to make the source tarball" 65; }
+  git -C "$SRC_TMP/pub" cat-file -e "$PUB_COMMIT^{commit}" || { rm -rf "$SRC_TMP"; die "the public repository has no commit $PUB_COMMIT" 65; }
+  git -C "$SRC_TMP/pub" archive --format=tar --prefix="talos-$PKG_VERSION/" "$PUB_COMMIT" | gzip -n -9 > "$SRC_TAR" \
+    || { rm -rf "$SRC_TMP"; die "git archive failed" 65; }
+  rm -rf "$SRC_TMP"
+  SRC_SHA="$(shasum -a 256 "$SRC_TAR" | awk '{print $1}')"
+  printf '%s  %s\n' "$SRC_SHA" "$(basename "$SRC_TAR")" > "$SRC_TAR.sha256"
+  say "source tarball $(basename "$SRC_TAR"): sha256 $SRC_SHA"
+fi
 WORK="$OUT/work"
 rm -rf "$WORK"
 mkdir -p "$WORK"
-BUILD_ARGS=(--release --out "$WORK" --no-checkout-stamp --hardened)
+BUILD_ARGS=(--release --out "$WORK" --no-checkout-stamp --hardened --bundle-tools)
 [ "$ARCH" = universal ] && BUILD_ARGS+=(--universal)
 say "building ($ARCH, hardened runtime, signed by the identity in TALOS_RELEASE_SIGN_ID)"
-TALOS_SIGN_ID="$ID" TALOS_REQUIRE_SIGN_ID=1 bash "$HERE/scripts/build-app.sh" "${BUILD_ARGS[@]}"
+TALOS_SOURCE_COMMIT="$PUB_COMMIT" TALOS_SOURCE_SHA256="$SRC_SHA" TALOS_SIGN_ID="$ID" TALOS_REQUIRE_SIGN_ID=1 bash "$HERE/scripts/build-app.sh" "${BUILD_ARGS[@]}"
 APP="$WORK/Talos.app"
 [ -d "$APP" ] || die "build-app.sh finished but $APP is not there"
 
@@ -86,6 +119,23 @@ if [ "$ARCH" = universal ]; then
   case " $GOT_ARCHS " in *" arm64 "*) ;; *) die "the universal build has no arm64 slice ($GOT_ARCHS)" ;; esac
   case " $GOT_ARCHS " in *" x86_64 "*) ;; *) die "the universal build has no x86_64 slice ($GOT_ARCHS)" ;; esac
 fi
+
+# The bundled tools: each signed with this identity's team under the hardened runtime (notarization refuses unsigned nested code),
+# bun with its engine's entitlements and tmux without any, a licence text for each, and no library outside the system in tmux.
+[ -z "$PUB_COMMIT" ] || [ "$(/usr/libexec/PlistBuddy -c 'Print :TalosSourceCommit' "$APP/Contents/Info.plist" 2>/dev/null)" = "$PUB_COMMIT" ] || die "the build does not carry the public commit it was asked to pin (TalosSourceCommit)"
+[ -z "$SRC_SHA" ] || [ "$(/usr/libexec/PlistBuddy -c 'Print :TalosSourceSHA256' "$APP/Contents/Info.plist" 2>/dev/null)" = "$SRC_SHA" ] || die "the build does not carry the source tarball's sha256 (TalosSourceSHA256)"
+[ -s "$APP/Contents/Resources/claude-install.sh" ] || die "the build has no bundled Claude Code installer"
+for tool in bun tmux; do
+  T="$APP/Contents/Helpers/$tool"
+  [ -x "$T" ] || die "the build has no bundled $tool"
+  codesign --verify --strict "$T" || die "the bundled $tool does not verify"
+  TI="$(codesign -dv --verbose=4 "$T" 2>&1)"
+  printf '%s\n' "$TI" | grep -qE '^CodeDirectory .*flags=0x[0-9a-f]*\([^)]*runtime' || die "the bundled $tool is not signed with the hardened runtime"
+  [ "$(printf '%s\n' "$TI" | sed -n 's/^TeamIdentifier=//p')" = "$TEAM" ] || die "the bundled $tool is signed by another team than the app"
+  [ -s "$APP/Contents/Resources/licenses/$tool.txt" ] || die "the build has no licence text for the bundled $tool"
+done
+codesign -d --entitlements - --xml "$APP/Contents/Helpers/bun" 2>/dev/null | grep -q 'cs.allow-jit' || die "the bundled bun lacks its JIT entitlement (it would crash under the hardened runtime)"
+/usr/bin/otool -L "$APP/Contents/Helpers/tmux" | grep -E '^[[:space:]]' | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)' && die "the bundled tmux depends on a library outside the system"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 BUILD_NUM="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"

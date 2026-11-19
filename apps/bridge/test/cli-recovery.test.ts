@@ -20,7 +20,7 @@ import { formatLogLine } from '../src/cli-main.ts'
 import { paths } from '../src/config.ts'
 import { redact } from '../src/redact.ts'
 import { STATUS_KEYS } from '../src/status-file.ts'
-import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
+import { type Harness, startHarness, tempHome, waitFor, writeKit } from './helpers.ts'
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -195,7 +195,7 @@ describe('D54 talos-app start', () => {
         mcpServers: { 'talos-app': { command: 'bun', args: ['run', '--cwd', '/x', '--silent', 'start'], env: {} } },
       }),
     )
-    return dir
+    return writeKit(dir) // start refuses a folder without the kit (kit-guard.test.ts)
   }
 
   test('runs claude in the agent folder with the bridge env, the owner flags first and the channel flag last', async () => {
@@ -289,7 +289,8 @@ describe('D54 talos-app start', () => {
   })
 
   test('no .mcp.json entry: says to run install.sh and starts nothing', async () => {
-    const dir = tempHome('talos-agent-')
+    const dir = agent()
+    rmSync(join(dir, '.mcp.json')) // a kit, but no bridge entry
     const c = cliIO()
     let spawned = false
     const code = await runCli(['start', '--agent-dir', dir], c.io, envOf(tempHome()), {

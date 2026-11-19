@@ -1,6 +1,7 @@
 // The Report a bug button in a thread on a phone (placement B): it sits in the message box's button row, on the left beside
 // + (Attach), and the timeline keeps no room for it. Real app (fake mode), both themes, default phone and 320 x 568.
-import { expect, type Locator, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
+import { test } from '../helpers/ios-readback.ts'
 
 test.use({ bypassCSP: true })
 
@@ -91,9 +92,14 @@ for (const size of sizes) {
           await open(page, '?bugbtn=a')
           await expect(page.getByTestId('composer').getByTestId('bug-button')).toHaveCount(0)
           const without = await box(page.getByTestId('composer'))
-          expect(withBtn.height, 'the button made the message box taller').toBeCloseTo(without.height, 0)
+          // WebKit lays the box out at 111 or 112 px from one load to the next, with or without the button: 1 px of rounding.
+          // A button that cost a row would add about 44 px, so "within 1 px" still catches it.
+          expect(
+            Math.abs(withBtn.height - without.height),
+            'the button made the message box taller',
+          ).toBeLessThanOrEqual(1)
           const tlWithout = await box(page.getByTestId('timeline'))
-          expect(tlWith.height).toBeCloseTo(tlWithout.height, 0)
+          expect(Math.abs(tlWith.height - tlWithout.height)).toBeLessThanOrEqual(1)
           await page.evaluate(() => localStorage.removeItem('talos.bugbtn'))
         })
       })

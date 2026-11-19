@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TalosSupervisor
 
 /// The Agent folder row's controls: the folder box and the three ways, then whatever card the flow is showing. All the
 /// decisions are the flow's; this only draws them.
@@ -24,11 +25,24 @@ struct AgentFolderPanel: View {
       .disabled(flow.busy)
       card
     }
+    .task {
+      flow.presentUpdaterRequest()
+      await flow.autoSetup()
+    }
+    .onReceive(CloneConfirmCenter.shared.$pending) { _ in flow.presentUpdaterRequest() }
   }
 
   @ViewBuilder private var card: some View {
     switch flow.step {
     case .idle, .working: EmptyView()
+    case .provisioning(let lines):
+      progressList(lines)
+    case .provisionFailed(let lines, let message):
+      progressList(lines)
+      note(message).foregroundStyle(.red)
+      Button(lines.contains { $0.step == .developerTools && { if case .failed = $0.state { return true } else { return false } }($0) } ? "Try again" : "Retry") {
+        Task { await flow.retryProvision() }
+      }
     case .confirmAdopt(_, let plan, _):
       note(plan)
       HStack {
@@ -65,6 +79,20 @@ struct AgentFolderPanel: View {
     case .done(let m): note(m).foregroundStyle(.green)
     case .failed(let m): note(m).foregroundStyle(.red)
     }
+  }
+
+  private func progressList(_ lines: [AgentFolderFlow.ProvisionLine]) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(lines, id: \.step) { l in
+        switch l.state {
+        case .none: note("   \(l.step.title)")
+        case .running: note("…  \(l.step.title)")
+        case .waiting(let text): note("…  \(text)").foregroundStyle(.orange)
+        case .done: note("✓  \(l.step.title)")
+        case .failed: note("✗  \(l.step.title)").foregroundStyle(.red)
+        }
+      }
+    }.accessibilityIdentifier("agent-folder-provision")
   }
 
   private func note(_ s: String) -> some View {

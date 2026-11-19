@@ -50,10 +50,12 @@ export interface Bus {
    * Other durable frames leave the buffer on 'delivered'.
    * `resume`: the caller made the frame id itself and re-sends it until it knows the frame was queued, so a frame of the
    * same type already stored under that id is that frame (only a missing queue row is added). Without it a repeated id is an error.
+   * `alsoWrite`: the caller's own writes (a seen mark, a count), run inside the same transaction as the queue write: they commit with the
+   * frame or not at all, so a failure never leaves a seen id behind for a frame that was not queued.
    */
   toBridge(
     frame: Record<string, unknown>,
-    opts: { durable: boolean; ttl_s?: number; resume?: boolean },
+    opts: { durable: boolean; ttl_s?: number; resume?: boolean; alsoWrite?: () => void },
   ): Promise<{ queued: boolean }>
   onAppFrame<T extends FrameType>(
     type: T,
@@ -64,6 +66,13 @@ export interface Bus {
     handler: (frame: FrameOf<T>, ctx: BridgeFrameContext) => void | Promise<void>,
   ): void
   bridgeOnline(): boolean
+  /**
+   * Recalls queued durable frames of one type that the Mac has not consumed (outbox row and stored event), inside the caller's
+   * transaction, and tells the apps the queue changed (presence `queue_depth`). Not a recall of a frame the Mac already has.
+   */
+  dropBridgeFrames(frameIds: readonly string[], type: string): void
+  /** Which of these frame ids are still stored (not consumed, not expired). */
+  storedFrameIds(frameIds: readonly string[]): Set<string>
   /** A session's turn ended: idle the 'working' rows it owned. Optional so test buses need not implement it. */
   settleWorking?(scope: 'main' | { thread_id: string }): void
   /** Adds fields to the app's `ready` frame. Optional so test buses need not implement it. */

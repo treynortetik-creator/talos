@@ -1,8 +1,9 @@
 // The thread-session numbers and the MCP allow list's fixed parts have one source, packages/protocol, and the Mac app's Swift
 // must say the same (P3d3). These read the Swift sources and fail when either side drifts.
-// gate-reads: apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift apps/desktop/Tests/TalosDesktopCoreTests/SpecHashTests.swift
+// gate-reads: apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift apps/desktop/Tests/TalosDesktopCoreTests/SpecHashTests.swift apps/desktop/Tests/TalosDesktopCoreTests/ThreadStateHookTests.swift
 import { describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   AGENT_REQUEST_MIN_GAP_MS,
@@ -42,11 +43,27 @@ import {
   workerUsagePath,
 } from '@talos-app/protocol'
 import { LAUNCH_SPEC_EXCLUDED_ENV, STRIP_RULES_ENTRY } from '../../src/supervisor/launch-spec.ts'
+import { seedThreadState, threadStateTemplate } from '../../src/supervisor/thread-state-seed.ts'
 import { UPDATE_KEYS_QUIET_S, UPDATE_RELEASE_POLL_S } from '../../src/supervisor/update-restart.ts'
-import { installWorkerHook, NO_PYTHON, workerHookDir } from '../../src/supervisor/worker-hook.ts'
+import {
+  installWorkerHook,
+  NO_PYTHON,
+  STATE_FILES,
+  STATE_HOOK,
+  workerHookDir,
+} from '../../src/supervisor/worker-hook.ts'
 import { inOneFamily } from '../../src/supervisor/worker-launch.ts'
 import { lines as noticeLines, TOOL_PROMPT_HOLD_MAX_S } from '../../src/supervisor/worker-notices.ts'
-import { HOOK_CLEAN_LINE, HOOK_LANG, HOOK_PASS_ENV, permissionHookCommand } from '../../src/supervisor/worker-spec.ts'
+import { stateFileAllowRules, stateFileDenyRules } from '../../src/supervisor/worker-policy.ts'
+import {
+  HOOK_CLEAN_LINE,
+  HOOK_LANG,
+  HOOK_PASS_ENV,
+  permissionHookCommand,
+  STATE_HOOK_CLEAN_LINE,
+  THREAD_STATE_ENV,
+  threadStateHookCommand,
+} from '../../src/supervisor/worker-spec.ts'
 import { subLaunch } from '../../src/supervisor/worker-subthreads.ts'
 import type { WorkerThread } from '../../src/supervisor/worker-types.ts'
 
@@ -494,5 +511,135 @@ describe('a sub-thread in its parent’s folder is SubThreads.swift’s', () => 
     ]).toEqual(Array(8).fill(false))
     // the Swift family test reads the same table; both ignore a child that is refused
     expect(text).toContain('$0.shares && $0.refusal == nil ? $0.parentId : nil')
+  })
+})
+
+// The thread's own live state file: the Mac's supervisor (WorkerHookState.swift, ThreadStateSeed.swift, WorkerSpec.swift) gives a
+// dedicated thread worker the same hook, command, allow rules, flag and seed text as the bridge's (thread-state-seed.ts,
+// worker-hook.ts, worker-spec.ts, worker-policy.ts). The Mac's own tests hold the Swift side to literals (ThreadStateHookTests.swift);
+// these read that literal and the Swift sources and hold them to the TypeScript.
+describe('the thread-state hook is the Mac’s', () => {
+  const state = swift('TalosDesktopCore/WorkerHookState.swift')
+  const seed = swift('TalosDesktopCore/ThreadStateSeed.swift')
+  const spec = swift('TalosDesktopCore/WorkerSpec.swift')
+  const macTest = readFileSync(join(SRC, '../Tests/TalosDesktopCoreTests/ThreadStateHookTests.swift'), 'utf8')
+  const specTs = readFileSync(join(import.meta.dir, '../../src/supervisor/worker-spec.ts'), 'utf8')
+
+  it('the files, the flag and the line the clean shell runs', () => {
+    expect(STATE_FILES).toEqual(['thread-state.py', 'compaction-guard.py'])
+    expect(state).toContain(`static let stateScriptName = "${STATE_HOOK}"`)
+    expect(state).toContain(`static let stateFileNames = [stateScriptName, "${STATE_FILES[1]}"]`)
+    expect(state).toContain(`static let threadStateEnv = "${THREAD_STATE_ENV}"`)
+    expect(state).toContain(`static let stateCleanLine = "${STATE_HOOK_CLEAN_LINE.replaceAll('"', '\\"')}"`)
+    expect(state).toContain('static let stateBytecodeDir = "/nonexistent"')
+    // the bundle's two files are the ones the build copies (build-app.sh, guards-test.sh)
+    const build = readFileSync(join(SRC, '../scripts/build-app.sh'), 'utf8')
+    expect(build).toContain(`for f in permission-relay.py _talos_common.py ${STATE_FILES.join(' ')}; do`)
+  })
+  it('the command: the Mac’s literal is the TypeScript text, less the locale', () => {
+    const lit = /cmd == "(f='\/home\/alex\/\.talos\/workers\/_hook\/thread-state\.py'; exec [^\n]*)"\)/.exec(
+      macTest,
+    )?.[1]
+    if (!lit) throw new Error('control: the Mac test holds the command to a literal')
+    const mac = lit.replaceAll('\\"', '"')
+    const python = /"\$f" '([^']+)' inject/.exec(mac)?.[1] as string
+    expect(
+      threadStateHookCommand(
+        '/home/alex/.talos/workers/_hook/thread-state.py',
+        python,
+        'inject',
+        { talosHome: '/home/alex/.talos', home: '/home/alex', thread: 'trip' },
+        '/home/alex/agent',
+      ),
+    ).toBe(mac.replace('LANG=en_US.UTF-8', `LANG=${HOOK_LANG}`))
+  })
+  it('the settings: the same events, matcher, timeout and both modes', () => {
+    for (const text of [specTs, state]) {
+      expect(text).toContain('startup|resume|clear|compact|fork')
+      expect(text).toContain('SessionStart')
+      expect(text).toContain('PreCompact')
+      expect(text).toContain('timeout')
+    }
+    expect(specTs).toContain("add('SessionStart', 'inject', 'startup|resume|clear|compact|fork')")
+    expect(specTs).toContain("add('PreCompact', 'save')")
+    expect(state).toContain('add("SessionStart", mode: "inject", matcher: "startup|resume|clear|compact|fork")')
+    expect(state).toContain('add("PreCompact", mode: "save", matcher: nil)')
+    expect(state).toContain('"timeout": 5')
+    expect(specTs).toContain('timeout: 5')
+    // the flag only with the hook, never inherited, and held by validate on both sides
+    expect(spec).toContain('k != WorkerHook.threadStateEnv')
+    expect(spec).toContain('if i.permissionHook.stateBytes != nil { env[WorkerHook.threadStateEnv] = "1" }')
+    expect(spec).toContain('WorkerHook.stateRegistered(settings: settings')
+    expect(specTs).toContain("if ((stateVar === '1') !== stateRegistered)")
+  })
+  it('the allow and deny rules: the same spelling, the same refusals', () => {
+    const allow = stateFileAllowRules('/home/alex/agent', 'trip')
+    expect(allow).toEqual([
+      'Edit(//home/alex/agent/threads/trip.state.md)',
+      'Write(//home/alex/agent/threads/trip.state.md)',
+    ])
+    expect(stateFileDenyRules('/home/alex/agent', 'trip')).toEqual(allow.map((r) => r.replace(/\)$/, '/**)')))
+    // the Mac's test holds its output to the same two strings (with a trailing slash given, as TS trims it)
+    expect(macTest).toContain(
+      '["Edit(//home/alex/agent/threads/trip.state.md)", "Write(//home/alex/agent/threads/trip.state.md)"]',
+    )
+    expect(stateFileAllowRules('/home/alex/agent/', 'trip')).toEqual(allow)
+    // the same bad folders and bad ids get none
+    for (const bad of [
+      '/home/al*ex/agent',
+      '/home/alex/a[1]/agent',
+      '/home/alex/a(b)',
+      '/home/alex/a b"c',
+      '/home/alex/a\nb',
+      'relative/agent',
+    ])
+      expect(stateFileAllowRules(bad, 'trip'), bad).toEqual([])
+    for (const bad of ['../x', 'Trip'] as const) expect(stateFileAllowRules('/home/alex/agent', bad)).toEqual([])
+    expect(state).toContain('CharacterSet(charactersIn: "*?[]{}()!\\\\\\"\'`")')
+    expect(state).toContain('stateRules(agentDir: agentDir, threadId: threadId, tail: "/**")')
+    // nothing lower-cased on the allow side, on either
+    expect(state).not.toContain('lowercased()')
+  })
+  it('the staged files are in the launch spec’s files under the same names', () => {
+    const plan = swift('TalosSupervisor/WorkerLaunchPlan.swift')
+    expect(state).toContain('"thread-state-hook": hook.stateBytes?[stateFileNames[0]]')
+    expect(state).toContain('"thread-state-compaction": hook.stateBytes?[stateFileNames[1]]')
+    expect(plan).toContain('WorkerHook.stateLaunchFiles(hook)')
+    const wiring = readFileSync(join(import.meta.dir, '../../src/supervisor/workers-wiring.ts'), 'utf8')
+    expect(wiring).toContain("'thread-state-hook': o.hook.state?.[STATE_HOOK] ?? null")
+    expect(wiring).toContain("'thread-state-compaction': o.hook.state?.[STATE_FILES[1]] ?? null")
+  })
+  it('the seed: the template text, and the problems it names', () => {
+    const ts = threadStateTemplate('ID', 'NAME')
+    for (const line of ts.split('\n').filter((l) => l !== '' && !l.startsWith('# NAME')))
+      expect(seed, line).toContain(line)
+    expect(seed).toContain('# \\(shown) live state (thread \\(id))')
+    expect(ts.startsWith('# NAME live state (thread ID)\n')).toBe(true)
+    // a name is flattened the same way, and cut at 80
+    expect(seed).toContain('.prefix(80)')
+    expect(threadStateTemplate('trip', 'A\nB## x').split('\n')[0]).toBe('# A B## x live state (thread trip)')
+    for (const why of [
+      'is not a plain folder',
+      'is a link',
+      "is not the agent folder's own threads folder",
+      'could not be made',
+    ]) {
+      expect(seed, why).toContain(why)
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'seed-parity-'))
+    try {
+      expect(seedThreadState(dir, 'trip', 'Trip')).toEqual({ ok: 'created' })
+      expect(seed).toContain('O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW')
+      expect(seed).toContain('mkdir(dir, 0o700)')
+      expect(seed).toContain('open(file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    // and the Mac's start calls it at a real start only (never the dry plan), and audits a problem under the bridge's event name
+    const manager = swift('TalosSupervisor/WorkerManager.swift')
+    const start = swift('TalosSupervisor/WorkerHookStart.swift')
+    expect(manager).toContain('seedThreadState(id, name: s.name)')
+    expect(start).toContain('worker_state_seed_failed thread=')
+    expect(swift('TalosSupervisor/WorkerLaunchPlan.swift')).not.toContain('seedThreadState')
   })
 })

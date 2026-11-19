@@ -12,6 +12,7 @@ import {
   FEATURES_MAX_V1,
   MainState,
   type MainStateT,
+  PEER_FEATURE,
   PROBLEMS_FEATURE,
   PROBLEMS_INSTALL_FEATURE,
 } from '@talos-app/protocol'
@@ -19,9 +20,11 @@ import type { Store } from './store.ts'
 
 /**
  * True while a stored frame must wait for a newer Mac: any problem report until its hello lists `problems/1`, and a report from
- * another install (a source and fields an older Mac refuses) until it lists `problems-install/1`.
+ * another install (a source and fields an older Mac refuses) until it lists `problems-install/1`. A linked-agent message
+ * (`peer.message`) waits the same way for `peer/1`: an older Mac drops a frame type it does not know and says nothing.
  */
 export function problemHeld(frame: { type: string }, bridgeHas: (feature: string) => boolean): boolean {
+  if (frame.type === 'peer.message') return !bridgeHas(PEER_FEATURE)
   if (frame.type !== 'problem.item') return false
   if (!bridgeHas(PROBLEMS_FEATURE)) return true
   return (

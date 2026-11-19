@@ -611,7 +611,7 @@ public final class Supervisor: @unchecked Sendable {
 
   private func claudeDir(_ env: [String: String]) -> String { WorkerMcp.claudeDir(home: options.home, env: env) }
   /// Claude Code's config folder as the last start this app decided saw it; nil before any.
-  private var launchClaudeDir: String?
+  var launchClaudeDir: String?
 
   /// Whether the current session is known to have a conversation: its file has been seen on disk, now or before
   /// (`session.conversation_seen`, written the first time, so it outlives the file and a change of config folder). Claude Code

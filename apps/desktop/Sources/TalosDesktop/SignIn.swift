@@ -50,7 +50,7 @@ struct SignInPanel: View {
             beforeSignIn()
             SignInAction.start(model: model)
           }
-          Text("Talos runs the sign-in for you and shows four words. Type y in the small terminal pane when they match the Talos window.")
+          Text("Talos runs the sign-in for you. It shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window.")
             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       }
       Text("Or run it yourself in Terminal:").font(.caption).foregroundStyle(.secondary)

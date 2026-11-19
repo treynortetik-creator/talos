@@ -150,12 +150,21 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
 
   var isVisible: Bool { window?.isVisible ?? false }
 
+  /// Tests: how many times a show() ran (a setup run with no terminal must leave it at zero).
+  private(set) static var showCalls = 0
+
   /// `takeFocus: false` (the agent raised a dialog, the owner did nothing): the window comes forward but the app is not
   /// activated and nothing is made first responder, so typing in another app does not land in the dialog.
-  func show(takeFocus: Bool = true) {
+  /// `raise` (the owner's own tap, no keyboard): the window is ordered to the front of everything without activating the app and without
+  /// making any window key, so it is not buried behind other apps and no key the owner types lands in a pane or a dialog. (Activating would
+  /// let AppKit pick the key window, and a terminal's window must never be handed the keyboard that way.)
+  func show(takeFocus: Bool = true, raise: Bool = false) {
+    Self.showCalls += 1
     if window == nil { build() }
     wantsKeyboard = takeFocus
-    if takeFocus {
+    if !takeFocus, raise {
+      window?.orderFrontRegardless()
+    } else if takeFocus {
       NSApp.activate(ignoringOtherApps: true)
       window?.makeKeyAndOrderFront(nil)
     } else {
@@ -572,7 +581,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     tabs.addTabViewItem(item)
     tabs.selectTabViewItem(item)
     pairingItem = item
-    // The sign-in pane is what the owner types `y` into: give it the keyboard (the agent viewer behind it must not).
+    // Details pane only: give it the keyboard (the agent viewer behind it must not).
     if let t = Self.firstTerminal(in: view) { window?.makeFirstResponder(t) }
   }
 

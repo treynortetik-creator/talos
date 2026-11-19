@@ -25,7 +25,7 @@ extension Supervisor {
   }
 
   /// An attached client typed within `promptClientQuiet`. Not read while a prompt is already announced, or when there is none.
-  private func ownerIsTyping() -> Bool {
+  func ownerIsTyping() -> Bool {
     guard let last = host.clientActivity() else { return false }
     return options.wallClock() / 1000 - last < timings.promptClientQuiet
   }

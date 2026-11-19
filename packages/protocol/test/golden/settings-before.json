@@ -8223,6 +8223,7 @@
       "permission_relay",
       "trust_mode",
       "bug_webhook_url",
+      "peers",
       "threads.session_opts.ops_read"
     ],
     "card_lines": [
@@ -8337,6 +8338,7 @@
       "memory_browser",
       "notifications",
       "owner",
+      "peers",
       "permission_relay",
       "quiet_window",
       "rev",

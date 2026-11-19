@@ -39,8 +39,11 @@ final class Rig: @unchecked Sendable {
   static let hookBundle: FakeAppBundle = {
     atexit { try? FileManager.default.removeItem(atPath: Rig.hookBundleBase) }
     let kit = (kitHook as NSString).deletingLastPathComponent
+    // and the thread-state hook's two files, as build-app.sh puts them beside the permission hook
+    let state = Dictionary(uniqueKeysWithValues: WorkerHook.stateFileNames.map { ($0, FileManager.default.contents(atPath: kit + "/" + $0)!) })
     return try! FakeAppBundle(
-      in: hookBundleBase, script: FileManager.default.contents(atPath: kitHook)!, helper: FileManager.default.contents(atPath: kit + "/_talos_common.py"))
+      in: hookBundleBase, script: FileManager.default.contents(atPath: kitHook)!, helper: FileManager.default.contents(atPath: kit + "/_talos_common.py"),
+      state: state)
   }()
   private static let hookBundleBase = (TestTemp.base as NSString).appendingPathComponent("talos-hookapp-\(getpid())")
   static let hookSource = WorkerHook.BundleSource(script: hookBundle.script, bundlePath: hookBundle.path, seal: { _ in nil })

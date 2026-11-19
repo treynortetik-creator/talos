@@ -64,7 +64,7 @@ const EVICTED_MEDIA_ROW_MS = 90 * 86_400_000
  */
 const OWNER_FRAME_SQL = "(e.audience = 'both' or (e.audience = 'bridge' and o.type in ('share.item', 'native.act')))"
 
-const WORK_FRAME_SQL = "'hook.event', 'hook.digest'"
+const WORK_FRAME_SQL = "'hook.event', 'hook.digest', 'peer.message'"
 
 export class Store {
   constructor(
@@ -398,7 +398,7 @@ export class Store {
     this.db.prepare('delete from core_outbox where frame_id = ?').run(frameId)
   }
   /**
-   * Work-content frames (`hook.event`, `hook.digest`) carry a title, summary and sender, and only the Mac needs them. Once the
+   * Work-content frames (`hook.event`, `hook.digest`, and a peer's `peer.message`) carry a title, summary and sender, and only the Mac needs them. Once the
    * Mac has pushed one into Claude (`consumed`) nothing reads it again, so the relay does not keep its sealed copy for the
    * buffer: the outbox row is gone by then and no app catch-up lists a bridge-only frame.
    */

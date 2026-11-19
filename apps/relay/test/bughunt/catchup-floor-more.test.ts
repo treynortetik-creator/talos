@@ -47,7 +47,7 @@ it('a device that missed an app frame is still reset, though bridge-only frames 
   )
   await b.close()
   await waitFor(() => !relay?.runtime.hub.bridgeOnline(), 10_000, 'bridge offline')
-  c.advance(8 * 86_400_000)
+  c.jump(8 * 86_400_000)
   expect(relay.runtime.store.appFloor()).toBe(have + 2) // one past the missed reply
   await a.connect()
   const reset = await a.expectFrame('catchup.reset')

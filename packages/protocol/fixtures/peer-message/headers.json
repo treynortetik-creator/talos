@@ -1,0 +1,223 @@
+{
+  "_comment": "Standard Webhooks v1 vectors for the peer inbox (P2). secret = whsec_ + base64 of bytes 0..31. signature = v1,base64(HMAC-SHA256(key, '<webhook-id>.<webhook-timestamp>.' + body)), the repo's signStandard. now_ms is the receiver's clock; the replay window is 5 minutes each way. expect.result: accepted | refused (reason: verifyStandard's own reason, or id_mismatch, checked by the peer inbox after verify) | duplicate (verify ok, id in seen_ids). Read by packages/integrations/test/peer-vectors.test.ts. secret_previous: the other secret a rotated connection still accepts for a while; cases with \"secrets\" list which of [secret, secret_previous] the receiver holds (default [secret]).",
+  "secret": "whsec_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "cases": [
+    {
+      "name": "valid delivery",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "accepted",
+        "delivery_key": "wh:msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD"
+      }
+    },
+    {
+      "name": "header id differs from body id",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCE",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,3zsETukYG5DNkzdTnqLyYXp8k99VIQOycZ5TSBopg1I="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "id_mismatch"
+      },
+      "note": "the signature is valid (it covers the header id); P2 must still refuse because body.id != webhook-id"
+    },
+    {
+      "name": "stale timestamp",
+      "now_ms": 1700000360000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "stale_timestamp"
+      }
+    },
+    {
+      "name": "timestamp too far in the future",
+      "now_ms": 1699999640000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "stale_timestamp"
+      }
+    },
+    {
+      "name": "signature over a different body",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,rs/Yu2C96zYXnBg5SIjIGZqonzEOOt0vZlnZKJCm0BI="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "signature_mismatch"
+      }
+    },
+    {
+      "name": "duplicate webhook-id",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [
+        "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD"
+      ],
+      "expect": {
+        "result": "duplicate",
+        "delivery_key": "wh:msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD"
+      },
+      "note": "verifies, but the receiver has already taken this id: answer 2xx, deliver nothing a second time"
+    },
+    {
+      "name": "missing webhook-signature header",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000"
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "missing_header"
+      }
+    },
+    {
+      "name": "missing webhook-id header",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "missing_header"
+      }
+    },
+    {
+      "name": "missing webhook-timestamp header",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-signature": "v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "missing_header"
+      }
+    },
+    {
+      "name": "several signatures, one valid",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg= v1,sVl4qUuDiZVYS/I5Aoxz4aeNJXZW9Bdk+ePmObD9H0o="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "accepted",
+        "delivery_key": "wh:msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD"
+      }
+    },
+    {
+      "name": "several signatures, none valid",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg= v1,eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "signature_mismatch"
+      }
+    },
+    {
+      "name": "signed with the previous secret of a rotated connection",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,Bje2zXSMnwHupDK0hb2oJaXqm+MgQMjKAiafdW8Q+tU="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "secrets": [
+        "current",
+        "previous"
+      ],
+      "expect": {
+        "result": "accepted",
+        "delivery_key": "wh:msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD"
+      }
+    },
+    {
+      "name": "signed with the previous secret after the receiver dropped it",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,Bje2zXSMnwHupDK0hb2oJaXqm+MgQMjKAiafdW8Q+tU="
+      },
+      "body": "{\"v\":1,\"id\":\"msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD\",\"from\":\"home\",\"text\":\"hello\",\"chain\":0,\"from_peer_task\":false,\"sent_at\":\"2023-11-14T22:13:20.000Z\"}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "signature_mismatch"
+      }
+    },
+    {
+      "name": "valid signature over a body that is not a PeerMessage",
+      "now_ms": 1700000001000,
+      "headers": {
+        "webhook-id": "msg_01HZX3K9M2Q4R5T6V7W8Y9ABCD",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,/sgRDx4c7t+6QK+wWPqXUzjCGvIAdiqqKDPyF6osu8Q="
+      },
+      "body": "{\"v\":1}",
+      "seen_ids": [],
+      "expect": {
+        "result": "refused",
+        "reason": "bad_body"
+      },
+      "note": "verifies, but the body fails the schema: P2 refuses with its own reason, not id_mismatch"
+    }
+  ],
+  "secret_previous": "whsec_ZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoM="
+}

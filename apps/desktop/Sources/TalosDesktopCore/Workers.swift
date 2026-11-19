@@ -398,6 +398,8 @@ public struct WakeFile: Codable, Equatable, Sendable {
 
 public struct ThreadSessionSettings: Equatable, Sendable {
   public var threadId: String
+  /// The thread's display name (config.threads[].name), for the heading of its live state file; nil when it has none.
+  public var name: String?
   public var cwd: String?
   public var model: String
   public var effort: String?
@@ -413,8 +415,9 @@ public struct ThreadSessionSettings: Equatable, Sendable {
   public var optsUnread: [String] = []
   public init(
     threadId: String, cwd: String? = nil, model: String = "inherit", effort: String? = nil, idleParkMin: Int = 30,
-    mcpAllow: [String]? = nil, sub: SubThreads.Launch? = nil, optsUnread: [String] = []
+    mcpAllow: [String]? = nil, sub: SubThreads.Launch? = nil, optsUnread: [String] = [], name: String? = nil
   ) {
+    self.name = name
     self.optsUnread = optsUnread
     self.threadId = threadId
     self.cwd = cwd
@@ -558,7 +561,7 @@ public struct DedicatedSettings: Equatable, Sendable {
       out[id] = ThreadSessionSettings(
         threadId: id, cwd: cwd, model: (sub == nil ? raw["model"] as? String : eff.model) ?? "inherit",
         effort: sub == nil ? raw["effort"] as? String : eff.effort, idleParkMin: idle, mcpAllow: eff.mcpAllow, sub: sub,
-        optsUnread: sub == nil ? ThreadSessionSettings.unreadOpts(t) : [])
+        optsUnread: sub == nil ? ThreadSessionSettings.unreadOpts(t) : [], name: t["name"] as? String)
     }
     var settings = DedicatedSettings(enabled: true, maxLive: maxLive, threads: out)
     settings.droppedEntries = dropped

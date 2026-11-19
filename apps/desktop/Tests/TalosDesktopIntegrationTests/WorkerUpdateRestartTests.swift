@@ -200,6 +200,10 @@ struct WorkerUpdateRestartTests {
     try r.instructions("trip", "Trip, after the update.")
     try r.instructions("garden", "Garden, after the update.")
     guard case .hash(let new?)? = r.dry("trip") else { Issue.record("no hash"); return }
+    // The app quits before the new release exists. The old manager must not tick while the box says r2: it would see the release
+    // change itself, queue both threads and park one (SIGTERM) just before `updatingManager` detaches it, so the new manager
+    // adopts a session that was parked for a restart nobody finishes (the restart is only in the old manager's memory).
+    r.mgr.detach()
     release.value = "r2"
     try r.status(governor: "ok")
     let mark = r.allEvents.count
@@ -230,6 +234,7 @@ struct WorkerUpdateRestartTests {
     var st = stat()
     #expect(stat(state, &st) == 0 && st.st_mode & 0o777 == 0o600)
     // once per spec: another app restart and another release change restart nothing
+    r.mgr.detach()  // as above: the old manager never runs against a release the new one is made for
     release.value = "r3"
     try r.status(governor: "ok")
     r.updatingManager(release: release, lines: said)

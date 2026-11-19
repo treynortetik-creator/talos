@@ -16,6 +16,7 @@ import {
   verifyRotation,
 } from '@talos-app/protocol'
 import { cardProblem } from './fake-relay-cards.ts'
+import type { FakePeers } from './fake-relay-peers.ts'
 import { type FakeRelayOptions, type HttpRecord, type RelayDirection, safeJson } from './fake-relay-shared.ts'
 import { mkFrame, now } from './frame-utils.ts'
 import type { Recorder } from './recorder.ts'
@@ -27,6 +28,7 @@ export type RelayHttpHost = {
   opts: FakeRelayOptions
   bridgeKey(): BridgeKeyPair
   rec: Recorder<RelayDirection>
+  peers: FakePeers
   /** True for a durable frame id the relay already stored: it is acked again and never checked or applied twice. */
   alreadyStored(frame: Frame): boolean
   /** A frame the Mac posted: stamp, remember and fan it out like a socket frame. Fills `seq` when it was stored. */
@@ -80,6 +82,11 @@ export class RelayHttp {
       }
       return this.bridgeRoutes(req, path, url, body, send)
     }
+    const hook = /^\/hook\/peer\/([A-Za-z0-9_-]+)$/.exec(path)
+    if (hook && req.method === 'POST') {
+      const a = this.host.peers.inbox(hook[1] as string, req.headers, body)
+      return send(a.status, a.body)
+    }
     return this.appRoutes(req, path, body, send)
   }
 
@@ -121,6 +128,21 @@ export class RelayHttp {
 
   private async bridgeRoutes(req: IncomingMessage, path: string, url: URL, body: Buffer, send: Send) {
     const method = req.method ?? 'GET'
+    if (path === '/bridge/peers' || path.startsWith('/bridge/peers/')) {
+      const p = this.host.peers
+      const name = /^\/bridge\/peers\/([^/]+)(\/rotate)?$/.exec(path)
+      const a =
+        method === 'POST' && path === '/bridge/peers'
+          ? p.create(safeJson(body))
+          : method === 'GET' && path === '/bridge/peers'
+            ? p.list()
+            : method === 'DELETE' && name && !name[2]
+              ? p.remove(decodeURIComponent(name[1] as string))
+              : method === 'POST' && name?.[2]
+                ? p.rotate(decodeURIComponent(name[1] as string))
+                : { status: 404, body: { error: 'not found' } }
+      return send(a.status, a.body)
+    }
     if (method === 'POST' && path === '/bridge/post') {
       let raw: Record<string, unknown>
       try {

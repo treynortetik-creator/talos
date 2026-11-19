@@ -81,6 +81,7 @@
     "settings_lock": false,
     "always_allow": [],
     "memory_browser": true,
+    "peers": [],
     "mirror": {
       "telegram": "off"
     }

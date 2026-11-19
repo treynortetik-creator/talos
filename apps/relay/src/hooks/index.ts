@@ -7,9 +7,11 @@ import { hookGate } from '../core/upload-gate.ts'
 import type { AppEnv, RelayServices } from '../services.ts'
 import { apiRoutes } from './api.ts'
 import { bridgeRoutes } from './bridge.ts'
+import { bridgePeerRoutes } from './bridge-peers.ts'
 import { handleClaim } from './claim.ts'
 import { applyInboxUpdate } from './inbox.ts'
 import { type HookResponse, handleHookRequest, idle } from './ingest.ts'
+import { PEER_BODY_MAX_BYTES } from './peer.ts'
 import { markDelivered } from './route.ts'
 import { createRuntime, runtimeFor, startTicking, tick } from './runtime.ts'
 import { type BodyRead, MAX_BODY_BYTES } from './types.ts'
@@ -136,7 +138,8 @@ function hookRoutes(): Hono<AppEnv> {
         url: c.req.url,
         ip,
         ...(Number.isFinite(declared) ? { declaredLength: declared } : {}),
-        readBody: () => readGated(rt, c.req.raw, ip, MAX_BODY_BYTES),
+        readBody: () =>
+          readGated(rt, c.req.raw, ip, c.req.param('integration') === 'peer' ? PEER_BODY_MAX_BYTES : MAX_BODY_BYTES),
         // Spec 5.4: 120/min per connection, 600/min in total. Charged only for verified deliveries.
         admit: (connId) => {
           if (!takeRate(c, 'hook_conn', connId).ok) return 'conn'
@@ -161,6 +164,7 @@ export const routes = new Hono<AppEnv>()
 routes.route('/', hookRoutes())
 routes.route('/', apiRoutes())
 routes.route('/', bridgeRoutes())
+routes.route('/', bridgePeerRoutes())
 
 export function register(services: RelayServices): void {
   const rt = runtimeFor(services) // tests install a configured runtime first

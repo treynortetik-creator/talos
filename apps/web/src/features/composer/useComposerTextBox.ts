@@ -35,7 +35,12 @@ export function useComposerTextBox(o: {
     const line = Number.parseFloat(cs.lineHeight)
     const lineH = Number.isFinite(line) ? line : 24
     const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0)
-    ta.style.height = `${Math.min(ta.scrollHeight, 6 * lineH + pad)}px`
+    // One line is drawn the same every time: scrollHeight is a whole number, and a fractional line plus padding (0.65rem)
+    // rounded to 44 on one load and 45 on the next (by where the box sat), so the composer, and the thread above it, moved
+    // by a pixel between loads.
+    const sh = ta.scrollHeight
+    const oneLine = sh - pad < lineH * 1.5
+    ta.style.height = `${oneLine ? Math.floor(lineH + pad) : Math.min(sh, 6 * lineH + pad)}px`
     if (followsInsert(ta, shownText.current, text)) ta.scrollTop = ta.scrollHeight
     shownText.current = text
     drawnValue.current = ta.value

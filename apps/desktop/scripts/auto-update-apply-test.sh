@@ -75,7 +75,16 @@ if [ "$rc" = 0 ] && head_is "$B" && [ "$(res)" = '{"v":1,"ok":true,"step":"prepa
   && grep -q "^pnpm install --frozen-lockfile (call 1, in ${B:0:7})" "$STUBLOG" && ! grep -q '^install' "$STUBLOG"; then
   ok "prepare: the checkout is on the release's commit with its packages installed, and nothing is swapped yet"
 else bad "prepare: exit $rc, head $(git -C "$T/co" rev-parse --short HEAD), result $(res), log: $(cat "$STUBLOG")"; fi
-: > "$STUBLOG"; swap; rc=$?
+# a Mac with no pnpm (bun only, as a bare Mac running the prebuilt app): the packages come from bun, with the install-js.sh flags
+STUB2="$T/stub2"; mkdir -p "$STUB2"; cp "$STUB/osascript" "$STUB/open" "$STUB2/"
+printf '#!/bin/bash\necho "bun $* (hooks=${TALOS_NO_HOOKS:-}, in $(git rev-parse --short HEAD 2>/dev/null))" >> "$STUBLOG"\nexit ${BUN_RC:-0}\n' > "$STUB2/bun"; chmod +x "$STUB2"/*
+fresh; PATH="$STUB2:/usr/bin:/bin" prepare; rc=$?
+if [ "$rc" = 0 ] && head_is "$B" && grep -q "^bun install --frozen-lockfile --ignore-scripts (hooks=1, in ${B:0:7})" "$STUBLOG" && ! grep -q '^pnpm' "$STUBLOG"; then
+  ok "prepare on a Mac with no pnpm: the packages come from bun (no scripts, no git hooks) and pnpm is never run"
+else bad "bun-only prepare: exit $rc, log: $(cat "$STUBLOG")"; fi
+fresh; BUN_RC=1 PATH="$STUB2:/usr/bin:/bin" prepare; rc=$?
+if [ "$rc" = 21 ] && head_is "$A" && on_main && [ "$(res)" = '{"v":1,"ok":false,"step":"prepare","why":"deps","restored":true}' ]; then ok "a failing bun install puts the checkout back, as pnpm's does"; else bad "bun failure: exit $rc, head $(git -C "$T/co" rev-parse --short HEAD), result $(res)"; fi
+fresh; prepare >/dev/null; : > "$STUBLOG"; swap; rc=$?
 if [ "$rc" = 0 ] && head_is "$B" && [ "$(res)" = '{"v":1,"ok":true,"step":"swap"}' ] \
   && grep -q "^install B --from-release $ZIP --sha256 $PIN --team ABCDE12345 --dest $DEST --no-relay-wait$" "$STUBLOG"; then
   ok "swap: the release's own install.sh swaps the app, without waiting for the relay"
@@ -217,7 +226,7 @@ OUT="$(check "$T/adhoc.zip" "$(sha "$T/adhoc.zip")")"; rc=$?
 [ "$rc" = 9 ] && case "$OUT" in *Gatekeeper*) true ;; *) false ;; esac && ok "an app signed ad hoc: refused by Gatekeeper (exit 9)" || bad "ad hoc: exit $rc: $OUT"
 OUT="$(check "$T/adhoc.zip" "$PIN")"; rc=$?
 [ "$rc" = 9 ] && case "$OUT" in *sha256*) true ;; *) false ;; esac && ok "a sha256 that is not the zip's: refused (exit 9)" || bad "sha mismatch: exit $rc: $OUT"
-if [ ! -s "$STUBLOG" ] && [ ! -e "$HOME/Applications" ] && [ ! -e "$HOME/Library/Application Support/Talos/checkout" ]; then
+if [ ! -s "$STUBLOG" ] && [ ! -e "$HOME/Applications" ] && [ ! -e "$HOME/Library/Application Support/Talos/checkout" ] && [ ! -e "$HOME/Library/Application Support/app.talos.desktop/checkout" ]; then
   ok "--check-only never quits, opens, installs or records anything"
 else bad "--check-only touched something: $(cat "$STUBLOG"); $(ls -A "$HOME")"; fi
 OUT="$(HOME="$HOME" bash "$INSTALL" --check-only 2>&1)"; rc=$?

@@ -55,7 +55,7 @@ extension WorkerManager {
   /// as copied, and the launch config's env (`desktop.json` `env`, which arrives folded into the login environment and so is never in
   /// `env`). The system prompt rides in argv (`--append-system-prompt`). The nonce file is never one of them.
   func launchSpecFiles(spec: WorkerSpec, plan: WorkerMcp.Plan?, talosOnly: Data?, hook: WorkerHook.Installed) -> [String: Data?] {
-    [
+    var files: [String: Data?] = [
       "settings.json": Data(spec.settingsJSON.utf8),
       "mcp.json": plan?.configJSON ?? talosOnly,
       // a session in the agent folder with no list loads that folder's talos-app entry itself, as written there (Linux's `agent-mcp.json`)
@@ -64,6 +64,9 @@ extension WorkerManager {
       "permission-hook-helper": hook.helperBytes,
       "launch-env": (try? JCS.text(.strings(updateRestart.launchEnv?() ?? [:]))).map { Data($0.utf8) },
     ]
+    // the thread-state hook's files as staged: a release that changes them restarts sessions for it too
+    for (name, bytes) in WorkerHook.stateLaunchFiles(hook) { files[name] = bytes }
+    return files
   }
 
   /// A built spec's parts (`spec_hash` is their hash, never a reason to refuse the start when it cannot be made).

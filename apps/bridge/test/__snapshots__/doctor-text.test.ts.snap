@@ -3,6 +3,7 @@
 exports[`talos-app doctor text prints exactly these lines for a healthy setup 1`] = `
 "ok    bun version: <bun> (needs 1.4.4 or newer)
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
+ok    Talos kit: installed in <agent>
 ok    .mcp.json entry: command <bun-path>, points at this checkout
 ok    home dir mode: 700 (want 700)
 ok    bridge.key mode: 600 (want 600)
@@ -31,6 +32,7 @@ Phones paired before going back to an older key have to pair again."
 exports[`talos-app doctor text prints these lines, and exits 1, when the relay is down and nothing is set up 1`] = `
 "ok    bun version: <bun> (needs 1.4.4 or newer)
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
+FAIL  Talos kit: This folder has no Talos kit: run <repo>/install.sh --agent-dir <a new folder> for an agent with the full Talos kit, or start with --no-kit to connect <agent> as a plain Claude Code folder
 FAIL  .mcp.json entry: no talos-app server in <agent>/.mcp.json (run apps/bridge/scripts/install.sh)
 ok    home dir mode: 700 (want 700)
 FAIL  bridge.key mode: missing

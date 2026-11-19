@@ -186,19 +186,21 @@ struct WorkerDialogTests {
       r.teardown()
       unlink(trigger)
     }
-    r.makeManager(idle: 2.0)
+    // Idle is long until the wake's pointer is settled: the manager reads the pane again after the Enter (EnterDetection) and, when a
+    // dialog has taken the screen by then, cannot tell the Enter went into the box, so it holds the pointer as owed, which rightly
+    // holds the park too. On a loaded machine that check ran after the dialog came, and the control below never parked (hostile
+    // run bf9ee62, 11-18). So: the pointer is typed and its check done, THEN the dialog, THEN the 2 s idle that this test is about.
+    r.makeManager(idle: 600)
     let log = NoticeLog()
     r.trackNotices(log)
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
-    // the wake's pointer is in and sent before the dialog comes: a line still being typed when the dialog takes the screen is never
-    // seen in the box, and is held (never typed a second time) until its claim deadline, which would hold the park too
-    // Not `enterCheckDone` here: its wait (about 2 s) is the idle time, so the worker would park before the dialog came. A notice
-    // that the Enter may have answered the dialog is harmless to this test, which counts no notices.
     #expect(r.wait(10) { r.typedLines.count == 1 }, "\(r.typedLines)")
+    #expect(r.enterCheckDone("trip"), "the pointer's Enter check")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     #expect(r.wait(10) { r.mgr.needsYou()["trip"] != nil })
+    r.mgr.tune { $0.idleSecondsOverride = 2.0 }
     // well past the idle time, and past the busy window: still up
     usleep(5_000_000)
     #expect(r.up("trip"), "parked while waiting on the owner: \(r.why("trip"))")

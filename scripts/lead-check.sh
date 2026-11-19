@@ -15,12 +15,20 @@
 #   2  GitHub could not be read
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="${LEAD_INBOX_REPO:-${GITHUB_REPOSITORY:-treynortetik-creator/talos-app}}"
+# shellcheck source=ci-runner/gh-account.sh
+. "$HERE/ci-runner/gh-account.sh"
+REPO="${LEAD_INBOX_REPO:-$(ci_gh_repo "$HERE/.." treynortetik-creator/talos-app)}" # the same as lead-inbox.sh reads
 HOME_DIR="${TALOS_LEAD_CHECK_HOME:-$HOME/.cache/talos-lead-check}"
 JOBS="browser check desktop image mobile mod"
 INBOX="${LEAD_CHECK_INBOX:-bash $HERE/lead-inbox.sh unread}" # a test's seam
 
 fail() { echo "lead-check: cannot read: $*" >&2; exit 2; }
+
+# as the repository owner's account, never gh's active one (scripts/ci-runner/gh-account.sh; CI_GH_USER or GH_TOKEN name another)
+errf="$(mktemp "${TMPDIR:-/tmp}/lead-check.XXXXXX")" || fail "no temporary file"
+tok="$(ci_gh_token "$REPO" 2>"$errf")" || { why="$(tail -1 "$errf")"; rm -f "$errf"; fail "$why"; }
+rm -f "$errf"
+export GH_TOKEN="$tok"
 
 shas="$(gh api "repos/$REPO/commits?sha=main&per_page=10" --jq '.[].sha' 2>/dev/null)" || fail "main's commits"
 [ -n "$shas" ] || fail "main's commits (none)"

@@ -686,6 +686,7 @@ public final class WorkerManager: @unchecked Sendable {
       && !SessionTranscript.isSaved(sessionId: sessionId, folder: cwd, claudeDir: claudeDir)
     let resumes = resume && !unsaved
     let nonce = Self.nonce()
+    seedThreadState(id, name: s.name)
     let d = dir(id)
     let launch = d + "/launch.sh"
     try? FileManager.default.createDirectory(

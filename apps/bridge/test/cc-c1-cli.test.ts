@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { DEFAULT_ASK_RULES } from '../src/permission/ask-rules.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { type Harness, startHarness, writeKit } from './helpers.ts'
 
 const tmp = (p = 'cc-c1-cli-') => mkdtempSync(join(tmpdir(), p))
 function cliIO(answer = 'n') {
@@ -142,7 +142,7 @@ describe('doctor: the permission relay', () => {
     procs?: string[]
   }) {
     h = await startHarness({ startBridge: false, config: (c) => ({ ...c, permission_relay: opts.relay ?? false }) })
-    const agent = tmp()
+    const agent = writeKit(tmp())
     const claudeDir = tmp('cc-c1-user-')
     await runCli(['install-mcp', '--agent-dir', agent], cliIO().io, env(h))
     if (opts.claudeSettings) writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify(opts.claudeSettings))

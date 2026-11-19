@@ -407,6 +407,9 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
       ['', 'image'],
       ['ci-part', 'check'],
       ['', 'fast'],
+      // Titan's report-only copies (CI_TITAN_HOSTILE=shadow: plan's report-ci prefix)
+      ['report-ci', 'check'],
+      ['report-ci', 'browser-e2e'],
     ])
       spawnSync('bash', ['-c', `. "${LOCKS}"\nci_post_status owner/talos-app ${SHA} ${job} success words`], {
         env: { PATH: `${b}:${process.env.PATH}`, CI_HOSTILE: '1', CI_STATUS_PREFIX: prefix as string },
@@ -416,6 +419,8 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
       'context=hostile-ci/image',
       'context=hostile-ci/part-check',
       'context=hostile-ci/report-fast',
+      'context=hostile-ci/report-check',
+      'context=hostile-ci/report-browser-e2e',
     ])
   })
 
@@ -454,6 +459,101 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
     )
     expect(out.sha).toBe(SHA)
     for (const k of Object.keys(out).filter((k) => k !== 'sha')) expect(out[k], k).toBe('')
+  })
+
+  describe('plan: CI_TITAN_HOSTILE=shadow also sends check and the e2e packages to Titan, report-only', () => {
+    const on = {
+      GITHUB_EVENT_NAME: 'schedule',
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_SHA: SHA,
+      GITHUB_REPOSITORY: 'owner/talos-app',
+      CI_HOSTILE: '1',
+      CI_DELPHI: 'on',
+      CI_CYCLOPS: 'on',
+      CI_HESTIA: 'on',
+      CI_TITAN_IMAGE: 'on',
+      CI_TITAN_BROWSER: 'e2e',
+      CI_BROWSER_E2E_WAIT: '600',
+      CI_TITAN_CHECK: 'on',
+      CI_CHECK_WAIT: '900',
+    }
+    const plan = (env: Record<string, string>) => {
+      const r = runnerSh('ci_plan', env)
+      expect(r.status, r.stderr).toBe(0)
+      return {
+        out: Object.fromEntries(
+          r.stdout
+            .trim()
+            .split('\n')
+            .map((l) => l.split(/=(.*)/s).slice(0, 2)),
+        ) as Record<string, string>,
+        err: r.stderr,
+      }
+    }
+    const rest = (o: Record<string, string>) =>
+      Object.entries(o).filter(([k]) => !['sha', 'check_titan', 'browser_e2e', 'linux_label'].includes(k))
+
+    it('shadow: check_titan and browser_e2e are report-ci on titan-b; nothing else goes anywhere, nothing waits for them', () => {
+      const { out } = plan({ ...on, CI_TITAN_HOSTILE: 'shadow' })
+      expect(out.check_titan).toBe('report-ci')
+      expect(out.browser_e2e).toBe('report-ci')
+      // Titan's second runner: a push landing during the hostile run never queues its Titan jobs behind these
+      expect(out.linux_label).toBe('talos-ci-linux-b')
+      expect(
+        plan({ ...on, CI_HOSTILE: '', GITHUB_EVENT_NAME: 'push', CI_TITAN_HOSTILE: 'shadow' }).out.linux_label,
+      ).toBe('')
+      const paused = { ...on, CI_TITAN_BROWSER: 'off', CI_TITAN_CHECK: 'off', CI_TITAN_HOSTILE: 'shadow' }
+      expect(plan(paused).out.linux_label).toBe('') // nothing on Titan: no label either
+      for (const [k, v] of rest(out)) expect(v, k).toBe('') // no wait, no fold, no image, no shards, no Hestia
+    })
+
+    it('shadow with the push switches in shadow too: the same; a push is untouched by it', () => {
+      const env = { ...on, CI_TITAN_CHECK: 'shadow', CI_TITAN_BROWSER: 'e2e-shadow', CI_TITAN_HOSTILE: 'shadow' }
+      expect(plan(env).out).toMatchObject({
+        check_titan: 'report-ci',
+        browser_e2e: 'report-ci',
+        e2e_wait: '',
+        check_wait: '',
+      })
+      const push = plan({ ...on, CI_HOSTILE: '', GITHUB_EVENT_NAME: 'push', CI_TITAN_HOSTILE: 'shadow' }).out
+      expect(push).toMatchObject({ check_titan: 'ci-part', check_wait: '900', browser_e2e: 'ci-part', e2e_wait: '600' })
+    })
+
+    it('the gaming pause (all three Titan switches off) keeps the hostile parts off Titan; each follows its own switch', () => {
+      const paused = {
+        ...on,
+        CI_TITAN_IMAGE: 'off',
+        CI_TITAN_BROWSER: 'off',
+        CI_TITAN_CHECK: 'off',
+        CI_TITAN_HOSTILE: 'shadow',
+      }
+      expect(plan(paused).out).toMatchObject({ check_titan: '', browser_e2e: '' })
+      expect(plan({ ...on, CI_TITAN_CHECK: 'off', CI_TITAN_HOSTILE: 'shadow' }).out).toMatchObject({
+        check_titan: '',
+        browser_e2e: 'report-ci',
+      })
+      // on without its wait plans nothing on Titan for a push, so nothing for the hostile run either
+      const noWait = { ...on, CI_BROWSER_E2E_WAIT: '', CI_TITAN_HOSTILE: 'shadow' }
+      expect(plan(noWait).out).toMatchObject({ check_titan: 'report-ci', browser_e2e: '' })
+    })
+
+    it('off, unset or an unknown value: everything on Lemnos, as before; an unknown value says so', () => {
+      for (const v of ['off', ''])
+        for (const [k, x] of Object.entries(plan({ ...on, CI_TITAN_HOSTILE: v }).out))
+          if (k !== 'sha') expect(x, `${v}:${k}`).toBe('')
+      const odd = plan({ ...on, CI_TITAN_HOSTILE: 'on' })
+      for (const [k, x] of Object.entries(odd.out)) if (k !== 'sha') expect(x, k).toBe('')
+      expect(odd.err).toContain("CI_TITAN_HOSTILE 'on' is not off or shadow; taken as off")
+    })
+
+    it('a schedule on a day a dispatched hostile nightly already ran still hands Titan nothing', () => {
+      const H = scratch()
+      const env = { ...on, CI_TITAN_HOSTILE: 'shadow', HOME: H, TALOS_CI_CACHE: join(H, 'cache') }
+      const m = runnerSh(`. "${join(here, 'ci-runner/schedule.sh')}"\nci_dispatch_marker hostile`, env).stdout.trim()
+      mkdirSync(dirname(m), { recursive: true })
+      writeFileSync(m, '')
+      for (const [k, x] of Object.entries(plan(env).out)) if (k !== 'sha') expect(x, k).toBe('')
+    })
   })
 
   it('dispatch-wait: a hostile dispatch is never closed as superseded, and reads nothing from GitHub', () => {
@@ -511,6 +611,28 @@ describe('ci-runner.yml: the hostile nightly by its own schedule, or by hand', (
   const cancelExpr = line(/^ {2}cancel-in-progress: (.*)$/m)
   const cron = (c: string) => ({ event_name: 'schedule', event: { schedule: c } })
   const dispatch = { event_name: 'workflow_dispatch', event: {} }
+
+  it("plan reads CI_TITAN_HOSTILE; Lemnos's two shadow compares never run for the hostile nightly", () => {
+    expect(yml).toMatch(/\n {6}CI_TITAN_HOSTILE: \$\{\{ vars\.CI_TITAN_HOSTILE \}\}\n/)
+    expect(yml).toMatch(/\n {6}linux_label: \$\{\{ steps\.plan\.outputs\.linux_label \}\}\n/)
+    // browser-e2e and check-titan take plan's label (titan-b for the hostile copies), the image job its own
+    for (const job of ['browser-e2e', 'check-titan']) {
+      const body = yml.slice(yml.indexOf(`\n  ${job}:\n`) + 1).split(/\n {2}\S/)[0]
+      expect(body, job).toContain(
+        `runs-on: [self-hosted, Linux, "\${{ needs.plan.outputs.linux_label || 'talos-ci-linux' }}"]`,
+      )
+    }
+    const titanJob = yml.slice(yml.indexOf('\n  titan:\n') + 1).split(/\n {2}\S/)[0]
+    expect(titanJob).toContain('runs-on: [self-hosted, Linux, talos-ci-linux]\n')
+    for (const name of [
+      "Compare Titan's e2e packages with Lemnos's (shadow)",
+      "Compare Titan's check with Lemnos's, test by test (shadow)",
+    ]) {
+      const at = yml.indexOf(`- name: ${name}`)
+      expect(at, name).toBeGreaterThan(0)
+      expect(yml.slice(at).split('\n')[1], name).toContain("&& env.CI_HOSTILE != '1' &&")
+    }
+  })
 
   it('two schedules: the nightly and the hostile one, at another hour; a boolean dispatch input', () => {
     expect([...yml.matchAll(/^ {4}- cron: "([^"]+)"/gm)].map((m) => m[1])).toEqual(['17 9 * * *', '43 11 * * *'])

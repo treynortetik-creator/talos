@@ -117,5 +117,11 @@ struct ConfigFileReadTests {
     #expect(Double(unseen.1) == MainRestartContract.unseenS)
     let quiet = try #require(text.firstMatch(of: /unseen_quiet_s:\s*(\d+)/), "the contract no longer has unseen_quiet_s")
     #expect(Double(quiet.1) == MainRestartContract.unseenQuietS)
+    let stall = try #require(text.firstMatch(of: /model_stall_s:\s*(\d+)/), "the contract no longer has model_stall_s")
+    #expect(Double(stall.1) == MainRestartContract.stallS)
+    let long = try #require(text.firstMatch(of: /model_stall_thinking_s:\s*(\d+)/), "the contract no longer has model_stall_thinking_s")
+    #expect(Double(long.1) == MainRestartContract.stallThinkingS)
+    let blank = try #require(text.firstMatch(of: /model_stall_blank_s:\s*(\d+)/), "the contract no longer has model_stall_blank_s")
+    #expect(Double(blank.1) == MainRestartContract.stallBlankS)
   }
 }

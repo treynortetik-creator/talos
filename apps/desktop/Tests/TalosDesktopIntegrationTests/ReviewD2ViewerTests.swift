@@ -151,19 +151,26 @@ struct ReviewD2ViewerTests {
     var t = Supervisor.Timings()
     t.tick = 0.2
     t.agentsPoll = 0.5
-    let r = try Rig(.tmux, scenario: "crash-after.sh", env: ["FAKE_CRASH_SECONDS": "1"], timings: t)
+    // The crash waits for the file below: a timed crash (FAKE_CRASH_SECONDS) starts when the agent does, and a loaded Mac can take
+    // longer than that to attach the viewer, so the whole restart ran before any wheel-up and the test proved nothing.
+    let r = try Rig(.tmux, scenario: "crash-after.sh", env: ["FAKE_CRASH_ON_FILE": "1"], timings: t)
     defer { r.teardown() }
     try coldStartConfirmed(r)
     let d = Viewer()
     let v = attach(r, d)
     defer { v.terminate() }
     #expect(r.wait(5) { v.running })
-    let end = Date().addingTimeInterval(12)
-    var sawMode = false
-    while Date() < end, r.starts.count < 2 || !isRunning(r.phase()) {
+    func wheelUp() -> Bool {
       v.typeDirectly(sgr(64, 10, 10))  // the owner scrolling back to see what happened
+      return tmux(r, "display-message", "-p", "-t", "=agent:", "#{pane_in_mode}").hasPrefix("1")
+    }
+    // The premise first: the viewer is attached and a wheel-up really puts the pane in copy mode. Only then does the agent crash.
+    let sawMode = r.wait(30) { wheelUp() }
+    FileManager.default.createFile(atPath: r.stateDir + "/crash-now", contents: Data())
+    let end = Date().addingTimeInterval(12)
+    while Date() < end, r.starts.count < 2 || !isRunning(r.phase()) {
+      v.typeDirectly(sgr(64, 10, 10))  // and keeps scrolling through the crash and the restart
       usleep(50_000)
-      if tmux(r, "display-message", "-p", "-t", "=agent:", "#{pane_in_mode}").hasPrefix("1") { sawMode = true }
     }
     usleep(800_000)
     #expect(sawMode, "control: the pane did enter copy mode")

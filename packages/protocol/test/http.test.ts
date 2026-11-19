@@ -73,6 +73,11 @@ const SPEC_ROUTES = [
   'POST /api/bug-inbox',
   // org pages, phase 1 (docs/ORG-PAGES-SPEC.md): the owner's devices only until viewer sign-in (phase 3)
   'POST /bridge/pages',
+  // linked agents, P2: the Mac's setup of a peer inbox
+  'POST /bridge/peers',
+  'GET /bridge/peers',
+  'DELETE /bridge/peers/:name',
+  'POST /bridge/peers/:name/rotate',
   'GET /api/pages',
   'GET /api/pages/:id',
   'POST /api/pages/:id/share',

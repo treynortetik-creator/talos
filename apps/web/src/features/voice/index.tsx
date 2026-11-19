@@ -5,8 +5,10 @@ import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'rea
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { Button, Textarea } from '../../ui/index.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
+import { BugThreadButton } from '../bugreport/BugButton.tsx'
 import type { CallBarProps, CallScreenProps, LiveCallButtonProps, SettingsSectionProps } from '../contracts.ts'
 import { DrivingRow } from '../drive/DrivingRow.tsx'
+import { useMediaQuery } from '../settings/useMedia.ts'
 import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThreadPatch.ts'
 import type { CallController } from './callController.ts'
 import { type Handoff, useCallStore } from './callStore.ts'
@@ -157,6 +159,9 @@ function Controls({ c, compact }: { c: CallController; compact?: boolean }) {
   const live = phase === 'live'
   const agentName = useTalos((s) => s.config?.agent.name ?? 'Talos')
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The call bar takes the message box's place, and with it the phone's Report a bug button (BugThreadButton below). On the
+  // narrowest phones the decorative mascot gives up 16 px for it, so End and the talk area keep theirs.
+  const narrow = useMediaQuery('(max-width: 359px)')
 
   const onDown = () => {
     if (mode === 'hold') return c.pressToTalk()
@@ -179,13 +184,21 @@ function Controls({ c, compact }: { c: CallController; compact?: boolean }) {
     >
       <Mascot
         state={phase === 'live' ? (mode === 'hold' && !talking ? 'listening' : 'speaking') : 'working'}
-        size={44}
+        size={narrow ? 28 : 44}
         name={agentName}
         decorative
       />
       {mode === 'hold' ? (
-        <Button variant="outline" disabled={!live} onClick={() => c.setMode('hands_free')}>
-          Hands-free
+        <Button
+          variant="outline"
+          disabled={!live}
+          onClick={() => c.setMode('hands_free')}
+          aria-label="Hands-free"
+          title="Hands-free"
+          className="px-2.5 sm:px-4"
+        >
+          <WaveIcon />
+          <span className="hidden sm:inline">Hands-free</span>
         </Button>
       ) : (
         <Button
@@ -194,11 +207,13 @@ function Controls({ c, compact }: { c: CallController; compact?: boolean }) {
           aria-pressed={muted}
           disabled={!live}
           onClick={() => c.setMuted(!muted)}
+          className="px-2.5 sm:px-4"
         >
           <MicIcon off={muted} />
           <span className="hidden sm:inline">{muted ? 'Unmute' : 'Mute'}</span>
         </Button>
       )}
+      <BugThreadButton variant="inline" />
       <button
         type="button"
         data-testid="talk-area"
@@ -279,7 +294,8 @@ export function CallScreen({ threadId, onEnd }: CallScreenProps) {
     >
       <h2 className="m-0 text-center font-display text-lg">{name}</h2>
       <p className="m-0 text-center text-sm opacity-80">{phase === 'connecting' ? 'Connecting…' : 'On a call'}</p>
-      <div className="flex flex-col gap-3 pb-2">
+      {/* The field is dark in both themes, so the controls take the cream ink here (Mute, Hands-free and Report a bug alike). */}
+      <div className="flex flex-col gap-3 pb-2 [--text-2:var(--talos-cream)] [--text:var(--talos-cream)]">
         <HandoffChips />
         <Captions c={c} />
         <TapToHear c={c} />

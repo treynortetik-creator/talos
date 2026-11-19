@@ -26,7 +26,7 @@ public enum SignInHelp {
   /// of this Mac, so the link goes into the Talos window.
   public static let how =
     "Run it in Terminal. It prints a one-time link (good for 10 minutes). Copy the link into the Talos window (Paste a "
-    + "setup link), not a browser. When the window shows four words, type y in Terminal if they match."
+    + "setup link), not a browser. When the window shows four words, type y in Terminal if they match. (The Sign in button does all of this for you and asks with a Confirm button instead.)"
 
   /// What the sign-in pane says when the command ended, or nil to leave its message alone: a run that showed a link says
   /// done, two different links keep their own message, and only a run that showed nothing is "ended before a link".

@@ -13,6 +13,7 @@ import { memoryNoteReadTool } from './memory-note-read.ts'
 import { inboxRaw, inboxTriage, setStatus, voiceProgress } from './misc.ts'
 import { talosModHello, talosModSync } from './mod.ts'
 import { publishPage } from './pages.ts'
+import { peerSendTool } from './peer.ts'
 import { readInboundTool } from './read-inbound.ts'
 import { restartMain } from './restart-main.ts'
 import { schedulePropose, scheduleRunDone, scheduleRunStart, schedulesList } from './schedules.ts'
@@ -51,6 +52,7 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   readInboundTool,
   memoryNoteReadTool,
   handoffTool,
+  peerSendTool,
   threadSession,
   restartMain,
   ...SCREEN_TOOL_RECORDS,

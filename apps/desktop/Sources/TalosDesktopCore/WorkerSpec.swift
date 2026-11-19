@@ -243,12 +243,16 @@ public struct WorkerSpec: Equatable, Sendable {
     guard WorkerFence.isSafe(talosHome: i.talosHome) else { throw BuildError.unsafeTalosHome(i.talosHome) }
     if let parent = i.parentCwd, let why = SubThreadFolder.problem(cwd: cwd, parentCwd: parent) { throw BuildError.subThreadFolder(why) }
 
+    // TALOS_APP_THREAD_STATE is set below, and only with the thread-state hook registered: never inherited
     var env = ClaudeEnvScrub.scrub(i.baseEnv).filter { k, _ in
-      !strippedEnv.contains(k) && !strippedPrefixes.contains(where: { k.hasPrefix($0) })
+      !strippedEnv.contains(k) && !strippedPrefixes.contains(where: { k.hasPrefix($0) }) && k != WorkerHook.threadStateEnv
     }
     let noChannel = noChannelDir(talosHome: i.talosHome)
     env["TALOS_APP_WORKER_THREAD"] = i.threadId
     env["TALOS_SESSION_ROLE"] = "worker"
+    // the kit's session-start and compaction-guard leave Main's state to Main only for a session whose own state hook is registered
+    // (`addingThreadState` below): a worker without it (an app built without the hook) keeps today's behaviour exactly
+    if i.permissionHook.stateBytes != nil { env[WorkerHook.threadStateEnv] = "1" }
     env["TALOS_APP_HOME"] = i.talosHome
     env["TALOS_APP_WORKER_NONCE"] = i.nonce
     // a Telegram or iMessage plugin that starts anyway finds no token here and exits before it touches anything
@@ -335,12 +339,13 @@ public struct WorkerSpec: Equatable, Sendable {
     let fenceRules = (i.threadFence ? WorkerFence.denyRules(talosHome: i.talosHome) : []) + WorkerFence.workerFilesDeny(talosHome: i.talosHome)
       + WorkerFence.extraDeny + settingsDeny + WorkerFence.deniedTools + i.mainDenyRules
       + (i.mcp?.denyRules ?? []) + carried.deny
+    // the hook's home is the session's own, as the hook read it before; its Talos home and thread are this start's, as text
+    let hookSession = WorkerHook.Session(
+      home: WorkerHook.hookHome(home), talosHome: i.talosHome, threadId: i.threadId, folder: cwd,
+      folderHooksCount: WorkerSpec.folderKey(cwd) != WorkerSpec.folderKey(i.agentDir))
     guard var fenced = WorkerFence.adding(deny: fenceRules, to: Self.withPermissionHook(
         WorkerFence.anchoring(withGuards, slashAnchor: i.talosHome + "/guards", cwdAnchor: i.agentDir), hook: i.permissionHook,
-        // the hook's home is the session's own, as the hook read it before; its Talos home and thread are this start's, as text
-        session: .init(
-          home: WorkerHook.hookHome(home), talosHome: i.talosHome, threadId: i.threadId, folder: cwd,
-          folderHooksCount: WorkerSpec.folderKey(cwd) != WorkerSpec.folderKey(i.agentDir))))
+        session: hookSession))
     else {
       throw BuildError.fenceUnmergeable
     }
@@ -362,6 +367,14 @@ public struct WorkerSpec: Equatable, Sendable {
       perms["defaultMode"] = "default"  // the ceiling check below still refuses a file that asks for more than main is known to have
     }
     fenced["permissions"] = perms
+    // the thread-state hook (its own live state file, put back at every boundary) and the one edit it lets the session make
+    if i.permissionHook.stateBytes != nil {
+      guard let added = addingThreadState(
+        fenced, hook: i.permissionHook, session: .init(home: hookSession.home, talosHome: i.talosHome, threadId: i.threadId),
+        talosHome: i.talosHome, agentDir: i.agentDir, threadId: i.threadId)
+      else { throw BuildError.fenceUnmergeable }
+      fenced = added
+    }
     // the status line records the session's plan-usage reading for the bridge (WorkerUsage), run by the hook's python3; it takes
     // the place of any other status line, which a session outside the agent folder does not load anyway
     fenced["statusLine"] = WorkerUsage.statusLine(python: i.permissionHook.python, talosHome: i.talosHome, threadId: i.threadId)
@@ -438,6 +451,13 @@ public struct WorkerSpec: Equatable, Sendable {
       throw BuildError.workerFilesOpen
     }
     let settings = (try? JSONSerialization.jsonObject(with: Data(settingsJSON.utf8))) as? [String: Any] ?? [:]
+    // TALOS_APP_THREAD_STATE=1 exactly when the settings run both thread-state commands (the kit's session-start and compaction-guard
+    // leave Main's state to Main only then): neither without the other
+    let flag = env[WorkerHook.threadStateEnv]
+    if let flag, flag != "1" { throw BuildError.forbiddenEnv(WorkerHook.threadStateEnv) }
+    if (flag == "1") != WorkerHook.stateRegistered(settings: settings, talosHome: env["TALOS_APP_HOME"] ?? "") {
+      throw BuildError.forbiddenEnv(WorkerHook.threadStateEnv)
+    }
     let denied = (settings["deniedMcpServers"] as? [[String: Any]] ?? []).compactMap { $0["serverName"] as? String }
     for n in WorkerMcp.alwaysDenied where !denied.contains(n) { throw BuildError.forbiddenEnv("deniedMcpServers") }
     if let d = PrivilegeCeiling.check(

@@ -78,20 +78,20 @@ describe('sessions', () => {
   it('by default a sign-in lasts 90 days unused (2026-11-14: nothing else asks for the passkey); past that it is 401', async () => {
     const h = await makeHarness()
     const cookie = await h.loginPinned()
-    h.fake.clock.advance(89 * DAY)
+    h.fake.clock.jump(89 * DAY)
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status).toBe(200)
-    h.fake.clock.advance(90 * DAY + 1000)
+    h.fake.clock.jump(90 * DAY + 1000)
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status).toBe(401)
   })
 
   it('SESSION_IDLE_DAYS and SESSION_TTL_DAYS move both limits, and the cookie lifetime follows the TTL', async () => {
     const h = await makeHarness({ env: { SESSION_TTL_DAYS: '60', SESSION_IDLE_DAYS: '20' } })
     const cookie = await h.loginPinned()
-    h.fake.clock.advance(15 * DAY) // past the old 14-day idle, inside the new 20
+    h.fake.clock.jump(15 * DAY) // past the old 14-day idle, inside the new 20
     const alive = await h.app.request('/probe/session', { headers: { Cookie: cookie } })
     expect(alive.status).toBe(200)
     expect(alive.headers.get('set-cookie') ?? '').toContain(`Max-Age=${60 * 86400}`)
-    h.fake.clock.advance(21 * DAY)
+    h.fake.clock.jump(21 * DAY)
     expect((await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status).toBe(401)
   })
 
@@ -100,7 +100,7 @@ describe('sessions', () => {
     const active = await h.loginPinned()
     const forgotten = await h.loginPinned()
     for (let i = 0; i < 3; i++) {
-      h.fake.clock.advance(2 * DAY)
+      h.fake.clock.jump(2 * DAY)
       expect(
         (await h.app.request('/probe/session', { headers: { Cookie: active } })).status,
         `day ${(i + 1) * 2}`,
@@ -114,7 +114,7 @@ describe('sessions', () => {
     const h = await makeHarness()
     const cookie = await h.loginPinned()
     for (let i = 0; i < 4; i++) {
-      h.fake.clock.advance(10 * DAY)
+      h.fake.clock.jump(10 * DAY)
       expect(
         (await h.app.request('/probe/session', { headers: { Cookie: cookie } })).status,
         `day ${(i + 1) * 10}`,

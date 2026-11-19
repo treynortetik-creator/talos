@@ -18,6 +18,7 @@ import { HealthBeat } from './health.ts'
 import {
   AppRequestId,
   CardId,
+  ConnId,
   DeviceId,
   IntegrationId,
   IsoTs,
@@ -46,6 +47,7 @@ import {
   Thread,
   ThreadStatus,
 } from './models.ts'
+import { PeerMessage, PeerName } from './peer.ts'
 import { Problem } from './problems.ts'
 import { NativeActWire } from './push-rich.ts'
 import { RunBlockRef } from './run.ts'
@@ -988,6 +990,21 @@ export const ShareItemFrame = frame('share.item', {
  * and the rate; the Mac scrubs it again, files it and answers `consumed` only after the file is on disk. Held back by
  * the relay until the Mac's hello lists `problems/1`.
  */
+/**
+ * relay -> bridge, durable and CONSUMABLE: a message another install of the owner sent to this one (linked agents). The relay
+ * checked the Standard Webhooks signature, the body (`PeerMessage`), the id and the daily cap. `peer` is the CONNECTION's
+ * configured name: that is who sent it, whatever `msg.from` claims. `msg.chain` and `msg.from_peer_task` are the sender's
+ * claims and nothing more; the Mac computes its own. Not a hook event: no inbox row, no card, no push, no digest.
+ * A revoke (the peer deleted on the relay) recalls only frames the Mac has not taken; one it already has (delivered, not yet
+ * consumed) stays, so the bridge must still drop a message whose `conn_id` it no longer has.
+ */
+export const PeerMessageFrame = frame('peer.message', {
+  conn_id: ConnId,
+  peer: PeerName,
+  msg: PeerMessage,
+  received_at: IsoTs,
+})
+
 export const ProblemItemFrame = frame('problem.item', { problem: Problem })
 
 // ---- MCP apps (connector apps as live widgets) ------------------------------------------------------------------------
@@ -1218,6 +1235,7 @@ export const frameSchemas = {
   'files.sent_list': FilesSentListFrame,
   'share.item': ShareItemFrame,
   'problem.item': ProblemItemFrame,
+  'peer.message': PeerMessageFrame,
   'native.act': NativeActWire,
   'app.request': AppRequestFrame,
   'app.response': AppResponseFrame,
@@ -1270,6 +1288,7 @@ export const DURABLE_FRAME_TYPES: readonly FrameType[] = [
   'device.revoked',
   'share.item',
   'problem.item',
+  'peer.message',
   'native.act',
   'app.update',
 ]
@@ -1288,6 +1307,7 @@ export const CONSUMABLE_FRAME_TYPES: readonly FrameType[] = [
   'voice.ended',
   'share.item',
   'problem.item',
+  'peer.message',
   'native.act',
 ]
 
@@ -1412,6 +1432,7 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...APP_OWNER_FRAME_TYPES,
     'share.item',
     'problem.item',
+    'peer.message',
     'native.act',
   ],
 }

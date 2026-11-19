@@ -30,8 +30,15 @@ export function worldOffsetMs(at?: string): number {
   return Math.abs(offset) < SAME_TIME_MS ? 0 : offset
 }
 
-/** The env that puts a bun process (the bridge, the CLI) on that clock. Empty without E2E_NOW. */
+/**
+ * The env that puts a bun process (the bridge, the CLI) on that clock. Empty without E2E_NOW. A preload the run already has
+ * stays, first: the hostile nightly's clock shift (scripts/ci-local/hostile-clock.cjs, BUN_OPTIONS=--preload) moves `Date`, then
+ * this one adds the world's offset to that moved `Date`. The offset was taken against this process's `Date`, which the same
+ * shift moved, so the two add up to the world's instant. Replacing BUN_OPTIONS instead dropped the shift: every bun process was
+ * 30 days behind the relay and the page, and every `worldAt` spec failed in the hostile run (2026-11-18, schedules.spec).
+ */
 export function clockEnv(offsetMs: number): Record<string, string> {
   if (offsetMs === 0) return {}
-  return { E2E_CLOCK_OFFSET_MS: String(offsetMs), BUN_OPTIONS: `--preload=${PRELOAD}` }
+  const before = process.env.BUN_OPTIONS?.trim()
+  return { E2E_CLOCK_OFFSET_MS: String(offsetMs), BUN_OPTIONS: `${before ? `${before} ` : ''}--preload=${PRELOAD}` }
 }

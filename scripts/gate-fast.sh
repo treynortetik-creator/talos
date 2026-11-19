@@ -8,7 +8,11 @@
 # test files whose own relative strings name a changed apps/bridge/src or apps/bridge/test file ('../src/x.ts': an import, an
 # export from, a dynamic import, a require, a path it spawns). Direct only, on purpose: bridge.ts reaches 317 of the 321 source
 # files, so following imports further selects about 283 of the 371 bridge test files for almost any change. Everything else
-# the planned gate runs (the e2e, old-client and browser specs) is CI's after the push. Names count only as written with their
+# the planned gate runs (the e2e and old-client steps, and the browser specs of a changed feature or helper) is CI's after the push.
+# The browser specs the fast gate runs are the change's own: each changed apps/web/test/**/*.spec.ts that is still there (not a
+# feature's folder of specs, not the smoke set), on every Playwright project that takes it (desktop, iphone, pixel; chromium-media
+# for voice; iphone-se for its one spec), under the heavy lock; a fast gate with no such spec takes no lock. A deleted spec runs
+# nothing; more than WEB_SPECS_MAX of them is the full gate. Names count only as written with their
 # extension, as every bridge import is (allowImportingTsExtensions).
 # It runs the full gate instead (FAST=0, FAST_WHY says why) for a change to: the keep-out list (scripts/gate-fast-keepout.txt,
 # the push path in scripts/gate-inputs.txt, the paths in docs/protected-paths.txt); a deleted bridge file (no scan follows a
@@ -84,7 +88,7 @@ gate_test_file() {
   [ -z "$2" ] || ! printf '%s\n' "$1" | LC_ALL=C grep -iqE -e "$2"
 }
 fast_plan() {
-  local f p ins ins_rest keep t tf _LO_LINES=() prot=() seeds=() bun=() cands=()
+  local f p ins ins_rest keep t tf _LO_LINES=() prot=() seeds=() bun=() cands=() web=() webkit=()
   # each list as the base has it; a list that is missing there, or holds nothing, keeps the fast gate off
   for p in scripts/gate-fast-keepout.txt scripts/gate-inputs.txt docs/protected-paths.txt; do
     [ -n "$(list_at_base "$p")" ] || { fast_off "$p is missing or empty at the base, so the keep-out list cannot be read"; return 0; }
@@ -167,8 +171,23 @@ fast_plan() {
     fast_off "it selects ${#bun[@]} bridge test files, more than $FAST_MAX"
     return 0
   fi
+  # the change's own browser specs: the changed spec files themselves, never a feature's folder (CI runs the rest). More of them
+  # than WEB_SPECS_MAX is the full gate, whose planned run names its own cap: a spec is never dropped without a word.
+  for f in "${CHANGED[@]+"${CHANGED[@]}"}"; do
+    t="$(web_spec_itself "$f")"
+    [ -n "$t" ] || continue
+    web+=("$t")
+    case "$t" in */voice/*) ;; *) webkit+=("$t") ;; esac # the iphone and pixel projects leave the voice folder out
+  done
+  uniq_into web "${web[@]+"${web[@]}"}"
+  uniq_into webkit "${webkit[@]+"${webkit[@]}"}"
+  if [ "${#web[@]}" -gt "$(web_specs_max)" ]; then
+    fast_off "it changes ${#web[@]} browser specs, more than $(web_specs_max) (WEB_SPECS_MAX)"
+    return 0
+  fi
   BUN=("${bun[@]+"${bun[@]}"}")
-  BUN_ALL=0 E2E=() E2E_ALL=0 OLD=0 WEB=() WEBKIT=()
+  BUN_ALL=0 E2E=() E2E_ALL=0 OLD=0
+  WEB=("${web[@]+"${web[@]}"}") WEBKIT=("${webkit[@]+"${webkit[@]}"}")
 }
 
 # fast_personal <rule files>: the fast gate's personal-data scan, of this change only: its files as they are on disk (CHANGED,
@@ -225,8 +244,8 @@ fast_fallback_log() {
 
 # The second count's half (no shared code with fast_plan above): gate.sh runs it ahead of PLAN_CHECK_JS, which calls fastPlan.
 IFS= read -r -d '' FAST_CHECK_JS <<'FAST_CHECK_JS_END' || true
-// --fast, fast_plan's rules written again: the bridge tests (the planned ones and those whose quoted relative paths name a
-// changed bridge module), or null for the full gate. c: the second count's own helpers and lists (gate.sh, PLAN_CHECK_JS).
+// --fast, fast_plan's rules written again: {bun, web, webkit}, the bridge tests (the planned ones and those whose quoted relative
+// paths name a changed bridge module) and the change's own browser specs, or null for the full gate. c: the second count's own helpers and lists (gate.sh, PLAN_CHECK_JS).
 function fastPlan(c) {
   const { base, changed, want, text, exists, glob, sorted, B, fs, spawnSync, bridgeTests, BRIDGE_TEST, BRIDGE_ALL } = c
   // a list as the base has it: CRs dropped, each line trimmed, no comments or blank lines; null when the base has none
@@ -292,7 +311,12 @@ function fastPlan(c) {
       bun.push(...bridgeTests.filter((t) => text(t).includes(name) && namesFile(t, f)))
     }
     if (sorted(bun).length > 60) return true
-    picked = sorted(bun)
+    // the change's own browser specs (web_spec_itself's twin): each changed apps/web/test/**/*.spec.ts still there, as the path
+    // relative to apps/web; the voice folder is not on the iphone and pixel projects. Over WEB_SPECS_MAX: the full gate.
+    const web = sorted(changed.filter((f) => glob('apps/web/test/*.spec.ts')(f) && exists(f)).map((f) => f.slice('apps/web/'.length)))
+    const cap = /^[0-9]+$/.test(process.env.WEB_SPECS_MAX || '') ? Number(process.env.WEB_SPECS_MAX) : 40
+    if (web.length > cap) return true
+    picked = { bun: sorted(bun), web, webkit: web.filter((w) => !glob('*/voice/*')(w)) }
     return false
   }
   let picked = null

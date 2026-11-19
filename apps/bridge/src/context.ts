@@ -12,6 +12,7 @@ import type { DialogCards } from './dialog-card.ts'
 import { receiptFrame, replyFrame } from './frames-out.ts'
 import type { HistoryStore } from './history-store.ts'
 import type { Logger } from './log.ts'
+import { holdOwnerNotice, newResendMemory, resendToMain } from './main-resend.ts'
 import type { MediaStore } from './media.ts'
 import type { ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, type ThreadRef } from './notify.ts'
@@ -69,6 +70,11 @@ export class SeenTracker {
    * gave to a thread's own worker are left out (another process reads those) until the router falls back to this session.
    */
   private unseenSince = new Map<string, number>()
+  /**
+   * Per thread: the owner messages told to this session since its last tool call (what `oldestUnseenAt` is the start of). A tool call
+   * or `take` empties it, so a message Main already took in is never in it (`pending` is not that: it outlives a tool call).
+   */
+  private unseenList = new Map<string, string[]>()
   /** Called when `oldestUnseenAt` may have changed (the live bridge rewrites status.json). */
   onChange?: () => void
 
@@ -77,7 +83,10 @@ export class SeenTracker {
     l.push(messageId)
     this.pending.set(thread, l)
     const routed = this.routerOwned.delete(messageId)
-    if (!routed) this.markUnseen(thread)
+    if (!routed) {
+      this.markUnseen(thread)
+      this.noteUnseen(thread, messageId)
+    }
     if (opts.persist === false || routed) return
     this.track(thread, messageId)
   }
@@ -85,6 +94,7 @@ export class SeenTracker {
   /** The router gave this session a message a thread's own worker did not claim in time: it is this session's to read now. */
   heldForMain(thread: string, messageId: string) {
     this.markUnseen(thread)
+    this.noteUnseen(thread, messageId)
     this.track(thread, messageId)
   }
 
@@ -92,7 +102,14 @@ export class SeenTracker {
   toolCalled() {
     if (this.unseenSince.size === 0) return
     this.unseenSince.clear()
+    this.unseenList.clear()
     this.onChange?.()
+  }
+
+  private noteUnseen(thread: string, messageId: string) {
+    const l = this.unseenList.get(thread) ?? []
+    l.push(messageId)
+    this.unseenList.set(thread, l)
   }
 
   private markUnseen(thread: string) {
@@ -109,6 +126,21 @@ export class SeenTracker {
     let oldest: number | undefined
     for (const at of this.unseenSince.values()) if (oldest === undefined || at < oldest) oldest = at
     return oldest === undefined ? null : new Date(oldest).toISOString()
+  }
+
+  private resend = newResendMemory()
+  /** Every notice on its way to Main (the owner's own are kept for `resendToMain`). */
+  hold(n: Notification) {
+    holdOwnerNotice(this.resend, n)
+  }
+  /** The Mac's stall watchdog asked (request file) for the unread owner message to be delivered once more (main-resend.ts). */
+  resendToMain(ctx: { paths: BridgePaths; log: Logger; clock: Clock }, deliver: (n: Notification) => Promise<void>) {
+    return resendToMain(this.resend, this, ctx, deliver)
+  }
+
+  /** The owner messages told to this session since its last tool call: the ones a stall is about, never an earlier, taken-in one. */
+  unseenIds(): string[] {
+    return [...this.unseenList.values()].flat()
   }
 
   /** The router handed this message to a thread's own worker session (another process): its claim is the router's to report. */
@@ -140,6 +172,7 @@ export class SeenTracker {
   take(thread: string): string[] {
     const l = this.pending.get(thread) ?? []
     this.pending.delete(thread)
+    this.unseenList.delete(thread)
     if (this.unseenSince.delete(thread)) this.onChange?.()
     return l
   }
@@ -277,6 +310,8 @@ export type BridgeContext = {
   apps?: AppService
   /** Problem reports (docs/ERRORS.md): the live main bridge files them; absent elsewhere. */
   problems?: import('./problems/service.ts').ProblemService
+  /** Linked agents (src/peer): `peer_send` and the inbound ledger. The live main bridge only. */
+  peers?: import('./peer/service.ts').PeerService
   /** Option C worker mode (docs/OPTION-C.md): this process is the named thread's own session. */
   worker?: {
     thread: string /** The connection to main's hub: the Schedules tools ask main through it. */

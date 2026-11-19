@@ -129,9 +129,27 @@ fi
 } > "$NOTES_DIR/release-notes.md"
 CHECK_ALL_FILES=1 bash "$ROOT/scripts/check-no-personal.sh" "$NOTES_DIR" >/dev/null 2>&1 || fail "the release notes did not pass the personal-data check"
 
+# The source tarball (R2-2): when the app in the zip carries TalosSourceSHA256, its first setup downloads talos-source-<tag>.tar.gz from
+# this release and checks that hash. So that asset MUST be in the folder (release-app.sh made it) with exactly that sha256, and goes up with
+# the rest; a missing or different one fails the publish (the app would be unable to set itself up).
+SRC_ASSETS=()
+STAMP=""
+if unzip -p "$DIR/$ZIPNAME" "Talos.app/Contents/Info.plist" > "$NOTES_DIR/zip-Info.plist" 2>/dev/null; then
+  STAMP="$(/usr/libexec/PlistBuddy -c 'Print :TalosSourceSHA256' "$NOTES_DIR/zip-Info.plist" 2>/dev/null || true)"
+fi
+if [ -n "$STAMP" ]; then
+  SRC="$DIR/talos-source-$TAG.tar.gz"
+  [ -f "$SRC" ] || fail "the app carries TalosSourceSHA256, so $(basename "$SRC") must be published with it, and it is not in $DIR"
+  [ "$(shasum -a 256 "$SRC" | awk '{print $1}')" = "$STAMP" ] || fail "$(basename "$SRC") is not the file the app's TalosSourceSHA256 names"
+  [ -f "$SRC.sha256" ] || printf '%s  %s\n' "$STAMP" "$(basename "$SRC")" > "$NOTES_DIR/$(basename "$SRC").sha256"
+  SRC_ASSETS=("$SRC")
+  [ -f "$SRC.sha256" ] && SRC_ASSETS+=("$SRC.sha256") || SRC_ASSETS+=("$NOTES_DIR/$(basename "$SRC").sha256")
+fi
+
 if [ "$DRY" = 1 ]; then echo "release $VERSION: dry run ok"; exit 0; fi
 gh release view "$TAG" --repo "$PUB" >/dev/null 2>&1 </dev/null && fail "a release for $TAG already exists on $PUB; it is never changed in place"
+ASSETS=("$DIR/$ZIPNAME" "$DIR/$ZIPNAME.sha256" "$DIR/latest.json" "$DIR/latest.json.sig")
 gh release create "$TAG" --repo "$PUB" --verify-tag --title "Talos $VERSION" --notes-file "$NOTES_DIR/release-notes.md" \
-  "$DIR/$ZIPNAME" "$DIR/$ZIPNAME.sha256" "$DIR/latest.json" "$DIR/latest.json.sig" </dev/null >/dev/null 2>&1 \
+  "${ASSETS[@]}" ${SRC_ASSETS[@]+"${SRC_ASSETS[@]}"} </dev/null >/dev/null 2>&1 \
   || fail "gh release create failed on $PUB"
 echo "release $VERSION: ok"

@@ -85,6 +85,8 @@ export class RelayClient {
   onAttest?: (req: { id: string; nonce: string }) => Promise<Record<string, unknown> | null>
   private ws: WebSocket | null = null
   private attempt = 0
+  /** When the current socket opened (the clock's ms): the `relay authed` line says how long the hello took. */
+  private openedAt: number | null = null
   /** Until this time (clock ms) a relay restart (close 1012) is being waited out: redials use a short fixed delay. 0 = none. */
   private restartUntil = 0
   private timer: unknown = null
@@ -248,6 +250,11 @@ export class RelayClient {
     this.ws = ws
     this.handshakeTimer = this.o.clock.setTimeout(() => this.onHandshakeTimeout(ws), HANDSHAKE_TIMEOUT_MS)
     let sentHello = false
+    ws.onopen = () => {
+      if (this.ws !== ws) return
+      this.openedAt = this.o.clock.now()
+      this.o.log.info('relay socket open', { attempt: this.attempt }) // the dial's backoff step; no address
+    }
     ws.onmessage = (ev) => {
       this.lastRx = this.o.clock.now()
       const text = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer)
@@ -406,6 +413,9 @@ export class RelayClient {
       }
       if (frame.type === 'ready') {
         this.authed = true
+        this.o.log.info('relay authed', {
+          after_ms: Math.max(0, this.o.clock.now() - (this.openedAt ?? this.o.clock.now())),
+        })
         this.everReady = true
         if (this.handshakeTimer) this.o.clock.clearTimeout(this.handshakeTimer)
         this.handshakeTimer = null

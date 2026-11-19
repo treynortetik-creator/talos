@@ -21,6 +21,7 @@ import {
   NATIVE_ACT_FEATURE,
   newUlid,
   ORIGINAL_TS_FEATURE,
+  PEER_FEATURE,
   PROBLEMS_FEATURE,
   PROBLEMS_INSTALL_FEATURE,
   RUN_FEATURE,
@@ -74,6 +75,8 @@ export function bridgeFeatures(svc: {
   memoryRoots?: { available: boolean } | undefined
   /** Problem reports (docs/ERRORS.md): present on a live bridge, which is the one that files them. */
   problems?: unknown
+  /** Linked agents (src/peer): present on a live main bridge, which is the one that takes `peer.message`. */
+  peers?: unknown
   /** Run in the terminal pane (src/pane-run.ts): only while the Mac app's run channel answers. */
   paneRun?: { available: boolean } | undefined
   /** Sub-threads: advertised only while the Mac app reports it checks a sub-thread's folder (workers.json). */
@@ -112,6 +115,7 @@ export function bridgeFeatures(svc: {
     SETTINGS_LOCK_FEATURE,
     ALWAYS_ALLOW_FEATURE,
     ...(svc.problems ? [PROBLEMS_INSTALL_FEATURE] : []),
+    ...(svc.peers ? [PEER_FEATURE] : []),
     // the config takes every stock theme id (iris, harbor): always on, last, where an older page goes without it
     THEMES_V2_FEATURE,
     // answers a phone's attest.request (BYOR phase 4): last, where an older page goes without it

@@ -111,4 +111,21 @@ struct WebPolicyTests {
     #expect(RelayConfig.envValue("A", in: "A=1\nA=2 # c\n") == "2")
     #expect(RelayConfig.envValue("A", in: "B=1") == nil)
   }
+
+  /// An install with its own Talos home (desktop.json `env` TALOS_APP_HOME, as a second agent on one Mac has) keeps its
+  /// relay in that home's bridge.env. The default home's file, or none, must not be the one read.
+  @Test func relayIsReadFromTheHomeTheSessionUses() {
+    let files = [
+      "/u/.config/talos/app/bridge.env": "TALOS_APP_RELAY_URL=https://default.relay.test",
+      "/u/agents/second/bridge.env": "TALOS_APP_RELAY_URL=https://second.relay.test",
+      "/p/home/bridge.env": "TALOS_APP_RELAY_URL=https://process.relay.test",
+    ]
+    let read: (String) -> String? = { files[$0] }
+    #expect(RelayConfig.resolve(configured: "auto", configEnv: ["TALOS_APP_HOME": "/u/agents/second"], processEnv: [:], userHome: "/u", read: read)?.host == "second.relay.test")
+    #expect(RelayConfig.resolve(configured: "auto", configEnv: ["TALOS_APP_HOME": "/u/agents/second"], processEnv: ["TALOS_APP_HOME": "/p/home"], userHome: "/u", read: read)?.host == "second.relay.test")
+    #expect(RelayConfig.resolve(configured: "auto", configEnv: [:], processEnv: ["TALOS_APP_HOME": "/p/home"], userHome: "/u", read: read)?.host == "process.relay.test")
+    #expect(RelayConfig.resolve(configured: "auto", configEnv: ["TALOS_APP_HOME": ""], processEnv: [:], userHome: "/u", read: read)?.host == "default.relay.test")
+    #expect(RelayConfig.resolve(configured: "auto", configEnv: ["TALOS_APP_HOME": "~/agents/second"], processEnv: [:], userHome: "/u", read: read)?.host == "second.relay.test")
+    #expect(RelayConfig.resolve(configured: "https://set.example.net", configEnv: ["TALOS_APP_HOME": "/u/agents/second"], processEnv: [:], userHome: "/u", read: read)?.host == "set.example.net")
+  }
 }

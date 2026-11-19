@@ -710,7 +710,7 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(webkit({ 'apps/web/test/help/help.spec.ts': 'y\n' })).toEqual(['\ttest/help/help.spec.ts'])
     expect(webkit({ 'apps/web/src/features/help/HelpAbout.tsx': 'y\n' })).toEqual(['\ttest/help/help.spec.ts'])
     expect(webkit({ 'apps/web/src/ui/Button.tsx': 'y\n' })).toEqual([]) // shared code: the smoke set, on Chromium only
-    expect(webkit({ 'apps/web/src/features/voice/Mic.tsx': 'y\n' })).toEqual([]) // the iphone project leaves voice out
+    expect(webkit({ 'apps/web/src/features/voice/Mic.tsx': 'y\n' })).toEqual(['\ttest/voice-setup/setup.spec.ts']) // the iphone project leaves the voice folder out, not voice-setup
     expect(
       webkit(
         { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/voice/Mic.tsx': 'y\n' },

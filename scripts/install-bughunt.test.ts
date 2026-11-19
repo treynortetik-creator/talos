@@ -233,6 +233,7 @@ describe('installers: the 2026-11-10 bug hunt (P-C1)', () => {
     // install.sh sources its memory defaults from scripts/ (a new agent's search and memory browser)
     mkdirSync(join(clone, 'scripts'))
     copyFileSync(join(REPO, 'scripts', 'install-memory.sh'), join(clone, 'scripts', 'install-memory.sh'))
+    copyFileSync(join(REPO, 'scripts', 'install-js.sh'), join(clone, 'scripts', 'install-js.sh'))
     symlinkSync(KIT, join(clone, 'kit'))
     const r = sh(sb, ['bash', join(clone, 'install.sh'), '--no-app', '--dry-run'], { cwd: clone })
     expect(r.code, r.out).toBe(0)

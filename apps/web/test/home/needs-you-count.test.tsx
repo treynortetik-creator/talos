@@ -1,4 +1,4 @@
-// The "Needs you" badge, the Home tab and the thread's "N needs you" pill all count the same cards: an expired card
+// The "Needs you" badge, the Home tab and the chip in the thread's header all count the same cards: an expired card
 // ("Expired, nothing ran") or one that fails its hash check never asks for the owner.
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
@@ -29,8 +29,17 @@ describe('needs-you count', () => {
     expect(screen.queryByRole('img', { name: /need you/ })).toBeNull()
   })
 
-  it('the thread pill ignores an expired card', () => {
+  it('the thread chip ignores an expired card', () => {
     renderWith(<ThreadScreen />, setup({ cards: [expired()] }), '/t/general', '/t/:thread')
+    expect(screen.queryByTestId('needs-you-chip')).toBeNull()
+  })
+
+  it('the thread chip counts the same cards as the badge, and takes no row above the composer', () => {
+    renderWith(<ThreadScreen />, setup({ cards: [live(), expired(), altered()] }), '/t/general', '/t/:thread')
+    const chip = screen.getByTestId('needs-you-chip')
+    expect(chip.textContent).toBe('1')
+    expect(chip.getAttribute('aria-label')).toBe('1 needs you, show the first')
+    expect(chip.closest('header')).toBeTruthy()
     expect(screen.queryByText(/needs you$/)).toBeNull()
   })
 })

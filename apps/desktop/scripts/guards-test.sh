@@ -24,7 +24,7 @@ export TALOS_SIGN_ID=-   # ad hoc on purpose: build-app.sh refuses a silent ad h
 if bash scripts/build-app.sh --out "$CTL" >/dev/null 2>&1; then ok "control: build-app.sh green"; else bad "control: build-app.sh red without any fault"; fi
 APP="$CTL/Talos.app"
 # 0b2. the built app carries the thread sessions' permission hook and its helper: the kit's own text, read-only, inside the signature
-for f in permission-relay.py _talos_common.py; do
+for f in permission-relay.py _talos_common.py thread-state.py compaction-guard.py; do
   B="$APP/Contents/Resources/talos-hooks/$f"
   if cmp -s "../../kit/hooks/$f" "$B" && [ "$(stat -f %Lp "$B" 2>/dev/null)" = 444 ]; then ok "the app bundles $f, read-only"; else bad "the app's talos-hooks/$f is missing, differs from the kit, or can be written to"; fi
 done
@@ -92,6 +92,11 @@ rm -rf "$MART" "$OUT"
 HK="$(mktemp -d)"; cp ../../kit/hooks/_talos_common.py "$HK/"
 OUT="$(mktemp -d)"
 if TALOS_HOOKS_SRC="$HK" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with permission-relay.py missing"; else ok "build-app.sh fails when the permission hook is missing"; fi
+rm -rf "$HK" "$OUT"
+# and a kit without the thread-state hook's files fails it too (the app would stage a session with none, silently)
+HK="$(mktemp -d)"; cp ../../kit/hooks/_talos_common.py ../../kit/hooks/permission-relay.py ../../kit/hooks/thread-state.py "$HK/"
+OUT="$(mktemp -d)"
+if TALOS_HOOKS_SRC="$HK" bash scripts/build-app.sh --out "$OUT" >/dev/null 2>&1; then bad "build-app.sh passed with compaction-guard.py missing"; else ok "build-app.sh fails when a thread-state hook file is missing"; fi
 rm -rf "$HK" "$OUT"
 
 # 2e. the bundled hook is the checked-out commit's, never the working tree's: an edit left in kit/hooks (a thread session working in the

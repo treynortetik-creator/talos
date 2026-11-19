@@ -22,6 +22,12 @@
 #                        GITHUB_REPOSITORY (or CI_REPO), else `gh repo view`.
 #   ci-runner.sh green   a push run of main only: when its commit reads green (all six), fast-forward refs/heads/green to it;
 #                        never backwards, never forced; a green that is not its ancestor is refused (scripts/ci-runner/green.sh)
+#   ci-runner.sh relays  each relay in the relay list (CI_RELAY_DEPLOYS, else ~/.config/talos-ci/relay-deploys.txt; format in
+#                        scripts/relay-deploys.example.txt) that must run only six-green commits: the commit it runs (newest successful
+#                        GitHub deployment) must have its own six local-ci/* statuses green, or be on the hand-deploy list
+#                        (CI_RELAY_HAND_DEPLOYS); else ::error::, an alert, exit 1. Every error and warning is an alert too. Main-tracking
+#                        relays are only reported. Needs gh; with no GH_TOKEN, the repository owner's login (CI_GH_USER names
+#                        another), never gh's active account (scripts/ci-runner/relays.sh)
 #
 # Input is environment only (the workflow passes the event's fields as env, never spliced into a command line):
 #   GITHUB_EVENT_NAME, GITHUB_REPOSITORY, GITHUB_REF and GITHUB_SHA (push, schedule), PR_NUMBER, PR_HEAD_SHA, PR_HEAD_REPO, PR_DRAFT, INPUT_REF, INPUT_JOBS (dispatch only), GH_TOKEN, CI_STATUS_URL, CI_SHA_FILE, CI_LOGS_OUT
@@ -282,16 +288,32 @@ ci_plan() {
     echo "::warning::plan: CI_TITAN_CHECK=on, so check's parts on Delphi and Cyclops do not run; a take-back runs them on Lemnos" >&2
     parts="" delphi="" cyclops="" shard_tools=""
   fi
-  # the hostile nightly runs everything on Lemnos, where its conditions are made: no part goes to another machine
-  [ "${CI_HOSTILE:-}" != 1 ] || parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" check_titan="" check_wait=""
+  # The hostile nightly runs everything on Lemnos, where its conditions are made: no part goes to another machine. With
+  # CI_TITAN_HOSTILE=shadow (docs/CI-MACHINES.md, "The hostile nightly on Titan"), Titan also runs check and the e2e packages
+  # under the same conditions (ci-local.sh sources hostile.sh there too), report-only: hostile-ci/report-check and
+  # hostile-ci/report-browser-e2e, never in the run's result, which stays Lemnos's. Each goes to Titan only while its own switch
+  # hands Titan that work on a push (check_titan, browser_e2e above: CI_TITAN_CHECK, CI_TITAN_BROWSER), so the gaming pause
+  # (all three off) keeps the hostile parts off Titan too: a part sent to a stopped runner would sit queued and hold the run.
+  local linux_label="" # empty: the workflow's own, talos-ci-linux
+  if [ "${CI_HOSTILE:-}" = 1 ]; then
+    local hc="" hb=""
+    case "${CI_TITAN_HOSTILE:-}" in '' | off) ;;
+      shadow) [ -z "$check_titan" ] || hc=report-ci; [ -z "$browser_e2e" ] || hb=report-ci ;;
+      *) echo "::warning::plan: CI_TITAN_HOSTILE '$CI_TITAN_HOSTILE' is not off or shadow; taken as off (the hostile nightly runs everything on Lemnos)" >&2 ;;
+    esac
+    parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="$hb" e2e_wait="" shard_tools="" check_titan="$hc" check_wait=""
+    # on Titan's second runner (titan-b, label talos-ci-linux-b): a push landing during the hostile run must not queue its
+    # gating Titan jobs behind these on the first runner. They still share Titan's heavy lock (one flock for the VM).
+    [ -z "$hc$hb" ] || linux_label=talos-ci-linux-b
+  fi
   # a schedule on a local day a dispatched nightly of its kind already started does nothing (ci_schedule_skip, scripts/ci-runner/schedule.sh):
   # the other machines' runners cannot see this machine's marker, so nothing is handed to them and their jobs do not run
   if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && [ -z "${CI_DISPATCH_NIGHTLY:-}" ] && . "$HERE/ci-runner/schedule.sh" &&
     marker="$(ci_dispatch_marker "$([ "${CI_HOSTILE:-}" = 1 ] && echo hostile || echo nightly)")" && [ -e "$marker" ]; then
-    parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" check_titan="" check_wait=""
+    parts="" delphi="" cyclops="" hestia="" titan="" titan_prefix="" remote_jobs="" fallback="" browser_e2e="" e2e_wait="" shard_tools="" check_titan="" check_wait="" linux_label=""
   fi
-  printf 'sha=%s\nremote_parts=%s\ndelphi=%s\ncyclops=%s\nhestia=%s\ntitan=%s\ntitan_prefix=%s\nremote_jobs=%s\nfallback=%s\nbrowser_e2e=%s\ne2e_wait=%s\nshard_tools=%s\ncheck_titan=%s\ncheck_wait=%s\n' \
-    "$sha" "$parts" "$delphi" "$cyclops" "$hestia" "$titan" "$titan_prefix" "$remote_jobs" "$fallback" "$browser_e2e" "$e2e_wait" "$shard_tools" "$check_titan" "$check_wait"
+  printf 'sha=%s\nremote_parts=%s\ndelphi=%s\ncyclops=%s\nhestia=%s\ntitan=%s\ntitan_prefix=%s\nremote_jobs=%s\nfallback=%s\nbrowser_e2e=%s\ne2e_wait=%s\nshard_tools=%s\ncheck_titan=%s\ncheck_wait=%s\nlinux_label=%s\n' \
+    "$sha" "$parts" "$delphi" "$cyclops" "$hestia" "$titan" "$titan_prefix" "$remote_jobs" "$fallback" "$browser_e2e" "$e2e_wait" "$shard_tools" "$check_titan" "$check_wait" "$linux_label"
 }
 
 # The answer this workflow attempt already has for a context: the state of its oldest final status (a failure wins), or nothing.
@@ -859,15 +881,18 @@ ROWS
 # not "untested" while CI is still on it. ONE message per gap (~/.cache/talos-ci/main-untested holds the last tested commit it
 # was said for), in the same alerts folder: how long, how many commits, the last tested commit and how long ago its verdict was.
 # It clears, silently, once a newer commit has a verdict. Run by the alert step and every 10 minutes by scripts/ci-alerts.sh
-# watch (no CI needed, a few gh reads).
+# watch (no CI needed, a few gh reads; there as the repository owner's account, ci_gh_session). GitHub unreadable: an alert, exit 1.
 ci_untested() {
-  local repo="${GITHUB_REPOSITORY:-treynortetik-creator/talos-app}" cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
+  local repo="${GITHUB_REPOSITORY:-${CI_REPO:-treynortetik-creator/talos-app}}" cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
   local after="${CI_UNTESTED_AFTER_S:-7200}" now list sha when rows line cls tested="" count=0 at iso age f oldest="" since
+  local err="$cache/.untested-gh.err"
   now=$(date +%s) f="$cache/main-untested"
-  list="$(gh api "repos/$repo/commits?sha=main&per_page=50" --jq '.[] | [.sha, .commit.committer.date] | @tsv' </dev/null 2>/dev/null)" || { echo "ci-runner: untested: main's commits could not be read"; return 0; }
+  mkdir -p "$cache" || return 1
+  # GitHub unreadable is an error and an alert, never a quiet "nothing to say": a check that cannot read main sees no gap
+  list="$(gh api "repos/$repo/commits?sha=main&per_page=50" --jq '.[] | [.sha, .commit.committer.date] | @tsv' </dev/null 2>"$err")" || { ci_gh_problem "$cache" untested-read "ci-runner: untested: main's commits could not be read from $repo, so a gap in main's verdicts would go unseen ($(tail -1 "$err" 2>/dev/null))" "$(ci_gh_read_after)"; return 1; }
   while IFS=$'\t' read -r sha when; do
     [ -n "$sha" ] || continue
-    rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description, .updated_at] | @tsv' </dev/null 2>/dev/null)" || { echo "ci-runner: untested: the statuses of ${sha:0:7} could not be read"; return 0; }
+    rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description, .updated_at] | @tsv' </dev/null 2>"$err")" || { ci_gh_problem "$cache" untested-read "ci-runner: untested: the statuses of ${sha:0:7} could not be read from $repo, so a gap in main's verdicts would go unseen ($(tail -1 "$err" 2>/dev/null))" "$(ci_gh_read_after)"; return 1; }
     line="$(printf '%s\n' "$rows" | cut -f1-3 | ci_classify)"
     cls="${line%%$'\t'*}"
     case "$cls" in green | red) tested="$sha"; break ;; esac
@@ -876,6 +901,7 @@ ci_untested() {
   done <<LIST
 $list
 LIST
+  ci_gh_problem_clear "$cache" untested-read
   [ -n "$tested" ] || { echo "ci-runner: untested: no finished verdict in main's newest 50 commits"; return 0; }
   iso="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^local-ci\// && $4 != "" { print $4 }' | sort | tail -1)"
   at="$(date -u -d "$iso" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null)" || at=""
@@ -897,6 +923,27 @@ LIST
   return 0
 }
 
+# ci_gh_session <key>: for a check that runs on a person's Mac (ci-alerts.sh watch): CI_REPO and GH_TOKEN for this process, as the
+# repository owner's account, never gh's active one (scripts/ci-runner/gh-account.sh). No account: an error and an alert, exit 1.
+ci_gh_session() {
+  local cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}" repo tok
+  mkdir -p "$cache" || return 1
+  repo="$(ci_gh_repo "$ROOT" treynortetik-creator/talos-app)"
+  # a checkout of a fork or of the public export reads a repository without main's statuses: one alert (the watcher's output goes
+  # nowhere), so a quiet check is not mistaken for a good one
+  if [ -z "${GITHUB_REPOSITORY:-}${CI_REPO:-}" ] && [ "$repo" != treynortetik-creator/talos-app ]; then
+    ci_gh_problem "$cache" "$1-repo" "ci-runner: $1 reads $repo (this checkout's origin), not the default repository: a fork or the public export has none of main's statuses, so this check sees nothing. Set CI_REPO, or run the watcher from a checkout of the main repository"
+  else
+    ci_gh_problem_clear "$cache" "$1-repo"
+  fi
+  if ! tok="$(ci_gh_token "$repo" 2>"$cache/.$1-gh.err")"; then
+    ci_gh_problem "$cache" "$1-account" "ci-runner: $1: $(tail -1 "$cache/.$1-gh.err" 2>/dev/null)"
+    return 1
+  fi
+  ci_gh_problem_clear "$cache" "$1-account"
+  export CI_REPO="$repo" GH_TOKEN="$tok"
+}
+
 # Sourced (the tests do this): only the functions above.
 if (return 0 2>/dev/null); then return 0; fi
 
@@ -912,12 +959,20 @@ case "${1:-}" in
   sweep) ci_sweep ;;
   logs) . "$HERE/ci-runner/logs.sh" && ci_logs ;;
   verdict) ci_verdict "${2:-}" ;;
-  alert) . "$HERE/ci-runner/alert.sh" && { ci_alert; [ "${CI_HOSTILE:-}" = 1 ] || { ci_untested; ci_report_alert; }; } ;;
-  untested) . "$HERE/ci-runner/alert.sh" && { ci_untested; ci_report_alert; } ;;
+  # every part runs; any one failing is the exit (its alert is written; the workflow's alert step is continue-on-error)
+  alert) . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/alert.sh" && {
+    a=0
+    ci_alert || a=1
+    if [ "${CI_HOSTILE:-}" != 1 ]; then ci_untested || a=1; ci_report_alert || a=1; fi
+    exit "$a"
+  } ;;
+  # both run even when the first cannot read GitHub; either failing is the exit (an alert is already written)
+  untested) . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/alert.sh" && ci_gh_session untested && { u=0; ci_untested || u=1; ci_report_alert || u=1; exit "$u"; } ;;
   e2e-shadow) . "$HERE/ci-runner/e2e-shadow.sh" && ci_e2e_shadow ;;
   check-shadow) . "$HERE/ci-runner/e2e-shadow.sh" && . "$HERE/ci-runner/check-shadow.sh" && ci_check_shadow ;;
   superseded) . "$HERE/ci-runner/main-queue.sh" && ci_superseded_mark ;;
   dispatch-wait) . "$HERE/ci-runner/main-queue.sh" && ci_dispatch_wait ;;
   green) . "$HERE/ci-runner/green.sh" && ci_green ;;
-  *) sed -n '2,36p' "$0"; exit 64 ;;
+  relays) . "$HERE/ci-runner/green.sh" && . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/relays.sh" && ci_relays ;;
+  *) sed -n '2,41p' "$0"; exit 64 ;;
 esac

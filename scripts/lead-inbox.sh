@@ -24,10 +24,14 @@
 #   - --mark advances the last-read comment only after a successful print, never on exit 2.
 # The last-read comment id is ~/.cache/talos-lead-inbox/last-read (TALOS_LEAD_INBOX_HOME), on the reader's machine.
 #
-# The repository: LEAD_INBOX_REPO, else GITHUB_REPOSITORY, else treynortetik-creator/talos-app. Alerts: TALOS_CI_CACHE/alerts.
+# The repository: LEAD_INBOX_REPO, else GITHUB_REPOSITORY, else CI_REPO, else this checkout's github.com origin, else
+# treynortetik-creator/talos-app. Alerts: TALOS_CI_CACHE/alerts. Every gh call runs as the repository owner's account, never gh's active
+# one (scripts/ci-runner/gh-account.sh): no account is exit 1 and an alert (unread: exit 2, `lead-inbox: cannot read`).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="${LEAD_INBOX_REPO:-${GITHUB_REPOSITORY:-treynortetik-creator/talos-app}}"
+# shellcheck source=ci-runner/gh-account.sh
+. "$HERE/ci-runner/gh-account.sh"
+REPO="${LEAD_INBOX_REPO:-$(ci_gh_repo "$HERE/.." treynortetik-creator/talos-app)}"
 CACHE="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
 READER="${TALOS_LEAD_INBOX_HOME:-$HOME/.cache/talos-lead-inbox}"
 LOCK="$CACHE/lead-inbox.lock"
@@ -102,7 +106,10 @@ lock() { # one poster at a time on this machine (the CI job and the watcher's fl
     # a holder that is gone (ps, not kill -0: the CI job and the watcher may be different users), one that never wrote its pid,
     # or one older than any holder lives (flush stops at 305 s; a reused pid looks alive). Taken over by moving the folder
     # aside (one mv wins), and only while it still holds the pid read above.
-    if { [ -n "$pid" ] && ! ps -p "$pid" >/dev/null 2>&1; } || { [ -z "$pid" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; } ||
+    # "gone" only when ps works now (it sees this very process) and does not see the holder: a ps that could not run at all (no
+    # process slots left under load) said "gone" for a live holder, and two posters posted the same alert twice
+    if { [ -n "$pid" ] && ps -p "$$" >/dev/null 2>&1 && ! ps -p "$pid" >/dev/null 2>&1; } ||
+      { [ -z "$pid" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; } ||
       [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
       [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$pid" ] && mv "$LOCK" "$LOCK.dead.$$" 2>/dev/null &&
         rm -f "$LOCK.dead.$$/pid" && rmdir "$LOCK.dead.$$" 2>/dev/null
@@ -178,6 +185,21 @@ unread() {
       { echo "lead-inbox: could not save the last-read mark in $READER" >&2; exit 1; }
   fi
 }
+
+# the account, before any gh call of a command that has one
+case "${1:-}" in
+  post | flush | note | unread)
+    mkdir -p "$CACHE" 2>/dev/null # the error file's folder
+    if ! tok="$(ci_gh_token "$REPO" 2>"$CACHE/.lead-inbox-gh.err")"; then
+      why="$(tail -1 "$CACHE/.lead-inbox-gh.err" 2>/dev/null)"
+      [ "$1" != unread ] || { echo "lead-inbox: cannot read: $why" >&2; exit 2; }
+      ci_gh_problem "$CACHE" inbox-account "lead-inbox: nothing posted: $why"
+      exit 1
+    fi
+    ci_gh_problem_clear "$CACHE" inbox-account
+    export GH_TOKEN="$tok"
+    ;;
+esac
 
 case "${1:-}" in
   post) [ "$#" -eq 3 ] || die "usage: post <id> <file>"; post "$2" "$3" ;;

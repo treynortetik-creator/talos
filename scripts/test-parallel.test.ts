@@ -4,13 +4,13 @@
 // The ci-requires guard and the file-finding check below read the bridge's test files by folder, so the gate runs this file
 // when one changes (scripts/gate.sh, guards_reading):
 // gate-reads: apps/bridge/*.test.* apps/bridge/*_test.* apps/bridge/*.spec.* apps/bridge/*_spec.*
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { exitWithin, requires, shard } from '../apps/bridge/scripts/test-parallel.ts'
+import { exitWithin, requires, shard, treeEnded } from '../apps/bridge/scripts/test-parallel.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const bridge = join(here, '..', 'apps', 'bridge')
@@ -100,13 +100,20 @@ test('blocks the process', () => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40_000)
 })
 `
+    // Running: the process exists and is not a zombie. A SIGKILLed child reparented to init stays a zombie until init reaps
+    // it, and kill(pid, 0) succeeds on a zombie: on a loaded Mac that read the killed `sleep` as alive (Delphi, 2026-11-19;
+    // the same test as scripts/verify/interrupt.test.ts, 772ca8e2). Looked at once, right after the runner returns, with no
+    // wait: the runner waits for the whole tree itself (test-parallel.ts treeEnded), so a child still running here is a real
+    // "killed with its children" failure, not a slow reaper.
     const alive = (file: string) => {
+      const pid = Number(readFileSync(file, 'utf8'))
       try {
-        process.kill(Number(readFileSync(file, 'utf8')), 0)
-        return true
+        process.kill(pid, 0)
       } catch {
         return false
       }
+      // running only with a state that is not Z: a zombie reaped between the kill(0) and this ps prints nothing, and is gone
+      return /^[^Z]/.test(spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim())
     }
     try {
       const r = run(
@@ -538,5 +545,37 @@ describe('exitWithin', () => {
     const start = Date.now()
     expect(await exitWithin(new Promise<number>(() => {}), 50)).toBeNull()
     expect(Date.now() - start).toBeLessThan(1000)
+  })
+})
+
+// After a kill the runner waits for the whole tree, not only the root (a killed file's own `sleep` was still there, or a zombie,
+// when the runner had already said the file was killed): a process still running after the grace is named; one that is gone,
+// or a zombie (ended, waiting for its parent to read its exit), is not.
+describe('treeEnded', () => {
+  it('names a process that is still running once the grace is over, and only that one', async () => {
+    const live = spawn('sleep', ['30'], { stdio: 'ignore' })
+    try {
+      const start = Date.now()
+      expect(await treeEnded([live.pid as number, 2 ** 22 + 7], 150)).toEqual([live.pid]) // the second id is no process
+      expect(Date.now() - start).toBeGreaterThanOrEqual(140)
+    } finally {
+      live.kill('SIGKILL')
+    }
+  })
+
+  it('a zombie has ended: it is not waited for', async () => {
+    // a parent that never reads its child's exit (the shell becomes a plain sleep), so the killed child stays a zombie
+    const parent = spawn('sh', ['-c', 'sleep 30 & echo $!; exec sleep 30'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      const kid = Number(await new Promise<string>((r) => parent.stdout?.once('data', (b) => r(String(b).trim()))))
+      process.kill(kid, 'SIGKILL')
+      const start = Date.now()
+      expect(await treeEnded([kid], 5000)).toEqual([])
+      expect(Date.now() - start).toBeLessThan(2000) // ended at once, not after the grace
+      // and it really is a zombie, which kill(pid, 0) still calls alive: the race this is for
+      expect(spawnSync('ps', ['-o', 'stat=', '-p', String(kid)], { encoding: 'utf8' }).stdout.trim()).toMatch(/^Z/)
+    } finally {
+      parent.kill('SIGKILL')
+    }
   })
 })

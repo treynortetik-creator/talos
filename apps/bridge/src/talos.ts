@@ -92,7 +92,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   },
   {
     name: 'doctor',
-    args: '[--agent-dir <dir>] [--deep]',
+    args: '[--agent-dir <dir>] [--no-kit] [--deep]',
     summary: say({
       mac: 'Check this Mac setup; --json returns the checks as rows',
       linux: 'Check this computer setup; --json returns the checks as rows',
@@ -212,10 +212,15 @@ export const COMMANDS: readonly CommandInfo[] = [
   ownerTerminal('enroll', 'Approve a new phone or browser', '[--label <name>] [--no-qr] [--confirm] [--json]'),
   ownerTerminal('devices', 'List approved devices or revoke one', '[revoke <id>]'),
   ownerTerminal('rotate', 'Replace the bridge key'),
+  ownerTerminal(
+    'peer',
+    'Link this Talos to another of yours: create, add, list, remove or rotate a peer',
+    'create <name> | add <name> --url <https url> | list | remove <name> | rotate <name>',
+  ),
   {
     name: 'start',
     who: 'internal',
-    args: '[--agent-dir <dir>] [--dry-run] [-- <claude flags>]',
+    args: '[--agent-dir <dir>] [--no-kit] [--dry-run] [-- <claude flags>]',
     summary: 'Start the agent (launches Claude Code)',
   },
   // `update`, `rollback` and `restore` act on the agent kit (the Talos zone of the agent folder) and run kit/bin/talos-update,
@@ -522,6 +527,7 @@ async function doctorJson(
       'agent-dir': { type: 'string' },
       'claude-dir': { type: 'string' },
       deep: { type: 'boolean' },
+      'no-kit': { type: 'boolean' },
     },
     strict: true,
   })
@@ -533,6 +539,7 @@ async function doctorJson(
       ...(values['agent-dir'] ? { agentDir: values['agent-dir'] } : {}),
       ...(values['claude-dir'] ? { claudeDir: values['claude-dir'] } : {}),
       ...(values.deep ? { deep: true } : {}),
+      ...(values['no-kit'] ? { noKit: true } : {}),
     },
     io,
     deps,

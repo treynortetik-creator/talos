@@ -179,7 +179,7 @@ struct AutoUpdaterTests {
     /// for real; otherwise the swap runs to its end inside the spawn. `healthy`: what this app says of its own health.
     func updater(
       version: String = "1.4.0", wallOffset: Double = 0, look: (@Sendable () -> [String])? = nil, healthy: Bool = false,
-      realSwap: Bool = false, appPath: String? = nil
+      realSwap: Bool = false, appPath: String? = nil, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil
     ) -> AutoUpdater {
       var o = AutoUpdater.Options(
         talosHome: home, appPath: appPath ?? dest + "/Talos.app", appVersion: version, keys: ReleaseTrust.testKeys)
@@ -246,6 +246,7 @@ struct AutoUpdaterTests {
         }
         h.processStart = { ProcessInspect.basic($0)?.startTime }
       }
+      tweak?(&h)
       return AutoUpdater(options: o, hooks: h)
     }
 
@@ -415,6 +416,49 @@ struct AutoUpdaterTests {
     r.updater().tick()
     #expect(r.downloads.get() == 0)
     #expect(r.posts.get() == ["Talos couldn't update to 1.5.0: the Talos code folder has changes of its own. It's still on 1.4.0."])
+  }
+
+  // MARK: the checkout must be a repository of its own, and a recorded clone must have been accepted
+
+  @Test func aFolderWithNoGitOfItsOwnInsideAnotherRepositoryIsNeverTakenForTheCheckout() throws {
+    let r = try Rig()
+    try r.publish()
+    // the checkout loses its .git while the folder around it is a repository: `git -C` would climb to that one and call it the checkout
+    try FileManager.default.removeItem(atPath: r.checkout + "/.git")
+    r.git(["init", "-q"], in: r.root)
+    r.updater().tick()
+    #expect(r.downloads.get() == 0, "nothing was downloaded for it")
+    #expect(r.posts.get().first?.contains("the Talos code folder could not be moved") == true, "\(r.posts.get())")
+  }
+
+  @Test func anUnacceptedRecordedCloneRaisesTheCardOnceAndAcceptingItLetsTheUpdateProceed() throws {
+    let r = try Rig()
+    try r.publish()
+    let accepted = Box<Bool>(false)
+    let offers = Box<[String]>([])
+    let co = r.checkout
+    let hook: @Sendable (inout AutoUpdater.Hooks) -> Void = { h in
+      // what the app's wiring answers: the clone is the recorded one; it is used only once accepted
+      h.checkout = { accepted.get() ? co : nil }
+      h.unacceptedClone = { accepted.get() ? nil : co }
+      h.offerClone = { clone in offers.edit { $0.append(clone) } }
+    }
+    let u = r.updater(hooks: hook)
+    u.tick()
+    #expect(offers.get() == [co] && r.downloads.get() == 0, "the card was raised and nothing ran: \(offers.get())")
+    r.clock.edit { $0 += AutoUpdate.checkEvery }
+    u.tick()
+    r.clock.edit { $0 += AutoUpdate.checkEvery }
+    u.tick()
+    #expect(offers.get() == [co], "asked once, not on every check")
+    // a second updater (the next app launch) remembers it too
+    r.updater(hooks: hook).tick()
+    #expect(offers.get() == [co], "asked once across launches")
+    // the owner pressed Use this clone: the Keychain now holds it, and the next check goes ahead
+    accepted.edit { $0 = true }
+    r.clock.edit { $0 += AutoUpdate.checkEvery }
+    u.tick()
+    #expect(r.downloads.get() == 1, "the update proceeds once the clone is accepted")
   }
 
   // MARK: refused after the download

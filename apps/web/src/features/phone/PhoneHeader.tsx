@@ -21,6 +21,7 @@ import { useThreadContext } from '../session/threadContext.ts'
 import { SessionPill } from '../thread-sessions/SessionStatus.tsx'
 import { rowShowsSession, useSessionWords } from '../thread-sessions/useSessionWords.ts'
 import { useNeedsYouCount } from '../threads/Nav.tsx'
+import { NeedsYouChip } from '../threads/NeedsYouChip.tsx'
 import { statusMark } from '../threads/StatusPill.tsx'
 import { usePhonePanel } from './phoneStore.ts'
 
@@ -184,6 +185,7 @@ export function PhoneHeader({
             </span>
           </span>
         )}
+        <NeedsYouChip threadId={thread.id} onChrome />
       </div>
       {/* the Library: the pages and files sent in Talos, one button (owner, 2026-11-15) */}
       <BugHeaderButton onChrome />

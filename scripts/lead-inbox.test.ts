@@ -22,6 +22,7 @@ function setup() {
   const repo = join(T, 'repo')
   mkdirSync(join(repo, 'scripts'), { recursive: true })
   cpSync(join(here, 'lead-inbox.sh'), join(repo, 'scripts/lead-inbox.sh'))
+  cpSync(join(here, 'ci-runner/gh-account.sh'), join(repo, 'scripts/ci-runner/gh-account.sh'))
   const git = (author: string, committer: string, ...a: string[]) =>
     spawnSync('git', a, {
       cwd: repo,
@@ -54,6 +55,7 @@ function setup() {
     TALOS_CI_CACHE: cache,
     TALOS_LEAD_INBOX_HOME: reader,
     GITHUB_REPOSITORY: 'owner/talos-app',
+    GH_TOKEN: 't', // the account is chosen by ci-gh-account.test.ts's cases; here, a token as the workflow gives it
   })
   const run = (...a: string[]) =>
     spawnSync('bash', [join(repo, 'scripts/lead-inbox.sh'), ...a], { cwd: T, env: env(), encoding: 'utf8' })
@@ -199,6 +201,36 @@ describe.skipIf(!hasJq)('lead-inbox.sh post / flush / note', () => {
     expect(s.ids().sort()).toEqual(['000-0000000-red', ...[0, 1, 2, 3, 4].map((i) => `10${i}-aaaaaaa-red`)])
     expect(existsSync(join(s.cache, 'lead-inbox.lock'))).toBe(false)
   })
+
+  it('a live holder is never taken over because ps could not run (no process slots under load): no second poster', async () => {
+    const s = setup()
+    const f = s.alert('100-aaaaaaa-red', 'main is RED\n')
+    // the lock, held by a live process
+    const holder = spawn('sleep', ['30'], { stdio: 'ignore' })
+    mkdirSync(join(s.cache, 'lead-inbox.lock'))
+    writeFileSync(join(s.cache, 'lead-inbox.lock', 'pid'), `${holder.pid}\n`)
+    // a ps that cannot run at all, as when a loaded machine has no process slots left
+    const bin = join(s.T, 'broken-ps')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'ps'), '#!/bin/sh\necho "ps: fork: Resource temporarily unavailable" >&2\nexit 2\n', {
+      mode: 0o755,
+    })
+    const env = { ...s.env(), PATH: `${bin}:${s.env().PATH}` }
+    const done = new Promise<number | null>((ok) =>
+      spawn('bash', [join(s.T, 'repo/scripts/lead-inbox.sh'), 'post', '100-aaaaaaa-red', f], {
+        env,
+        stdio: 'ignore',
+      }).on('exit', ok),
+    )
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(readFileSync(join(s.cache, 'lead-inbox.lock', 'pid'), 'utf8').trim()).toBe(String(holder.pid)) // not taken over
+    expect(s.ids()).not.toContain('100-aaaaaaa-red') // nothing posted beside the holder
+    // the holder ends and lets go: the waiter posts, once
+    holder.kill()
+    rmSync(join(s.cache, 'lead-inbox.lock'), { recursive: true })
+    expect(await done).toBe(0)
+    expect(s.ids().filter((i) => i === '100-aaaaaaa-red')).toHaveLength(1)
+  }, 30_000)
 
   it('refuses to post (exit 3) unless the repository is PRIVATE: no issue, no comment', () => {
     const s = setup()

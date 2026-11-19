@@ -1,0 +1,3 @@
+# An example of the hand-deploy list (CI_RELAY_HAND_DEPLOYS, or ~/.config/talos-ci/relay-hand-deploys.txt; absent means empty). The real one is
+# NOT in this repository. One line per emergency deploy by hand: <full 40-hex sha><TAB><environment><TAB><YYYY-MM-DD><TAB><reason>.
+0123456789abcdef0123456789abcdef01234567	beta-relay-1 / production	2026-01-31	security fix, deployed before CI finished

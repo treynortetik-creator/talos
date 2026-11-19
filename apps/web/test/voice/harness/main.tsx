@@ -4,11 +4,19 @@
 
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { MemoryRouter } from 'react-router'
 import '../../../src/theme/tokens.css'
 import './harness.css'
+import { BugReporter } from '../../../src/features/bugreport/BugReporter.tsx'
 import { CallErrorLine } from '../../../src/features/voice/CallErrorLine.tsx'
 import { CallController } from '../../../src/features/voice/callController.ts'
-import { CallBar, LiveCallButton, setCallController, useIsOnCall } from '../../../src/features/voice/index.tsx'
+import {
+  CallBar,
+  CallScreen,
+  LiveCallButton,
+  setCallController,
+  useIsOnCall,
+} from '../../../src/features/voice/index.tsx'
 import { browserDeps } from '../../../src/features/voice/media.ts'
 import type { DataChannelLike, PeerLike } from '../../../src/features/voice/types.ts'
 import { ClientProvider } from '../../../src/lib/client.ts'
@@ -99,6 +107,9 @@ window.__voice = {
     }),
 }
 
+// `?screen=1` shows the full-screen call view instead of the bar.
+const screen = new URLSearchParams(location.search).get('screen') === '1'
+
 function Composer() {
   const [text, setText] = useState('')
   const onCall = useIsOnCall()
@@ -106,7 +117,13 @@ function Composer() {
     <main style={{ padding: 16, background: 'var(--bg)', color: 'var(--text)', minHeight: '100dvh' }}>
       <h1 style={{ margin: 0 }}>General</h1>
       {onCall ? (
-        <CallBar threadId="general" onEnd={() => {}} />
+        screen ? (
+          <CallScreen threadId="general" onEnd={() => {}} />
+        ) : (
+          <div style={{ margin: '0 -16px -16px' }}>
+            <CallBar threadId="general" onEnd={() => {}} />
+          </div>
+        )
       ) : (
         <>
           <CallErrorLine threadId="general" />
@@ -124,6 +141,9 @@ const root = document.getElementById('root')
 if (root)
   createRoot(root).render(
     <ClientProvider client={client}>
-      <Composer />
+      <MemoryRouter>
+        <Composer />
+        <BugReporter />
+      </MemoryRouter>
     </ClientProvider>,
   )

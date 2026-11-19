@@ -56,6 +56,7 @@ import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
 import { withPaneRun } from './pane-run.ts'
+import { notePeerTaint, PeerService } from './peer/service.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
 import { RelayClient } from './relay-client.ts'
@@ -180,7 +181,7 @@ export class Bridge {
   private relayRestartTold = false
   private healthyStartNoted = false
   /** The two test seams and hooks the bridge reads after its constructor: the first healthy start, and a slow stop. */
-  private readonly after: Pick<BridgeOptions, 'onHealthyStart' | 'stopDelay'>
+  private readonly after: Pick<BridgeOptions, 'onHealthyStart' | 'stopDelay' | 'peers'>
   private readonly results = new PendingResults()
   private historyKeptAsideTold = false
   private readonly clock: Clock
@@ -190,13 +191,13 @@ export class Bridge {
   readonly hub: HubServer | undefined
   /** Option C, worker mode only: the connection to main's hub. */
   readonly hubClient: HubClient | undefined
-
-  /** The card services only a live main-session bridge runs: settings proposals, dialogs, screen consent, action-rule asks. */
+  /** The services only a live main-session bridge runs: settings proposals, dialogs, screen consent, action-rule asks, linked agents. */
   private startMainCards(): void {
     this.ctx.configProposals = new ConfigProposals(this.ctx)
     this.ctx.dialogs = new DialogCards(this.ctx)
     this.ctx.screenConsent = new ScreenConsent(this.ctx)
     this.ctx.actionRuleAsks = new ActionRuleAsks(this.ctx)
+    this.ctx.peers = new PeerService(this.ctx, this.after.peers)
   }
 
   private constructor(opts: BridgeOptions, keyRef: KeyMaterial | undefined) {
@@ -338,8 +339,7 @@ export class Bridge {
     }
     this.hubClient = hubClient
     if (live) {
-      // every notification for the main session passes the routing table first; a dedicated thread's owner message
-      // may go to its own session instead (docs/OPTION-C.md "Routing")
+      // every main-session notification passes the routing table first; a dedicated thread's owner message may go to its session
       const router = new ThreadRouter(this.ctx, (n) => this.deliver(n), {
         store: workerStoreOf(this.ctx),
         onCardUndelivered: (id, told) => this.inbound?.cardNotDelivered(id, told),
@@ -548,12 +548,11 @@ export class Bridge {
     this.results.written(requestId)
   }
 
-  /**
-   * Every hand-over to the agent's channel: refused once the bridge has started to stop, so a message that was held when stop
-   * began is neither delivered nor, with nothing delivered, marked seen or acked (stopping.ts). The relay keeps it.
-   */
+  /** Every hand-over to the agent's channel; refused once stop has begun, so a held message is neither delivered nor acked (stopping.ts). */
   private deliver(n: Notification): Promise<void> {
     if (this.ctx.closing) return Promise.reject(new BridgeStopping())
+    notePeerTaint(this.ctx, n) // a linked agent's message taints main until the owner speaks (peer/taint.ts)
+    this.ctx.seen.hold(n)
     return this.emitFn(n)
   }
 
@@ -614,6 +613,7 @@ export class Bridge {
     this.silence?.start()
     this.ctx.problems?.start()
     this.tripwire?.start()
+    this.ctx.peers?.start()
     // Option C: the hub socket for thread sessions, and the deadlines of messages routed before a restart
     this.hub?.start().catch((e) => this.log.warn('hub socket not started', { error: (e as Error).message }))
     this.router?.resume()
@@ -806,6 +806,7 @@ export class Bridge {
         this.log.warn('media retention tick failed', { error: (e as Error).message })
       }
       this.ctx.permission.reconcile()
+      if (this.statusWriter) await this.ctx.seen.resendToMain(this.ctx, (n) => this.deliver(n))
       this.tellRelayNeedsRestart()
       // A row the relay never acked stays queued; on a link that stayed up nothing else would send it again.
       if (this.client?.connected) (this.ctx.transport as LiveTransport).flushOutbox({ idleOnly: true })
@@ -951,6 +952,7 @@ export class Bridge {
     this.pollTimer = this.debounce = null
     this.ctx.schedules?.stop(final)
     this.ctx.dialogs?.stop()
+    this.ctx.peers?.stop()
     void this.ctx.apps?.stop().catch(() => {})
     this.stopMemory()
     for (const w of this.watchers) w.close()
@@ -961,8 +963,7 @@ export class Bridge {
   async stop(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    // Before anything is awaited: from here on nothing is handed to the agent, no frame is taken up or acked, and the undo
-    // holds that wait for a point end without a row, so a message that was held stays with the relay for the next bridge.
+    // Before anything is awaited: nothing more goes to the agent, no frame is taken up or acked, and undo holds end without a row.
     this.ctx.closing = true
     this.ctx.undo?.abandon()
     this.statusWriter?.stop()
@@ -979,9 +980,8 @@ export class Bridge {
     this.hubClient?.close()
     await this.hub?.close().catch(() => {})
     ;(this.ctx.search as Partial<SearchServiceHandle> | undefined)?.stop?.()
-    // A hand-over that was already made when stop began finishes its books (seen, consumed) before the store closes, or the
-    // relay would replay a message the agent has. Work that was waiting is refused now, so this ends at once; a handler
-    // stuck on something else is not waited for past the cap (the process is exiting).
+    // A hand-over already made when stop began finishes its books (seen, consumed) before the store closes, or the relay would
+    // replay a message the agent has. Waiting work is refused now; a handler stuck on something else is not waited for past the cap.
     await this.inboundSettled()
     await this.results.settled(RESULT_WRITE_CAP_MS)
     await this.after.stopDelay?.()

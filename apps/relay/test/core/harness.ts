@@ -10,10 +10,20 @@ import { runtimeOf } from '../../src/core/runtime.ts'
 import { loadEnv } from '../../src/env.ts'
 import { type RunningRelay, startRelay } from '../../src/index.ts'
 import type { Logger } from '../../src/services.ts'
+import { capClockJumps } from '../helpers/clock-cap.ts'
 import { TEST_DATA_KEY } from '../helpers/fake-services.ts'
 import { installTestAuth, mintTestStepup, pinTestDevice, testAppHeaders } from '../helpers/test-auth.ts'
 
 export const ORIGIN = 'https://relay.example.com'
+
+/**
+ * How long a test relay keeps an idle keep-alive socket open (production: Node's default, 5 s). A test drives the relay and its
+ * client in one process, and a long fake-clock advance replays the relay's timers synchronously, sometimes for seconds (up to
+ * 12.8 s, 2026-11-19): neither side's real keep-alive timer can run meanwhile, so when the loop frees, fetch sends down a pooled
+ * socket at the moment the server's 5 s timeout closes it, and fails with ECONNRESET (red main at 50b976cb). A test server never
+ * closes an idle socket that way; production's own close is tested at 5 s in keepalive-production.test.ts.
+ */
+export const TEST_KEEP_ALIVE_MS = 10 * 60_000
 
 export type TestRelay = RelayHandle & {
   relay: RunningRelay
@@ -37,6 +47,8 @@ export async function startTestRelay(
     ntfyFetch?: typeof fetch
     /** WP-I5: where the APNs sender connects (a local HTTP/2 fake). Needs the APNS_* env to be set. */
     apnsAuthority?: (env: 'sandbox' | 'production') => string
+    /** Keep production's keep-alive (Node's default) instead of TEST_KEEP_ALIVE_MS: for the test of production's own close. */
+    productionKeepAlive?: boolean
   } = {},
 ): Promise<TestRelay> {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'talos-relay-'))
@@ -52,6 +64,7 @@ export async function startTestRelay(
     ...opts.env,
   })
   const transport = new NoopTransport()
+  if (opts.clock) capClockJumps(opts.clock) // helpers/clock-cap.ts
   const relay = await startRelay({
     env,
     host: '127.0.0.1',
@@ -63,6 +76,7 @@ export async function startTestRelay(
     ...(opts.apnsAuthority ? { apnsAuthority: opts.apnsAuthority } : {}),
     ...(opts.webDir ? { webDir: opts.webDir } : {}),
   })
+  if (!opts.productionKeepAlive) relay.http.keepAliveTimeout = TEST_KEEP_ALIVE_MS
   let stopped = false
   const stopKeepData = async () => {
     if (stopped) return

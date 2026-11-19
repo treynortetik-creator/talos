@@ -56,18 +56,26 @@ const freePort = () =>
     })
     s.on('error', reject)
   })
+/**
+ * The monitor in HTTP mode on a free port. A port found free is closed again before the monitor binds it, and on a busy machine
+ * another process can take it in between (the monitor then exits): it is tried again on a new port, three times at most. The
+ * monitor cannot be asked for port 0 instead: it prints the port it was given ("localhost:0"), not the one it got.
+ */
 async function monitorHttp() {
-  const port = await freePort()
-  const child: ChildProcess = spawn(process.execPath, [MONITOR], {
-    env: { PATH: process.env.PATH ?? '', PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  cleanups.push(() => void child.kill('SIGKILL'))
-  await new Promise<void>((resolve, reject) => {
-    child.stdout?.on('data', (d) => /listening on/.test(String(d)) && resolve())
-    child.on('exit', () => reject(new Error('monitor exited')))
-  })
-  return { port, url: `http://127.0.0.1:${port}/mcp` }
+  for (let attempt = 1; ; attempt++) {
+    const port = await freePort()
+    const child: ChildProcess = spawn(process.execPath, [MONITOR], {
+      env: { PATH: process.env.PATH ?? '', PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    cleanups.push(() => void child.kill('SIGKILL'))
+    const up = await new Promise<boolean>((resolve) => {
+      child.stdout?.on('data', (d) => /listening on/.test(String(d)) && resolve(true))
+      child.on('exit', () => resolve(false))
+    })
+    if (up) return { port, url: `http://127.0.0.1:${port}/mcp` }
+    if (attempt === 3) throw new Error(`the system monitor exited before listening, on 3 free ports (last ${port})`)
+  }
 }
 
 const uiOf = (t: { _meta?: unknown }) =>

@@ -5,6 +5,8 @@
 #     --universal          one binary for Apple Silicon and Intel (arm64 + x86_64)
 #     --no-checkout-stamp  leave out TalosCheckout (the path of this clone): a prebuilt app for another Mac, where install.sh
 #                          records that Mac's own clone instead (release-app.sh)
+#     --bundle-tools       put the pinned bun and tmux (and their licences) inside the app: Contents/Helpers, Contents/Resources/licenses
+#                          (bundle-tools.sh; release-app.sh turns it on). A debug build leaves them out: it runs on a dev Mac.
 #     --hardened           sign with the hardened runtime and a secure timestamp (needs a real identity; release-app.sh)
 #     --release builds carry no path of this Mac (no /Users/<name>, no checkout path); release-app.sh checks (path-leak-check.sh).
 # Signs with $TALOS_SIGN_ID if set, else the "Talos Local Signing" identity if present (scripts/make-signing-identity.sh).
@@ -14,13 +16,13 @@
 # Ends with `codesign --verify --strict` and `Talos --selftest`; either failing makes this script fail.
 # Env: TALOS_COMPANION_SRC, TALOS_MENUBAR_SRC, TALOS_HOOKS_SRC (other folders for the bundled art and hooks; guards-test.sh only).
 # The hooks are otherwise taken from the checked-out commit, never the working tree, and a working tree that differs fails the build.
-# Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both).
+# Env: TALOS_SWIFTPM_CACHE, TALOS_SWIFT_SCRATCH (CI uses both). TALOS_SOURCE_COMMIT, TALOS_SOURCE_SHA256: stamped as TalosSourceCommit and TalosSourceSHA256 (release-app.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 cd "$HERE"
 
-CONFIG=debug OUT="$HERE/.build/app" UNIVERSAL=0 STAMP_CHECKOUT=1 HARDENED=0
+CONFIG=debug OUT="$HERE/.build/app" UNIVERSAL=0 STAMP_CHECKOUT=1 HARDENED=0 BUNDLE_TOOLS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) CONFIG=release; shift ;;
@@ -28,6 +30,7 @@ while [ $# -gt 0 ]; do
     --universal) UNIVERSAL=1; shift ;;
     --no-checkout-stamp) STAMP_CHECKOUT=0; shift ;;
     --hardened) HARDENED=1; shift ;;
+    --bundle-tools) BUNDLE_TOOLS=1; shift ;;
     *) echo "build-app: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -93,6 +96,18 @@ sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" Resources/Info.pli
 # this is not a git checkout.
 GIT_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 [ -z "$GIT_SHA" ] || plutil -replace TalosGitSha -string "$GIT_SHA" "$APP/Contents/Info.plist"
+# The public commit this release was made from (release-app.sh passes it): the app clones the public repository at its tag and
+# requires that commit, so the code it fetches is pinned by this signed app. A build without it refuses to fetch code by itself.
+if [ -n "${TALOS_SOURCE_COMMIT:-}" ]; then
+  [[ "$TALOS_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "build-app: TALOS_SOURCE_COMMIT is not a 40-digit commit id" >&2; exit 64; }
+  plutil -replace TalosSourceCommit -string "$TALOS_SOURCE_COMMIT" "$APP/Contents/Info.plist"
+fi
+# sha256 of the source tarball the release publishes (talos-source-<tag>.tar.gz, made by release-app.sh): the app downloads that asset
+# and checks this hash before it unpacks anything
+if [ -n "${TALOS_SOURCE_SHA256:-}" ]; then
+  [[ "$TALOS_SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "build-app: TALOS_SOURCE_SHA256 is not a SHA-256 value" >&2; exit 64; }
+  plutil -replace TalosSourceSHA256 -string "$TALOS_SOURCE_SHA256" "$APP/Contents/Info.plist"
+fi
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # Icon: committed .icns if present, else made from the brand PNG with sips + iconutil.
@@ -165,8 +180,23 @@ for src in "$MENUBAR_SRC"/*.png; do
   fi
 done
 
-# The thread sessions' permission hook and the helper it imports. Copied before codesign so they are sealed into the bundle, and
-# read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift), because a thread working in
+# The tools a clean Mac lacks: bun and tmux, pinned and checksummed (bundle-tools.sh), beside their licences. Copied before codesign.
+# The nested-code pass below signs them with the app's identity; bun alone gets its engine's entitlements.
+if [ "$BUNDLE_TOOLS" = 1 ]; then
+  TOOLS_TMP="$(mktemp -d "${TMPDIR:-/tmp}/talos-build-tools-XXXXXX")"
+  TOOLS_ARCH=arm64; [ "$UNIVERSAL" = 1 ] && TOOLS_ARCH=universal
+  bash scripts/bundle-tools.sh --out "$TOOLS_TMP/out" --arch "$TOOLS_ARCH" || { rm -rf "$TOOLS_TMP"; echo "build-app: the bundled tools could not be made" >&2; exit 1; }
+  mkdir -p "$APP/Contents/Helpers" "$APP/Contents/Resources/licenses"
+  cp "$TOOLS_TMP/out/bin/bun" "$TOOLS_TMP/out/bin/tmux" "$APP/Contents/Helpers/"
+  cp "$TOOLS_TMP/out/licenses/"* "$APP/Contents/Resources/licenses/"
+  # Claude Code's installer, exactly as pinned, read-only and sealed by the signature (ClaudeInstaller runs this copy)
+  cp "$TOOLS_TMP/out/claude-install.sh" "$APP/Contents/Resources/claude-install.sh"; chmod 0444 "$APP/Contents/Resources/claude-install.sh"
+  rm -rf "$TOOLS_TMP"
+fi
+
+# The thread sessions' permission hook and the helper it imports, plus the thread-state hook (thread-state.py) and the compaction guard
+# it shares its carry with (the app stages those two beside the permission hook the same way: WorkerHookState.swift, both or neither).
+# Copied before codesign so they are sealed into the bundle, and read-only (0444): the app takes the hook from here and from nowhere else (WorkerHookSource.swift), because a thread working in
 # the checkout could edit the kit's copy, which is the script that answers its own approval prompts.
 # For the same reason the files are NOT read from the working tree: they are the ones the checked-out commit holds
 # (`git cat-file blob HEAD:kit/hooks/...`), and the build is refused when the working tree's copy is not that same text. An edit
@@ -179,7 +209,7 @@ rm -rf "$HOOKS_OUT"
 mkdir -p "$HOOKS_OUT"
 # whatever the umask: the app refuses a hook folder another account can write (WorkerHookSource.swift)
 chmod 0755 "$HOOKS_OUT"
-for f in permission-relay.py _talos_common.py; do
+for f in permission-relay.py _talos_common.py thread-state.py compaction-guard.py; do
   if [ -n "${TALOS_HOOKS_SRC:-}" ]; then
     if [ ! -s "$TALOS_HOOKS_SRC/$f" ] || [ -L "$TALOS_HOOKS_SRC/$f" ]; then
       echo "build-app: $TALOS_HOOKS_SRC/$f is missing, empty or a link; thread sessions would have no permission hook" >&2
@@ -223,7 +253,10 @@ SIGN=(codesign --force --sign "$ID")
 while IFS= read -r nested; do
   [ -n "$nested" ] || continue
   echo "build-app: signing nested code $nested"
-  "${SIGN[@]}" "$nested"
+  case "$nested" in
+    */Contents/Helpers/bun) "${SIGN[@]}" --entitlements Resources/entitlements-bun.plist "$nested" ;;
+    *) "${SIGN[@]}" "$nested" ;;
+  esac
 done < <(find "$APP/Contents" -type f ! -path "$APP/Contents/MacOS/Talos" -print0 \
   | xargs -0 file -h 2>/dev/null | sed -n 's/^\(.*\): *Mach-O.*/\1/p' | awk -F/ '{print NF "\t" $0}' | sort -rn | cut -f2-)
 # The hardened build takes the release entitlements: the resources a local build has without asking (Resources/entitlements-release.plist).
@@ -239,7 +272,7 @@ if [ "$(stat -f %Lp "$HOOKS_OUT")" != 755 ]; then
   echo "build-app: $HOOKS_OUT is not a folder only its owner can write (0755) after signing" >&2
   exit 1
 fi
-for f in permission-relay.py _talos_common.py; do
+for f in permission-relay.py _talos_common.py thread-state.py compaction-guard.py; do
   if [ ! -s "$HOOKS_OUT/$f" ] || [ "$(stat -f %Lp "$HOOKS_OUT/$f")" != 444 ]; then
     echo "build-app: $HOOKS_OUT/$f is missing or not read-only after signing" >&2
     exit 1

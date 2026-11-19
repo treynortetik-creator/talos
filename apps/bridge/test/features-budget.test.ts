@@ -50,6 +50,7 @@ test(`with every optional feature on, an older page still gets the keep-list wit
     filesSent: on,
     memoryRoots: on,
     problems: {},
+    peers: {},
     paneRun: on,
     config: { subthreadsSupported: () => true },
   }
@@ -86,6 +87,7 @@ test(`with every optional feature on, the first hello carries every feature (at 
     filesSent: on,
     memoryRoots: on,
     problems: {},
+    peers: {},
     paneRun: on,
     config: { subthreadsSupported: () => true },
   }

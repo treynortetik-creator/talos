@@ -51,6 +51,7 @@ esac
         PATH: `${bin}:${process.env.PATH}`,
         TALOS_LEAD_CHECK_HOME: join(d, 'home'),
         LEAD_CHECK_INBOX: `sh ${join(d, 'inbox.sh')}`,
+        GH_TOKEN: 't', // the account itself: ci-gh-account.test.ts
       },
     })
     return {

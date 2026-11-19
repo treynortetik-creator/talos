@@ -48,4 +48,5 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   dev: { thread_fence: true, note_lookup: true },
   settings_lock: false,
   always_allow: [],
+  peers: [],
 }

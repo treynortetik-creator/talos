@@ -225,6 +225,10 @@ export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-
     log: join(home, 'bridge.log'),
     /** The live bridge's content-free health file (DESKTOP-SPEC 6.2): read by the Mac menu bar and `talos-app status`. */
     status: join(home, 'status.json'),
+    /** The Mac's stall watchdog asks here for a second delivery of Main's oldest unseen owner message (main-resend.ts). */
+    mainResend: join(home, 'main-resend.json'),
+    /** What the bridge answers it with, for the Mac to read: {v, unseen_at, outcome: 'sent' | 'failed', delivered, why?}. */
+    mainResendResult: join(home, 'main-resend-result.json'),
     /** The relay's last `ready.features`, so a restart's first hello is the one it takes (relay-features-memo.ts). */
     relayFeatures: join(home, 'relay-features.json'),
     /** The versions the live bridge started cleanly from, newest first; `talos-app rollback` reads it. */

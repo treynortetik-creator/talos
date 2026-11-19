@@ -18,12 +18,15 @@ public enum MacSettingsText {
   public static let autoUpdateHelp =
     "Installs each new signed release by itself, only while no session is working, and says so in your default thread. Off: Talos never looks for one."
 
+  public static let unstickHelp =
+    "When the agent's model request looks stuck on your message, Talos presses Esc once in its window and sends the message again, then says so in your thread. Only once per message, and never while you are typing there or a question is on screen. Off: Talos only tells you."
+
   public enum Setting: String, CaseIterable, Sendable {
     case agentFolder, launchCommand, host, notifyThread
     case autoRestart, autoConfirmRestart, startSessionOnLaunch, openTerminalOnDialog
     case relayAddress, talosAppCommand
     case composeHotkey
-    case startAtLogin, dockIcon, keepAwake, companion, openWindowAtLaunch, autoUpdate
+    case startAtLogin, dockIcon, keepAwake, companion, openWindowAtLaunch, autoUpdate, unstickMain
   }
 
   /// When a change takes effect. Never empty: a setting that applies at once says "Applies now."
@@ -45,6 +48,7 @@ public enum MacSettingsText {
     case .keepAwake: return "Applies now."
     case .companion: return "Applies now."
     case .openWindowAtLaunch: return "Applies the next time Talos starts."
+    case .unstickMain: return "Applies now."
     case .autoUpdate: return "Applies now. Off stops a check or a waiting update; an update already being put in place finishes."
     }
   }

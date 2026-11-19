@@ -7,7 +7,7 @@ import { paths } from '../src/config.ts'
 import { ConfigFile, parseConfig } from '../src/config-file.ts'
 import { type McpEntry, mcpEntry, mergeMcpConfig } from '../src/mcp-config.ts'
 import { postSystemRow } from '../src/system-post.ts'
-import { type Harness, startHarness, tempHome } from './helpers.ts'
+import { type Harness, startHarness, tempHome, writeKit } from './helpers.ts'
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -191,7 +191,7 @@ describe('talos-app post, digest, status, doctor', () => {
 
   test('doctor passes on a healthy setup and fails on a world-readable key or a missing .mcp.json entry', async () => {
     h = await startHarness({ startBridge: false })
-    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    const agent = writeKit(mkdtempSync(join(tmpdir(), 'talos-agent-')))
     const inst = cliIO()
     await runCli(['install-mcp', '--agent-dir', agent], inst.io, env(h))
     const ok = cliIO()

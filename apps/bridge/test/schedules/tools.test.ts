@@ -68,6 +68,7 @@ describe('registration', () => {
       ...ATTACHMENT_BRIDGE_TOOLS,
       ...PAGE_BRIDGE_TOOLS,
       'handoff',
+      'peer_send',
       'thread_session',
       'restart_main',
       ...SCREEN_BRIDGE_TOOLS,
@@ -80,7 +81,7 @@ describe('registration', () => {
         CONFIG_BRIDGE_TOOLS.length +
         ATTACHMENT_BRIDGE_TOOLS.length +
         PAGE_BRIDGE_TOOLS.length +
-        3 + // handoff, thread_session, restart_main
+        4 + // handoff, peer_send, thread_session, restart_main
         SCREEN_BRIDGE_TOOLS.length,
     )
   })

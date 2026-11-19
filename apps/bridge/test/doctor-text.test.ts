@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
-import { type Harness, startHarness } from './helpers.ts'
+import { type Harness, startHarness, writeKit } from './helpers.ts'
 
 let h: Harness | undefined
+const REPO = resolve(import.meta.dir, '..', '..', '..')
 const realHome = process.env.HOME
 const realClaudeDir = process.env.CLAUDE_CONFIG_DIR
 afterEach(async () => {
@@ -53,7 +54,7 @@ describe('talos-app doctor text', () => {
   test('prints exactly these lines for a healthy setup', async () => {
     const claudeDir = emptyHome()
     h = await startHarness({ startBridge: false })
-    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    const agent = writeKit(mkdtempSync(join(tmpdir(), 'talos-agent-')))
     const env = { TALOS_APP_HOME: h.home, TALOS_APP_RELAY_URL: h.relay.httpUrl }
     const out: string[] = []
     const io = {
@@ -94,7 +95,8 @@ describe('talos-app doctor text', () => {
     const env = { TALOS_APP_HOME: home, TALOS_APP_RELAY_URL: 'http://127.0.0.1:1' }
     const args = ['doctor', '--agent-dir', agent, '--claude-dir', claudeDir]
     expect(await runCli(args, io, env, OFF_THIS_MACHINE)).toBe(1)
-    const lines = normalise(out, { [home]: '<home>', [agent]: '<agent>' }).map((l) =>
+    // the clone's own path (in the no-kit row's install.sh) last, so a temp folder inside the clone is still <home>/<agent>
+    const lines = normalise(out, { [home]: '<home>', [agent]: '<agent>', [REPO]: '<repo>' }).map((l) =>
       // Bun words the connection error its own way; the row and its FAIL level are what is pinned.
       stabilise(l.startsWith('FAIL  relay /healthz:') ? 'FAIL  relay /healthz: <unreachable>' : l),
     )

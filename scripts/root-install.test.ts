@@ -34,6 +34,8 @@ describe('root install.sh', () => {
     const launch = readFileSync(join(sb.agent, 'start-talos.sh'), 'utf8')
     expect(launch).toContain(`--plugin-dir ${MOD}`)
     expect(launch).toContain(sb.agent)
+    // the default homes: nothing baked in, so the bridge and the CLI keep finding them the usual way
+    expect(launch).not.toContain('export ')
     const v = spawnSync('bash', [join(sb.agent, 'scripts', 'verify-install.sh')], {
       encoding: 'utf8',
       env: { PATH: sb.bin, HOME: sb.home },
@@ -76,6 +78,42 @@ describe('root install.sh', () => {
     expect(readFileSync(join(sb.agent, baks[0] as string), 'utf8')).toBe(edited)
     expect(readFileSync(launch, 'utf8')).not.toContain('ALEX_EXAMPLE_EDIT')
   }, 120_000)
+
+  // Dante's setup (Pantheon 2026-11-19): installed with TALOS_APP_HOME set, then started from a shell without it, so
+  // start-talos.sh ran the CLI against the default home, a bridge with no key and no settings. The script now carries the
+  // homes it was installed with; one at its default is left out, so a script stays the same across machines.
+  it('start-talos.sh carries a TALOS_APP_HOME other than the default and a TALOS_INBOX_ROOT, and only those', () => {
+    const sb = sandbox()
+    const appHome = join(sb.home, 'other app home')
+    const inbox = join(sb.home, "the owner's inbox")
+    const r = run(sb, ['--no-app', '--yes'], { TALOS_APP_HOME: appHome, TALOS_INBOX_ROOT: inbox })
+    expect(r.code, r.out).toBe(0)
+    const launch = join(sb.agent, 'start-talos.sh')
+    // what a shell with neither set gets when it runs the script's exports: the install-time paths, spaces and quotes intact
+    const seen = spawnSync(
+      'bash',
+      ['-c', 'eval "$(grep "^export " "$1")"; printf "%s|%s" "$TALOS_APP_HOME" "$TALOS_INBOX_ROOT"', 'x', launch],
+      { encoding: 'utf8', env: { PATH: sb.bin } },
+    )
+    expect(seen.stdout).toBe(`${appHome}|${inbox}`)
+    // the exports come before the exec that runs the CLI
+    const text = readFileSync(launch, 'utf8')
+    expect(text.indexOf('export TALOS_APP_HOME=')).toBeLessThan(text.indexOf('exec bun'))
+    expect(text.indexOf('export TALOS_INBOX_ROOT=')).toBeLessThan(text.indexOf('exec bun'))
+    // TALOS_APP_HOME at its default value: not baked in
+    const sb2 = sandbox()
+    const r2 = run(sb2, ['--no-app', '--yes'], { TALOS_APP_HOME: join(sb2.home, '.config', 'talos', 'app') })
+    expect(r2.code, r2.out).toBe(0)
+    expect(readFileSync(join(sb2.agent, 'start-talos.sh'), 'utf8')).not.toContain('export ')
+    // a relative path is baked in as the absolute one it meant where the install ran (the harness runs it from the repo)
+    const sb3 = sandbox()
+    const rel = `rel-inbox-${Date.now()}`
+    expect(run(sb3, ['--no-app', '--yes'], { TALOS_INBOX_ROOT: rel }).code).toBe(0)
+    expect(readFileSync(join(sb3.agent, 'start-talos.sh'), 'utf8')).toContain(
+      `export TALOS_INBOX_ROOT=${join(REPO, rel)}\n`,
+    )
+    expect(existsSync(join(REPO, rel))).toBe(false) // the install only names it; it writes nothing there
+  }, 360_000)
 
   it('refuses a non-empty folder that is not a Talos agent and leaves it alone', () => {
     const sb = sandbox()

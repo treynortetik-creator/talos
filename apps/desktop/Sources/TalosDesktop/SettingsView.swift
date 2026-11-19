@@ -107,7 +107,7 @@ struct SettingsView: View {
     if let c = p.cli { save { $0.talosAppCommand = c } }
     if let r = p.relay {
       save { $0.relayUrl = r }
-      web.configure(relayUrl: r)
+      web.configure(relayUrl: r, configEnv: model.configNow.env)
     }
     drafts.saved(model.configNow)
   }
@@ -196,6 +196,9 @@ struct SettingsView: View {
         AppliesNote(setting: .startSessionOnLaunch)
         Toggle("Open the terminal when the agent needs you", isOn: bind(\.openTerminalOnDialog))
         AppliesNote(setting: .openTerminalOnDialog)
+        Toggle("Unstick the agent when it stops answering", isOn: bind(\.unstickMain))
+        Text(MacSettingsText.unstickHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        AppliesNote(setting: .unstickMain)
         Divider()
         notifyThreadSection
         Divider()

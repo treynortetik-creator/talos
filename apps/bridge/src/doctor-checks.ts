@@ -15,6 +15,7 @@ import { modDoctorChecks } from './doctor-mods.ts'
 import { wslDoctorChecks } from './doctor-wsl.ts'
 import { fileMode, readJsonFile } from './fsutil.ts'
 import { loadKeyFile } from './keys.ts'
+import { hasTalosKit, isPlainFolder, noKitMessage, plainFolderWarning } from './kit-marker.ts'
 import { readMcpEntry } from './mcp-config.ts'
 import { say } from './owner-words.ts'
 import { askRuleFiles, askRulesIn, DEFAULT_ASK_RULES, normalizeRule, settingsPath } from './permission/ask-rules.ts'
@@ -28,7 +29,8 @@ const BRIDGE_DIR = resolve(dirname(import.meta.path), '..')
 
 export type Check = { level: 'ok' | 'warn' | 'FAIL'; name: string; detail: string }
 
-export type DoctorOptions = { agentDir?: string; claudeDir?: string; deep?: boolean }
+/** noKit: the agent folder is a plain Claude Code folder on purpose (`--no-kit`, as start takes it). */
+export type DoctorOptions = { agentDir?: string; claudeDir?: string; deep?: boolean; noKit?: boolean }
 
 /** What the checks found: the rows, and the bridge key when there is one (the caller prints the relay line for it). */
 export type DoctorResult = { checks: Check[]; key?: { keyId: string; publicKeyB64: string } }
@@ -105,6 +107,11 @@ export async function runDoctorChecks(
     add('warn', 'MCP SDK version', 'could not read it; run pnpm install')
   }
   const agentDir = opts.agentDir ? resolve(opts.agentDir) : process.cwd()
+  // start refuses such a folder unless --no-kit, so the doctor fails it unless told the same: the bridge alone, with none of
+  // Talos around it
+  if (hasTalosKit(agentDir)) add('ok', 'Talos kit', `installed in ${agentDir}`)
+  else if (opts.noKit || isPlainFolder(env.home, agentDir)) add('warn', 'Talos kit', plainFolderWarning(agentDir))
+  else add('FAIL', 'Talos kit', noKitMessage(agentDir))
   const entry = readMcpEntry(agentDir) as
     | { command?: string; args?: string[]; env?: Record<string, unknown> }
     | undefined

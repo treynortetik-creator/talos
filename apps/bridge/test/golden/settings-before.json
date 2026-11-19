@@ -4976,6 +4976,7 @@
       "memory_browser",
       "notifications",
       "owner",
+      "peers",
       "permission_relay",
       "quiet_window",
       "rev",

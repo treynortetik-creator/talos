@@ -38,15 +38,20 @@ public enum AgentFolderSetup {
     return servers["talos-app"] != nil
   }
 
-  /// The clone `install.sh --from-release` recorded for a prebuilt app (which carries no `TalosCheckout`): the first line of
-  /// `<supportDir>/checkout`. nil when there is none. Any program running as the owner can write that file, so what it names is
-  /// only a candidate: `recordedCloneProblem` judges it, and the owner confirms it once (`AgentFolderFlow`) before it is used.
-  public static func recordedCheckout(supportDir: String) -> String? {
-    guard let d = FileManager.default.contents(atPath: supportDir + "/checkout"),
-      let text = String(data: d, encoding: .utf8)
-    else { return nil }
-    let line = text.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
-    return line.isEmpty ? nil : line
+  /// The clone recorded for a prebuilt app (which carries no `TalosCheckout`): the first line of `<dir>/checkout`. nil when there is none.
+  /// Any program running as the owner can write that file, so what it names is only a candidate: `recordedCloneProblem` judges it, and
+  /// the owner confirms it once (`AgentFolderFlow`) before it is used. A clone the app made itself (`CloneProvisioner`) is accepted by it.
+  public static func recordedCheckout(supportDir: String) -> String? { recordedCheckout(in: [supportDir])?.clone }
+
+  /// The first record that names a clone, and the file it was read from (judged for ownership): the new bundle-id folder first, then the
+  /// old `Application Support/Talos` one that earlier installs made. An empty or missing new record falls back to the old.
+  public static func recordedCheckout(in dirs: [String]) -> (clone: String, file: String)? {
+    for dir in dirs {
+      guard let d = FileManager.default.contents(atPath: dir + "/checkout"), let text = String(data: d, encoding: .utf8) else { continue }
+      let line = text.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
+      if !line.isEmpty { return (line, dir + "/checkout") }
+    }
+    return nil
   }
 
   /// Why a recorded clone may not be used; nil when it may. The same rules as the guard refresh's checkout (Supervisor
@@ -75,6 +80,26 @@ public enum AgentFolderSetup {
       if let why = ownedProblem(f, uid: uid) { return "\(lead) \(f) \(why). \(tail)" }
     }
     return nil
+  }
+
+  /// The clone the updater may move and run: the one stamped in the app (a local build), else the recorded one, but only when the owner
+  /// (or this app, after it made the clone itself) accepted exactly that path in the Keychain and it passes the same judgement as for
+  /// Create, Adopt and Choose. A record any program could write is never trusted on its own. nil: none.
+  public static func updaterCheckout(
+    stamped: String?, record: (clone: String, file: String)?, accepted: String?, unsafe: [String], uid: uid_t = getuid()
+  ) -> String? {
+    if let stamped, !stamped.isEmpty { return stamped }
+    guard let record, accepted == record.clone else { return nil }
+    return recordedCloneProblem(record.clone, recordFile: record.file, unsafe: unsafe, uid: uid) == nil ? record.clone : nil
+  }
+
+  /// The recorded clone that passes every check but was never accepted (so `updaterCheckout` skipped it): what the owner should be asked
+  /// about. nil when there is no record, it is accepted, or it fails the checks (that is a refusal, not a question).
+  public static func unacceptedRecordedClone(
+    record: (clone: String, file: String)?, accepted: String?, unsafe: [String], uid: uid_t = getuid()
+  ) -> String? {
+    guard let record, accepted != record.clone else { return nil }
+    return recordedCloneProblem(record.clone, recordFile: record.file, unsafe: unsafe, uid: uid) == nil ? record.clone : nil
   }
 
   /// The folders a recorded clone may not be in or around: the Talos home, the agent folder, each thread's own folder (from the

@@ -75,7 +75,7 @@ enum SyntheticInputGuard {
   @MainActor
   static func isPromptWindow(_ w: NSWindow?) -> Bool {
     guard let w else { return false }
-    return w is NeedsYouPanel || w.isSheet || w.sheetParent != nil || w is NSPanel && w.worksWhenModal
+    return w is NeedsYouPanel || w is PairingPanel || w.isSheet || w.sheetParent != nil || w is NSPanel && w.worksWhenModal
       || NSApp.modalWindow != nil
   }
 

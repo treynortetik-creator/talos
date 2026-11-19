@@ -699,7 +699,7 @@ export function TimelineCard({
   highlighted?: boolean
 }) {
   return (
-    <div id={`card-${card.id}`} className="enter-up px-4 py-2" data-testid="timeline-card">
+    <div id={`card-${card.id}`} className="enter-up scroll-mt-2 px-4 py-2" data-testid="timeline-card">
       <Suspense fallback={<div className="h-24 animate-pulse rounded-card bg-surface-2" />}>
         <CardView card={card} threadName={threadName} inline {...(highlighted ? { highlighted } : {})} />
       </Suspense>

@@ -191,7 +191,7 @@ describe('media', () => {
     relay = await startTestRelay({ clock: c })
     const ref = (await (await upload(relay, PNG, { 'content-type': 'image/png' })).json()) as { media_id: string }
     // age past the buffer window with nobody connected; the hourly sweeper runs on the way
-    c.advance(8 * 86_400_000)
+    c.jump(8 * 86_400_000)
     expect((await get(relay, `/media/${ref.media_id}`)).status).toBe(410)
     expect(readdirSync(join(relay.dir, 'media'))).toHaveLength(0)
     const k = kit(relay)

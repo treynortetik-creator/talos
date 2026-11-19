@@ -2,7 +2,8 @@
 // is up within a frame or two of the tap, with a "getting the screen" placeholder, and never waits on the capture; taps while it
 // opens open nothing more. Where the browser cannot read back a drawn page (WebKit: the iPhone app, Safari, the Mac app), the
 // sheet says so at once and offers Add a picture, instead of spending seconds copying the page for a picture it cannot keep.
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
+import { test } from '../helpers/ios-readback.ts'
 
 type Talos = { store: { setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void } }
 
@@ -32,18 +33,33 @@ async function openThread(page: Page, n: number) {
   await expect(page.getByTestId('timeline')).toBeVisible()
 }
 
-/** Milliseconds from the tap to the sheet being in the page, measured inside the page. */
+/**
+ * From the tap to the sheet being in the page, measured inside the page: how many frames the page drew first (0: it was there
+ * at once), the milliseconds (for the log only: a loaded machine stretches every frame), and what the picture was at that
+ * moment ("capturing", or the Annotator's ok / failed).
+ */
 const timeToSheet = (page: Page) =>
   page.evaluate(
     () =>
-      new Promise<number>((resolve) => {
+      new Promise<{ ms: number; frames: number; picture: string }>((resolve) => {
         const btn = Array.from(document.querySelectorAll('button')).find(
           (b) => b.getAttribute('aria-label') === 'Report a bug' || b.textContent?.trim() === 'Report a bug',
         ) as HTMLButtonElement
         const t0 = performance.now()
+        let frames = 0
         btn.click()
-        const tick = () =>
-          document.querySelector('[data-bug-reporter]') ? resolve(performance.now() - t0) : requestAnimationFrame(tick)
+        const tick = () => {
+          const sheet = document.querySelector('[data-bug-reporter]')
+          if (!sheet) {
+            frames++
+            requestAnimationFrame(tick)
+            return
+          }
+          const picture = sheet.querySelector('[data-testid="bug-capturing"]')
+            ? 'capturing'
+            : (sheet.querySelector('[data-capture]')?.getAttribute('data-capture') ?? 'none')
+          resolve({ ms: performance.now() - t0, frames, picture })
+        }
         tick()
       }),
   )
@@ -52,10 +68,15 @@ test('one tap: the sheet is up at once, extra taps open nothing more, and the pi
   page,
 }, info) => {
   await openThread(page, 120)
-  const ms = await timeToSheet(page)
+  const { ms, frames, picture } = await timeToSheet(page)
   info.annotations.push({ type: 'time-to-sheet-ms', description: String(Math.round(ms)) })
-  console.log(`[${info.project.name}] time to sheet: ${Math.round(ms)} ms`)
-  expect(ms).toBeLessThan(200)
+  console.log(`[${info.project.name}] time to sheet: ${Math.round(ms)} ms, ${frames} frame(s), picture ${picture}`)
+  // "at once" in what the page does, not in a stopwatch that load stretches (a 120-message thread under a CPU burner took
+  // 200-1300 ms with the sheet still in the first frame): within a frame or two of the tap, and before the picture is
+  // ready, so the sheet never waited on the capture (the 2-3 s the owner saw, 2026-11-15). Where the browser cannot read
+  // the page back (WebKit), the sheet may say so in its first frame: "failed" then, never "ok".
+  expect(frames).toBeLessThanOrEqual(2)
+  expect(picture).not.toBe('ok')
   await expect(page.locator('[data-bug-reporter]')).toHaveCount(1)
   // the picture, or the plain "no picture" with Add a picture, settles on its own
   const pic = page.locator('[data-bug-reporter] [data-capture]')

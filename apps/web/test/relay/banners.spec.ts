@@ -74,6 +74,9 @@ test('relay unreachable shows the retry banner with Retry now', async ({ page, c
   harness.blockWs(true)
   harness.dropAppSockets()
   await expect(page.getByText(/Can't reach your server/)).toBeVisible()
+  // the countdown is part of the full text, one tap behind More
+  await expect(page.getByText(/Retrying in \d+ s/)).toBeHidden()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await expect(page.getByText(/Retrying in \d+ s/)).toBeVisible()
   harness.blockWs(false)
   await clickRetryIfShown(page)

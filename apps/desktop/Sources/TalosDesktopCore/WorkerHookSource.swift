@@ -27,6 +27,9 @@ extension WorkerHook {
       public var path: String
       public var script: Data
       public var helper: Data?
+      /// The thread-state hook's files by name (`WorkerHook.stateFileNames`), when the bundle has every one of them and the helper they
+      /// import; nil otherwise (a bundle built before they were added): no thread-state hook for the session.
+      public var state: [String: Data]?
     }
 
     public enum Answer: Equatable, Sendable {
@@ -62,6 +65,7 @@ extension WorkerHook {
       var helper: Mark?
       var scriptBytes: Data
       var helperBytes: Data?
+      var state: [String: File]?
     }
 
     public let script: String?
@@ -110,16 +114,30 @@ extension WorkerHook {
         }
         // opened and read again after the check, and the files must not have been touched since before it: what was sealed is what is kept
         guard case .success(let after) = Self.load(script: real, helper: helper), after.script.mark == files.script.mark,
-          after.helper?.mark == files.helper?.mark, after.script.bytes == files.script.bytes, after.helper?.bytes == files.helper?.bytes
+          after.helper?.mark == files.helper?.mark, after.script.bytes == files.script.bytes, after.helper?.bytes == files.helper?.bytes,
+          Self.sameState(after.state, files.state, exactly: true)
         else { return .problem(Self.changed(script)) }
-        baseline = Baseline(path: real, script: after.script.mark, helper: after.helper?.mark, scriptBytes: after.script.bytes, helperBytes: after.helper?.bytes)
-        return .ok(.init(path: real, script: after.script.bytes, helper: after.helper?.bytes))
+        baseline = Baseline(
+          path: real, script: after.script.mark, helper: after.helper?.mark, scriptBytes: after.script.bytes, helperBytes: after.helper?.bytes,
+          state: after.state)
+        return .ok(.init(path: real, script: after.script.bytes, helper: after.helper?.bytes, state: after.state?.mapValues(\.bytes)))
       }
       guard base.path == real, base.script.sameFile(files.script.mark), (base.helper == nil) == (files.helper == nil),
         base.helper.map({ b in files.helper.map { b.sameFile($0.mark) } ?? false }) ?? true,
-        files.script.bytes == base.scriptBytes, files.helper?.bytes == base.helperBytes
+        files.script.bytes == base.scriptBytes, files.helper?.bytes == base.helperBytes, Self.sameState(base.state, files.state, exactly: false)
       else { return .problem(Self.changed(script)) }
-      return .ok(.init(path: real, script: files.script.bytes, helper: files.helper?.bytes))
+      return .ok(.init(path: real, script: files.script.bytes, helper: files.helper?.bytes, state: files.state?.mapValues(\.bytes)))
+    }
+
+    /// The thread-state files of two looks: the same names, and each the same file (`exactly`: down to the status change, as at the
+    /// check itself) with the same bytes. Both none is the same.
+    private static func sameState(_ a: [String: File]?, _ b: [String: File]?, exactly: Bool) -> Bool {
+      guard let a, let b else { return a == nil && b == nil }
+      guard Set(a.keys) == Set(b.keys) else { return false }
+      return a.allSatisfy { k, f in
+        guard let o = b[k] else { return false }
+        return f.bytes == o.bytes && (exactly ? f.mark == o.mark : f.mark.sameFile(o.mark))
+      }
     }
 
     private static func isLink(_ p: String) -> String { "the Talos app's \(p) is a link, not part of the signed app" }
@@ -141,7 +159,7 @@ extension WorkerHook {
       var mark: Mark
       var bytes: Data
     }
-    private typealias Loaded = (script: File, helper: File?)
+    private typealias Loaded = (script: File, helper: File?, state: [String: File]?)
 
     /// Why the folder the hook is in is not one the app's files can be trusted in, or nil: a real folder (no link), of this account
     /// or root, that no other account can write (R1-5). A folder others can write lets them swap the file's name for another file.
@@ -179,11 +197,21 @@ extension WorkerHook {
         }
         return .success(File(mark: mark, bytes: bytes))
       }
+      // the thread-state files beside them, each held to the same rules as the hook (a bad one refuses the start, never skips it);
+      // all of them and the helper they import, or none
+      let folder = (script as NSString).deletingLastPathComponent
+      var found: [String: File] = [:]
+      for name in WorkerHook.stateFileNames {
+        switch one(folder + "/" + name, optional: true) {
+        case .failure(let w): return .failure(w)
+        case .success(let f): if let f { found[name] = f }
+        }
+      }
       switch (one(script, optional: false), one(helper, optional: true)) {
       case (.failure(let w), _), (_, .failure(let w)): return .failure(w)
       case (.success(let s), .success(let h)):
         guard let s else { return .failure(Why(text: "the permission hook \(script) is missing or cannot be read")) }
-        return .success((s, h))
+        return .success((s, h, h != nil && found.count == WorkerHook.stateFileNames.count ? found : nil))
       }
     }
   }
