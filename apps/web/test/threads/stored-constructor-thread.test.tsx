@@ -22,7 +22,6 @@ function withStored() {
         kind: 'agent' as const,
         order: 9,
         notify: 'all' as const,
-        voice_context: 'recent' as const,
         archived: false,
         created_at: at,
       },

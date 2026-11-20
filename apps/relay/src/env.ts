@@ -53,19 +53,6 @@ const base = z.object({
   APNS_KEY_P8: z.string().optional(),
   /** The app's bundle id: the APNs topic. */
   APNS_BUNDLE_ID: z.string().optional(),
-  /** Optional. Live voice is off without it. */
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  /** Where the dictation (and only that) request goes. Tests point it at a fake server; leave it unset in production. */
-  OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
-  /** The model that turns a dictation recording into text. */
-  TRANSCRIBE_MODEL: z.string().min(1).default('gpt-transcribe'),
-  /** Megabytes of dictation audio accepted in any 24 hours before the relay answers 429. 0 stops dictation. */
-  DICTATE_DAILY_MAX_MB: int(100, 0, 100_000),
-  /** Seconds to wait for OpenAI before giving up with 504. */
-  DICTATE_TIMEOUT_S: int(90, 1, 600),
-  VOICE_MODEL: z.string().min(1).default('gpt-live-1'),
-  VOICE_DAILY_MAX_MIN: int(60, 0),
-  VOICE_SESSION_MAX_MIN: int(30, 1),
   BUFFER_DAYS: int(7, 1, 90),
   MEDIA_MAX_MB: int(50, 1, 50),
   /**

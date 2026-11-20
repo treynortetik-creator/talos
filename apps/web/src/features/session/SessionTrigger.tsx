@@ -117,9 +117,13 @@ export function SessionTrigger({ threadId }: { threadId: string }) {
         {...(hasChip && !offline
           ? {}
           : {
-              'aria-label': hasChip ? `Session: ${reading}, mod offline` : offline ? 'Session, mod offline' : 'Session',
+              'aria-label': hasChip
+                ? `Your agent: ${reading}, not connected`
+                : offline
+                  ? 'Your agent, not connected'
+                  : 'Your agent',
             })}
-        {...(offline ? { title: 'Session: mod offline' } : {})}
+        {...(offline ? { title: 'Your agent: not connected' } : {})}
         {...(docked ? { 'aria-expanded': dockOpen, 'aria-controls': 'session-dock' } : { 'aria-haspopup': 'dialog' })}
         data-testid="session-trigger"
         onClick={() => {
@@ -130,10 +134,10 @@ export function SessionTrigger({ threadId }: { threadId: string }) {
         // A 44 px touch without growing the drawn chip: the hit area reaches past it.
         className="absolute top-2 right-3 z-10 flex items-center rounded-button px-1.5 py-1 hover:bg-surface-2 before:absolute before:-inset-2 before:content-['']"
       >
-        {hasChip && <span className="sr-only">Session: </span>}
+        {hasChip && <span className="sr-only">Your agent: </span>}
         <SessionChip threadId={threadId} />
         {/* No reading yet: the trigger still needs something visible to tap. */}
-        {!hasChip && <span className="text-[11px] text-text-2">Session</span>}
+        {!hasChip && <span className="text-[11px] text-text-2">Your agent</span>}
       </button>
       {seen && !docked && (
         <Suspense fallback={null}>

@@ -185,8 +185,6 @@ describe('hub entry points, app socket', () => {
         'speak.request',
         'thread.session.control',
         'undo.request',
-        'voice.ask',
-        'voice_note',
       ].filter((t) => (signedTypes as string[]).includes(t)),
     )
     untouched(rp, seq)

@@ -15,8 +15,21 @@ import { CardId, IsoTs, ThreadId } from './ids.ts'
  * goes to the default thread; a thread session's own copy is an entry's `dialog`.
  * `bypass` is Claude Code's "running in Bypass Permissions mode" disclaimer: no subject, two options (No, exit / Yes, I accept).
  * It is a SAFETY question: only the owner's own tap answers it (a signed paired-device answer on the phone, a real click on the Mac).
+ * `tool_permission` is a tool's own permission question (a Bash command, a file create or edit) that Claude Code asks in the pane: `subject` is the tool and
+ * the command or file (`Bash command · touch a`), the options are `Allow once` and `Deny` and nothing else (a standing grant is never offered), and it
+ * is a SAFETY question like the bypass disclaimer. `agent_question` is the agent's own question (AskUserQuestion): `subject` is the question, the
+ * options are its rows, and `free_text` is the index of the free-text option (`Other…`) when the screen offers one: the card draws a text field for it
+ * and the owner's words travel IN the signed frame (`text`). Neither is read off a Linux supervisor's pane yet; the Mac reads both (`PaneSelect`).
  */
-export const DIALOG_KINDS = ['trust', 'mcp_consent', 'login', 'dev_channels', 'bypass'] as const
+export const DIALOG_KINDS = [
+  'trust',
+  'mcp_consent',
+  'login',
+  'dev_channels',
+  'bypass',
+  'tool_permission',
+  'agent_question',
+] as const
 export const DialogKind = z.enum(DIALOG_KINDS)
 export type DialogKindT = z.infer<typeof DialogKind>
 
@@ -72,6 +85,14 @@ const Label = z.string().min(1).max(DIALOG_LABEL_MAX)
 export const LAUNCH_CHANGED_PIECES = ['folder', 'program', 'flags', 'env'] as const
 export const LaunchChanged = z.array(z.enum(LAUNCH_CHANGED_PIECES)).max(LAUNCH_CHANGED_PIECES.length)
 
+export const FreeText = z
+  .number()
+  .int()
+  .min(0)
+  .max(DIALOG_MAX_OPTIONS - 1)
+const freeTextFits = (d: { kind?: string; dialog_kind?: string; options: string[]; free_text?: number | undefined }) =>
+  d.free_text === undefined || ((d.dialog_kind ?? d.kind) === 'agent_question' && d.free_text < d.options.length)
+
 /** A login dialog has nothing to choose; the others have at least one option. */
 const optionsFitKind = (d: { dialog_kind?: string; kind?: string; options: string[] }) =>
   (d.dialog_kind ?? d.kind) === 'login' ? d.options.length === 0 : d.options.length >= 1
@@ -103,10 +124,16 @@ export const WorkerDialog = z
       .max(DIALOG_MAX_OPTIONS - 1)
       .nullable(),
     launch_changed: LaunchChanged.optional(),
+    /** A question's free-text option: its index in `options`. Absent for every other dialog and for a question with none. */
+    free_text: FreeText.optional(),
     seen_at: IsoTs,
     expires_at: IsoTs,
   })
   .refine(optionsFitKind, { path: ['options'], message: 'a login dialog has no options; the others have at least one' })
+  .refine(freeTextFits, {
+    path: ['free_text'],
+    message: 'only a question has a free-text option, and it is one of its options',
+  })
 export type WorkerDialogT = z.infer<typeof WorkerDialog>
 
 /** The choice an answer carries: an option index, or `open` (the login card's one button). Exactly one. */
@@ -157,6 +184,8 @@ export type DialogProofT = z.infer<typeof DialogProof>
  *     of the dialog on the pane now, and `payload.dialog_kind`, `payload.subject` and `payload.options` are EXACTLY equal (same
  *     strings, same order, same count; `subject` null equals null) to the Mac's own in-memory record of that sighting, the one
  *     it wrote to workers.json. A login dialog has no options and no `choice`.
+ *     A question's free-text answer carries its words in the signed frame as `text` (one line, 1 to 120 characters, no control or invisible
+ *     character): the frame has a `text` if and only if `choice` is the Mac's recorded `free_text` index, and `payload.free_text` equals it.
  *  5. `payload.options[signed.choice]` equals, character for character, the label the screen shows now at that place, and the
  *     Mac has not pressed anything for this `dialog_id` before (a press by a popup click, or by an earlier answer, counts).
  *     Then it presses at most once per `dialog_id`. For login nothing is typed: the Mac brings Terminals forward.
@@ -185,7 +214,7 @@ export const DialogAnswer = z
 export type DialogAnswerT = z.infer<typeof DialogAnswer>
 
 export const DIALOG_OUTCOMES = ['pressed', 'nothing_pressed', 'opened'] as const
-export const DIALOG_NOTHING_REASONS = ['screen_changed', 'already_answered', 'unverified'] as const
+export const DIALOG_NOTHING_REASONS = ['screen_changed', 'already_answered', 'unverified', 'unconfirmed'] as const
 export const DIALOG_RESULT_SOURCES = ['card', 'mac'] as const
 /**
  * `workers/<thread>/dialog-result.json` (the Mac writes, the bridge reads and deletes): what happened. Strict.

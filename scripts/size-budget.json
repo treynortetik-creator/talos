@@ -13,8 +13,7 @@
     "apps/bridge/src/apps/scan.ts::evaluateServer": 323,
     "apps/web/src/features/apps/AppViewCard.tsx::AppViewCard": 416,
     "apps/web/src/features/cards/CardView.tsx::CardView": 506,
-    "apps/web/src/features/drive/index.tsx::DriveScreen": 322,
-    "apps/web/src/features/drive/queue.ts::createVoiceQueue": 375,
+    "apps/web/src/features/drive/queue.ts::createVoiceQueue": 363,
     "apps/web/src/features/memory/index.tsx::MemoryScreen": 305,
     "apps/web/src/features/schedules/ScheduleDetail.tsx::Detail": 360,
     "apps/web/src/features/schedules/ScheduleForm.tsx::ScheduleForm": 405,
@@ -27,6 +26,6 @@
   },
   "filesListedCount": 5,
   "filesListedLines": 5680,
-  "functionsListedCount": 14,
-  "functionsListedLines": 5199
+  "functionsListedCount": 13,
+  "functionsListedLines": 4865
 }

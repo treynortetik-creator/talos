@@ -21,7 +21,7 @@ const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString()
 describe('the words for a superseded bridge', () => {
   it('say "superseded", name what to do, and differ from every other offline state', () => {
     const m = macMessage('superseded', { lastSeen: iso(60_000), nowMs: NOW })
-    expect(m.cause).toMatch(/superseded/i)
+    expect(m.cause).toMatch(/took your (Mac|PC|computer)'s place/i)
     expect(m.next).toMatch(/rotate/)
     for (const k of ['dropped', 'asleep', 'key_refused', 'mod_quiet'] as const)
       expect(macMessage(k, { lastSeen: iso(60_000), nowMs: NOW }).cause).not.toBe(m.cause)
@@ -39,7 +39,7 @@ describe('the words for a superseded bridge', () => {
     })
     const b = bannerFor(s, false, NOW)
     expect(b?.kind).toBe('bridge_offline')
-    expect(b?.text).toMatch(/superseded/i)
+    expect(b?.text).toMatch(/took your (Mac|PC|computer)'s place/i)
   })
 })
 
@@ -92,7 +92,7 @@ describe('Banners', () => {
     )
     mount({ online: false, lastSeen: new Date(Date.now() - 30_000).toISOString(), superseded: true })
     await waitFor(() => expect(screen.getByTestId('mac-banner').getAttribute('data-kind')).toBe('superseded'))
-    expect(screen.getByText(/superseded/i)).toBeTruthy()
+    expect(screen.getByText(/took your (Mac|PC|computer)'s place/i)).toBeTruthy()
   })
   it('online while two bridges share the key: a notice that another bridge connected', async () => {
     vi.stubGlobal(
@@ -101,7 +101,7 @@ describe('Banners', () => {
     )
     mount({ online: true, lastSeen: new Date().toISOString(), superseded: true })
     await waitFor(() => expect(screen.getByTestId('bridge-notice')).toBeTruthy())
-    expect(screen.getByTestId('bridge-notice').textContent).toMatch(/another bridge connected/i)
+    expect(screen.getByTestId('bridge-notice').textContent).toMatch(/took your (Mac|PC|computer)'s place/i)
     expect(screen.queryByTestId('mac-banner')).toBeNull()
   })
   it('online and not superseded: no notice', async () => {

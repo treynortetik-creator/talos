@@ -29,7 +29,6 @@ import type {
   OutboxEntry,
   OutboxKind,
   Pending,
-  PendingVoice,
   SocketClient,
   SocketClientOptions,
 } from './socket-types.ts'
@@ -51,7 +50,7 @@ export type SocketCtx = {
   rnd: () => number
   baseMs: number
   maxMs: number
-  voiceRetryMs: number
+  flushRetryMs: number
   store: StoreApi<ClientState>
   meta: ReturnType<typeof createMetaStore>
   set: (fn: (s: ClientState) => Partial<ClientState>) => void
@@ -80,9 +79,6 @@ export type SocketCtx = {
   entryLocks: Map<string, Promise<unknown>>
   discarding: Set<string>
   writtenOn: Map<string, number>
-  uploadFailures: Map<string, { connection: number; count: number; round: number }>
-  /** Deadline overruns per queued voice note (a reconnect cut is not one); cleared whenever the note is shown as failed or discarded. */
-  deadlineHits: Map<string, number>
   wipeListeners: Set<() => void>
   /**
    * Inbox changes sent and not yet answered (frame id -> change), with the socket each went out on. An entry stays
@@ -97,10 +93,10 @@ export type SocketCtx = {
   /** Message ids the relay reported as never taken by the Mac (receipt `not_delivered`, or `ready.not_delivered`). */
   lostIds: Set<string>
   /**
-   * Messages and voice notes the relay acked on this run (frame id -> its row), newest last, at most ACKED_REFS_MAX. The
+   * Messages the relay acked on this run (frame id -> its row), newest last, at most ACKED_REFS_MAX. The
    * signed frame is dropped at the ack, so this is the only way a later refusal by the Mac (`error{ref}`) finds its row.
    */
-  ackedRefs: Map<string, { clientMsgId: string; threadId: string; voiceNote: boolean }>
+  ackedRefs: Map<string, { clientMsgId: string; threadId: string }>
 
   /**
    * The relay's clock minus ours, learned from each `ready`. Owner frames are signed with the corrected time, so a phone
@@ -128,7 +124,7 @@ export type SocketCtx = {
   pingTimer: ReturnType<typeof setInterval> | null
   lastPong: number
   pongs: number
-  voiceRetryTimer: ReturnType<typeof setTimeout> | null
+  flushRetryTimer: ReturnType<typeof setTimeout> | null
   outbox: OutboxEntry[]
   outboxOrder: number
   inboxQueue: Map<string, InboxPatch>
@@ -142,13 +138,9 @@ export type SocketCtx = {
   readQueue: Map<string, { upTo: number; cleared: number; known?: number }>
   /** Per thread, the seqs of the rows this device counted (or would count) as unread, for a read mark that stops short. */
   unreadSeqs: Map<string, Set<number>>
-  voiceQueue: PendingVoice[]
   flushing: boolean
-  /** The voice upload the flush is waiting on: a new connection cancels it. */
-  uploadAbort: AbortController | null
   flushAgain: boolean
   connection: number
-  round: number
   saveTimer: ReturnType<typeof setTimeout> | null
   probing: boolean
   wakeTimer: ReturnType<typeof setTimeout> | null
@@ -203,12 +195,10 @@ export type SocketCtx = {
   loadOutbox: (deviceId?: string) => Promise<void>
   noticeRemoved: (n: number) => void
   dropFromOutbox: (frameId: string) => Promise<void>
-  dropVoiceAsks: () => Promise<void>
   onAcked: (frameId: string) => Promise<void>
   withEntryLock: <T>(clientMsgId: string, fn: () => Promise<T>) => Promise<T>
   signedAtOf: (bytes: string) => number
   markWritten: (e: OutboxEntry, began: number) => Promise<OutboxEntry>
-  holdsForVoice: (e: { kind: OutboxKind; threadId: string; order: number }) => boolean
   // socket-outbox-send.ts
   sendEntry: (clientMsgId: string, began: number, restartOf?: (cur: OutboxEntry) => boolean) => Promise<boolean>
   sendFailed: (e: OutboxEntry, err: unknown) => void
@@ -298,7 +288,7 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     rnd: opts.backoff?.random ?? Math.random,
     baseMs: opts.backoff?.baseMs ?? 1000,
     maxMs: opts.backoff?.maxMs ?? 30_000,
-    voiceRetryMs: opts.voiceRetryMs ?? 10_000,
+    flushRetryMs: opts.flushRetryMs ?? 10_000,
     store,
     meta,
     set: (fn: (s: ClientState) => Partial<ClientState>) => store.setState((s) => ({ ...s, ...fn(s) })),
@@ -316,8 +306,6 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     entryLocks: new Map(),
     discarding: new Set(),
     writtenOn: new Map(),
-    uploadFailures: new Map(),
-    deadlineHits: new Map(),
     wipeListeners: new Set(),
     inboxInFlight: new Map(),
     mediaFetchIds: new Map(),
@@ -338,19 +326,16 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     pingTimer: null,
     lastPong: 0,
     pongs: 0,
-    voiceRetryTimer: null,
+    flushRetryTimer: null,
     outbox: [],
     outboxOrder: 0,
     inboxQueue: new Map(),
     inboxBefore: new Map(),
     readQueue: new Map(),
     unreadSeqs: new Map(),
-    voiceQueue: [],
     flushing: false,
-    uploadAbort: null,
     flushAgain: false,
     connection: 0,
-    round: 0,
     saveTimer: null,
     probing: false,
     wakeTimer: null,

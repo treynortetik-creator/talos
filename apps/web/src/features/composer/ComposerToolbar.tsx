@@ -1,29 +1,24 @@
-// The row under the notices: + menu, the text box (or the recording indicator), dictation, and Send / mic / live call.
-// On a phone the box takes a whole row of its own, the controls a row beneath it (+ and dictation left; mic, live call or
-// Send right; the Report a bug button, on a phone, sits right beside +), so the text gets the full width (the owner, 2026-11-14). Once the thread's column is 36rem (576 px) wide it
+// The row under the notices: + menu, the text box, and Send. On a phone the box takes a whole row of its own, the controls a
+// row beneath it (+ left; Send right, always there, dimmed with nothing to send; the Report a bug button, on a phone, sits right beside
+// +), so the text gets the full width (the owner, 2026-11-14). Once the thread's column is 36rem (576 px) wide it
 // is one row again: the column's width (a container query), not the window's, so a narrow column beside the panes or the
 // sidebar on a desktop gets the roomy layout too. Only the visual order changes (CSS order): the DOM, so the tab order
-// and what a screen reader reads, stays plus, bug button, box, dictation, send.
-import { type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type RefObject, Suspense } from 'react'
-import { formatDuration } from '../../lib/format.ts'
+// and what a screen reader reads, stays plus, bug button, box, send.
+// Voice input (Dictate, the mic, the live call) was archived on 2026-11-19. Send is always shown (2026-11-20), so the row keeps
+// its height on a phone and the box does not change width as the first letter is typed.
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent, RefObject } from 'react'
 import { cn } from '../../ui/cn.ts'
-import { IconCamera, IconFile, IconImage, IconMic, IconPlus, IconSend, IconStop } from '../../ui/icons.tsx'
+import { IconCamera, IconFile, IconImage, IconPlus, IconSend, IconStop } from '../../ui/icons.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/index.ts'
 import { BugThreadButton } from '../bugreport/BugButton.tsx'
-import { LiveCallButton } from '../registry.ts'
 import type { useSlashPicker } from '../session/SlashPicker.tsx'
 import type { WorkingStop } from '../threads/WorkingRow.tsx'
 import { useSendGuard } from './sendGuard.ts'
-import type { Mode } from './useComposerVoice.ts'
 
 type Which = 'photos' | 'camera' | 'files'
 
 export function ComposerToolbar(p: {
-  threadId: string
   placeholder: string | undefined
-  mode: Mode
-  hint: 'slide' | 'cancel' | 'lock' | null
-  elapsed: number
   text: string
   setText: (v: string) => void
   clearNote: () => void
@@ -42,25 +37,16 @@ export function ComposerToolbar(p: {
    * (iPhone Safari): no popover, + opens iOS's own sheet on one plain input. */
   attachMode: 'native' | 'ios-web' | 'menu'
   openIosSheet: () => void
-  dictationButton: React.ReactNode
-  dictationBusy: boolean
   canSend: boolean
+  /** An attachment is still uploading: Send waits for it, and a tap says so. */
+  waiting: boolean
   tooLong: boolean
-  macOnline: boolean
   /** Stop for the turn that is running (hidden when there is none to stop). */
   working: WorkingStop
   onSend: () => void
-  mic: {
-    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => void
-    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => void
-    onPointerUp: () => void
-    onPointerCancel: () => void
-    onMicClick: (e: React.MouseEvent) => void
-  }
 }) {
-  const { mode, hint, elapsed, text, picker, dictationBusy } = p
-  const recording = mode !== 'idle'
-  const sendGuard = useSendGuard(p.canSend && !recording)
+  const { text, picker } = p
+  const sendGuard = useSendGuard(p.canSend)
   return (
     <div data-testid="composer-row" className="flex flex-wrap items-end gap-x-2 gap-y-1.5 @min-[36rem]:flex-nowrap">
       <input
@@ -98,7 +84,6 @@ export function ComposerToolbar(p: {
           aria-label="Attach"
           onClick={p.openIosSheet}
           className="order-2 grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill text-text-2 @min-[36rem]:order-none"
-          disabled={recording}
         >
           <IconPlus />
         </button>
@@ -109,7 +94,6 @@ export function ComposerToolbar(p: {
               type="button"
               aria-label="Attach"
               className="order-2 grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill text-text-2 @min-[36rem]:order-none"
-              disabled={recording}
             >
               <IconPlus />
             </button>
@@ -146,117 +130,102 @@ export function ComposerToolbar(p: {
         </Popover>
       )}
 
-      {/* Report a bug (placement B, phones only): beside +. Same order slot as dictation, ahead of it in the DOM. */}
+      {/* Report a bug (placement B, phones only): beside +. Same order slot as Send's, ahead of it in the DOM. */}
       <BugThreadButton variant="inline" className="order-3 @min-[36rem]:order-none" />
 
-      {recording ? (
-        <div
-          className="order-1 flex min-h-11 basis-full items-center gap-3 px-2 @min-[36rem]:order-none @min-[36rem]:flex-1 @min-[36rem]:basis-auto"
-          aria-live="polite"
-        >
-          <span className="inline-block size-2 rounded-pill bg-danger" aria-hidden="true" />
-          <span className="font-mono text-sm">{formatDuration(elapsed)}</span>
-          <span className="text-sm text-text-2">
-            {hint === 'cancel' ? 'Release to cancel' : hint === 'lock' ? 'Release to lock' : '‹ Slide to cancel'}
-          </span>
-        </div>
-      ) : (
-        <textarea
-          ref={p.taRef}
-          value={text}
-          rows={1}
-          onChange={(e) => {
-            p.setText(e.target.value)
-            p.clearNote()
-          }}
-          onInput={p.syncFromDom}
-          onBeforeInput={p.syncFromDom}
-          onFocus={p.syncFromDom}
-          onBlur={p.syncFromDom}
-          onCompositionEnd={p.syncFromDom}
-          onKeyUp={p.syncFromDom}
-          onKeyDown={p.onKeyDown}
-          onPaste={p.onPaste}
-          placeholder={p.placeholder ?? 'Message'}
-          aria-label="Message"
-          {...(picker.open && picker.items.length > 0
-            ? { 'aria-controls': 'slash-list', 'aria-activedescendant': picker.items[picker.active]?.id }
-            : {})}
-          enterKeyHint="send"
-          className="composer-box order-1 max-h-64 min-h-11 min-w-0 basis-full resize-none @min-[36rem]:order-none @min-[36rem]:flex-1 @min-[36rem]:basis-auto rounded-bubble border border-line bg-surface px-[min(1rem,18px)] py-[0.65rem] text-text transition-[border-color,box-shadow] duration-[var(--dur-1)] ease-talos placeholder:text-text-2 focus-visible:border-text focus-visible:shadow-[0_0_0_1px_var(--text)] focus-visible:outline-none"
-        />
-      )}
+      <textarea
+        ref={p.taRef}
+        value={text}
+        rows={1}
+        onChange={(e) => {
+          p.setText(e.target.value)
+          p.clearNote()
+        }}
+        onInput={p.syncFromDom}
+        onBeforeInput={p.syncFromDom}
+        onFocus={p.syncFromDom}
+        onBlur={p.syncFromDom}
+        onCompositionEnd={p.syncFromDom}
+        onKeyUp={p.syncFromDom}
+        onKeyDown={p.onKeyDown}
+        onPaste={p.onPaste}
+        placeholder={p.placeholder ?? 'Message'}
+        aria-label="Message"
+        {...(picker.open && picker.items.length > 0
+          ? { 'aria-controls': 'slash-list', 'aria-activedescendant': picker.items[picker.active]?.id }
+          : {})}
+        enterKeyHint="send"
+        className="composer-box order-1 max-h-64 min-h-11 min-w-0 basis-full resize-none @min-[36rem]:order-none @min-[36rem]:flex-1 @min-[36rem]:basis-auto rounded-bubble border border-line bg-surface px-[min(1rem,18px)] py-[0.65rem] text-text transition-[border-color,box-shadow] duration-[var(--dur-1)] ease-talos placeholder:text-text-2 focus-visible:border-text focus-visible:shadow-[0_0_0_1px_var(--text)] focus-visible:outline-none"
+      />
 
-      {!recording && p.dictationButton ? (
-        <div className="order-3 flex @min-[36rem]:order-none">{p.dictationButton}</div>
-      ) : null}
-
-      <div className="order-4 ms-auto flex items-end gap-2 @min-[36rem]:order-none @min-[36rem]:ms-0">
+      {/* Send's slot: as wide and as high as Send, whether or not there is anything to send, so nothing moves. */}
+      <div className="order-4 ms-auto flex min-h-[min(2.75rem,52px)] min-w-[min(2.75rem,52px)] items-end gap-2 @min-[36rem]:order-none @min-[36rem]:ms-0">
         {p.working.showStop && (
-          <button
-            type="button"
-            aria-label="Stop"
-            data-testid="composer-stop"
-            disabled={p.working.busy}
-            // keeps the keyboard up: a tap must not pull focus off the box
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => void p.working.stop()}
-            className="grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill border border-danger text-danger disabled:opacity-40"
-          >
-            <IconStop fill="currentColor" />
-          </button>
-        )}
-        {p.canSend && !recording ? (
-          <button
-            type="button"
-            aria-label="Send"
-            aria-disabled={p.tooLong || undefined}
-            // A click must not pull focus off the box (the button also unmounts once the text empties).
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              sendGuard.sent(e)
-              p.onSend()
-              // From the keyboard (Enter or Space on Send: detail 0) focus would fall to the page once Send goes; it goes back to
-              // the box, so a second Enter or Space never reaches the mic or the call button that take Send's place
-              if (e.detail === 0) p.taRef.current?.focus({ preventScroll: true })
-            }}
-            className={cn(
-              'grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill bg-accent text-on-accent',
-              p.tooLong && 'opacity-40',
-            )}
-          >
-            <IconSend />
-          </button>
-        ) : (
-          // the mic and the live-call button take Send's place: a second press of a send must not reach them (sendGuard.ts)
+          // Stop sits left of Send, which stays put; the guard still swallows a press there in the moment after a send (sendGuard.ts)
           <div className="contents" {...sendGuard.handlers}>
             <button
               type="button"
-              aria-label="Record a voice note"
-              data-testid="mic"
-              disabled={dictationBusy}
-              onPointerDown={p.mic.onPointerDown}
-              onPointerMove={p.mic.onPointerMove}
-              onPointerUp={p.mic.onPointerUp}
-              onPointerCancel={p.mic.onPointerCancel}
-              onClick={p.mic.onMicClick}
-              onContextMenu={(e) => e.preventDefault()}
-              style={{ touchAction: 'none' }}
-              className={cn(
-                'grid size-[min(2.75rem,52px)] shrink-0 select-none place-items-center rounded-pill',
-                mode === 'holding' ? 'scale-125 bg-accent text-on-accent' : 'text-text-2',
-                dictationBusy && 'opacity-40',
-              )}
+              aria-label="Stop"
+              data-testid="composer-stop"
+              disabled={p.working.busy}
+              // keeps the keyboard up: a tap must not pull focus off the box
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void p.working.stop()}
+              className="grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill border border-danger text-danger disabled:opacity-40"
             >
-              <IconMic />
+              <IconStop fill="currentColor" />
             </button>
-            {!recording && text === '' && (
-              <Suspense fallback={null}>
-                <LiveCallButton threadId={p.threadId} disabled={!p.macOnline || dictationBusy} />
-              </Suspense>
-            )}
           </div>
         )}
+        {/* Send is always here (the owner, 2026-11-20: "there's no button to hit Send"). With nothing to send, or an upload
+            still running, it is dimmed and does nothing; typing turns it on where it already is. */}
+        <button
+          type="button"
+          aria-label="Send"
+          aria-disabled={!p.canSend || p.tooLong || undefined}
+          // A click must not pull focus off the box.
+          onMouseDown={(e) => e.preventDefault()}
+          title={p.waiting ? 'Waiting for the upload' : undefined}
+          data-waiting={p.waiting || undefined}
+          onClick={(e) => {
+            if (!p.canSend) {
+              if (p.waiting) p.onSend() // sends nothing: the box says it is waiting for the upload
+              return
+            }
+            sendGuard.sent(e)
+            p.onSend()
+            // From the keyboard (Enter or Space on Send: detail 0) focus goes back to the box, so a second Enter or Space lands
+            // in the box
+            if (e.detail === 0) p.taRef.current?.focus({ preventScroll: true })
+          }}
+          className={cn(
+            'grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill bg-accent text-on-accent transition-opacity duration-[var(--dur-1)]',
+            (!p.canSend || p.tooLong) && 'opacity-40',
+          )}
+        >
+          {p.waiting ? (
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              className="animate-spin motion-reduce:animate-none"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeDasharray="42 100"
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <IconSend />
+          )}
+        </button>
       </div>
     </div>
   )

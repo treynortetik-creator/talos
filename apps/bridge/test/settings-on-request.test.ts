@@ -127,7 +127,6 @@ describe('asked, the lock off (the default): made at once, and the owner is told
           kind: 'agent',
           order: 5,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-10-28T00:00:00.000Z',
         },
@@ -145,9 +144,9 @@ describe('asked, the lock off (the default): made at once, and the owner is told
     expect(text(await propose(h, MONTH))).toContain('applied: the owner asked')
   })
 
-  test('the settings opened today: memory browser either way, the work words, the persona; the lock on', async () => {
+  test('the settings opened today: memory browser either way, the work words; the lock on', async () => {
     h = await start()
-    await ownerSays(h, 'general', 'turn off the memory browser, then back on, rename the work section, set a persona')
+    await ownerSays(h, 'general', 'turn off the memory browser, then back on, rename the work section')
     expect(text(await propose(h, [{ path: 'memory_browser', value: false }]))).toContain('applied')
     expect(cfg(h).memory_browser).toBe(false)
     // the phone may only turn it off; the agent turns it back on when the owner asks
@@ -155,8 +154,6 @@ describe('asked, the lock off (the default): made at once, and the owner is told
     expect(cfg(h).memory_browser).toBe(true)
     expect(text(await propose(h, [{ path: 'work.label', value: 'Office' }]))).toContain('applied')
     expect(cfg(h).work?.label).toBe('Office')
-    expect(text(await propose(h, [{ path: 'agent.voice_persona', value: 'Speak briefly.' }]))).toContain('applied')
-    expect(cfg(h).agent.voice_persona).toBe('Speak briefly.')
   })
 })
 

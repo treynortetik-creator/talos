@@ -60,6 +60,9 @@ struct ProofEdit {
   var thread: String?
   var action: String = "primary"
   var tsOffset: Double = 0
+  /// A free-text answer's words, signed into the frame (`text`), and what the card binds as its free-text option (nil: the offer's own).
+  var text: String?
+  var freeText: Int??
 }
 
 extension WorkerRig {
@@ -89,6 +92,7 @@ extension WorkerRig {
     var subject: String? = offer.subject
     if let changed = edit.subject { subject = changed }
     payload["subject"] = subject.map { $0 as Any } ?? NSNull()
+    if let f = edit.freeText ?? offer.free_text { payload["free_text"] = f }
     let binding = TestOwner.json([
       "id": cardId, "kind": "dialog", "thread_id": edit.thread ?? "trip", "payload": payload, "title": "Trust this folder?", "primary_label": "Answer",
     ])
@@ -97,6 +101,7 @@ extension WorkerRig {
       "payload_hash": "sha256:" + TestOwner.hex(binding), "ts": ISOTime.string(Date().timeIntervalSince1970 + edit.tsOffset),
     ]
     if let choice { frame["choice"] = choice }
+    if let text = edit.text { frame["text"] = text }
     let signed = TestOwner.json(frame)
     var o: [String: Any] = [
       "v": 2, "dialog_id": dialogId ?? offer.id, "label": displayLabel ?? (choice.map { offer.options[$0] } ?? "Open on the Mac"), "by": "Test phone",
@@ -330,6 +335,128 @@ struct NeedsYouTests {
     let e = try #require(r.entry("trip")?.error)
     #expect(e.detail != WorkerManager.declinedTrustText, "an unconfirmed Enter is not a decline: \(e.detail)")
     #expect(keys.keys == ["ENTER"], "pressed once, never repeated: \(keys.keys)")
+  }
+
+  /// A tmux whose Enter is steered by the file `mode` beside it: `drop` swallows the key and says it was sent, `hang` swallows it and runs past
+  /// the call timeout, anything else (or no file) passes it on. Every other call is the real tmux.
+  private func steerEnter(_ r: WorkerRig, mode: String) throws -> String {
+    let modePath = r.root + "/enter-mode"
+    try mode.write(toFile: modePath, atomically: true, encoding: .utf8)
+    let shim = r.root + "/tmux-steer-enter"
+    try """
+    #!/bin/bash
+    enter=
+    for a in "$@"; do case "$a" in *Enter*) enter=1 ;; esac; done
+    if [ -n "$enter" ]; then
+      echo x >> '\(r.root)/enter-attempts'
+      case "$(cat '\(modePath)' 2>/dev/null)" in
+        drop) exit 0 ;;
+        hang) sleep 3; exit 0 ;;
+      esac
+    fi
+    exec '\(Rig.tmuxPath!)' "$@"
+    """.write(toFile: shim, atomically: true, encoding: .utf8)
+    chmod(shim, 0o755)
+    r.tmuxBin = shim
+    r.makeManager()
+    return modePath
+  }
+
+  /// An Enter that timed out, on a screen that never changed (the key did not reach Claude): not answered for good. After the short memory the
+  /// same dialog is offered again as a new sighting with a new id; the old card's answer then presses nothing; the new card's answer works.
+  @Test func anEnterThatTimedOutOnAnUnchangedScreenIsOfferedAgainWithANewCard() throws {
+    let keys = KeyLog()
+    let r = try WorkerRig(scenario: "dialog-real.sh", extraEnv: ["FAKE_DLG": "trust", "FAKE_DLG_KEYLOG": keys.path])
+    defer { r.teardown(); keys.remove() }
+    let modePath = try steerEnter(r, mode: "hang")
+    r.trackNotices(NoticeLog())
+    r.mgr.tune { $0.cardAckWait = 600; $0.callTimeout = 1; $0.unsentEnterMemory = 11 }  // longer than the 5 s a still screen takes to settle: only the memory holds it back
+    let owner = TestOwner()
+    try r.writeDevices([owner.entry()])
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(20) { r.resultControl() == "ctl_1" })
+    // DURING the memory the old card presses nothing: a fresh signed tap and a popup click are both refused, and tmux was asked for one Enter only
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_f")
+    #expect(r.wait(15) { r.resultControl() == "ctl_f" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "screen_changed", "\(String(describing: r.result))")
+    let clicked = Locked<PopupAnswerResult?>(nil)
+    r.mgr.popupAnswer(thread: "trip", dialogId: o.id, action: .choose(0, label: o.options[0])) { clicked.set($0) }
+    #expect(r.wait(5) { clicked.get() != nil })
+    #expect(clicked.get() == .nothing(.screenChanged), "\(String(describing: clicked.get()))")
+    #expect(r.mgr.popupOffers().isEmpty, "the old card is not on the popup either")
+    let attempts = { ((try? String(contentsOfFile: r.root + "/enter-attempts", encoding: .utf8)) ?? "").split(separator: "\n").count }
+    #expect(attempts() == 1, "one Enter asked of tmux: \(attempts())")
+    usleep(8_000_000)  // the screen has settled by now: a counted-as-sent Enter would already have a new card
+    #expect(r.offer?.id == o.id, "inside the memory it is not offered again")
+    #expect(r.wait(30) { r.offer != nil && r.offer?.id != o.id }, "offered again with a new card: \(String(describing: r.offer))")
+    let again = try #require(r.offer)
+    #expect(again.kind == o.kind && again.options == o.options && again.subject == o.subject)
+    #expect(keys.keys.isEmpty, "the key never reached the dialog: \(keys.keys)")
+    // the old card cannot press anything now
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_2")
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    #expect(keys.keys.isEmpty, "the old card pressed: \(keys.keys)")
+    // the new one does, once
+    try "pass".write(toFile: modePath, atomically: true, encoding: .utf8)
+    try r.writeAnswer(again, owner: owner, choice: 0, control: "ctl_3")
+    #expect(r.wait(20) { r.resultControl() == "ctl_3" })
+    #expect(r.result?["outcome"] as? String == "pressed")
+    #expect(r.wait(10) { keys.keys == ["ENTER"] }, "\(keys.keys)")
+  }
+
+  /// An Enter whose delivery was unknown but which DID land: the dialog goes. A late tap for that card is answered (already_answered, nothing
+  /// pressed, the file taken) instead of lingering until the bridge gives up.
+  @Test func aLateTapForATimedOutEnterThatLandedIsAnsweredAlreadyAnswered() throws {
+    let keys = KeyLog()
+    let r = try WorkerRig(scenario: "dialog-real.sh", extraEnv: ["FAKE_DLG": "trust", "FAKE_DLG_KEYLOG": keys.path])
+    defer { r.teardown(); keys.remove() }
+    let shim = r.root + "/tmux-slow-enter"
+    try """
+    #!/bin/bash
+    slow=
+    for a in "$@"; do case "$a" in *Enter*) slow=1 ;; esac; done
+    '\(Rig.tmuxPath!)' "$@"; rc=$?
+    [ -z "$slow" ] || sleep 3
+    exit $rc
+    """.write(toFile: shim, atomically: true, encoding: .utf8)
+    chmod(shim, 0o755)
+    r.tmuxBin = shim
+    r.makeManager()
+    r.trackNotices(NoticeLog())
+    r.mgr.tune { $0.cardAckWait = 600; $0.callTimeout = 1; $0.unsentEnterMemory = 11 }
+    let owner = TestOwner()
+    try r.writeDevices([owner.entry()])
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    #expect(r.wait(20) { r.resultControl() == "ctl_1" })
+    #expect(r.wait(15) { r.offer == nil || r.entry("trip")?.dialog == nil }, "the dialog went: it landed")
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_late")
+    #expect(r.wait(15) { r.resultControl() == "ctl_late" }, "a late tap is answered: \(String(describing: r.result))")
+    #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "already_answered", "\(String(describing: r.result))")
+    #expect(!FileManager.default.fileExists(atPath: r.answerPath), "the answer file is taken")
+    #expect(keys.presses.filter { $0 == "ENTER" } == ["ENTER"], "one Enter only: \(keys.keys)")
+  }
+
+  /// An Enter tmux confirmed is the answer for good: a second tap for the same card presses nothing, and no memory of an unknown send is kept.
+  @Test func aConfirmedEnterIsTheAnswerAndASecondTapForTheCardPressesNothing() throws {
+    let keys = KeyLog()
+    let r = try WorkerRig(scenario: "dialog-real.sh", extraEnv: ["FAKE_DLG": "trust", "FAKE_DLG_KEYLOG": keys.path])
+    defer { r.teardown(); keys.remove() }
+    _ = try steerEnter(r, mode: "drop")
+    r.trackNotices(NoticeLog())
+    r.mgr.tune { $0.cardAckWait = 600 }
+    let owner = TestOwner()
+    try r.writeDevices([owner.entry()])
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(15) { r.resultControl() == "ctl_1" })
+    #expect(r.result?["outcome"] as? String == "pressed")
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_2")
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    #expect(keys.keys.isEmpty, "the dropped Enter was the only one sent: \(keys.keys)")
   }
 
   /// The words at the top of the file are for display; the Mac presses from what was signed.

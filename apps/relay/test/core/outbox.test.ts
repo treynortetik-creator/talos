@@ -476,17 +476,6 @@ describe('push rules', () => {
       expect(bodies()).toEqual([])
     })
 
-    it('a voice.ask counts as being there: a hands-free call is not an idle screen', async () => {
-      const { c, app } = await visibleSetup()
-      await advance(c, 70_000, 20_000)
-      expect(isPresent()).toBe(false)
-      const ask = await app.sendVoiceAsk('general', 'what is on my plate?')
-      await app.expectFrame('error', (f) => f.ref === ask.id) // no voice module in this relay: refused, but the owner was there
-      app.send({ type: 'ping', nonce: 'barrier2' })
-      await app.expectFrame('pong', (f) => f.nonce === 'barrier2')
-      expect(isPresent()).toBe(true)
-    })
-
     it('a hidden screen is never present, however recent its last frame', async () => {
       const { app } = await visibleSetup()
       app.send({ type: 'visibility', state: 'hidden' })

@@ -11,8 +11,9 @@ extension Supervisor {
   /// Saves the mode's flag in place of the saved one(s), then, with `restart`, restarts cold (both on this queue, in that order, so the
   /// start reads the new arguments). `then` runs on the queue once the arguments are saved.
   public func changePermissionMode(_ mode: PermissionMode, restart: Bool, then: (@Sendable () -> Void)? = nil) {
+    let adds = addsChannelsFlagToSaved
     mutateConfig(
-      { $0.args = PermissionModeSetting.applying(mode, to: $0.args) },
+      { $0.args = adds ? MainChannelFlag.ensured(PermissionModeSetting.applying(mode, to: $0.args)) : PermissionModeSetting.applying(mode, to: $0.args) },
       then: then)
     if restart { restartColdIfLive() }
   }
@@ -34,6 +35,9 @@ extension Supervisor {
   public func savedLaunchIsConfirmed(_ c: DesktopConfig, claude: String) -> Bool {
     LaunchSeal.isConfirmed(c, fingerprint: launchFingerprint(c, claude), parts: launchParts(c, claude), trust: options.launchTrust)
   }
+
+  /// Main's saved command carries the Talos channel (`MainChannelFlag`); a thread's supervisor, or a test that turns the option off, does not.
+  var addsChannelsFlagToSaved: Bool { options.addsChannelsFlag && options.name == TmuxCommands.mainSession }
 
   /// The mode label of THIS launch's own arguments (set at the spawn), never of what is saved now: a launch that waits at the dialog
   /// keeps the mode it was started with whatever is written to desktop.json meanwhile.
@@ -85,7 +89,7 @@ extension Supervisor {
         postToPhone { _ in PermissionModeSetting.refusedLine(.custom) }
         return
       }
-      let outcome = PermissionModeSetting.evaluate(r.mode, against: config)
+      let outcome = PermissionModeSetting.evaluate(r.mode, against: config, addsChannelsFlag: addsChannelsFlagToSaved)
       audit("permission_mode_request", ["mode": r.mode.rawValue, "changed": outcome == .unchanged ? "0" : "1"])
       guard case .updated(let args) = outcome else {
         postToPhone { _ in PermissionModeSetting.alreadyLine(r.mode) }

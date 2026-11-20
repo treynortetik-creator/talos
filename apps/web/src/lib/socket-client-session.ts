@@ -1,4 +1,6 @@
 // The client methods that start, stop and re-enroll it.
+
+import { isArchivedVoice } from './archivedVoice.ts'
 import { type ClientState, NoAnswerError, TalosClientError } from './client.ts'
 import { deleteDeviceKey, loadDeviceKey } from './deviceKey.ts'
 import { ACTIVITY_EVENTS, SNAPSHOT } from './socket-constants.ts'
@@ -9,7 +11,7 @@ import type { OutboxEntry, SocketClient } from './socket-types.ts'
 export function createClientSession(
   c: SocketCtx,
 ): Pick<SocketClient, 'start' | 'ensureDevice' | 'deviceKey' | 'onQueueWiped' | 'setPinned' | 'reconnect' | 'close'> {
-  const { WS, configWaiters, isOnline, queueKeptAt, set, setMeta, settleConfig, storage, uploadFailures, writtenOn } = c
+  const { WS, configWaiters, isOnline, queueKeptAt, set, setMeta, settleConfig, storage, writtenOn } = c
   return {
     async start(o) {
       if (c.started) {
@@ -55,14 +57,12 @@ export function createClientSession(
       if (opts?.replace) {
         // A replaced key means the old one was revoked: what it signed or queued is never sent, whatever else happened first.
         // Count what is waiting in storage (this client may not have started and loaded it yet) so the owner can be told.
-        const waiting =
-          (await storage.all<OutboxEntry>('outbox').catch(() => [] as OutboxEntry[])).filter(
-            (x) => x.kind !== 'voice.ask',
-          ).length + (await storage.all('blobs').catch(() => [])).length
+        const waiting = (await storage.all<OutboxEntry>('outbox').catch(() => [] as OutboxEntry[])).filter(
+          (e) => !isArchivedVoice(e),
+        ).length
         await deleteDeviceKey(storage)
         c.key = null
         c.outbox = []
-        c.voiceQueue = []
         // A failed wipe is not swallowed: the old key's queue must not stay behind to be loaded by the next start.
         await storage.clear('outbox')
         await storage.clear('blobs')
@@ -122,10 +122,8 @@ export function createClientSession(
       c.saveTimer = null
       c.stopPing()
       if (c.wakeTimer) clearTimeout(c.wakeTimer)
-      if (c.voiceRetryTimer) clearTimeout(c.voiceRetryTimer)
-      c.voiceRetryTimer = null
-      uploadFailures.clear()
-      c.deadlineHits.clear()
+      if (c.flushRetryTimer) clearTimeout(c.flushRetryTimer)
+      c.flushRetryTimer = null
       writtenOn.clear()
       // Ends with the session: a read mark or an undo note from before a sign-out is not carried into the next one.
       c.readQueue.clear()

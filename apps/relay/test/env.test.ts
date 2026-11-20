@@ -14,9 +14,6 @@ describe('relay env', () => {
       DATA_DIR: './data',
       RP_NAME: 'Talos',
       BRIDGE_PUBKEY_FORCE: false,
-      VOICE_MODEL: 'gpt-live-1',
-      VOICE_DAILY_MAX_MIN: 60,
-      VOICE_SESSION_MAX_MIN: 30,
       BUFFER_DAYS: 7,
       MEDIA_MAX_MB: 50,
       MEDIA_UPLOADS_PER_HOUR: 60,
@@ -102,11 +99,10 @@ describe('relay env', () => {
     expect(() => loadEnv({ ...base, VAPID_SUBJECT: 'http://localhost' })).toThrow(/VAPID_SUBJECT/)
   })
   it('treats empty strings as unset and coerces numbers and flags', () => {
-    const e = loadEnv({ ...base, PORT: '9090', BRIDGE_PUBKEY: '', BRIDGE_PUBKEY_FORCE: '1', OPENAI_API_KEY: '' })
+    const e = loadEnv({ ...base, PORT: '9090', BRIDGE_PUBKEY: '', BRIDGE_PUBKEY_FORCE: '1' })
     expect(e.PORT).toBe(9090)
     expect(e.BRIDGE_PUBKEY).toBeUndefined()
     expect(e.BRIDGE_PUBKEY_FORCE).toBe(true)
-    expect(e.OPENAI_API_KEY).toBeUndefined()
   })
   it('validates the bridge public key shape and WORK_INTEGRATIONS', () => {
     expect(() => loadEnv({ ...base, BRIDGE_PUBKEY: 'nope' })).toThrow(/BRIDGE_PUBKEY/)

@@ -56,4 +56,14 @@ extension WorkerManager {
     guard read.refusal == nil else { return (nil, read.rows) }
     return (run(argv), read.rows)
   }
+
+  /// The tmux send for one step of a tool-permission or question answer (`PaneAnswerDriver.Step`): the number key, the owner's typed words, or Enter.
+  /// Only ever run through `sendKey` with the offer's own `.pane` intent.
+  func paneKeyArgv(_ id: String, _ step: PaneAnswerDriver.Step) -> [String] {
+    switch step {
+    case .number(let n): return tmux(id).sendSelectNumber(n)
+    case .text(let t): return tmux(id).sendAnswerText(t)
+    case .enter: return tmux(id).sendDialogKey(.enter)
+    }
+  }
 }

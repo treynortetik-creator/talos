@@ -17,11 +17,10 @@ import { PaneToolbar } from '../panes/Panes.tsx'
 import { PHONE_QUERY } from '../phone/PhoneChrome.tsx'
 import { PhoneHeader } from '../phone/PhoneHeader.tsx'
 import { usePhonePanel } from '../phone/phoneStore.ts'
-import { CallBar, ContextView, InboxScreen } from '../registry.ts'
+import { ContextView, InboxScreen } from '../registry.ts'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { SessionPill } from '../thread-sessions/SessionStatus.tsx'
 import { rowShowsSession, useSessionWords } from '../thread-sessions/useSessionWords.ts'
-import { useIsOnCall } from '../voice/controller.ts'
 import { ArchivedBanner } from './ArchivedBanner.tsx'
 import { Banners } from './Banners.tsx'
 import { ItemSheet } from './ItemSheet.tsx'
@@ -62,7 +61,6 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
   // only when it has something to say: a plain idle session keeps the agent's own status (on a call, queued...)
   const session = rowShowsSession(sessionWords) ? sessionWords : null
   const firstCard = useAwaitingOwner(threadId).find((c) => c.kind === 'permission')
-  const callActive = useIsOnCall(threadId)
   const [item, setItem] = useState<InboxItemT | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const phone = useMediaQuery(PHONE_QUERY)
@@ -92,16 +90,9 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
       </div>
     )
   const isInbox = thread.id === 'inbox'
-  // Nothing emits an `on_call` thread status, so the call controller's own phase is the real signal.
-  const onCall = callActive || status?.state === 'on_call'
 
   const chat = (
-    <DropZone
-      threadId={threadId}
-      enabled={!onCall}
-      className="flex h-full min-h-0 flex-col"
-      data-testid="thread-screen"
-    >
+    <DropZone threadId={threadId} enabled className="flex h-full min-h-0 flex-col" data-testid="thread-screen">
       {phone ? (
         <PhoneHeader thread={thread} state={state} statusLabel={status?.label} />
       ) : (
@@ -175,14 +166,8 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
       ) : (
         <Timeline threadId={threadId} highlightCard={highlightCard} onOpenItem={setItem} scrollRef={scrollRef} />
       )}
-      {!onCall && <WorkingRow threadId={threadId} />}
-      {onCall ? (
-        <Suspense fallback={null}>
-          <CallBar threadId={threadId} onEnd={() => {}} />
-        </Suspense>
-      ) : (
-        <Composer threadId={threadId} placeholder={isInbox ? 'Ask about your inbox' : `Message ${agent}`} />
-      )}
+      <WorkingRow threadId={threadId} />
+      <Composer threadId={threadId} placeholder={isInbox ? 'Ask about your inbox' : `Message ${agent}`} />
       <UndoStrip floating />
       <ItemSheet item={item} onClose={() => setItem(null)} />
     </DropZone>

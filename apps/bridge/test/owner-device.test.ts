@@ -2,11 +2,11 @@
 // lock him out (agent-cli.ts). Written by an owner message only: not by a share, a peer message or a bridge-made row.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { newId } from '@talos-app/protocol'
-import { LAST_OWNER_DEVICE_KEY } from '../src/agent-cli.ts'
+import { LAST_OWNER_DEVICE_KEY } from '../src/agent-quiet.ts'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { nullLogger } from '../src/log.ts'
-import { fixture, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -101,19 +101,6 @@ describe('last_owner_device', () => {
     expect(
       agentCliRefusal(h.bridge.ctx.env, ['peer', 'create', 'work'], { terminal: false, raw: {}, cwd: h.home }),
     ).toMatch(/outside text/)
-  })
-  test('a voice note moves it too', async () => {
-    h = await startHarness({ env: { TALOS_APP_STT_CMD: JSON.stringify([fixture('fake-stt.sh'), '{in}']) } })
-    const res = await fetch(`${h.relay.httpUrl}/api/media`, {
-      method: 'POST',
-      headers: { 'content-type': 'audio/mp4', 'x-talos-name': 'note.m4a', 'x-talos-duration-ms': '5000' },
-      body: 'audio bytes',
-    })
-    const ref = (await res.json()) as Record<string, unknown>
-    expect(kv()).toBeUndefined()
-    await h.app.sendVoiceNote('general', { ...ref, kind: 'voice_note', role: 'attachment' })
-    await waitFor(() => kv() !== undefined, 6000, 'the voice note to be recorded')
-    expect(kv()?.device_id).toBe(h.app.device.deviceId)
   })
   test('a message folded into a backlog (replayed after the Mac was off, long after the relay got it) moves it too', async () => {
     h = await startHarness()

@@ -4,7 +4,6 @@ import {
   NATIVE_CAPTURE_MAX_BYTES,
   NATIVE_FEATURES_MAX,
   NATIVE_TO_WEB,
-  NATIVE_VOICE_NOTE_MAX_BYTES,
   NativeToWeb,
   TERMINAL_RECT_MAX,
   WEB_TO_NATIVE,
@@ -316,7 +315,6 @@ describe('native -> web bridge messages', () => {
   const good = {
     navigate: { type: 'navigate', path: '/t/general' },
     compose: { type: 'compose', thread_id: 'general', text: 'hello' },
-    voice_note: { type: 'voice_note', thread_id: 'general', mime: 'audio/mp4', duration_ms: 1200, bytes_b64: 'AAAA' },
     enroll_code: { type: 'enroll_code', code: '0123456789ABCDEFGHJKMNPQRS' },
     companion_reply_request: { type: 'companion_reply_request', req: 'r12', thread_id: 'general' },
     companion_replies: { type: 'companion_replies', on: true },
@@ -426,12 +424,6 @@ describe('native -> web bridge messages', () => {
       expect(WebToNative.safeParse({ type: 'capture_ack', req: 'r1', ok: false, reason }).success).toBe(true)
     expect(WebToNative.safeParse({ type: 'capture_ack', req: 'r1', ok: false, reason: 'busy' }).success).toBe(false)
     expect(NativeToWeb.safeParse({ type: 'capture_ack', req: 'r1', ok: true }).success).toBe(false)
-  })
-  it('voice_note is capped at 25 MB decoded', () => {
-    const fit = Math.floor(NATIVE_VOICE_NOTE_MAX_BYTES / 3) * 4
-    expect(NativeToWeb.safeParse({ ...good.voice_note, bytes_b64: 'A'.repeat(fit) }).success).toBe(true)
-    expect(NativeToWeb.safeParse({ ...good.voice_note, bytes_b64: 'A'.repeat(fit + 8) }).success).toBe(false)
-    expect(NativeToWeb.safeParse({ ...good.voice_note, bytes_b64: 'not base64!' }).success).toBe(false)
   })
 })
 

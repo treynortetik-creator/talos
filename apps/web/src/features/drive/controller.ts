@@ -2,24 +2,16 @@
 //   - a voice reply that arrives LIVE goes into the FIFO (queue.ts); history is never spoken (judged by relay seq);
 //   - each agent text reply has its OWN 20 s phone-voice backup; only its own clip STARTING cancels it, a clip that
 //     fails leaves it running, and a reply the phone already read drops a late clip;
-//   - one speaker at a time: the phone voice waits while Talk is held, a live call is on, or a clip is starting or
-//     playing (every one of those waits is bounded); Talk and a live call cancel it, and a clip waits for it;
+//   - one speaker at a time: the phone voice waits while a clip is starting or playing (that wait is bounded), and a
+//     clip waits for the phone voice;
 //   - only the device that is driving reads aloud: the one whose tap turned driving on, or that has /drive open
 //     (a relaunch keeps it if driving_until is still the window it claimed). Other open devices stay silent;
-//   - pending cards and permission requests are counted and announced once, never approved here;
-//   - hold-to-talk records a voice note into the chosen thread, pausing playback while it records.
+//   - pending cards and permission requests are counted and announced once, never approved here.
+// (Talk, the hold-to-talk voice note, was archived on 2026-11-19: tag archive/voice-2026-11-19, docs/archived/voice.md.)
 // Rule behind all of it: a failure must never be silent, because the owner cannot look at the phone.
 import { DETAILS_IN_THREAD, drivingActive, type MessageT, spokenText } from '@talos-app/protocol'
 import { createStore, type StoreApi } from 'zustand/vanilla'
-import { holdCapture } from '../../lib/appUpdate.ts'
 import type { ClientState, TalosClient } from '../../lib/client.ts'
-import { micOffText } from '../../lib/micOff.ts'
-import { getPlatform } from '../../lib/platform.ts'
-import type { SocketClient } from '../../lib/socketClient.ts'
-import { uploadVoiceWithDeadline } from '../../lib/uploadDeadline.ts'
-import { canQueue } from '../composer/keptNotes.ts'
-import type { RecorderHandle } from '../composer/recorder.ts'
-import { extFor } from '../composer/recorder.ts'
 import type { Heard } from './prefs.ts'
 import type { QueueItem, VoiceQueue } from './queue.ts'
 
@@ -28,14 +20,10 @@ export const FALLBACK_MS = 20_000
 export const RETRY_MS = 1_500
 /** Auto-extend only if the owner talked or tapped within this long. */
 export const IDLE_END_MS = 2 * 3600_000
-const THINKING_MAX_MS = 90_000
-const MIN_NOTE_MS = 400
 /** Messages with no relay seq (local ones) count as new if created this close to activation or later. */
 const LIVE_SLACK_MS = 5_000
 
-type Kept = { note: Awaited<ReturnType<RecorderHandle['stop']>>; thread: string; name: string }
-
-export type DriveStatus = 'ready' | 'listening' | 'sending' | 'thinking' | 'speaking'
+export type DriveStatus = 'ready' | 'speaking'
 
 export type DriveState = {
   active: boolean
@@ -45,8 +33,6 @@ export type DriveState = {
   thread: string
   cardsWaiting: number
   error: string | null
-  /** How many finished notes could not be saved or sent yet: kept in memory, and `retryNote` tries them again. */
-  kept: number
 }
 
 export type DriveDeps = {
@@ -58,8 +44,6 @@ export type DriveDeps = {
   fallbackEnabled(): boolean
   loadThread(): string | null
   saveThread(id: string): void
-  recorder(): Promise<RecorderHandle>
-  audioSession: { set(t: 'playback' | 'play-and-record'): void }
   /** Survives the PWA being killed. Optional: tests run without. */
   persist?: {
     loadHeard(): Heard | null
@@ -88,24 +72,6 @@ export class DriveController {
   private sayQueue: string[] = []
   private sayTimer: unknown = null
   private lastMessages: ClientState['messages'] | null = null
-  private recording: RecorderHandle | Promise<RecorderHandle> | null = null
-  /** Notes being saved or sent right now (a talk's, or a Retry's): the status says 'sending' while any is. */
-  private sending = 0
-  /** Recordings that could not be saved or sent yet, in order: each stays until it is saved or sent, and a new note never
-   * touches another. A reload is held off while any is kept. */
-  private unsaved: Kept[] = []
-  private unsavedHold: (() => void) | null = null
-  private retrying = false
-  /** Bumped by a sign-out: a save or Retry that began before it keeps and sends nothing afterwards. */
-  private generation = 0
-  /**
-   * The hold of the talk being recorded (lib/appUpdate.ts: no automatic reload while a voice note is only in memory). Each
-   * talk owns its own: endTalk takes it with the recording and releases it once that talk's send settles, so a second talk
-   * started during the first's upload can never release the first's, or the first's the second's.
-   */
-  private talkHold: (() => void) | null = null
-  private thinking = false
-  private thinkingTimer: unknown = null
   private expiryTimer: unknown = null
   private expiryFor: string | null = null
   private watching = false
@@ -118,11 +84,9 @@ export class DriveController {
   private claimed = false
   /** /drive is open on this device. */
   private screenOpen = false
-  private onCall = false
   private textThread = new Map<string, string>()
 
   constructor(private readonly d: DriveDeps) {
-    if ('onQueueWiped' in d.client) (d.client as SocketClient).onQueueWiped(() => this.discardKept())
     this.store = createStore<DriveState>(() => ({
       active: false,
       status: 'ready',
@@ -130,7 +94,6 @@ export class DriveController {
       thread: d.loadThread() ?? 'general',
       cardsWaiting: 0,
       error: null,
-      kept: 0,
     }))
   }
 
@@ -190,31 +153,13 @@ export class DriveController {
     if (Number.isFinite(u)) this.d.persist?.saveLocal?.(u)
   }
 
-  /** A live call started or ended: nothing else talks while it is on, and the phone voice stops. */
-  setOnCall(on: boolean): void {
-    if (on === this.onCall) return
-    this.onCall = on
-    if (on) {
-      if (this.active) this.d.speech.cancel()
-      this.d.queue.hold('call')
-    } else this.d.queue.release('call')
-  }
-
   private set(p: Partial<DriveState>) {
     this.store.setState(p)
   }
 
   private refresh() {
     const q = this.d.queue.store.getState()
-    const status: DriveStatus = this.recording
-      ? 'listening'
-      : this.sending > 0
-        ? 'sending'
-        : q.playing
-          ? 'speaking'
-          : this.thinking
-            ? 'thinking'
-            : 'ready'
+    const status: DriveStatus = q.playing ? 'speaking' : 'ready'
     if (status !== this.store.getState().status) this.set({ status })
   }
 
@@ -291,10 +236,8 @@ export class DriveController {
     this.pending.clear()
     this.spoken.clear()
     if (this.expiryTimer) this.d.clearTimeout(this.expiryTimer)
-    if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer)
-    this.expiryTimer = this.thinkingTimer = null
+    this.expiryTimer = null
     this.expiryFor = null
-    this.thinking = false
     this.d.queue.clear()
     this.d.persist?.saveHeard(null)
     this.set({ active: false, status: 'ready', cardsWaiting: 0 })
@@ -358,7 +301,6 @@ export class DriveController {
       return
     }
     if (m.kind === 'text' && m.text) {
-      this.endThinking()
       this.set({ line: firstLine(spokenText(m.text) ?? m.text) })
       if (this.d.fallbackEnabled()) this.arm(m.id, m.thread_id, m.text)
     }
@@ -371,12 +313,12 @@ export class DriveController {
     this.pending.delete(id)
   }
 
-  /** True while the phone voice must stay quiet: Talk is held, a live call is on, or a clip is starting or playing.
-   * Every one of these ends by itself: the queue gives a clip LOAD_TIMEOUT_MS to start and the phone voice
+  /** True while the phone voice must stay quiet: a clip is starting or playing.
+   * It ends by itself: the queue gives a clip LOAD_TIMEOUT_MS to start and the phone voice
    * SPEECH_WAIT_MAX_MS, so a clip that never loads cannot keep the phone quiet for good. */
   private busy(): boolean {
     const q = this.d.queue.store.getState()
-    return this.recording !== null || this.onCall || q.playing || q.unlocking || q.loading || q.waitingSpeech
+    return q.playing || q.unlocking || q.loading || q.waitingSpeech
   }
 
   private arm(id: string, thread: string, text: string, ms = FALLBACK_MS) {
@@ -397,7 +339,7 @@ export class DriveController {
     this.pending.set(id, { thread, text, handle: this.d.setTimeout(fire, ms) })
   }
 
-  // ---- one speaker at a time: notes and card lines wait for a quiet moment ------------------------------------------------
+  // ---- one speaker at a time: card lines wait for a quiet moment ------------------------------------------------
   say(text: string): void {
     if (!this.local) return
     this.sayQueue.push(text)
@@ -447,217 +389,5 @@ export class DriveController {
     if (!next) return
     this.set({ thread: next.id })
     this.d.saveThread(next.id)
-  }
-
-  // ---- talking -------------------------------------------------------------------------------------------------------
-  private endThinking() {
-    this.thinking = false
-    if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer)
-    this.thinkingTimer = null
-    this.refresh()
-  }
-
-  async beginTalk(): Promise<void> {
-    if (this.recording) return
-    this.touch()
-    this.set({ error: null })
-    // The phone voice must not go into the voice note, and nothing plays while he talks.
-    this.d.speech.cancel()
-    this.d.queue.hold('record')
-    this.d.audioSession.set('play-and-record')
-    getPlatform().haptic('light')
-    const hold = holdCapture()
-    this.talkHold = hold
-    const p = this.d.recorder()
-    this.recording = p
-    this.refresh()
-    try {
-      const handle = await p
-      // Talk may have been let go while the microphone was starting (a quick tap, the permission prompt): endTalk then took
-      // this recording and finishes it. Writing the handle back would leave it "Listening…" with nothing to end it.
-      if (this.recording === p) this.recording = handle
-    } catch (e) {
-      // let go already: endTalk took the recording, and it reports the refusal
-      if (this.recording === p) {
-        this.recording = null
-        this.talkHold = null
-        hold()
-        this.recordFailed(e)
-      }
-    }
-  }
-
-  /** The microphone could not start: back to playback, the queue goes on, and the owner is told why. */
-  private recordFailed(e: unknown) {
-    this.d.audioSession.set('playback')
-    this.d.queue.release('record')
-    this.say("Couldn't record. Try again.")
-    this.set({
-      error:
-        e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
-          ? micOffText()
-          : "Couldn't record. Try again.",
-    })
-    this.refresh()
-  }
-
-  async endTalk(send: boolean): Promise<void> {
-    const rec = this.recording
-    if (!rec) return
-    // this talk's own hold, released however it ends: refused, cancelled, too short, sent or failed
-    const hold = this.talkHold
-    this.recording = null
-    this.talkHold = null
-    try {
-      await this.finishTalk(rec, send)
-    } finally {
-      hold?.()
-    }
-  }
-
-  private async finishTalk(rec: Promise<RecorderHandle> | RecorderHandle, send: boolean): Promise<void> {
-    let handle: RecorderHandle
-    try {
-      handle = await rec
-    } catch (e) {
-      this.recordFailed(e) // refused after the finger was up (the first permission prompt): not an error of endTalk's
-      return
-    }
-    this.d.audioSession.set('playback')
-    let note: Awaited<ReturnType<RecorderHandle['stop']>> | null = null
-    try {
-      if (send) note = await handle.stop()
-      else handle.cancel()
-    } catch {
-      note = null
-    }
-    this.d.queue.release('record')
-    if (!note || note.durationMs < MIN_NOTE_MS) {
-      this.refresh()
-      return
-    }
-    this.sending++
-    this.refresh()
-    const thread = this.store.getState().thread
-    try {
-      await this.place({ note, thread, name: `voice-note-${Date.now()}.${extFor(note.mime)}` })
-    } finally {
-      this.sending--
-      this.refresh()
-    }
-  }
-
-  /** Saves the note on this device (only the outbox flush uploads it); if that fails and the phone is online it is sent
-   * straight away as before; otherwise it is kept in memory for `retryNote`. */
-  private async place(u: Kept, announceFailure = true, fresh = true): Promise<boolean> {
-    const began = this.generation
-    const client = this.d.client
-    const offline = !navigator.onLine || client.store.getState().connection !== 'online'
-    const meta = { name: u.name, durationMs: u.note.durationMs, waveform: u.note.waveform }
-    let saved = false
-    if (canQueue(client)) {
-      try {
-        await client.queueVoiceNote({ threadId: u.thread, blob: u.note.blob, ...meta })
-        saved = true
-      } catch {
-        // nothing was kept
-      }
-    }
-    if (!saved && !offline) {
-      try {
-        const att = await uploadVoiceWithDeadline(client, u.note.blob, meta)
-        await client.sendVoiceNote({ threadId: u.thread, attachment: { ...att, kind: 'voice_note' } })
-        this.unkeep(u)
-        this.startThinking()
-        return true
-      } catch {
-        // still in memory below
-      }
-    }
-    if (!saved) {
-      if (this.generation !== began) return false // wiped or deleted meanwhile: it does not come back
-      if (fresh) this.keep(u) // a Retry's note is already listed, or was deleted meanwhile
-      if (announceFailure) this.announceUnsaved()
-      return false
-    }
-    this.unkeep(u)
-    if (offline) {
-      // Nothing to wait for: it goes when the connection is back.
-      this.say('Saved. It will send when the connection is back.')
-      return true
-    }
-    this.startThinking()
-    return true
-  }
-
-  private announceUnsaved() {
-    this.say("Couldn't save that. Tap to try again.")
-    this.set({ error: "Couldn't save that. Tap to try again." })
-    getPlatform().haptic('error')
-  }
-
-  private keep(u: Kept) {
-    if (!this.unsaved.includes(u)) this.unsaved = [...this.unsaved, u]
-    if (!this.unsavedHold) this.unsavedHold = holdCapture()
-    this.set({ kept: this.unsaved.length })
-  }
-
-  /** Takes out exactly this recording (by identity), never "the current one". */
-  private unkeep(u: Kept) {
-    this.unsaved = this.unsaved.filter((k) => k !== u)
-    if (this.unsaved.length === 0) {
-      this.unsavedHold?.()
-      this.unsavedHold = null
-      this.set({ error: null })
-    }
-    this.set({ kept: this.unsaved.length })
-  }
-
-  private startThinking() {
-    getPlatform().haptic('success')
-    this.thinking = true
-    if (this.thinkingTimer) this.d.clearTimeout(this.thinkingTimer) // a second note restarts the wait, not a second one
-    this.thinkingTimer = this.d.setTimeout(() => this.endThinking(), THINKING_MAX_MS)
-  }
-
-  /** Drops every kept note (a sign-out that wipes the queue, or the owner confirmed a Delete) and lets go of the hold. */
-  discardKept(): void {
-    this.generation++
-    this.unsaved = []
-    this.unsavedHold?.()
-    this.unsavedHold = null
-    this.set({ kept: 0, error: null })
-  }
-
-  /** The owner confirmed Delete: the kept notes go. A save still running is not touched (only a sign-out drops those),
-   * and a Retry skips notes that are no longer listed. */
-  deleteKept(): void {
-    this.unsaved = []
-    this.unsavedHold?.()
-    this.unsavedHold = null
-    this.set({ kept: 0, error: null })
-  }
-
-  /** Tap to try again: each kept note is saved again in turn (sent directly when the save fails and the phone is online).
-   * One run at a time; a talk that ends meanwhile adds its own note and touches none of these. */
-  async retryNote(): Promise<void> {
-    if (this.retrying || this.unsaved.length === 0) return
-    this.retrying = true
-    this.sending++
-    this.set({ error: null })
-    this.refresh()
-    try {
-      let failed = false
-      const began = this.generation
-      for (const u of [...this.unsaved]) {
-        if (!this.unsaved.includes(u)) continue // deleted or wiped while an earlier one was being saved
-        if (!(await this.place(u, false, false)) && this.generation === began) failed = true
-      }
-      if (failed) this.announceUnsaved() // once per Retry, not once per note
-    } finally {
-      this.sending--
-      this.retrying = false
-      this.refresh()
-    }
   }
 }

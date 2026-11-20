@@ -35,7 +35,6 @@ const inboxThread = {
   kind: 'system',
   order: 0,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-01T00:00:00.000Z',
 } as never

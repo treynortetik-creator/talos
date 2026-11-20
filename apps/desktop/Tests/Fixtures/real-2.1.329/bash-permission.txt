@@ -1,0 +1,23 @@
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Opus 5.5 with medium effort
+ ▝▝   ▝▝   /tmp/example-project
+  Updated: 34 features, 425 fixes, 224 other changes
+  code.claude.com/docs/en/changelog for details
+❯ Run the shell command: echo probe-a
+  Ran 1 shell command
+⏺ It printed probe-a.
+✻ Brewed for 5s · done 3:45 AM
+❯ Run the shell command: touch probe-a.txt
+  Creating empty probe-a.txt file
+  ⎿  $ touch probe-a.txt
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Create empty probe-a.txt file
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ touch probe-a.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /tmp/example-project from this project
+   3. No
+ Esc to cancel · Tab to amend

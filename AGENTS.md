@@ -41,7 +41,7 @@ them share. The one-screen picture is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE
 Deeper docs, read when the task needs them: [`docs/SECURITY.md`](docs/SECURITY.md) (what is protected and how),
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md), [`docs/bridge.md`](docs/bridge.md), [`docs/THREADS.md`](docs/THREADS.md),
 [`docs/SCHEDULES.md`](docs/SCHEDULES.md), [`docs/desktop.md`](docs/desktop.md), [`docs/ios.md`](docs/ios.md),
-[`docs/SETUP.md`](docs/SETUP.md), [`docs/voice.md`](docs/voice.md).
+[`docs/SETUP.md`](docs/SETUP.md).
 
 The original build spec is not part of this repository and is partly stale; where a doc cites it, the code and the docs listed
 above are the final word.

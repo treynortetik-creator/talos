@@ -124,7 +124,7 @@ struct MainThreadAndNoticesGuiTests {
     // what the windows read meanwhile
     let now = w.model.configNow
     #expect(now.keepAwakeOnAC == !was.keepAwakeOnAC && now.autoRestart == was.autoRestart)
-    #expect(now.args == ["--one", "--two"] && now.agentDir == "/home/alex/elsewhere")
+    #expect(now.args == MainChannelFlag.ensured(["--one", "--two"]) && now.agentDir == "/home/alex/elsewhere")
     #expect(w.model.editLaunchLine("claude --one --two") == .unchanged, "the box is judged against the change just made")
 
     let revision = w.model.configRevision
@@ -133,11 +133,11 @@ struct MainThreadAndNoticesGuiTests {
     await w.settle { w.model.configRevision >= revision + 2 }
     let after = w.model.supervisor.currentConfig()
     #expect(after.keepAwakeOnAC == !was.keepAwakeOnAC && after.autoRestart == was.autoRestart)
-    #expect(after.args == ["--one", "--two"] && after.agentDir == "/home/alex/elsewhere")
+    #expect(after.args == MainChannelFlag.ensured(["--one", "--two"]) && after.agentDir == "/home/alex/elsewhere")
     #expect(w.model.configNow == after, "nothing is left laid over the supervisor's config")
     #expect(w.model.configRevision == revision + 2, "the launch line and the folder each told the windows to reload, once applied")
     let disk = try #require(try ConfigFile.load(SupervisorController.configPath))
-    #expect(disk.args == ["--one", "--two"] && disk.keepAwakeOnAC == !was.keepAwakeOnAC, "and it reached desktop.json")
+    #expect(disk.args == MainChannelFlag.ensured(["--one", "--two"]) && disk.keepAwakeOnAC == !was.keepAwakeOnAC, "and it reached desktop.json")
   }
 
   @Test func aSettingChangedBeforeSetupIsHeldAtOnceAndReachesTheImport() async throws {
@@ -151,7 +151,7 @@ struct MainThreadAndNoticesGuiTests {
     held.release()
     #expect(w.model.importCommand("claude --one") == nil)
     let c = w.model.supervisor.currentConfig()
-    #expect(c.keepAwakeOnAC && c.notifyThread == "daily" && c.args == ["--one"])
+    #expect(c.keepAwakeOnAC && c.notifyThread == "daily" && c.args == MainChannelFlag.ensured(["--one"]))
   }
 
   @Test func aHotkeyRebindDoesNotWriteOverASettingStillOnItsWay() async throws {
@@ -195,7 +195,7 @@ struct MainThreadAndNoticesGuiTests {
     DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { gate.signal() }
     #expect(w.model.importCommand("claude --two") == nil)
     let after = w.model.supervisor.currentConfig()
-    #expect(after.args == ["--two"])
+    #expect(after.args == MainChannelFlag.ensured(["--two"]))
     #expect(after.session.id == id, "the import wrote a copy read before the tick ended over the tick's id")
   }
 

@@ -290,25 +290,24 @@ python3 ~/talos-agent/scripts/talos-jobs.py enable talos-morning-brief --time 07
 `talos-app schedules adopt` ends without a refusal. Details: [`docs/SCHEDULES.md`](docs/SCHEDULES.md),
 [`kit/setup/scheduling.md`](kit/setup/scheduling.md).
 
-### 9.2 Voice notes and spoken replies
+### 9.2 Spoken replies
 
-Voice notes arrive without any setup. To get them transcribed and to hear spoken replies, point the bridge at the agent folder's
-own scripts. Local speech-to-text needs `brew install whisper-cpp ffmpeg` and then
-`bash ~/talos-agent/scripts/voice/setup.sh --stt` (Apple Silicon can use `--parakeet` instead). Spoken replies work with macOS
-`say` and nothing else. Then add these lines to `~/.config/talos/app/bridge.env` (the paths must be absolute: commands run
-without a shell, so `~` is not expanded, which is why the lines are built with `$HOME`):
+Spoken replies work with macOS `say` and nothing else. To hear them, point the bridge at the agent folder's own script: add
+these lines to `~/.config/talos/app/bridge.env` (the paths must be absolute: commands run without a shell, so `~` is not
+expanded, which is why the lines are built with `$HOME`):
 
 ```bash
-printf 'TALOS_APP_STT_CMD=["%s/talos-agent/scripts/stt.sh","{in}"]\n' "$HOME" >> ~/.config/talos/app/bridge.env
 printf 'TALOS_APP_TTS_CMD=["%s/talos-agent/scripts/tts.sh","file","{out}","{text}"]\n' "$HOME" >> ~/.config/talos/app/bridge.env
 printf 'TALOS_APP_TTS_EXT=m4a\n' >> ~/.config/talos/app/bridge.env
 ```
 
-`stt.sh` takes the audio file and prints the transcript; `tts.sh file <out> "<text>"` renders text to the file, and `m4a` is the
-format it can always produce. Restart the agent. **Live voice** (talking in real time) is a different thing: it needs an
-`OPENAI_API_KEY`, which [YOU] add as a Railway variable; see [`docs/voice.md`](docs/voice.md).
+`tts.sh file <out> "<text>"` renders text to the file, and `m4a` is the format it can always produce. Restart the agent. The
+app has no voice input any more (dictation, voice notes and live calls are archived: [`docs/archived/voice.md`](docs/archived/voice.md)).
+The agent still has its own transcription tool for audio files you give it: it needs `brew install whisper-cpp ffmpeg` and then
+`bash ~/talos-agent/scripts/voice/setup.sh --stt` (Apple Silicon can use `--parakeet` instead), and it runs as
+`bash ~/talos-agent/scripts/stt.sh note.ogg`.
 
-**CHECKPOINT 9.2:** send a voice note from the phone; the transcript appears under it. Ask the agent for a voice reply; it plays.
+**CHECKPOINT 9.2:** in the app, Settings, Voice, set Spoken replies to Always, and ask the agent something; the reply plays.
 Settings, Health no longer shows "Voice replies need a TTS command".
 
 ### 9.3 Local speech and voice models

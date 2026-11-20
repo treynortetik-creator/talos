@@ -44,7 +44,7 @@ describe("hostSteps: commands and controls in each host's words", () => {
       'On the Mac, run talos-app doctor. It prints the key line your server needs: paste it into your server settings and deploy again. The setup guide has the steps.',
     )
     expect(m.superseded).toBe(
-      'The older bridge reconnects on its own within a minute or two. If it does not, restart the Claude session on your Mac. If you did not start a second bridge, run talos-app rotate on the Mac.',
+      'Talos on the older computer reconnects on its own within a minute or two. If it does not, restart your agent on your Mac. If you did not start Talos on a second computer, run talos-app rotate on the Mac.',
     )
     expect(m.asleep('7 days')).toBe(
       'Wake the Mac and check that Claude is still running in its terminal. Your messages wait on the server for up to 7 days.',
@@ -59,9 +59,11 @@ describe("hostSteps: commands and controls in each host's words", () => {
     expect(m.lookThere).toBe(
       "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
     )
-    expect(m.rotate).toBe('If you did not start a second bridge on purpose, run talos-app rotate on your Mac.')
+    expect(m.rotate).toBe(
+      'If you did not start Talos on a second computer on purpose, run talos-app rotate on your Mac.',
+    )
     expect(m.dialogHere).toBe("This prompt can't be shown here. Answer it at the Mac.")
-    expect(m.dialogExpired).toBe('Expired. Nobody answered in time; the session is still waiting at the Mac.')
+    expect(m.dialogExpired).toBe('Expired. Nobody answered in time; your agent is still waiting at the Mac.')
   })
   it('no other host reads "Mac" in any of them', () => {
     for (const h of OTHERS) {
@@ -89,7 +91,7 @@ describe('health', () => {
   it("a Mac's rows and notes are as they were (the default, and said outright)", () => {
     for (const host of [undefined, 'mac' as const]) {
       const rows = healthRows(offline, { scheduler: undefined, ...(host ? { host } : {}) })
-      expect(rows.find((r) => r.id === 'bridge')?.label).toBe('Mac bridge')
+      expect(rows.find((r) => r.id === 'bridge')?.label).toBe('Talos on your Mac')
     }
     const noVoice = statusOf({ beat: { tts: false, sqlite: { fts5: false } } } as never)
     expect(healthNotes(noVoice, 'mac')).toEqual([

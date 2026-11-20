@@ -41,9 +41,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -56,7 +54,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -67,7 +64,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -86,7 +82,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -109,7 +105,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -120,7 +115,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -297,9 +291,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -312,7 +304,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -323,7 +314,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -342,7 +332,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -385,9 +375,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -400,7 +388,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -411,7 +398,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -430,7 +416,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -612,9 +598,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -627,7 +611,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -638,7 +621,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -657,7 +639,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -680,7 +662,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -691,7 +672,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -868,9 +848,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -883,7 +861,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -894,7 +871,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -913,7 +889,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -956,9 +932,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -971,7 +945,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -982,7 +955,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -1001,7 +973,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -1465,9 +1437,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -1480,7 +1450,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -1491,7 +1460,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -1510,7 +1478,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -1533,7 +1501,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -1544,7 +1511,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -1721,9 +1687,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -1736,7 +1700,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -1747,7 +1710,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -1766,7 +1728,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -1809,9 +1771,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -1824,7 +1784,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -1835,7 +1794,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -1854,7 +1812,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -2329,9 +2287,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -2344,7 +2300,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -2355,7 +2310,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -2374,7 +2328,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -2397,7 +2351,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -2408,7 +2361,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -2585,9 +2537,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -2600,7 +2550,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -2611,7 +2560,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -2630,7 +2578,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -2673,9 +2621,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -2688,7 +2634,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -2699,7 +2644,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -2718,7 +2662,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -3029,9 +2973,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -3044,7 +2986,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -3055,7 +2996,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -3074,7 +3014,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -3097,7 +3037,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -3108,7 +3047,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -3285,9 +3223,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -3300,7 +3236,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -3311,7 +3246,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -3330,7 +3264,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -3373,9 +3307,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -3388,7 +3320,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -3399,7 +3330,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -3418,7 +3348,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -3672,9 +3602,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -3687,7 +3615,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -3698,7 +3625,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -3717,7 +3643,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -3740,7 +3666,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -3751,7 +3676,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -3928,9 +3852,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -3943,7 +3865,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -3954,7 +3875,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -3973,7 +3893,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4016,9 +3936,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -4031,7 +3949,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -4042,7 +3959,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -4061,7 +3977,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4276,9 +4192,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -4291,7 +4205,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -4302,7 +4215,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -4321,7 +4233,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4344,7 +4256,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -4355,7 +4266,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -4532,9 +4442,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -4547,7 +4455,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -4558,7 +4465,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -4577,7 +4483,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4620,9 +4526,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -4635,7 +4539,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -4646,7 +4549,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -4665,7 +4567,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4867,9 +4769,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -4882,7 +4782,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -4893,7 +4792,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -4912,7 +4810,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -4935,7 +4833,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -4946,7 +4843,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -5123,9 +5019,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -5138,7 +5032,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -5149,7 +5042,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -5168,7 +5060,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -5211,9 +5103,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -5226,7 +5116,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -5237,7 +5126,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -5256,7 +5144,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -5708,9 +5596,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -5723,7 +5609,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -5734,7 +5619,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -5753,7 +5637,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -5776,7 +5660,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -5787,7 +5670,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -5964,9 +5846,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -5979,7 +5859,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -5990,7 +5869,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -6009,7 +5887,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -6052,9 +5930,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -6067,7 +5943,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -6078,7 +5953,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -6097,7 +5971,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -6324,9 +6198,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -6339,7 +6211,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -6350,7 +6221,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -6369,7 +6239,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -6392,7 +6262,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -6403,7 +6272,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -6580,9 +6448,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -6595,7 +6461,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -6606,7 +6471,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -6625,7 +6489,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -6668,9 +6532,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -6683,7 +6545,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -6694,7 +6555,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -6713,7 +6573,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -7012,9 +6872,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -7027,7 +6885,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -7038,7 +6895,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -7057,7 +6913,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -7080,7 +6936,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -7091,7 +6946,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -7268,9 +7122,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -7283,7 +7135,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -7294,7 +7145,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -7313,7 +7163,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,
@@ -7356,9 +7206,7 @@
             "version": 1,
             "rev": 0,
             "agent": {
-              "name": "Talos",
-              "voice": "meridian",
-              "voice_persona": ""
+              "name": "Talos"
             },
             "owner": {
               "display_name": "You"
@@ -7371,7 +7219,6 @@
                 "kind": "fixed",
                 "order": 0,
                 "notify": "all",
-                "voice_context": "recent",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               },
@@ -7382,7 +7229,6 @@
                 "kind": "system",
                 "order": 1,
                 "notify": "all",
-                "voice_context": "none",
                 "archived": false,
                 "created_at": "2026-10-28T00:00:00.000Z"
               }
@@ -7401,7 +7247,7 @@
               "retention": "passthrough"
             },
             "voice_notes": {
-              "reply_with_voice": "when_voice",
+              "reply_with_voice": "never",
               "driving_until": null
             },
             "permission_relay": true,

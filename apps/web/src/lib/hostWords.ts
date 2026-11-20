@@ -131,7 +131,7 @@ const MAC_STEPS: HostSteps = {
   keyFix:
     'On the Mac, run talos-app doctor. It prints the key line your server needs: paste it into your server settings and deploy again. The setup guide has the steps.',
   superseded:
-    'The older bridge reconnects on its own within a minute or two. If it does not, restart the Claude session on your Mac. If you did not start a second bridge, run talos-app rotate on the Mac.',
+    'Talos on the older computer reconnects on its own within a minute or two. If it does not, restart your agent on your Mac. If you did not start Talos on a second computer, run talos-app rotate on the Mac.',
   asleep: (days) =>
     `Wake the Mac and check that Claude is still running in its terminal. Your messages wait on the server for up to ${days}.`,
   modQuiet: 'Check that Claude is still running on your Mac with the Talos mod loaded.',
@@ -139,9 +139,9 @@ const MAC_STEPS: HostSteps = {
   answerThere:
     'It stopped at a question only the Mac can answer. Open Talos Terminal on the Mac, pick this thread under Thread sessions, and answer it there. Then press Restart here to start it again',
   lookThere: "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
-  rotate: 'If you did not start a second bridge on purpose, run talos-app rotate on your Mac.',
+  rotate: 'If you did not start Talos on a second computer on purpose, run talos-app rotate on your Mac.',
   dialogHere: "This prompt can't be shown here. Answer it at the Mac.",
-  dialogExpired: 'Expired. Nobody answered in time; the session is still waiting at the Mac.',
+  dialogExpired: 'Expired. Nobody answered in time; your agent is still waiting at the Mac.',
 }
 
 const PC_TRAY = 'click the Talos icon by the clock'
@@ -156,7 +156,7 @@ export const PAIR_WAYS =
 export const PC_PAIR = `On the PC, ${PC_TRAY}, choose Pair a phone…, and open the link it shows on this device (or copy it and paste it here).`
 // Until the tray's "Open a thread's session…" is on main (Titan): the honest version. Keep it this one constant.
 export const PC_ANSWER =
-  "This session is waiting for an answer Talos can't show on your phone, and on a Windows PC it can't be opened yet. Stop the thread and start it again to go on: a question it asks as it starts comes back then, but one it asked in the middle of a task is dropped, and that task ends."
+  "Your agent is waiting for an answer Talos can't show on your phone, and on a Windows PC it can't be opened yet. Stop the thread and start it again to go on: a question it asks as it starts comes back then, but one it asked in the middle of a task is dropped, and that task ends."
 
 export function hostSteps(host: Host | null): HostSteps {
   if (host === 'mac') return MAC_STEPS
@@ -164,7 +164,7 @@ export function hostSteps(host: Host | null): HostSteps {
     return {
       // Titan's Check Talos... window copies the key the server needs (tray.ps1); the tray writes three dots
       keyFix: `On the PC, ${PC_TRAY}, choose Check Talos..., then Copy the relay key, and set it as BRIDGE_PUBKEY in your server's settings.`,
-      superseded: `The older bridge reconnects on its own within a minute or two. If it does not, on the PC, ${PC_TRAY} and choose Restart Talos…; if this keeps happening, send the log folder (Open the log folder in the same menu) to whoever helps you.`,
+      superseded: `Talos on the older computer reconnects on its own within a minute or two. If it does not, on the PC, ${PC_TRAY} and choose Restart Talos…; if this keeps happening, send the log folder (Open the log folder in the same menu) to whoever helps you.`,
       asleep: (days) =>
         `Wake the PC and check that Talos is running: ${PC_TRAY} and choose Start Talos. Your messages wait on the server for up to ${days}.`,
       modQuiet: `On the PC, ${PC_TRAY} and choose Restart Talos…. If the mod still does not report, run Talos Setup again.`,
@@ -172,10 +172,10 @@ export function hostSteps(host: Host | null): HostSteps {
       answerThere: PC_ANSWER,
       lookThere: `It stopped for a reason this version doesn't know. On the PC, ${PC_TRAY} and choose Open the log folder; send its logs to whoever helps you.`,
       // a key rotation from the tray is not there yet (a gap): restart is real
-      rotate: `If you did not start a second bridge on purpose: a new key can't be made from a Windows PC yet. On the PC, ${PC_TRAY} and choose Restart Talos…; if this keeps happening, send the log folder (Open the log folder in the same menu) to whoever helps you.`,
+      rotate: `If you did not start Talos on a second computer on purpose: a new key can't be made from a Windows PC yet. On the PC, ${PC_TRAY} and choose Restart Talos…; if this keeps happening, send the log folder (Open the log folder in the same menu) to whoever helps you.`,
       // the PC has no terminal to answer it in yet (a gap)
       dialogHere: "This prompt can't be shown here, and Talos on a Windows PC can't open it yet.",
-      dialogExpired: 'Expired. Nobody answered in time; the session is still waiting on the PC.',
+      dialogExpired: 'Expired. Nobody answered in time; your agent is still waiting on the PC.',
     }
   // Linux, and a computer not known yet: the same talos-app commands, run on the computer itself. Not known yet is also
   // every first pairing (a device not pinned gets no features): there the sentence names the tray's way too.
@@ -183,7 +183,7 @@ export function hostSteps(host: Host | null): HostSteps {
     keyFix:
       'On your computer, run talos-app doctor. It prints the key line your server needs: paste it into your server settings and deploy again. The setup guide has the steps.',
     superseded:
-      'The older bridge reconnects on its own within a minute or two. If it does not, restart Talos on your computer. If you did not start a second bridge, run talos-app rotate on your computer.',
+      'Talos on the older computer reconnects on its own within a minute or two. If it does not, restart Talos on your computer. If you did not start Talos on a second computer, run talos-app rotate on your computer.',
     asleep: (days) =>
       `Wake your computer and check that Talos is still running on it. Your messages wait on the server for up to ${days}.`,
     modQuiet: 'Check that Claude is still running on your computer with the Talos mod loaded.',
@@ -192,9 +192,9 @@ export function hostSteps(host: Host | null): HostSteps {
       'It stopped at a question only your computer can show. On your computer, run talos-app supervise attach for this thread and answer it there. Then press Restart here to start it again',
     lookThere:
       "It stopped for a reason this version doesn't know. On your computer, run talos-app supervise attach for this thread to see what happened",
-    rotate: 'If you did not start a second bridge on purpose, run talos-app rotate on your computer.',
+    rotate: 'If you did not start Talos on a second computer on purpose, run talos-app rotate on your computer.',
     dialogHere: "This prompt can't be shown here. Answer it at your computer.",
-    dialogExpired: 'Expired. Nobody answered in time; the session is still waiting at your computer.',
+    dialogExpired: 'Expired. Nobody answered in time; your agent is still waiting at your computer.',
   }
   return host === 'linux'
     ? linux

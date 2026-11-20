@@ -414,11 +414,10 @@ describe('headless mode', () => {
     expect(h.relay.http.every((r) => r.path.startsWith('/bridge/post') || !r.path.startsWith('/bridge/ws'))).toBe(true)
     expect(emitted).toEqual([])
     // live-only tools say so
-    for (const name of ['create_thread', 'card_result', 'voice_progress', 'inbox_triage']) {
+    for (const name of ['create_thread', 'card_result', 'inbox_triage']) {
       const r = await b.callTool(name, {
         name: 'x',
         card_id: 'c',
-        voice_delegation_id: 'v',
         text: 't',
         event_id: 'e',
         ok: true,

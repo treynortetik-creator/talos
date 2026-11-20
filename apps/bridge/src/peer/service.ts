@@ -18,6 +18,7 @@ import { BlockedAddressError, createGuardedFetch } from '@talos-app/protocol/gua
 import type { Clock } from '../clock.ts'
 import { type BridgeContext, defaultThreadRef, postSystemNotice, type threadRef } from '../context.ts'
 import { redact } from '../redact.ts'
+import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { cleanHandoffText } from '../worker/handoff.ts'
 import { PeerLedger } from './ledger.ts'
@@ -76,6 +77,7 @@ export class PeerService {
   private readonly clock: Clock
   private readonly fetchFn: PeerFetch
   private secrets: SecretStore | undefined
+  private scoped: SecretStore | undefined
   private timer: unknown = null
   private running = false
   private again = false
@@ -108,8 +110,12 @@ export class PeerService {
   }
 
   private async secretStore(): Promise<SecretStore> {
-    this.secrets ??= await openSecretStore({ home: this.ctx.env.home })
-    return this.secrets
+    this.scoped ??= homeScopedStore(
+      this.secrets ?? (await openSecretStore({ home: this.ctx.env.home })),
+      this.ctx.env.home,
+      { kind: 'peer', log: (m) => this.ctx.log.info(m) },
+    )
+    return this.scoped
   }
 
   private async secretOf(name: string): Promise<string | undefined> {

@@ -9,10 +9,8 @@ import { useComposerStore } from '../../src/features/composer/composerStore.ts'
 import { UpdateReady } from '../../src/features/pwa/UpdateReady.tsx'
 import {
   askWorkerForUpdate,
-  captureInFlight,
   checkServerVersion,
   claimAutoReload,
-  holdCapture,
   IDLE_BEFORE_TIMER_RELOAD_MS,
   noteActivity,
   noteServerVersion,
@@ -46,7 +44,7 @@ function fakeWorker(controller: boolean) {
     },
   }
 }
-const safe = { onCall: false, busy: false, path: '/t/general' }
+const safe = { busy: false, path: '/t/general' }
 
 beforeEach(() => {
   resetAppUpdate()
@@ -113,9 +111,8 @@ describe('when a reload is worth it, and safe', () => {
     expect(reloadWouldHelp()).toBe(true)
   })
 
-  it('safe only visible, off Settings, with no dialog, typed text, composer state or call', () => {
+  it('safe only visible, off Settings, with no dialog, typed text or composer state', () => {
     expect(safeToReload(safe)).toBe(true)
-    expect(safeToReload({ ...safe, onCall: true })).toBe(false)
     expect(safeToReload({ ...safe, busy: true })).toBe(false)
     expect(safeToReload({ ...safe, path: '/settings/notifications' })).toBe(false)
     document.body.innerHTML = '<div role="dialog"></div>'
@@ -450,7 +447,7 @@ describe("the relay's version, read again while the page stays open", () => {
     }
   })
 
-  it('the timer never reloads mid-recording, nor while the owner is using the page; a later still moment does', async () => {
+  it('the timer never reloads with a dialog open, nor while the owner is using the page; a later still moment does', async () => {
     vi.useFakeTimers()
     try {
       fakeWorker(false)
@@ -464,7 +461,7 @@ describe("the relay's version, read again while the page stays open", () => {
       const reload = vi.fn()
       render(
         <MemoryRouter>
-          <div data-capturing="true" data-testid="recording" />
+          <div role="dialog" data-testid="dialog" />
           <UpdateReady reload={reload} running="a446f3e" />
         </MemoryRouter>,
       )
@@ -472,9 +469,9 @@ describe("the relay's version, read again while the page stays open", () => {
         vi.advanceTimersByTime(VERSION_CHECK_EVERY_MS + 1)
       })
       expect(screen.getByTestId('update-ready')).toBeTruthy()
-      expect(reload, 'a voice note is being recorded').not.toHaveBeenCalled()
-      // the recording ends, but the owner is still scrolling: no reload under a reader
-      screen.getByTestId('recording').removeAttribute('data-capturing')
+      expect(reload, 'a dialog is open').not.toHaveBeenCalled()
+      // the dialog closes, but the owner is still scrolling: no reload under a reader
+      screen.getByTestId('dialog').setAttribute('role', 'presentation')
       await act(async () => {
         vi.advanceTimersByTime(VERSION_CHECK_EVERY_MS - IDLE_BEFORE_TIMER_RELOAD_MS / 2)
         noteActivity()
@@ -490,15 +487,5 @@ describe("the relay's version, read again while the page stays open", () => {
       vi.unstubAllGlobals()
       vi.useRealTimers()
     }
-  })
-
-  it('a voice note in flight (held from the first sound to its send) blocks every automatic reload; release is idempotent', () => {
-    const release = holdCapture()
-    expect(captureInFlight()).toBe(true)
-    expect(safeToReload(safe)).toBe(false)
-    release()
-    release()
-    expect(captureInFlight()).toBe(false)
-    expect(safeToReload(safe)).toBe(true)
   })
 })

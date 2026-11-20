@@ -13,7 +13,7 @@ The relay may add a top-level `relay: { seq, received_at }` to any frame. It is 
 
 ## Owner frames and the raw-JSON rule
 
-`message`, `voice_note`, `card.resolve`, `config.patch` and `voice.ask` carry `device_id` and `osig`. Their schemas are
+`message`, `card.resolve` and `config.patch` (and the other owner frames below) carry `device_id` and `osig`. The frames `voice_note` and `voice.ask` were owner frames until voice input was archived (2026-11-19); the frames `voice.state`, `voice.progress` and `voice.ended` went with them, and all five are now unknown types (`bad_frame`). See [archived/voice.md](archived/voice.md). Their schemas are
 `.strict()` and contain no `.default()`. The signature covers the JCS (RFC 8785) form of the frame without `osig`, `relay`
 and `stepup_token`:
 
@@ -99,15 +99,15 @@ new `up_to_seq`. `thread.unread{thread_id}` (app to relay, not signed, like `thr
 
 ### Not delivered (`receipt.state = 'not_delivered'`, D38)
 
-A message, voice note, card decision or settings change waits in the relay's outbox until the Mac takes it, and is dropped
+A message, card decision or settings change waits in the relay's outbox until the Mac takes it, and is dropped
 with its stored frame when it is 7 days old. Just before that sweep the relay reports what it is about to drop, once per frame
 (`nd:<frame id>` in the seen ids):
 
-- Message or voice note: `receipt{message_id, state:'not_delivered'}` to every device. The relay keeps it in message meta,
+- Message: `receipt{message_id, state:'not_delivered'}` to every device. The relay keeps it in message meta,
   so `ready.not_delivered` (the last 200 ids, for 7 days) tells a device that was away. `Message.receipt` accepts the new
   value; an unknown receipt word reads as no receipt, never as a bad message. The row says it did not reach the agent and offers
-  Edit and Delete (a voice note: Delete only).
-- A message or voice note the Mac **refuses** (`error{ref}` from the bridge for a frame the relay had already acked: an
+  Edit and Delete (an old voice note: Delete only).
+- A message the Mac **refuses** (`error{ref}` from the bridge for a frame the relay had already acked: an
   unknown thread, a signing time outside the window) gets the same `not_delivered` receipt at once, plus one
   `author:'system'` row in its thread with the Mac's code and words (`refusedMessageNote`), stored and sent to every
   device. The row's id is `m_<id of the error frame>`; the sender's own app, which still receives the `error`, writes the
@@ -200,8 +200,7 @@ be lost or reordered.
 
 - `ack{ref}` or `ack{ref, stage: 'delivered'}`: the bridge has the frame.
 - `ack{ref, stage: 'consumed'}`: the bridge pushed it into the Claude session as a channel notification.
-- For `CONSUMABLE_FRAME_TYPES` (`message`, `voice_note`, `card.resolve`, `hook.event`, `hook.digest`, `voice.ask`,
-  `voice.ended`) the relay keeps the frame in its replay buffer until `consumed`.
+- For `CONSUMABLE_FRAME_TYPES` (`message`, `card.resolve`, `hook.event`, `hook.digest`, and the others in that list) the relay keeps the frame in its replay buffer until `consumed`.
 - On **every** bridge `hello` the relay re-sends all consumable frames not yet `consumed` (delivered or not), in `relay.seq`
   order, original bytes. A (delivered, unconsumed) then B (sent while the bridge was down) arrive A, B.
 - The bridge handles inbound frames one at a time in arrival order and dedupes on `id` when it notifies: a frame it already

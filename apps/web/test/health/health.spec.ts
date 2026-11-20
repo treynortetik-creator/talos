@@ -142,7 +142,7 @@ test('storage nearly full is a red relay row', async ({ page }) => {
 test('notes: no TTS command, no FTS5', async ({ page }) => {
   await open(page, () =>
     statusOf({
-      beat: { mod: { state: 'alive', last_seen: AT, expected: true }, tts: false, stt: true, sqlite: { fts5: false } },
+      beat: { mod: { state: 'alive', last_seen: AT, expected: true }, tts: false, sqlite: { fts5: false } },
     }),
   )
   await expect(
@@ -201,7 +201,7 @@ test('axe: Health is clean in light and dark, healthy and broken', async ({ page
     bridge: { online: false, last_seen: AT, down_since: '2026-10-29T07:00:00.000Z' },
     mod: { state: 'unknown', last_seen: null, expected: true },
     push: { subscriptions: 0, last_ok_at: null, last_error_at: null },
-    beat: { mod: { state: 'quiet', last_seen: null, expected: true }, tts: false, stt: false, sqlite: { fts5: false } },
+    beat: { mod: { state: 'quiet', last_seen: null, expected: true }, tts: false, sqlite: { fts5: false } },
   })
   await page.reload()
   await expect(row(page, 'alerts')).toHaveAttribute('data-tone', 'bad')

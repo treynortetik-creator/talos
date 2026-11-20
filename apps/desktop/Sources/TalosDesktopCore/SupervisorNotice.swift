@@ -161,15 +161,29 @@ public enum SupervisorNotice {
     return "the \(label) dialog is on Main's pane; press Esc there to close it (Esc only: Enter opens System Settings)"
   }
 
-  /// Main's session waits on a prompt of the CLI's: the line for the default thread.
-  public static func mainPromptLine(agentName: String?, prompt: PromptDetector.Prompt) -> String {
-    "\(agentName ?? "The agent") is waiting on \(promptWhat(prompt)); open Terminal on the Mac to answer."
+  /// What is said of a prompt that is NOT on a card (the screen could not be read whole, or no bridge made one): Talos pressed nothing and the
+  /// session still waits. Several questions at once (tabs) are not carded: they are answered at the Mac.
+  static func noCard(_ p: PromptDetector.Prompt) -> String {
+    PaneSelect.isMultiQuestion(p.region)
+      ? "asking several questions at once, which Talos cannot put on a card. Answer them at the Mac."
+      : "Talos could not put it on a card, so nothing was pressed and it still waits for your answer."
   }
 
-  /// A thread session waits on a prompt of the CLI's: the line for its own thread (the wording of `WorkerNotice.line`, and like it
-  /// without the thread's name).
+  /// Main's session waits on a prompt of the CLI's that has no card: the line for the default thread. (A prompt the Mac could read whole is on a
+  /// card and in the Talos popup; the card is its notice, and this line is not posted.)
+  public static func mainPromptLine(agentName: String?, prompt: PromptDetector.Prompt) -> String {
+    let who = agentName ?? "The agent"
+    return PaneSelect.isMultiQuestion(prompt.region)
+      ? "\(who) is \(noCard(prompt))"
+      : "\(who) is waiting on \(promptWhat(prompt)); \(noCard(prompt))"
+  }
+
+  /// A thread session waits on a prompt of the CLI's that has no card (or whose card never came): the line for its own thread (the wording of
+  /// `WorkerNotice.line`, and like it without the thread's name).
   public static func workerPromptLine(prompt: PromptDetector.Prompt) -> String {
-    "This thread's session is waiting on \(promptWhat(prompt)); open this thread in Terminals on the Mac to answer."
+    PaneSelect.isMultiQuestion(prompt.region)
+      ? "This thread's session is \(noCard(prompt))"
+      : "This thread's session is waiting on \(promptWhat(prompt)); \(noCard(prompt))"
   }
 }
 
@@ -232,12 +246,15 @@ public struct ThreadNotices: Equatable, Sendable {
 
   /// The prompt names (`WorkerNotice.promptName`) whose questions come as a card and a Talos popup with buttons: no terminal in their line.
   static let answeredOnCard: Set<String> = ["approve a project MCP server", "bypass permissions", "development channels"]
+  /// The prompts nobody named (`PromptDetector.Prompt.title`) that a card answers when the Mac can read them whole (a tool permission, the agent's question).
+  static let answeredOnPaneCard: Set<String> = ["Bash command", "file create", "file edit", "question"]
 
   public static func waitingLine(name: String, prompt: String) -> String {
     if answeredOnCard.contains(prompt) {
       return "\(SupervisorNotice.needsYou): the \(name) session is waiting on a '\(prompt)' prompt. Answer it on its card or in the Talos popup."
     }
     let what = prompt.isEmpty ? "a prompt" : "a '\(prompt)' prompt"
+    if answeredOnPaneCard.contains(prompt) { return "\(SupervisorNotice.needsYou): the \(name) session is waiting on \(what). Answer it on its card, or at the Mac." }
     return "\(SupervisorNotice.needsYou): the \(name) session is waiting on \(what). Open Terminals…"
   }
 

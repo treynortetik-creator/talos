@@ -608,8 +608,9 @@ describe('guard decisions', () => {
       expect(bash(c), c).toBeDefined()
     expect(write(join(home, 'owner-folders.json'))).toBeDefined()
     expect(write(join(home, 'owner-folders.json'), 'Edit')).toBeDefined()
-    // a thread session's own fence closes the whole Talos home to the file tools, so it is covered there too
-    expect(fenceDenyRules(home)).toEqual(expect.arrayContaining([`Write(/${home}/**)`, `Edit(/${home}/**)`]))
+    // a thread session's own fence closes the whole Talos home to the file tools, so it is covered there too (Edit( ) covers Write,
+    // NotebookEdit and MultiEdit: Claude Code matches no other tool name in a path rule)
+    expect(fenceDenyRules(home)).toEqual(expect.arrayContaining([`Edit(/${home}/**)`]))
   })
   test('the Write tools are denied on the trust files too', () => {
     for (const f of ['devices.json', 'config.json', 'tripwire.writing', 'tripwire.json', 'guards/guards.json'])

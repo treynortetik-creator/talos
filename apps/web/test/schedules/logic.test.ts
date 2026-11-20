@@ -40,9 +40,9 @@ describe('status words (S5.2 table)', () => {
     expect(st(heldJob).word).toBe('On hold: changed outside the app')
     expect(st(job({ id: 'a-b', paused: true })).word).toBe('Paused')
   })
-  it('no_session waiting reads "agent session isn\'t running"', () => {
+  it('no_session waiting reads "your agent isn\'t running"', () => {
     expect(st(job({ id: 'a-b', today: 'waiting', wait_reason: 'no_session' })).word).toBe(
-      "Waiting: agent session isn't running",
+      "Waiting: your agent isn't running",
     )
   })
   it('a 0.2-era last_run with only {ds,status} still reads', () => {
@@ -55,7 +55,7 @@ describe('offline waiting rows (S5.2): a timestamp comparison, not schedule math
   const s = job({ id: 'a-b', today: 'not_due', next_run: '2026-10-05T07:30:00-04:00', catchup_min: 180 })
   it('past next_run and inside fire + catchup -> waiting', () => {
     expect(waitingOffline(s, NOW_MS, false)).toBe(true)
-    expect(st(s, { macOnline: false }).word).toBe("Waiting: agent session isn't running")
+    expect(st(s, { macOnline: false }).word).toBe("Waiting: your agent isn't running")
   })
   it('online, or past the window, or paused: not waiting', () => {
     expect(waitingOffline(s, NOW_MS, true)).toBe(false)
@@ -105,7 +105,7 @@ describe('banner (S5.5): worst first', () => {
     expect(b?.fix?.[0]).toContain('talos-app schedules adopt')
   })
   it('counts the jobs waiting with no session', () => {
-    expect(pickBanner(VARIANTS.nosession())?.text).toBe("Your agent session isn't running. 1 job is waiting.")
+    expect(pickBanner(VARIANTS.nosession())?.text).toBe("Your agent isn't running. 1 job is waiting.")
   })
   it('paused_all offers Resume; headless_blocked offers Retry; held offers Review', () => {
     expect(pickBanner(VARIANTS.pausedAll())?.button).toBe('resume')

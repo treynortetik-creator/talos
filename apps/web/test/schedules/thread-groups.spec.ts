@@ -36,11 +36,11 @@ for (const scheme of ['light', 'dark'] as const) {
 
     test('groups: Main, then each thread, each saying who runs it', async ({ page }) => {
       await open(page)
-      await expect(page.getByTestId('group-name')).toHaveText(['Main', 'Trip', 'Garden', 'Rota'])
-      await expect(runner(page, MAIN)).toHaveText('run by Main')
-      await expect(runner(page, 'trip')).toHaveText('own session · live')
-      await expect(runner(page, 'garden')).toHaveText('own session · parked')
-      await expect(runner(page, 'shared_one')).toHaveText('run by Main')
+      await expect(page.getByTestId('group-name')).toHaveText(['Main agent', 'Trip', 'Garden', 'Rota'])
+      await expect(runner(page, MAIN)).toHaveText('run by your main agent')
+      await expect(runner(page, 'trip')).toHaveText('own agent · live')
+      await expect(runner(page, 'garden')).toHaveText('own agent · parked')
+      await expect(runner(page, 'shared_one')).toHaveText('run by your main agent')
       // a job in an archived thread falls to Main; a row is one line with its name and when
       await expect(group(page, MAIN).getByTestId('schedule-row-gone-thread-job')).toBeVisible()
       await expect(group(page, 'trip').getByTestId('schedule-row-packing-check')).toContainText('Weekdays at 8:00 AM')
@@ -48,12 +48,12 @@ for (const scheme of ['light', 'dark'] as const) {
       // a row says who runs the job, in words; a job that is not a session job never reads as "own session"
       const rr = (key: string, id: string) =>
         group(page, key).getByTestId(`schedule-row-${id}`).getByTestId('row-runner')
-      await expect(rr('trip', 'packing-check')).toHaveText("Runs in Trip's own session")
-      await expect(rr('trip', 'trip-backup')).toHaveText('Runs in the background, no session')
-      await expect(rr('trip', 'trip-both')).toHaveText('Run by Main, with a background backup')
-      await expect(rr('garden', 'water-plants')).toHaveText("Runs in Garden's own session")
-      await expect(rr('shared_one', 'rota-nudge')).toHaveText('Run by Main')
-      await expect(rr(MAIN, 'daily-summary')).toHaveText('Run by Main')
+      await expect(rr('trip', 'packing-check')).toHaveText("Run by Trip's own agent")
+      await expect(rr('trip', 'trip-backup')).toHaveText('Runs in the background, no agent needed')
+      await expect(rr('trip', 'trip-both')).toHaveText('Run by your main agent, with a background backup')
+      await expect(rr('garden', 'water-plants')).toHaveText("Run by Garden's own agent")
+      await expect(rr('shared_one', 'rota-nudge')).toHaveText('Run by your main agent')
+      await expect(rr(MAIN, 'daily-summary')).toHaveText('Run by your main agent')
     })
 
     test('no sideways scroll, and the group name and runner are one reading for a screen reader', async ({ page }) => {
@@ -64,7 +64,7 @@ for (const scheme of ['light', 'dark'] as const) {
       )
       expect(wide).toBe(false)
       await expect(group(page, 'trip')).toHaveAccessibleName('Trip')
-      await expect(group(page, 'trip')).toHaveAccessibleDescription('own session · live')
+      await expect(group(page, 'trip')).toHaveAccessibleDescription('own agent · live')
     })
 
     test('keyboard: Tab lands on the first group header, Enter opens it, and the job is next', async ({
@@ -93,22 +93,22 @@ for (const scheme of ['light', 'dark'] as const) {
 
     test('a failed session, an older Mac and no sessions at all: every group reads "run by Main"', async ({ page }) => {
       await open(page, { sessions: { workers: { trip: 'failed', garden: 'stopping' } } })
-      await expect(runner(page, 'trip')).toHaveText('run by Main')
-      await expect(runner(page, 'garden')).toHaveText('run by Main')
+      await expect(runner(page, 'trip')).toHaveText('run by your main agent')
+      await expect(runner(page, 'garden')).toHaveText('run by your main agent')
       await open(page, { sessions: { workers: { trip: 'live', garden: 'live' }, supported: false } })
-      await expect(runner(page, 'trip')).toHaveText('run by Main')
+      await expect(runner(page, 'trip')).toHaveText('run by your main agent')
       await open(page, { sessions: null })
-      await expect(page.locator('[data-testid="group-runner"]').first()).toHaveText('run by Main')
-      for (const r of await page.getByTestId('group-runner').all()) await expect(r).toHaveText('run by Main')
+      await expect(page.locator('[data-testid="group-runner"]').first()).toHaveText('run by your main agent')
+      for (const r of await page.getByTestId('group-runner').all()) await expect(r).toHaveText('run by your main agent')
     })
 
     test('a worker going live moves its label without a reload', async ({ page }) => {
       await open(page)
-      await expect(runner(page, 'garden')).toHaveText('own session · parked')
+      await expect(runner(page, 'garden')).toHaveText('own agent · parked')
       await page.evaluate(() => window.__sessions({ workers: { trip: 'live', garden: 'live' } }))
-      await expect(runner(page, 'garden')).toHaveText('own session · live')
+      await expect(runner(page, 'garden')).toHaveText('own agent · live')
       await page.evaluate(() => window.__sessions({ workers: { trip: 'live' } })) // garden switched back to shared
-      await expect(runner(page, 'garden')).toHaveText('run by Main')
+      await expect(runner(page, 'garden')).toHaveText('run by your main agent')
     })
 
     test('axe is clean', async ({ page }) => {

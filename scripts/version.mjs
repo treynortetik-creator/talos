@@ -1,4 +1,4 @@
-// The one build-time version. Order: APP_VERSION, the deploy platform's commit sha, `git describe`, root package.json.
+// The one build-time version. Order: APP_VERSION, the deploy platform's commit sha, `git describe` (never an archive/* tag: those mark removed features), root package.json.
 // Prints the version when run directly; build scripts import `buildVersion`.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -10,7 +10,7 @@ export function buildVersion() {
   const sha = process.env.RAILWAY_GIT_COMMIT_SHA?.trim()
   if (sha) return sha.slice(0, 7)
   try {
-    const out = execFileSync('git', ['describe', '--tags', '--always', '--dirty'], {
+    const out = execFileSync('git', ['describe', '--tags', '--exclude=archive/*', '--always', '--dirty'], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       stdio: ['ignore', 'pipe', 'ignore'],
     })

@@ -26,6 +26,12 @@ struct OnboardingActions {
   var wordsDontMatch: () -> Void = {}
   var retryPairing: () -> Void = {}
   var showAppleWindow: () -> Void = {}
+  /// Not enough free space for Apple's install: look again.
+  var recheckSpace: () -> Void = {}
+  /// Opens System Settings at General > Storage.
+  var openStorage: () -> Void = {}
+  /// Asks Apple's installer without the space check (Apple's own installer has the final say).
+  var tryAnyway: () -> Void = {}
 }
 
 /// The setup window's one view: the screen for the flow's step. Pure of any process; `OnboardingCoordinator` feeds it.
@@ -169,13 +175,20 @@ private struct AppleToolsScreen: View {
     OBFrame(flow: flow) {
       HStack(spacing: 40) {
         VStack(alignment: .leading, spacing: 14) {
-          Text(OnboardingCopy.appleTitle).font(OB.heading(28)).fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+          Text(flow.tools.isNeedSpace ? OnboardingCopy.spaceTitle : OnboardingCopy.appleTitle).font(OB.heading(28)).fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
           switch flow.tools {
           case .asking:
             muted(OnboardingCopy.appleAsking)
             (Text(OnboardingCopy.appleClick).bold() + Text(OnboardingCopy.appleClickRest)).font(OB.body(16)).lineSpacing(4)
               .fixedSize(horizontal: false, vertical: true)
             Button(OnboardingCopy.appleNoWindow, action: actions.showAppleWindow).buttonStyle(LinkStyle())
+          case .needSpace(let have):
+            muted(OnboardingCopy.spaceBody(have: have))
+            Button(OnboardingCopy.tryAgain, action: actions.recheckSpace).buttonStyle(PillStyle())
+            HStack(spacing: 20) {
+              Button(OnboardingCopy.spaceAnyway, action: actions.tryAnyway).buttonStyle(LinkStyle())
+              Button(OnboardingCopy.spaceHow, action: actions.openStorage).buttonStyle(LinkStyle())
+            }
           case .installing(let pct):
             muted(OnboardingCopy.appleInstalling)
             HStack {
@@ -188,11 +201,13 @@ private struct AppleToolsScreen: View {
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        AppleWindowSketch().opacity({ if case .installing = flow.tools { return 0.45 } else { return 1 } }()).accessibilityHidden(true)
+        if !flow.tools.isNeedSpace {
+          AppleWindowSketch().opacity({ if case .installing = flow.tools { return 0.45 } else { return 1 } }()).accessibilityHidden(true)
+        }
       }
       .padding(.horizontal, 64)
     } footer: {
-      Text(OnboardingCopy.appleFooter).font(OB.body(13)).foregroundStyle(OB.muted).frame(maxWidth: .infinity, alignment: .leading)
+      Text(flow.tools.isNeedSpace ? OnboardingCopy.spaceFooter : OnboardingCopy.appleFooter).font(OB.body(13)).foregroundStyle(OB.muted).frame(maxWidth: .infinity, alignment: .leading)
       Button(OnboardingCopy.continueButton, action: {}).buttonStyle(PillStyle()).disabled(true)
     }
   }
@@ -208,7 +223,7 @@ private struct AppleWindowSketch: View {
       HStack(spacing: 6) {
         Spacer()
         ForEach(Array(OnboardingCopy.appleWindowButtons.enumerated()), id: \.offset) { i, t in
-          let install = i == 2
+          let install = i == OnboardingCopy.appleWindowButtons.count - 1
           Text(t).font(OB.body(12, install ? .semibold : .regular)).foregroundStyle(install ? OB.ink : Color(hex: 0x333333)).lineLimit(1).fixedSize()
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: 6).fill(install ? OB.accent : Color(hex: 0xEEEEEE)))
@@ -216,6 +231,7 @@ private struct AppleWindowSketch: View {
         }
       }
       .padding(.top, 4)
+      Text(OnboardingCopy.appleWindowAgree).font(OB.body(12)).foregroundStyle(Color(hex: 0x555555)).fixedSize(horizontal: false, vertical: true)
     }
     .padding(18)
     .frame(width: 250)

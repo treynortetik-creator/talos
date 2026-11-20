@@ -81,33 +81,6 @@ const tappedAtCentre = (loc: Locator) =>
 test.describe('on-screen keyboard', () => {
   test.skip(({ browserName }) => browserName !== 'webkit', 'iOS layout: Chromium resizes the layout viewport itself')
 
-  test('R3-01: a low settings field (the live-call personality, the last box on Voice; Agent has no low field any more) is not left under the keyboard', async ({
-    page,
-  }) => {
-    await page.setViewportSize(SHELL)
-    await open(page, '/settings/voice')
-    const field = page.getByLabel('Live-call personality')
-    await expect(field).toBeVisible()
-    // Rest the field low on the screen, where the owner taps it with the keyboard down.
-    await field.evaluate((el) => {
-      let s = el.parentElement
-      while (s && !(s.scrollHeight > s.clientHeight + 1 && getComputedStyle(s).overflowY !== 'visible'))
-        s = s.parentElement
-      if (s) s.scrollTop += el.getBoundingClientRect().top - 656
-    })
-    expect((await field.boundingBox())?.y ?? 0, 'the setup: the field rests below the keyboard top').toBeGreaterThan(
-      530,
-    )
-    await field.evaluate((el) => (el as HTMLElement).focus({ preventScroll: true }))
-    await keyboard(page, 336)
-    await expect(page.locator('html')).toHaveAttribute('data-kb', 'open')
-    await frames(page)
-    await frames(page)
-    await expect(field).toBeFocused()
-    const hit = await tappedAtCentre(field)
-    expect(hit.isIt, `field at y ${hit.y.join('-')} is covered by ${hit.what}`).toBe(true)
-  })
-
   test('R3-03: a new row does not snap away the card field being edited', async ({ page }) => {
     await page.setViewportSize(SHELL)
     await open(page)

@@ -186,7 +186,7 @@ final class SupervisorController: ObservableObject {
     guard let m else { return }
     let sup = supervisor
     // Main's development-channels warning, when refused, goes to the owner as a card the bridge posts (SupervisorDevCard.swift)
-    m.setMainDialog { [weak sup] in sup?.status.devDialog }
+    m.setMainDialog { [weak sup] in sup?.status.devDialog ?? sup?.status.paneDialog }
     // a worker stuck on a prompt gets one line in its own thread, through the same signed `talos-app post` main's notices use
     m.postNotice = { [weak sup] thread, text in sup?.postToThread(thread, text: text) ?? .failed }
     m.onEvent = { [weak self] e in Task { @MainActor in self?.handleWorker(e) } }
@@ -572,7 +572,7 @@ final class SupervisorController: ObservableObject {
       var c = PreSetup.base(for: settledConfig(), configured: configured, store: store)
       if let d = spec.agentDir { c.agentDir = d }
       c.claudePath = spec.program == "claude" ? "auto" : spec.program
-      c.args = spec.args
+      c.args = MainChannelFlag.ensured(spec.args)
       c.env = BridgeEnv.merged(spec.env)  // the bridge variables stay even when the pasted line has none (audit D45)
       if let id = spec.resumeId, id != c.session.id { c.session = DesktopConfig.Session(id: id, previousIds: c.session.previousIds) }
       guard commitSetup(c) else { return SetupText.importNotSaved(path: Self.configPath) }
@@ -704,12 +704,12 @@ final class SupervisorController: ObservableObject {
   @discardableResult
   func setPermissionMode(_ mode: PermissionMode, restart: Bool) -> PermissionModeSetting.Outcome {
     guard configured, !refusedForUnreadableConfig() else { return .unchanged }
-    let o = PermissionModeSetting.evaluate(mode, against: configNow)
+    let o = PermissionModeSetting.evaluate(mode, against: configNow, addsChannelsFlag: true)
     guard case .updated = o else { return o }
     let go = restart && prepareToStart()
     if go { supervisor.startTicking() }
     edit(
-      { $0.args = PermissionModeSetting.applying(mode, to: $0.args) }, bumpRevision: true,
+      { $0.args = MainChannelFlag.ensured(PermissionModeSetting.applying(mode, to: $0.args)) }, bumpRevision: true,
       through: { [supervisor] _, done in supervisor.changePermissionMode(mode, restart: go, then: done) })
     return o
   }

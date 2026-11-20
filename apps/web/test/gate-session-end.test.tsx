@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The real App and Gate. The relay closes the live socket with 4401 and says why; only a session that ran out of time, was
-// signed in again, or a tab holding an old device key keeps what the owner had queued. Revoked, signed out everywhere, or no reason (an older relay) empties the queue, queued voice notes included.
+// signed in again, or a tab holding an old device key keeps what the owner had queued. Revoked, signed out everywhere, or no reason (an older relay) empties the queue.
 
 import { FakeRelay, NodeWebSocket } from '@talos-app/testkit'
 import { cleanup, render, waitFor } from '@testing-library/react'
@@ -54,7 +54,7 @@ async function liveApp(opts: { meReason?: string } = {}) {
     WebSocketImpl: NodeWebSocket as unknown as typeof WebSocket,
   })
   await client.ensureDevice()
-  // one message and one voice note are already waiting on this device
+  // one message is already waiting on this device
   await storage.put('outbox', '01JZ0000000000000000000001', {
     id: '01JZ0000000000000000000001',
     order: 1,
@@ -63,14 +63,6 @@ async function liveApp(opts: { meReason?: string } = {}) {
     threadId: 'general',
     bytes: '{}',
   })
-  await storage.put('blobs', 'm_01JZ0000000000000000000002', {
-    clientMsgId: 'm_01JZ0000000000000000000002',
-    threadId: 'general',
-    mime: 'audio/webm',
-    name: 'v.webm',
-    blob: new Blob(['abc']),
-    order: 2,
-  })
   const close = vi.spyOn(client, 'close')
   render(<App client={client} storage={storage} />)
   if (opts.meReason === undefined)
@@ -78,9 +70,8 @@ async function liveApp(opts: { meReason?: string } = {}) {
   return { client, storage, close }
 }
 
-const counts = async (s: { all: (n: 'outbox' | 'blobs') => Promise<unknown[]> }) => ({
+const counts = async (s: { all: (n: 'outbox') => Promise<unknown[]> }) => ({
   outbox: (await s.all('outbox')).length,
-  blobs: (await s.all('blobs')).length,
 })
 
 describe('the Gate on a 4401 close', () => {
@@ -90,7 +81,7 @@ describe('the Gate on a 4401 close', () => {
     relay.closeApps(4401, 'expired')
     await waitFor(() => expect(window.location.pathname).toBe('/login'), { timeout: 10_000 })
     await waitFor(async () => expect((await storage.all('cache')).length).toBe(0))
-    expect(await counts(storage)).toEqual({ outbox: 1, blobs: 1 })
+    expect(await counts(storage)).toEqual({ outbox: 1 })
   })
 
   // This tab held a device key the owner has since replaced, or this browser has just signed in over its session. The storage
@@ -108,18 +99,18 @@ describe('the Gate on a 4401 close', () => {
       expect(await storage.get('cache', 'snapshot')).toBeDefined()
       expect(await storage.get('drafts', 'general')).toBe('half a thought')
       expect((await storage.all('schedules')).length).toBe(1)
-      expect(await counts(storage)).toEqual({ outbox: 1, blobs: 1 })
+      expect(await counts(storage)).toEqual({ outbox: 1 })
       expect(window.localStorage.getItem('talos-app:wipe-pending')).toBeNull()
     },
   )
 
   it.each([['revoked'], ['logged_out_everywhere'], ['logged_out'], ['']])(
-    'closed with reason %j: the queue and the voice notes are wiped too',
+    'closed with reason %j: the queue is wiped too',
     async (reason) => {
       const { storage } = await liveApp()
       relay.closeApps(4401, reason)
       await waitFor(() => expect(window.location.pathname).toBe('/login'), { timeout: 10_000 })
-      await waitFor(async () => expect(await counts(storage)).toEqual({ outbox: 0, blobs: 0 }), { timeout: 10_000 })
+      await waitFor(async () => expect(await counts(storage)).toEqual({ outbox: 0 }), { timeout: 10_000 })
     },
   )
 })

@@ -247,10 +247,9 @@ describe('main resend: the Mac asks, the bridge delivers the stalled owner messa
       ['tap', 'owner', 'card_action'],
       ['sys', 'system', 'system'],
       ['ext', 'external', 'text'],
-      ['voice', 'owner_voice', 'voice_note'],
     ] as const)
       holdOwnerNotice(m, { content: 'x', meta: { message_id: id, trust, kind } })
-    expect([...m.held.keys()]).toEqual(['own', 'voice'])
+    expect([...m.held.keys()]).toEqual(['own'])
   })
 
   test("the request parser accepts the Mac's form and refuses the rest", () => {

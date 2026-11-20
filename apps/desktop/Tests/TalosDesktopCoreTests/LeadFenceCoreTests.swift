@@ -112,18 +112,19 @@ func escalation(_ body: () throws -> Void) -> PrivilegeCeiling.Denial? {
 
 @Suite("Lead fence: the Talos home deny")
 struct WorkerFenceTests {
-  @Test func theRulesAreSixToolsOnTheWholeHomeInTheGivenSpellingAndInLowerCase() {
+  @Test func theRulesAreReadAndEditOnTheWholeHomeInTheGivenSpellingAndInLowerCase() {
     let rules = WorkerFence.denyRules(talosHome: "/home/Alex/.Talos/")
-    for tool in ["Read", "Edit", "Write", "Grep", "Glob", "NotebookEdit"] {
+    for tool in ["Read", "Edit"] {
       for form in ["/home/Alex/.Talos", "/home/alex/.talos"] {
         #expect(rules.contains("\(tool)(/\(form)/**)"), "\(tool) \(form)")
         #expect(rules.contains("\(tool)(/\(form))"), "\(tool) \(form)")
       }
     }
-    #expect(rules.count == 24)
-    #expect(Set(rules).count == 24, "no repeats")
+    // 2 tools (Read, Edit) x 2 rules (`/**` and the folder) x 2 spellings; 1 spelling for an already lower-case home
+    #expect(rules.count == 8)
+    #expect(Set(rules).count == 8, "no repeats")
     // an already lower-case home is one spelling
-    #expect(WorkerFence.denyRules(talosHome: "/home/example/.talos").count == 12)
+    #expect(WorkerFence.denyRules(talosHome: "/home/example/.talos").count == 4)
   }
 
   @Test func thereIsNoCarveOutAndNoRuleForTheInboxAnywhere() {
@@ -181,7 +182,7 @@ struct WorkerFenceTests {
     try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: t.talosHome)
     let real = try #require(realpath(t.talosHome, nil).map { p -> String in defer { free(p) }; return String(cString: p) })
     let rules = WorkerFence.denyRules(talosHome: link)
-    for tool in ["Read", "Grep", "Glob", "Edit", "Write", "NotebookEdit"] {
+    for tool in ["Read", "Edit"] {
       for form in [link, link.lowercased(), real, real.lowercased()] {
         #expect(rules.contains("\(tool)(/\(form)/**)") && rules.contains("\(tool)(/\(form))"), "\(tool) \(form)")
       }
@@ -222,7 +223,7 @@ struct WorkerFenceTests {
     var o2 = try #require(jsonObject(good.settingsJSON))
     var p2 = try #require(o2["permissions"] as? [String: Any])
     var d2 = try #require(p2["deny"] as? [String])
-    d2.removeAll { $0 == "NotebookEdit(/\(t.talosHome))" }
+    d2.removeAll { $0 == "Edit(/\(t.talosHome))" }
     p2["deny"] = d2
     o2["permissions"] = p2
     one.settingsJSON = String(decoding: try JSONSerialization.data(withJSONObject: o2, options: [.sortedKeys]), as: UTF8.self)

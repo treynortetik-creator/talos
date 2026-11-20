@@ -49,15 +49,9 @@ export function hapticCall(kind: HapticKind): { method: 'impact' | 'notification
   return { method: 'impact', options: { style: 'LIGHT' } }
 }
 
-/** V3's three session types onto TalosAudio modes: while listening/speaking, while recording, and idle. */
-export function audioMode(type: AudioSessionType): 'playback' | 'paused' | 'record' | 'idle' {
-  return type === 'play-and-record'
-    ? 'record'
-    : type === 'playback'
-      ? 'playback'
-      : type === 'paused'
-        ? 'paused'
-        : 'idle'
+/** The session types onto TalosAudio modes: while listening/speaking, a clip loaded and stopped, and idle. */
+export function audioMode(type: AudioSessionType): 'playback' | 'paused' | 'idle' {
+  return type === 'playback' ? 'playback' : type === 'paused' ? 'paused' : 'idle'
 }
 
 /** A native Now Playing command and the page's own MediaSession can both deliver one tap; the second one inside this window is dropped. */

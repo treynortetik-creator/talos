@@ -14,7 +14,6 @@ import {
   type FrameType,
   isInheritedName,
   isQuiet,
-  type MessageT,
   newUlid,
   type PresenceT,
   type ThreadT,
@@ -783,14 +782,6 @@ export class Hub implements Bus {
   }
 
   // ---- history ----------------------------------------------------------------------------------------------------
-
-  /** The thread's newest messages as the app would see them (the voice module seeds a call from these). */
-  recentMessages(threadId: string, limit: number): MessageT[] {
-    return this.d.store
-      .threadEvents(threadId, null, limit)
-      .map((f) => historyFrames.eventMessage.call(this.historyCtx, f))
-      .filter((m): m is MessageT => m !== null)
-  }
 
   /**
    * Runs the module handlers for an app frame. With `strict`, says whether every one of them finished without error, or

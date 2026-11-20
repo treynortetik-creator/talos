@@ -14,7 +14,7 @@ export const UPLOAD_TEXT = {
   label: (where: string) => `Upload a file to ${where}`,
   busy: 'One upload at a time: wait for this one to finish.',
   folderDrop: 'Folders can’t be uploaded: drop the files inside it.',
-  relay: "The upload didn't reach the relay. Try again.",
+  relay: "The upload didn't reach Talos. Try again.",
   some: (failed: string[]) => `Not put: ${failed.join('; ')}`,
   root: 'this folder',
   sending: (name: string) => `Uploading ${name}…`,

@@ -1,8 +1,8 @@
 // Fourth pass on PR #92 (WP-I5), web side: a stale 'online' after a warm resume, the native badge on resume, and the
 // Settings note that outlives its row state.
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeCard } from '../cards/helpers.tsx'
+import { cardSend, makeCard } from '../cards/helpers.tsx'
 
 vi.setConfig({ testTimeout: 30_000 })
 const long = { timeout: 10_000 }
@@ -50,7 +50,7 @@ describe('a warm resume: the connection still reads online, but no ready has lan
     await act(async () => {
       client.store.setState((s) => ({ ...s, readySeq: 4, cards: [fresh] }))
     })
-    await screen.findByRole('button', { name: /Send/ }, long)
+    await cardSend(long)
     expect(window.location.pathname).toBe(`/card/${fresh.id}`)
   })
 
@@ -61,7 +61,7 @@ describe('a warm resume: the connection still reads online, but no ready has lan
     await act(async () => {
       client.store.setState((s) => ({ ...s, readySeq: 4, cards: [first] }))
     })
-    await screen.findByRole('button', { name: /Send/ }, long)
+    await cardSend(long)
     await act(async () => {
       window.history.pushState({}, '', `/card/${next.id}`)
       window.dispatchEvent(new PopStateEvent('popstate'))

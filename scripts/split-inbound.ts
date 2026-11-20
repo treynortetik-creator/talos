@@ -41,7 +41,7 @@ const FAMILIES: Record<string, { file: string; about: string; methods: string[] 
   },
   messages: {
     file: 'inbound-messages.ts',
-    about: 'Owner messages and voice notes, one at a time and as a backlog after the Mac was offline.',
+    about: 'Owner messages, one at a time and as a backlog after the Mac was offline.',
     methods: [
       'fetchAttachments',
       'record',
@@ -50,8 +50,6 @@ const FAMILIES: Record<string, { file: string; about: string; methods: string[] 
       'messageRow',
       'onMessage',
       'afterOwnerNotify',
-      'voiceNoteContent',
-      'onVoiceNote',
       'handleBacklog',
     ],
   },

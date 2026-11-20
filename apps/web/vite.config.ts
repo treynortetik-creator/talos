@@ -70,7 +70,6 @@ export default defineConfig({
           rollupOptions: {
             input: {
               main: fileURLToPath(new URL('index.html', import.meta.url)),
-              voiceHarness: fileURLToPath(new URL('test/voice/harness/index.html', import.meta.url)),
               cardsHarness: fileURLToPath(new URL('test/cards/harness/index.html', import.meta.url)),
               schedulesHarness: fileURLToPath(new URL('test/schedules/harness/index.html', import.meta.url)),
               memoryHarness: fileURLToPath(new URL('test/memory/harness/index.html', import.meta.url)),

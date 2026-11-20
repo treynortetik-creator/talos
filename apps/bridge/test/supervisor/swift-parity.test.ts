@@ -576,15 +576,10 @@ describe('the thread-state hook is the Mac’s', () => {
   })
   it('the allow and deny rules: the same spelling, the same refusals', () => {
     const allow = stateFileAllowRules('/home/alex/agent', 'trip')
-    expect(allow).toEqual([
-      'Edit(//home/alex/agent/threads/trip.state.md)',
-      'Write(//home/alex/agent/threads/trip.state.md)',
-    ])
+    expect(allow).toEqual(['Edit(//home/alex/agent/threads/trip.state.md)'])
     expect(stateFileDenyRules('/home/alex/agent', 'trip')).toEqual(allow.map((r) => r.replace(/\)$/, '/**)')))
-    // the Mac's test holds its output to the same two strings (with a trailing slash given, as TS trims it)
-    expect(macTest).toContain(
-      '["Edit(//home/alex/agent/threads/trip.state.md)", "Write(//home/alex/agent/threads/trip.state.md)"]',
-    )
+    // the Mac's test holds its output to the same string (with a trailing slash given, as TS trims it)
+    expect(macTest).toContain('== ["Edit(//home/alex/agent/threads/trip.state.md)"]')
     expect(stateFileAllowRules('/home/alex/agent/', 'trip')).toEqual(allow)
     // the same bad folders and bad ids get none
     for (const bad of [

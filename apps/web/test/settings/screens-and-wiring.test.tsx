@@ -39,7 +39,7 @@ function stubStatus(over: Partial<HealthStatusT> = {}) {
 
 describe('Health: Connection merged in, relay limits read-only, tool prompts switch', () => {
   it('shows the relay limits as a read-only line that says where to change them, and the tool-prompts state as a switch', async () => {
-    stubStatus({ limits: { buffer_days: 3, upload_max_mb: 20, voice_daily_max_min: 45, voice_session_max_min: 15 } })
+    stubStatus({ limits: { buffer_days: 3, upload_max_mb: 20 } })
     const client = setup()
     client.store.setState((s) => (s.config ? { ...s, config: { ...s.config, permission_relay: true } } : s))
     renderWith(<HealthScreen />, client, '/settings/health')
@@ -50,7 +50,6 @@ describe('Health: Connection merged in, relay limits read-only, tool prompts swi
     await waitFor(() => expect(within(ro).getByTestId('relay-limits')).toBeTruthy())
     expect(within(ro).getByTestId('relay-limits').textContent).toMatch(/messages kept 3 days/)
     expect(within(ro).getByTestId('relay-limits').textContent).toMatch(/uploads up to 20 MB/)
-    expect(within(ro).getByTestId('relay-limits').textContent).toMatch(/45 min a day, 15 min per call/)
     expect(ro.querySelectorAll('input, select, button:not([role="switch"])').length).toBe(0) // the limits line has nothing to press; the switch is the only control
     expect(ro.querySelectorAll('[role="switch"]').length).toBe(1)
   })
@@ -74,13 +73,11 @@ describe('Health: Connection merged in, relay limits read-only, tool prompts swi
 })
 
 describe('limitsLine and the copy that used to hard-code 7 days and 50 MB (M34)', () => {
-  it('words the relay’s numbers, one day singular, a zero daily allowance as none', () => {
+  it('words the relay’s numbers, one day singular', () => {
     expect(limitsLine(undefined)).toBeNull()
     expect(limitsLine({})).toBeNull()
     expect(limitsLine({ buffer_days: 1 })).toBe('messages kept 1 day')
-    expect(limitsLine({ voice_daily_max_min: 0, voice_session_max_min: 30 })).toBe(
-      'live voice no minutes allowed today, 30 min per call',
-    )
+    expect(limitsLine({ buffer_days: 3, upload_max_mb: 20 })).toBe('messages kept 3 days · uploads up to 20 MB')
   })
 
   it('the Mac-offline message says the real number of days, and the old 7 days when the relay did not say', () => {

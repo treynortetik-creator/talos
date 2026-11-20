@@ -526,7 +526,7 @@ struct SetupGuiTests {
     let d = try #require(disk())
     #expect(d.keepAwakeOnAC && d.agentDir == "/home/alex/held", "held settings joined the file")
     #expect(d.hotkeys.compose == "ctrl+opt+shift+k", "a hotkey set before setup no longer reverts")
-    #expect(d.args == ["--dangerously-skip-permissions"])
+    #expect(d.args == MainChannelFlag.ensured(["--dangerously-skip-permissions"]))
     #expect(PreSetup.load(store) == nil, "and the held copy is gone")
   }
 
@@ -564,7 +564,7 @@ struct SetupGuiTests {
     store.setString("ctrl+opt+Space", forKey: PreSetup.hotkeyKey)
     #expect(m.importCommand("claude --two") == nil)
     let d = try #require(disk())
-    #expect(d.args == ["--two"])
+    #expect(d.args == MainChannelFlag.ensured(["--two"]))
     #expect(d.relayUrl == "https://new.example.com" && d.hotkeys.compose == "cmd+shift+k", "the live file wins over anything held")
   }
 
@@ -732,7 +732,7 @@ struct MacHomesScreensGuiTests {
     let narrow = try await shot("mac-session-narrow-light", SettingsView(model: m), size: NSSize(width: 640, height: 520), dark: false)
     for d in [notSet, setUp, refused, narrow] { #expect(d.count > 8_000) }
     #expect(notSet != setUp && setUp != refused)
-    #expect(m.supervisor.currentConfig().args == ["--x"], "the refused line changed nothing")
+    #expect(m.supervisor.currentConfig().args == MainChannelFlag.ensured(["--x"]), "the refused line changed nothing")
     #expect(m.supervisor.currentConfig().env["SECRET"] == "secret-value")
   }
 
@@ -747,7 +747,7 @@ struct MacHomesScreensGuiTests {
     let size = NSSize(width: 700, height: 700)
     let (_, h1) = host(SettingsView(model: m, typedLaunchLine: "claude --y"), size: size, dark: false)
     await settle(h1, 2.5)
-    #expect(m.supervisor.currentConfig().args == ["--y"], "the edit was saved")
+    #expect(m.supervisor.currentConfig().args == MainChannelFlag.ensured(["--y"]), "the edit was saved")
     let afterEdit = try png(h1)
     let (_, h2) = host(SettingsView(model: m), size: size, dark: false)
     await settle(h2, 2.5)

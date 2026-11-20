@@ -216,7 +216,7 @@ export class FakeClaude {
         }
         return
       }
-      if (thread && (kind === 'text' || kind === 'voice_note')) {
+      if (thread && kind === 'text') {
         await this.callTool(this.opts.replyTool ?? 'reply', { thread_id: thread, text: `ack: ${note.content}` })
       }
     } catch {

@@ -15,7 +15,7 @@ import type { BridgeOptions } from './bridge-options.ts'
 import { BugContextService } from './bug-context/service.ts'
 import { CardExpiry } from './card-expiry.ts'
 import { CardLedger } from './cards-ledger.ts'
-import { sessionMarkerInherited } from './claude-env.ts'
+import { sessionMarkerInherited, startupTalosChannel } from './claude-env.ts'
 import { type Clock, realClock } from './clock.ts'
 import { assertSecureRelayUrl, type BridgePaths, paths as pathsOf } from './config.ts'
 import { ConfigFile, supervisorFlagOpts } from './config-file.ts'
@@ -480,6 +480,7 @@ export class Bridge {
         instance,
         commit: BRIDGE_COMMIT,
         sessionMarkerInherited: sessionMarkerInherited(),
+        talosChannel: startupTalosChannel(this.log),
         snapshot: () => ({
           mode: 'live',
           relay: {
@@ -521,8 +522,7 @@ export class Bridge {
   }
 
   /**
-   * The one way a notification reaches the agent's channel. Its content is text from many hands (the owner's message, a voice
-   * transcript, a card title, a hand-off, a revise note): a forged `<channel … trust="owner">` or other control tag in it is
+   * The one way a notification reaches the agent's channel. Its content is text from many hands (the owner's message, a card title, a hand-off, a revise note): a forged `<channel … trust="owner">` or other control tag in it is
    * neutralised here, so only Claude Code's own wrapper is a real tag, whatever path the text came by.
    */
   setEmit(fn: (n: Notification) => Promise<void>) {

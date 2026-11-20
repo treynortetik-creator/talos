@@ -19,6 +19,10 @@ extension Supervisor {
     public var dialogStall: Double = 60
     /// A prompt of the CLI's that Talos has no name for counts after its region of the screen has held still this long.
     public var promptSettle: Double = 5
+    /// A tool permission or question offered as a card whose card the phone has not acknowledged by now gets the plain line (the CLI path), like a thread's
+    /// `cardAckWait`; and its stall alarm (the unknown-question warning, which opens Terminal) is held back this long while the offer stands.
+    public var paneCardWait: Double = 15
+    public var paneStallAfter: Double = 600
     /// ... and while an attached client has not typed for this long (an owner-opened picker is not waiting on anybody).
     public var promptClientQuiet: Double = 30
     /// The dev-channels warning is answered only while no attached tmux client has typed for this long (or when the clients cannot be read: never).
@@ -202,6 +206,9 @@ extension Supervisor {
     public var agentActivity: String?
     /// Main's dialog on its pane as an offer for the bridge's card (SupervisorDevCard.swift); `WorkerManager` writes it to `workers.json`.
     public var devDialog: DialogOffer?
+    /// Main's tool permission or the agent's own question as an offer (SupervisorPanePrompt.swift): the Mac popup lists it, and it goes into `workers.json`
+    /// beside `devDialog` for the bridge's card. Never both at once.
+    public var paneDialog: DialogOffer?
     /// Main's API-key question as a Mac popup offer (`SupervisorFirstStart`). Not written to workers.json: there is no phone card for it yet.
     public var apiKeyDialog: DialogOffer?
     /// Main's MCP-server question or bypass disclaimer as a Mac popup offer (`SupervisorSafetyPopup`), answered only by a real click.
@@ -294,6 +301,23 @@ extension Supervisor {
     var safetyUnsentScreen: String?
     var safetyUnsentUntil: Double = 0
     var safetyPhoneTold = false
+    /// Main's tool permission or the agent's question as an offer (SupervisorPanePrompt.swift), the screen it was made for (`PaneSelect.Screen.bound`),
+    /// what the pane showed at the last look, since when and since when it has shown none (the supervisor's clock), the dialog id a key was sent for,
+    /// the screen whose answer key was confirmed (not offered again while it stands) and the one whose key's delivery is unknown (the short memory).
+    var paneOffer: DialogOffer?
+    /// When (supervisor clock) the standing offer was made, and the offer the phone line was posted for.
+    var paneOfferedAt: Double = 0
+    var paneLineFor: String?
+    var paneBound: String?
+    var paneSeen: String?
+    var paneSince: Double = 0
+    var paneGone: Double?
+    var panePressedFor: String?
+    var paneAnswered: String?
+    var paneUnsent: String?
+    var paneUnsentUntil: Double = 0
+    var paneControlsSeen: [String] = []
+    var paneProofsUsed: [String] = []
     /// The pane's last output as the host last reported it (a wall time), and when on the supervisor's clock that report last changed.
     /// The dialog stall is timed from the second, so a Mac clock set forward cannot raise it early nor one set back hold it off.
     var outputSeen: Date?

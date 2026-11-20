@@ -127,18 +127,6 @@ describe('an attachment the relay would not hand over', () => {
     expect(relay.state.gets).toBe(0)
     expect(existsSync(join(h.home, 'media', `${ref.media_id}.txt`))).toBe(false)
   })
-
-  test('a voice note whose download failed tells the owner too, and the agent is not told it was tampered with', async () => {
-    const relay = flakyRelay()
-    h = await startHarness({ bridge: { fetchFn: relay.fetchFn } })
-    const ref = await upload(h, 'audio bytes', 'note.m4a', 'audio/mp4')
-    relay.state.down = true
-    await h.app.sendVoiceNote('general', { ...ref, kind: 'voice_note', role: 'attachment' })
-    await h.waitNotes(1)
-    expect(h.notes[0]?.content).toContain('retry_attachment')
-    expect(h.notes[0]?.content).not.toContain('could not be fetched or verified')
-    await waitFor(() => ownerNotices(h as Harness).some((t) => t.includes('note.m4a')), 5000, 'the owner notice')
-  })
 })
 
 describe('an attachment that fails the signed check', () => {
@@ -302,7 +290,6 @@ describe('a thread with its own session', () => {
             kind: 'fixed',
             order: 5,
             notify: 'all',
-            voice_context: 'recent',
             archived: false,
             created_at: '2026-10-28T00:00:00.000Z',
             session: 'dedicated',

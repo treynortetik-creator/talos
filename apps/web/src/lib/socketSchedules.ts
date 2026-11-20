@@ -210,7 +210,7 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
       if (!d.features()?.includes(HEARTBEAT_FEATURE))
         throw new TalosClientError('scheduler_unavailable', 'Update Talos on your Mac to test a heartbeat.')
       if (!d.relayFeatures?.()?.includes(HEARTBEAT_FEATURE))
-        throw new TalosClientError('scheduler_unavailable', 'Update your Talos relay to test a heartbeat.')
+        throw new TalosClientError('scheduler_unavailable', 'Update Talos online to test a heartbeat.')
       return ask(
         'heartbeat.test_result',
         {

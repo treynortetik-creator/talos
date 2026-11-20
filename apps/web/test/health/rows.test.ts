@@ -44,7 +44,6 @@ describe('healthNotes', () => {
       beat: {
         mod: { state: 'alive', last_seen: null, expected: true },
         tts: false,
-        stt: true,
         sqlite: { fts5: false },
       },
     })

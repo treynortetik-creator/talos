@@ -46,7 +46,10 @@ extension Supervisor {
       }
       writePromptRecord(PromptRecord(hash: hash, open: true))
       audit("prompt_notified", ["kind": p.title ?? "prompt"])
-      postToPhone(asMac: false) { SupervisorNotice.mainPromptLine(agentName: $0, prompt: p) }  // screen text: never as the Mac's own row
+      // a prompt the Mac read whole is a popup and a card (`mainPaneSelect`): the card is its notice. One it could not read gets the line.
+      if PaneSelect.read(rows: rows) == nil {
+        postToPhone(asMac: false) { SupervisorNotice.mainPromptLine(agentName: $0, prompt: p) }  // screen text: never as the Mac's own row
+      }
     case .cleared:
       audit("prompt_cleared", [:])
       closePromptRecord()

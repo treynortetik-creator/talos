@@ -2,7 +2,7 @@
 // The Mac refuses an owner signature older than 8 days. A queued message or voice note that waited that long is signed
 // again by the same device key (new frame id and time, same client message id) before it is sent, so waiting through a
 // long session expiry does not turn into a silent refusal. The fake Mac checks signature, age and repeats like the real one.
-import { newId, verifyOwnerFrame } from '@talos-app/protocol'
+import { verifyOwnerFrame } from '@talos-app/protocol'
 import { FakeBridge, FakeRelay, waitFor } from '@talos-app/testkit'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSocketClient, type SocketClient } from '../src/lib/socketClient.ts'
@@ -61,20 +61,8 @@ describe('a queued message that outlived the Mac age limit', () => {
   it('is signed again with a fresh time and the same client message id, and the Mac takes it', async () => {
     skew = -10 * DAY // signed ten days ago, by this clock
     const sent = await client.sendMessage({ threadId: 'general', text: 'still wanted' })
-    // A voice note older than the relay keeps its upload (7 days) is shown as failed instead; this one is just past the re-sign age.
-    skew = -6.5 * DAY
-    await client.sendVoiceNote({
-      threadId: 'general',
-      attachment: {
-        media_id: newId('md'),
-        kind: 'voice_note',
-        role: 'attachment',
-        mime: 'audio/webm',
-        name: 'v.webm',
-        size: 3,
-        sha256: 'a'.repeat(64),
-      },
-    })
+    skew = -6.5 * DAY // just past the re-sign age
+    await client.sendMessage({ threadId: 'general', text: 'also wanted' })
     const before = await queuedFrames()
     expect(before).toHaveLength(2)
     for (const f of before) expect(Date.now() - Date.parse(String(f.ts))).toBeGreaterThan(6 * DAY) // old enough to be signed again
@@ -87,7 +75,7 @@ describe('a queued message that outlived the Mac age limit', () => {
 
     const key = await client.deviceKey()
     if (!key) throw new Error('no key')
-    const sentFrames = [...fromApp('message'), ...fromApp('voice_note')].map((f) => f.raw)
+    const sentFrames = fromApp('message').map((f) => f.raw)
     expect(sentFrames).toHaveLength(2)
     for (const f of sentFrames) {
       expect(await verifyOwnerFrame(f, key.publicJwk)).toBe(true) // the same device key, the same signature check

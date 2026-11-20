@@ -93,8 +93,8 @@ describe('rules the table keeps so no row is silently ignored', () => {
     t['owner.extra'] = { phone: false, agent: false, risk: 'low', default: 'x' } // owner is open to the phone as a whole section
     expect(problems(t).join('\n')).toMatch(/owner\.extra/)
     const u = copy()
-    ;(u['agent.voice'] as Record<string, unknown>).phone = 'leaf'
-    expect(problems(u).join('\n')).toMatch(/agent\.voice/)
+    ;(u['voice_notes.driving_until'] as Record<string, unknown>).phone = 'leaf'
+    expect(problems(u).join('\n')).toMatch(/voice_notes\.driving_until/)
   })
 
   it('(b) no row asks for a passkey step-up (2026-11-14)', () => {
@@ -162,9 +162,9 @@ describe('the agent column: a setting the agent may propose carries everything t
 
   it('the words the agent is told are built from the rows, in row order', () => {
     expect(AGENT_SETTINGS_PHRASE).toBe(
-      "agent name, live-call voice, live-call persona, the owner's name, threads, the default thread, timezone, quiet hours, notifications on or off, thread names in notifications, voice-note replies, driving mode, the work section name, the work note, the model list, the memory browser, how long attachments are kept, which kinds of sending are always allowed, the thread fence (developer), the notes lookup for thread sessions (developer), the settings lock (on only), thread sessions and the app theme",
+      "agent name, the owner's name, threads, the default thread, timezone, quiet hours, notifications on or off, thread names in notifications, spoken replies, driving mode, the work section name, the work note, the model list, the memory browser, how long attachments are kept, which kinds of sending are always allowed, the thread fence (developer), the notes lookup for thread sessions (developer), the settings lock (on only), thread sessions and the app theme",
     )
-    expect(AGENT_VALUE_HINTS.startsWith('agent.name (1-32 chars), agent.voice (one of meridian, marin')).toBe(true)
+    expect(AGENT_VALUE_HINTS.startsWith('agent.name (1-32 chars), owner.display_name (1-40 chars)')).toBe(true)
     expect(AGENT_VALUE_HINTS.endsWith('else a card with a preview)')).toBe(true)
   })
 

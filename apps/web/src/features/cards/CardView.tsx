@@ -111,7 +111,7 @@ export const ALWAYS_ALLOW_LABEL: Record<SendKind, string> = {
 /** Shown when a high-risk card was answered from a notification (error `open_in_app`). */
 export const OPEN_IN_APP_COPY = 'This card is approved in the app, not from a notification.'
 /** An older relay or Mac that still asks for the confirmation step this app no longer has (two old error codes). */
-export const OLDER_STEP_COPY = 'Your relay or your Mac is older than this app. Update Talos, then try again.'
+export const OLDER_STEP_COPY = 'Your Talos server or your Mac is older than this app. Update Talos, then try again.'
 
 export function errorCopy(e: unknown, agent: string, host: Host | null): string {
   // The phone only says "nothing was sent" when the frame never left it, and never guesses at the outcome otherwise.
@@ -269,12 +269,14 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       setDecided(true)
     })
   // a button of a needs-you dialog card; the login card's one button carries no index
-  const choose = (choice: number | null) =>
+  const choose = (choice: number | null, text?: string) =>
     run(async () => {
       await client.resolveCard(card.id, {
         action: 'primary',
         payloadHash: hash,
         ...(choice === null ? {} : { choice }),
+        // a question's free-text option: the owner's words, signed with the rest of the frame
+        ...(text === undefined ? {} : { text }),
       })
       setDecided(true)
     })
@@ -700,7 +702,7 @@ function destinationText(card: CardT, d: { label: string; value: string }): stri
     d.value.startsWith('Full permissions') &&
     card.destination.some((x) => x.label === 'Where' && /live session/.test(x.value))
   )
-    return 'As your live session (its permissions)'
+    return 'As your live agent (its permissions)'
   return d.value
 }
 

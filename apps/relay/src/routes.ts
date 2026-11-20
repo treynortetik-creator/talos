@@ -6,12 +6,10 @@ import { routes as authRoutes } from './auth/index.ts'
 import { globalBodyCap } from './core/body-guard.ts'
 import { routes as coreRoutes } from './core/index.ts'
 import { isClientHangup, recorderOf } from './core/problems.ts'
-import { routes as dictateRoutes } from './dictate/index.ts'
 import { routes as hookRoutes } from './hooks/index.ts'
 import { assertRouteTable } from './route-table.ts'
 import type { AppEnv, RelayServices } from './services.ts'
 import { routes as v2Routes } from './v2/index.ts'
-import { routes as voiceRoutes } from './voice/index.ts'
 
 export function buildApp(services: RelayServices): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
@@ -44,11 +42,9 @@ export function buildApp(services: RelayServices): Hono<AppEnv> {
   app.route('/', coreRoutes)
   app.route('/', authRoutes)
   app.route('/', hookRoutes)
-  app.route('/', voiceRoutes)
-  app.route('/', dictateRoutes)
   app.route('/', v2Routes) // docs/V2-FEATURES.md V1.4: declared-guard placeholders until WP-V1 / WP-V4 land
   assertRouteTable(app)
   return app
 }
 
-export { authRoutes, coreRoutes, hookRoutes, v2Routes, voiceRoutes }
+export { authRoutes, coreRoutes, hookRoutes, v2Routes }

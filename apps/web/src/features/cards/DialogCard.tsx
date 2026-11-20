@@ -7,13 +7,15 @@
 import {
   type CardT,
   cardExpiryMs,
+  cleanDialogText,
   DIALOG_FOOTNOTE,
   DIALOG_NOTHING_PRESSED_TITLE,
   DIALOG_PRESSING_TEXT,
+  DIALOG_TEXT_MAX,
   dialogOf,
   dialogVisibleText,
 } from '@talos-app/protocol'
-import type { ReactNode, Ref } from 'react'
+import { type ReactNode, type Ref, useState } from 'react'
 import { hostSteps, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { Button } from '../../ui/index.ts'
@@ -35,8 +37,8 @@ export type DialogCardProps = {
   altered: boolean
   /** A tap was sent from this device and the card has not changed yet. */
   decided: boolean
-  /** The index of the pressed option, or null for the login card's one button. */
-  onChoose: (choice: number | null) => void
+  /** The index of the pressed option, or null for the login card's one button. `text` is the owner's own words, for a question's free-text option only. */
+  onChoose: (choice: number | null, text?: string) => void
 }
 
 type Phase = 'waiting' | 'pressing' | 'answered' | 'nothing' | 'failed' | 'closed' | 'expired'
@@ -66,6 +68,7 @@ export function DialogCard({
   onChoose,
 }: DialogCardProps) {
   const host = useHost()
+  const [text, setText] = useState('')
   const d = dialogOf(card)
   const phase = phaseOf(card, isExpiredNow(card, now), decided)
   const shell = (children: ReactNode, tone = 'border-warn') => (
@@ -121,7 +124,7 @@ export function DialogCard({
       {d.subject !== null && phase !== 'nothing' ? (
         <p
           data-testid="dialog-subject"
-          className="mt-2 rounded-button bg-surface-2 p-2 font-mono text-sm text-text [overflow-wrap:anywhere] break-all"
+          className="mt-2 whitespace-pre-wrap rounded-button bg-surface-2 p-2 font-mono text-sm text-text [overflow-wrap:anywhere] break-all"
         >
           {dialogVisibleText(d.subject)}
         </p>
@@ -141,7 +144,7 @@ export function DialogCard({
           {[
             by ? `Answered on ${dialogVisibleText(by)}` : 'Answered',
             when,
-            d.dialog_kind === 'login' ? '' : 'the session is starting',
+            d.dialog_kind === 'login' ? '' : 'your agent is starting',
           ]
             .filter(Boolean)
             .join(' · ')}
@@ -164,19 +167,58 @@ export function DialogCard({
                 {dialogVisibleText(card.primary_label)}
               </Button>
             ) : (
-              d.options.map((label, i) => (
-                <Button
-                  // the screen order is the identity: two options may read the same
-                  // biome-ignore lint/suspicious/noArrayIndexKey: options are fixed for the life of the card
-                  key={i}
-                  variant="outline"
-                  disabled={busy}
-                  className="h-auto whitespace-normal py-2 text-left [overflow-wrap:anywhere]"
-                  onClick={() => onChoose(i)}
-                >
-                  {dialogVisibleText(label)}
-                </Button>
-              ))
+              d.options.map((label, i) =>
+                i === d.free_text ? (
+                  // the question's free-text option: the owner's own words, typed here and sent in the signed answer
+                  <form
+                    // biome-ignore lint/suspicious/noArrayIndexKey: options are fixed for the life of the card
+                    key={i}
+                    data-testid="dialog-free-text"
+                    className="flex w-full min-w-0 flex-col gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      const words = cleanDialogText(text)
+                      if (words !== null && !busy) onChoose(i, words)
+                    }}
+                  >
+                    <label htmlFor={`${titleId}-text`} className="text-sm text-text-2">
+                      {dialogVisibleText(label)}
+                    </label>
+                    <input
+                      id={`${titleId}-text`}
+                      type="text"
+                      value={text}
+                      maxLength={DIALOG_TEXT_MAX}
+                      autoComplete="off"
+                      disabled={busy}
+                      aria-invalid={text !== '' && cleanDialogText(text) === null}
+                      aria-describedby={`${titleId}-text-hint`}
+                      className="min-h-11 min-w-0 rounded-button border border-line bg-surface-2 px-3 py-2 text-base text-text"
+                      onChange={(e) => setText(e.target.value)}
+                    />
+                    <p id={`${titleId}-text-hint`} className="text-xs text-text-2">
+                      {text !== '' && cleanDialogText(text) === null
+                        ? 'Use plain text on one line.'
+                        : 'Typed to your agent exactly as you write it.'}
+                    </p>
+                    <Button type="submit" variant="outline" disabled={busy || cleanDialogText(text) === null}>
+                      Send your answer
+                    </Button>
+                  </form>
+                ) : (
+                  <Button
+                    // the screen order is the identity: two options may read the same
+                    // biome-ignore lint/suspicious/noArrayIndexKey: options are fixed for the life of the card
+                    key={i}
+                    variant="outline"
+                    disabled={busy}
+                    className="h-auto whitespace-normal py-2 text-left [overflow-wrap:anywhere]"
+                    onClick={() => onChoose(i)}
+                  >
+                    {dialogVisibleText(label)}
+                  </Button>
+                ),
+              )
             )}
           </fieldset>
           {error ? (

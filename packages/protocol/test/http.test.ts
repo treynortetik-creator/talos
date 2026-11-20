@@ -22,7 +22,6 @@ const SPEC_ROUTES = [
   'GET /api/me',
   'GET /api/devices',
   'POST /api/devices/:id/revoke',
-  'POST /api/dictate',
   'POST /api/push/subscribe',
   'DELETE /api/push/subscribe',
   'GET /api/push/apns',
@@ -37,8 +36,6 @@ const SPEC_ROUTES = [
   'GET /media/:id',
   'GET /media/:id/page',
   'GET /media/:id/app', // MCP Apps AP2 (spec M3.5)
-  'POST /api/voice/session',
-  'POST /api/voice/session/:id/close',
   'GET /api/integrations/catalog',
   'GET /api/connections',
   'POST /api/connections',
@@ -186,15 +183,6 @@ describe('http route table', () => {
     expect(routes.bridgeEnroll.req.safeParse({ ...ok, code_id: 'short' }).success).toBe(false)
     const { label: _label, ...noLabel } = ok
     expect(routes.bridgeEnroll.req.safeParse(noLabel).success).toBe(true) // the label is optional
-  })
-  it('voice session matches spec 6.2: request {thread_id, sdp}, response {voice_session_id, sdp_answer, max_minutes}', () => {
-    const v = routes.voiceSession
-    expect(v.req.safeParse({ thread_id: 'general', sdp: 'v=0' }).success).toBe(true)
-    expect(v.req.safeParse({ thread_id: 'all', sdp: 'v=0' }).success).toBe(false)
-    const res = { voice_session_id: 'v_01JBF3V7Q8K2M4N6P8R0S2T4V6', sdp_answer: 'v=0', max_minutes: 30 }
-    expect(v.res.safeParse(res).success).toBe(true)
-    expect(v.res.safeParse({ ...res, max_minutes: undefined }).success).toBe(false)
-    expect(v.res.safeParse({ ...res, voice_session_id: 'x' }).success).toBe(false)
   })
   it('bridge share token revoke: DELETE /bridge/share/tokens/:id, bridge-sig, no body', () => {
     expect(routes.bridgeShareTokenRevoke).toMatchObject({

@@ -31,6 +31,27 @@ struct OnboardingCopyGuardTests {
     #expect(OnboardingCopy.offlineButton == "Try again now")
   }
 
+  /// Apple's real macOS 26 dialog has Cancel and Install, nothing else.
+  @Test func theAppleWindowCardShowsCancelAndInstall() {
+    #expect(OnboardingCopy.appleWindowButtons == ["Cancel", "Install"])
+  }
+
+  @Test func theAppleClickLineNamesInstallAndAgree() {
+    #expect(OnboardingCopy.appleClick + OnboardingCopy.appleClickRest == "Click Install, then Agree, in Apple's window. It takes about 5 minutes, then Talos carries on by itself.")
+    #expect(OnboardingCopy.appleWindowAgree.contains("Agree"))
+    #expect(OnboardingCopy.appleClosed.contains("Install and Agree"))
+  }
+
+  /// The setup window stays an ordinary window: Apple's installer opens in front of it, never under a floating one.
+  @Test func theSetupScreensNeverFloatAboveOtherWindows() throws {
+    let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Sources/TalosDesktop")
+    for f in ["Onboarding.swift", "OnboardingScreens.swift", "OnboardingCoordinator.swift", "OnboardingLive.swift", "OnboardingSteps.swift", "OnboardingTheme.swift"] {
+      let text = try String(contentsOf: sources.appendingPathComponent(f), encoding: .utf8)
+      #expect(!text.contains(".floating") && !text.contains("isFloatingPanel") && !text.contains("level ="), Comment(rawValue: f))
+    }
+  }
+
   /// Every quoted literal in the screens' source files (the three views and the coordinator's own words).
   @Test func noLiteralInTheScreenSourcesUsesAnEngineerWord() throws {
     let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

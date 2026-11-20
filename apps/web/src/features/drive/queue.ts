@@ -49,9 +49,6 @@ export type VoiceQueue = {
   /** Drops every queued (not yet playing) clip for a text the phone voice already read. */
   removeReply(replyTo: string): void
   back(seconds: number): void
-  /** Recording (or anything else that must be heard) pauses playback; `release` resumes it. */
-  hold(reason: string): void
-  release(reason: string): void
   /** Re-applies the saved speed (after the speed button). */
   applySpeed(): void
   clear(): void
@@ -121,10 +118,9 @@ export function createVoiceQueue(opts: {
     waitingSpeech: false,
   }))
   const set = (p: Partial<QueueState>) => store.setState(p)
-  const holds = new Set<string>()
   const seen = new Set<string>()
   let silent = false // the unlock clip is on the element
-  let userPaused = false // the listener paused it: a hold's release must not restart it
+  let userPaused = false // the listener paused it: nothing may restart it by itself
   const started = new Set<string>()
   const failed = new Set<string>()
   const retried = new Set<string>()
@@ -166,7 +162,7 @@ export function createVoiceQueue(opts: {
 
   const startCurrent = () => {
     const { current, armed } = store.getState()
-    if (!current || !armed || holds.size > 0 || userPaused) return
+    if (!current || !armed || userPaused) return
     // One voice at a time: a clip never starts over the phone voice reading an earlier reply. It waits, bounded.
     if (opts.speaking?.()) {
       if (speechWait?.id !== current.id) speechWait = { id: current.id, since: Date.now() }
@@ -197,7 +193,7 @@ export function createVoiceQueue(opts: {
     set({ loading: true })
     loadTimer = setTimeout(() => {
       loadTimer = null
-      if (!sameItem(item) || holds.size > 0 || userPaused || store.getState().blocked) return
+      if (!sameItem(item) || userPaused || store.getState().blocked) return
       giveUp(item)
     }, LOAD_TIMEOUT_MS)
     play(item)
@@ -238,7 +234,7 @@ export function createVoiceQueue(opts: {
       stopWatches()
       setTimeout(() => {
         retrying.delete(item.id)
-        if (!sameItem(item) || holds.size > 0 || failed.has(item.id)) return
+        if (!sameItem(item) || failed.has(item.id)) return
         audio.load()
         begin(item)
       }, RETRY_CLIP_MS)
@@ -318,7 +314,7 @@ export function createVoiceQueue(opts: {
     const at = audio.currentTime
     stallTimer = setTimeout(() => {
       stallTimer = null
-      if (!sameItem(cur) || audio.paused || holds.size > 0 || userPaused) return
+      if (!sameItem(cur) || audio.paused || userPaused) return
       if (audio.currentTime > at) return
       giveUp(cur)
     }, STALL_TIMEOUT_MS)
@@ -447,22 +443,11 @@ export function createVoiceQueue(opts: {
       }
       set({ position: audio.currentTime })
     },
-    hold(reason) {
-      holds.add(reason)
-      stopWatches()
-      if (!audio.paused && !silent) audio.pause()
-      // Remember it was playing so release resumes: the current item stays in `current`.
-    },
-    release(reason) {
-      holds.delete(reason)
-      if (holds.size === 0) startCurrent()
-    },
     applySpeed,
     clear() {
       stopWatches()
       speechWait = null
       audio.pause()
-      holds.clear()
       userPaused = false
       set({ current: null, pending: [], playing: false, blocked: false, paused: false, position: 0, duration: 0 })
     },

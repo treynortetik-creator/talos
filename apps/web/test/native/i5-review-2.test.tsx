@@ -1,9 +1,9 @@
 // Second round of push regression tests, web side. Each test pins a bug that was found and fixed, unless its name says
 // "control". These mount the real
 // App and its real routes, because arm.test.tsx mounts CardDeepLink on a private route and production never reaches that.
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeCard } from '../cards/helpers.tsx'
+import { cardSend, makeCard } from '../cards/helpers.tsx'
 
 async function open(url: string, card: ReturnType<typeof makeCard>, arm = false) {
   window.history.pushState({}, '', url)
@@ -16,7 +16,7 @@ async function open(url: string, card: ReturnType<typeof makeCard>, arm = false)
   if (arm) (await import('../../src/features/cards/arm.tsx')).armCard(card.id)
   render(<App client={client} storage={createMemoryStorage()} />)
   // The card is on screen first, so a failure below is about arming, not about this harness.
-  const button = await screen.findByRole('button', { name: /Send/ })
+  const button = await cardSend()
   return { button, resolve }
 }
 

@@ -128,8 +128,9 @@ describe('tools', () => {
     ).toBe(true)
   })
 
-  test('voice:true runs the fake TTS and attaches the output as a voice_reply', async () => {
+  test('with spoken replies on, the fake TTS runs and its output is attached as a voice_reply', async () => {
     h = await startHarness({
+      config: (c) => ({ ...c, voice_notes: { ...c.voice_notes, reply_with_voice: 'always' } }),
       env: {
         TALOS_APP_TTS_CMD: JSON.stringify([fixture('fake-tts.sh'), 'file', '{out}', '{text}']),
         TALOS_APP_TTS_EXT: 'mp3',
@@ -138,7 +139,6 @@ describe('tools', () => {
     const res = await h.bridge.callTool('reply', {
       thread_id: 'general',
       text: 'long text',
-      voice: true,
       voice_text: 'short spoken',
     })
     expect(res.isError).toBeFalsy()
@@ -153,29 +153,11 @@ describe('tools', () => {
     )
   })
 
-  test('voice:true without a TTS command still sends the text and says why there is no audio', async () => {
+  test('silent rides on the reply frame', async () => {
     h = await startHarness()
-    const res = await h.bridge.callTool('reply', { thread_id: 'general', text: 'hi', voice: true })
-    expect(res.isError).toBeFalsy()
-    expect(text(res)).toContain('voice reply skipped')
-    await h.relay.expectFrame('reply', (r) => r.message.text === 'hi', { direction: 'from_bridge' })
-  })
-
-  test('speak, voice_delegation_id and silent ride on the reply frame; speak over 600 chars is refused', async () => {
-    h = await startHarness()
-    await h.bridge.callTool('reply', {
-      thread_id: 'general',
-      text: 'full',
-      speak: 'short',
-      voice_delegation_id: 'abc',
-      silent: true,
-    })
-    const f = await h.relay.expectFrame('reply', (r) => r.speak === 'short', { direction: 'from_bridge' })
-    expect(f.voice_delegation_id).toBe('abc')
+    await h.bridge.callTool('reply', { thread_id: 'general', text: 'full', silent: true })
+    const f = await h.relay.expectFrame('reply', (r) => r.message.text === 'full', { direction: 'from_bridge' })
     expect(f.silent).toBe(true)
-    expect(
-      (await h.bridge.callTool('reply', { thread_id: 'general', text: 'x', speak: 'y'.repeat(601) })).isError,
-    ).toBe(true)
   })
 
   test('attach sends one file; an .html file becomes an html page card', async () => {
@@ -259,7 +241,6 @@ describe('tools', () => {
       kind: 'agent',
       order: 5 + i,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
     })
@@ -340,7 +321,7 @@ describe('tools', () => {
     expect(text(res)).not.toBe('status working')
   })
 
-  test('inbox_triage sends inbox.update; voice_progress sends voice.progress', async () => {
+  test('inbox_triage sends inbox.update', async () => {
     h = await startHarness()
     const e = 'e_01JBF3V7Q8K2M4N6P8R0S2T4V6'
     expect(
@@ -351,11 +332,6 @@ describe('tools', () => {
     expect(u.agent_summary).toBe('Needs a reply')
     expect(u.state).toBe('done')
     expect((await h.bridge.callTool('inbox_triage', { event_id: 'bogus' })).isError).toBe(true)
-    await h.bridge.callTool('voice_progress', { voice_delegation_id: 'd1', text: 'looking', say: true })
-    const p = await h.relay.expectFrame('voice.progress', (f) => f.voice_delegation_id === 'd1', {
-      direction: 'from_bridge',
-    })
-    expect(p.say).toBe(true)
   })
 
   test('inbox_raw returns the payload inside the untrusted wrapper', async () => {

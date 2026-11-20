@@ -268,7 +268,7 @@ final class WorkerHookTests {
       "\(String(describing: WorkerHook.found(folder: thread, isAgentFolder: false)))")
     // the deny rules name the canonical root's files too
     let deny = WorkerFence.settingsDeny(projectFolders: [thread] + WorkerHook.gitRoots(of: thread).roots, configDirs: [])
-    #expect(deny.contains("Write(/\(realVictim)/.claude/**)"), "\(deny)")
+    #expect(deny.contains("Edit(/\(realVictim)/.claude/**)"), "\(deny)")
     // a pointer that leads nowhere, an unreadable first line, and a `.git` that is a link: refused
     for text in ["gitdir: \(root)/nowhere\n", "not a pointer\n"] {
       try text.write(toFile: thread + "/.git", atomically: true, encoding: .utf8)

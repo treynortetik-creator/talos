@@ -63,8 +63,8 @@ test.describe('list', () => {
   test('groups and status words follow the data', async ({ page }) => {
     await open(page)
     // jobs are grouped by the thread they run in (test/schedules/thread-groups.spec.ts): none here has a thread, so one Main group
-    await expect(page.getByTestId('group-name')).toHaveText(['Main', 'One-off'])
-    await expect(page.getByTestId('group-runner')).toHaveText('run by Main')
+    await expect(page.getByTestId('group-name')).toHaveText(['Main agent', 'One-off'])
+    await expect(page.getByTestId('group-runner')).toHaveText('run by your main agent')
     const order = await page
       .locator('li[data-testid^="schedule-row-"]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
@@ -131,7 +131,7 @@ test.describe('review fixes', () => {
     const card = page.locator('[data-card-state="pending"]')
     await expect(card).toContainText(/Tue Oct 6, 7:30 AM( EDT)?/)
     await expect(card).not.toContainText('2026-10-06T07:30')
-    await expect(card).toContainText('As your live session (its permissions)')
+    await expect(card).toContainText('As your live agent (its permissions)')
     await expect(card).not.toContainText('Full permissions, nobody watching')
   })
 
@@ -146,7 +146,7 @@ test.describe('review fixes', () => {
 
   test('a session job reads "As your live session" in the detail', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
-    await expect(page.getByTestId('schedule-detail')).toContainText('As your live session (its permissions)')
+    await expect(page.getByTestId('schedule-detail')).toContainText('As your live agent (its permissions)')
   })
 
   test('the Off row has a switch in the off position and "On events" is printed once', async ({ page }) => {
@@ -201,10 +201,10 @@ test.describe('detail', () => {
     const d = page.getByTestId('schedule-detail')
     await expect(d.getByText('Weekdays at 7:30 AM')).toBeVisible()
     await expect(d.getByText('Still runs if your agent is back within 3 h.')).toBeVisible()
-    await expect(d.getByText('In your live session (a sub-agent does the work)')).toBeVisible()
-    await expect(d.getByText('As your live session (its permissions)')).toBeVisible()
+    await expect(d.getByText('With your live agent (a helper agent does the work)')).toBeVisible()
+    await expect(d.getByText('As your live agent (its permissions)')).toBeVisible()
     await expect(d.getByTestId('prompt')).toContainText('Summarise yesterday')
-    await expect(d.getByRole('list', { name: 'Recent runs' })).toContainText('Session')
+    await expect(d.getByRole('list', { name: 'Recent runs' })).toContainText('Agent')
     for (const b of ['Run now', 'Pause', 'Edit', 'Ask Talos'])
       await expect(d.getByRole('button', { name: b })).toBeVisible()
   })
@@ -388,7 +388,7 @@ test.describe('create and edit', () => {
     await page.getByLabel('Time').fill('16:30')
     await page.getByLabel('What to do').fill('Wrap up the week.')
     await expect(page.getByTestId('byte-counter')).toHaveText('17 / 16,384 bytes')
-    await page.getByRole('radio', { name: 'In the background (no session needed)' }).check()
+    await page.getByRole('radio', { name: 'In the background (no agent needed)' }).check()
     await expect(page.getByTestId('background-note')).toContainText(
       'macOS can block background runs after Claude Code updates.',
     )
@@ -439,7 +439,7 @@ test.describe('offline', () => {
     await page.evaluate(() => window.__talos.setMacOnline(false))
     await expect(page.getByTestId('offline-banner')).toContainText('Your Mac is offline. This list is from 7:45 AM.')
     await expect(page.getByTestId('offline-banner')).toContainText('Changes and Run now need your Mac.')
-    await expect(page.getByTestId('schedule-row-standup-prep')).toContainText("Waiting: agent session isn't running")
+    await expect(page.getByTestId('schedule-row-standup-prep')).toContainText("Waiting: your agent isn't running")
     await expect(page.getByRole('button', { name: 'New' })).toBeDisabled()
     await expect(page.getByRole('switch', { name: 'Daily summary runs on schedule' })).toHaveCount(0)
     await page.getByTestId('schedule-row-daily-summary').getByRole('link').click()
@@ -478,7 +478,7 @@ test.describe('offline', () => {
     await page.clock.install({ time: new Date(NOW_ISO) })
     await page.goto(`/test/schedules/harness/index.html?route=/schedules&offline=1`)
     await expandGroups(page)
-    await expect(page.getByTestId('schedule-row-standup-prep')).toContainText("Waiting: agent session isn't running")
+    await expect(page.getByTestId('schedule-row-standup-prep')).toContainText("Waiting: your agent isn't running")
     await expect(page.getByTestId('offline-banner')).toBeVisible()
   })
 })
@@ -524,8 +524,8 @@ test.describe('health banner and fix sheets', () => {
 
   test('waiting with no session says so and counts the jobs', async ({ page }) => {
     await open(page, '/schedules', { variant: 'nosession' })
-    await expect(page.getByTestId('health-banner')).toContainText("Your agent session isn't running. 1 job is waiting.")
-    await expect(page.getByTestId('schedule-row-weekly-review')).toContainText("Waiting: agent session isn't running")
+    await expect(page.getByTestId('health-banner')).toContainText("Your agent isn't running. 1 job is waiting.")
+    await expect(page.getByTestId('schedule-row-weekly-review')).toContainText("Waiting: your agent isn't running")
   })
 
   test('held jobs: Review opens the first held job', async ({ page }) => {
@@ -565,7 +565,7 @@ test.describe('empty and error states', () => {
     await expect(page.getByTestId('install-cmd')).toContainText('git clone https://github.com/')
     await expect(page.getByTestId('install-cmd')).toContainText('~/chronos/install.sh')
     await expect(page.getByTestId('empty-not_installed')).toContainText(
-      'Then run talos-app schedules adopt and restart your session.',
+      'Then run talos-app schedules adopt and restart your agent.',
     )
     await expect(page.getByRole('button', { name: 'Copy' })).toBeVisible()
   })
@@ -648,7 +648,7 @@ test.describe('with the real-bridge captures', () => {
     await load(page, '13-states-and-health', 0)
     await expect(row).toContainText('Waiting for the agent')
     await page.evaluate(() => window.__captured('13-states-and-health', 2))
-    await expect(row).toContainText("Waiting: agent session isn't running")
+    await expect(row).toContainText("Waiting: your agent isn't running")
     await expect(page.getByTestId('schedule-row-missed-job')).toContainText('Missed')
     await page.evaluate(() => window.__captured('13-states-and-health', 3))
     await expect(row).toContainText('Running')

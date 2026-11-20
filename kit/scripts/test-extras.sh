@@ -94,7 +94,7 @@ echo "ffmpeg: \$*" >> "$SB/audio.calls"; printf 'CONVERTED' > "\${@: -1}"
 FAKE
 cat > "$FB/whisper-cli" <<FAKE
 #!/bin/bash
-echo "whisper: \$*" >> "$SB/audio.calls"; echo "   hello from the voice note"
+echo "whisper: \$*" >> "$SB/audio.calls"; echo "   hello from the recording"
 FAKE
 chmod +x "$FB"/*
 export PATH="$FB:$PATH"; : > "$SB/audio.calls"
@@ -128,7 +128,7 @@ out="$( cd "$A" && bash scripts/stt.sh "$SB/note.ogg" 2>&1 )"; rc=$?
 { [ "$rc" != 0 ] && <<<"$out" grep -q 'model missing'; } && ok "stt.sh: a missing model is a clear error naming the fix" || no "stt missing model not handled (rc=$rc)" "$out"
 mkdir -p "$XDG_DATA_HOME/talos/models"; printf 'm' > "$XDG_DATA_HOME/talos/models/ggml-base.en.bin"
 out="$( cd "$A" && bash scripts/stt.sh "$SB/note.ogg" 2>&1 )"
-{ [ "$out" = "hello from the voice note" ] && grep -q 'ffmpeg:.*-ar 16000 -ac 1' "$SB/audio.calls"; } && ok "stt.sh: converts to 16 kHz mono, runs whisper, prints a trimmed transcript" || no "stt.sh output wrong" "$out"
+{ [ "$out" = "hello from the recording" ] && grep -q 'ffmpeg:.*-ar 16000 -ac 1' "$SB/audio.calls"; } && ok "stt.sh: converts to 16 kHz mono, runs whisper, prints a trimmed transcript" || no "stt.sh output wrong" "$out"
 ( cd "$A" && TMPDIR="$SB/tmpd" bash scripts/stt.sh "$SB/note.ogg" >/dev/null 2>&1 ); [ -z "$(ls -A "$SB/tmpd")" ] && ok "stt.sh leaves no temp files behind" || no "stt.sh leaked temp files" "$(ls -A "$SB/tmpd")"
 out="$( cd "$A" && bash scripts/stt.sh "$SB/missing.ogg" 2>&1 )"; <<<"$out" grep -q 'not found' && ok "stt.sh: a missing audio file is reported" || no "missing audio not reported" "$out"
 rm -rf "$XDG_DATA_HOME/talos"

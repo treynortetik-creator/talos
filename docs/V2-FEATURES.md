@@ -369,7 +369,7 @@ New auth modes for the route-table enum: `health-token` and `share-token`. New r
   - `absent` = not expected.
   - `expected` = kv `mod_seen_at` is within 7 days.
 - **The rest of the beat:**
-  - `tts` / `stt` say whether a command is configured.
+  - `tts` says whether a command is configured (`stt`, the bridge's own speech-to-text command, was removed with voice input: [archived/voice.md](archived/voice.md)).
   - `sqlite.fts5` is the V3.1 probe result.
   - `search` / `memory` come from those modules.
 - **No content.** No thread names, paths or text.
@@ -675,6 +675,10 @@ CREATE TABLE IF NOT EXISTS fts_files (media_id TEXT PRIMARY KEY, ord INTEGER NOT
   web apps from iOS 18.4, per firt.dev), and Media Session metadata and handlers are set.
 
 ### V4.2 Driving mode: UI (WP-V3, `apps/web/src/features/drive/**`, `/drive`)
+
+> **Archived 2026-11-19.** The Talk button (hold to talk, tap to toggle) and the "Talk live" / "End call" pill below, the
+> recorder behind them, and the live-call holds are removed: /drive is a listen-only screen (queue, playback, the driving
+> row, card announcements). The text below is history for those parts. See [archived/voice.md](archived/voice.md).
 
 ```
  ┌──────────────────────────────┐

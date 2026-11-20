@@ -41,14 +41,6 @@ describe('settings_read', () => {
     expect(await read(h)).toMatch(new RegExp(`Pending settings cards: ${id} \\(dev\\.thread_fence, expires \\S+\\)`))
   })
 
-  test('the voice persona is counted, never shown', async () => {
-    const persona = 'a very particular way of speaking '.repeat(10)
-    h = await start({ agent: { ...loadExampleConfig('default').agent, voice_persona: persona } })
-    const out = await read(h)
-    expect(out).toContain(`agent.voice_persona: (set, ${persona.length} characters)`)
-    expect(out).not.toContain('particular')
-  })
-
   test('a sub-thread\'s missing folder and MCP list read null (raw), never "same as <parent>"', async () => {
     const base = loadExampleConfig('default')
     const t = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -57,7 +49,6 @@ describe('settings_read', () => {
       kind: 'agent',
       order: 9,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
       ...extra,

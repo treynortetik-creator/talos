@@ -164,7 +164,7 @@ const EMPTY_READ: Record<FakeReadType, (f: Record<string, unknown>) => Record<st
   }),
 }
 
-const OWNER_TYPES = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])
+const OWNER_TYPES = new Set(['message', 'card.resolve'])
 const MAX_AGE_MS = 8 * 24 * 3600_000
 const MAX_FUTURE_MS = 2 * 60_000
 const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
@@ -296,8 +296,6 @@ export class FakeBridge {
     this.send({ type: 'ack', ref: id, stage: 'consumed' })
     if (frame.type === 'message' && this.autoReply) {
       this.reply(frame.thread_id, `echo: ${frame.text}`)
-    } else if (frame.type === 'voice_note' && this.autoReply) {
-      this.reply(frame.thread_id, 'echo: (voice note)')
     } else if (frame.type === 'card.resolve') {
       this.resolveCard(frame)
     }
@@ -577,8 +575,7 @@ export class FakeBridge {
     // A re-send of a frame we delivered but never consumed (after a crash) is legitimate; anything else with a seen id is a replay.
     if (this.state.unconsumed.has(frame.id)) return null
     if (this.state.seen.has(frame.id)) return 'sig_invalid'
-    if ((frame.type === 'message' || frame.type === 'voice_note') && this.state.clientMsgIds.has(frame.client_msg_id))
-      return 'sig_invalid'
+    if (frame.type === 'message' && this.state.clientMsgIds.has(frame.client_msg_id)) return 'sig_invalid'
     return null
   }
 
@@ -662,7 +659,7 @@ export class FakeBridge {
       }
     }
     this.state.seen.add(id)
-    if (frame.type === 'message' || frame.type === 'voice_note') this.state.clientMsgIds.add(frame.client_msg_id)
+    if (frame.type === 'message') this.state.clientMsgIds.add(frame.client_msg_id)
     this.state.unconsumed.add(id)
     this.pending.set(id, frame)
     this.send({ type: 'ack', ref: id, stage: 'delivered' })

@@ -66,8 +66,6 @@ export function runAction(act: ActionSpec, ctx: ActionCtx): boolean {
         case 'bugReport':
           ctx.openBugReport()
           return true
-        case 'call':
-          return false // not wired anywhere today
       }
   }
 }

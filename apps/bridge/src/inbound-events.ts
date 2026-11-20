@@ -1,45 +1,14 @@
-// Voice calls, shared items, problem reports and webhook events.
+// Shared items, problem reports and webhook events.
 // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
 // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
-import { SHARE_THREAD, trustOn } from '@talos-app/protocol'
-import { localClock } from './clock-meta.ts'
+import { SHARE_THREAD } from '@talos-app/protocol'
 import { defaultThreadRef, threadRef } from './context.ts'
 import type { Inbound } from './inbound.ts'
 import type { Item, Of } from './inbound-shared.ts'
-import {
-  hookDigestNotification,
-  hookEventNotification,
-  shareItemNotification,
-  voiceDelegationNotification,
-  voiceEndedNotification,
-} from './notify.ts'
+import { hookDigestNotification, hookEventNotification, shareItemNotification } from './notify.ts'
 import { fileShare } from './share/inbox-file.ts'
-import { recordVoiceAsk } from './trust.ts'
 
 export const eventsFrames = {
-  async onVoiceAsk(this: Inbound, it: Item, f: Of<'voice.ask'>) {
-    const { ctx } = this
-    const thread = ctx.config.thread(f.thread_id) ? threadRef(ctx, f.thread_id) : defaultThreadRef(ctx)
-    // Calls are not stored as message rows, so the time of the question is kept for `ownerAskedIn` (trust mode only reads it)
-    recordVoiceAsk(ctx, thread.id)
-    await ctx.emit(
-      voiceDelegationNotification({
-        thread,
-        frame: f,
-        trust: trustOn(ctx.config.config),
-        clock: localClock(ctx, f.ts),
-      }),
-    )
-    this.done(it)
-  },
-
-  async onVoiceEnded(this: Inbound, it: Item, f: Of<'voice.ended'>) {
-    const { ctx } = this
-    const thread = ctx.config.thread(f.thread_id) ? threadRef(ctx, f.thread_id) : defaultThreadRef(ctx)
-    await ctx.emit(voiceEndedNotification({ thread, frame: f }))
-    this.done(it)
-  },
-
   /**
    * A Shortcut share (docs/V2-FEATURES.md V4.3): stored in history.sqlite (so it is searchable after the relay buffer
    * ages out), FILED by the bridge into the shared inbox (zero taps, no agent judgment; review note A), then notified

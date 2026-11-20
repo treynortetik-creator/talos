@@ -108,22 +108,6 @@ describe('voice queue', () => {
     expect(q.store.getState().current).toBeNull()
   })
 
-  it('a hold (recording) pauses playback and release resumes it; a reply that arrives meanwhile waits', async () => {
-    const { audio, q } = mk()
-    await q.unlock()
-    q.enqueue(item('a'))
-    await tick()
-    q.hold('record')
-    expect(audio.paused).toBe(true)
-    q.enqueue(item('b'))
-    await tick()
-    expect(q.store.getState().playing).toBe(false)
-    q.release('record')
-    await tick()
-    expect(audio.src).toBe('/media/a')
-    expect(audio.paused).toBe(false)
-  })
-
   it('applies the saved speed to every reply', async () => {
     const { audio, q } = mk(1.5)
     await q.unlock()

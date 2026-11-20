@@ -124,7 +124,7 @@ export function friendlyPatchError(e: unknown, what: 'settings' | 'threads' = 's
         ? 'Something else changed the threads at the same time. Your list is up to date now; try again.'
         : 'Something else changed these settings at the same time. They are up to date now; try again.'
     case 'thread_session_refused':
-      return said ? `Your Mac said no: ${said}` : 'Your Mac said no to that thread session setting.'
+      return said ? `Your Mac said no: ${said}` : 'Your Mac said no to that setting.'
     case 'config_field_forbidden':
       return "That setting can't be changed from the app."
     case 'bad_frame':

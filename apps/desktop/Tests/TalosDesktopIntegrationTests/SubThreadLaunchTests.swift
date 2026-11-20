@@ -17,12 +17,19 @@ struct SubThreadLaunchTests {
   }
 
   /// The rig with the manager ticking; `subOpts` gets the fake home.
-  func rig(parentId: String = "par", parentOpts: String? = nil, _ subOpts: (String) -> String) throws -> WorkerRig {
+  /// `parentOpts` gets the fake home too. The config is whole before the manager's first tick: a tick reads it once and takes the wakes
+  /// under that read, so a config rewritten after ticking has started can be missed by a tick that is already running (a wake taken
+  /// under the old config). `prepare` runs before ticking for the same reason (folders the config points at).
+  func rig(
+    parentId: String = "par", parentOpts: ((String) -> String)? = nil, prepare: (WorkerRig) throws -> Void = { _ in },
+    _ subOpts: (String) -> String
+  ) throws -> WorkerRig {
     let r = try WorkerRig(scenario: "review-worker.sh")
     r.env["FAKE_ARGV_DUMP"] = r.root + "/argv"
     r.env["FAKE_STATE_DIR"] = r.root + "/fake-state"
     try r.fenceWorld(projects: ["par"])
-    try config(r, subOpts: subOpts(r.home), parentId: parentId, parentOpts: parentOpts)
+    try prepare(r)
+    try config(r, subOpts: subOpts(r.home), parentId: parentId, parentOpts: parentOpts?(r.home))
     r.manager(busyWindow: 0.5)
     r.mgr.startTicking()
     return r
@@ -35,7 +42,7 @@ struct SubThreadLaunchTests {
   }
 
   @Test func aSubWithAFolderThatDoesNotExistGetsItMadeInsideItsParentAndRunsThere() throws {
-    let r = try rig(parentOpts: nil) { #"{"cwd":"\#($0)/par/made/deeper"}"# }
+    let r = try rig { #"{"cwd":"\#($0)/par/made/deeper"}"# }
     defer { r.teardown() }
     #expect(!FileManager.default.fileExists(atPath: r.home + "/par/made"))
     try r.wake("sub")
@@ -82,10 +89,11 @@ struct SubThreadLaunchTests {
   }
 
   @Test func nothingIsMadeInsideAParentFolderNoSessionMayUse() throws {
-    let r = try rig(parentOpts: "{}") { _ in "{}" }
+    let r = try rig(
+      parentOpts: { #"{"cwd":"\#($0)/.claude/par"}"# },
+      prepare: { try FileManager.default.createDirectory(atPath: $0.home + "/.claude/par", withIntermediateDirectories: true) }
+    ) { #"{"cwd":"\#($0)/.claude/par/new"}"# }
     defer { r.teardown() }
-    try FileManager.default.createDirectory(atPath: r.home + "/.claude/par", withIntermediateDirectories: true)
-    try config(r, subOpts: #"{"cwd":"\#(r.home)/.claude/par/new"}"#, parentOpts: #"{"cwd":"\#(r.home)/.claude/par"}"#)
     try r.wake("sub")
     #expect(r.wait(10) { r.state("sub") == "failed" }, "\(r.why("sub"))")
     #expect(!FileManager.default.fileExists(atPath: r.home + "/.claude/par/new"))
@@ -198,14 +206,14 @@ struct SubThreadLaunchTests {
 
   // the owner, 2026-11-19: under a parent with no folder (it runs in the agent folder), a sub-thread's own existing folder is used
   @Test func aSubWhoseParentHasNoFolderStartsInItsOwnExistingFolder() throws {
-    let r = try rig(parentOpts: "{}") { #"{"cwd":"\#($0)/par"}"# }
+    let r = try rig(parentOpts: { _ in "{}" }) { #"{"cwd":"\#($0)/par"}"# }
     defer { r.teardown() }
     try r.wake("sub")
     #expect(r.wait(10) { r.up("sub") }, "\(r.why("sub"))")
   }
 
   @Test func aSubWhoseParentHasNoFolderAndWhoseFolderOutsideIsMissingDoesNotStartAndNothingIsMade() throws {
-    let r = try rig(parentOpts: "{}") { #"{"cwd":"\#($0)/par/s"}"# }
+    let r = try rig(parentOpts: { _ in "{}" }) { #"{"cwd":"\#($0)/par/s"}"# }
     defer { r.teardown() }
     try r.wake("sub")
     #expect(r.wait(10) { r.state("sub") == "failed" }, "\(r.why("sub"))")

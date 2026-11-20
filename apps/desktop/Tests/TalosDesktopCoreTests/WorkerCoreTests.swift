@@ -79,7 +79,7 @@ struct WorkerSpecTests {
     i.otherFolders = ["/home/example/garden"]
     i.baseEnv["CLAUDE_CONFIG_DIR"] = "/home/example/cfg"
     let deny = ((jsonObject(try WorkerSpec.build(i).settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
-    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+    for tool in ["Edit"] {
       for file in [
         // the whole .claude folder of each folder a thread session works in (R1-8), and the owner's settings
         "/home/example/trip/.claude/**", "/home/example/trip/.claude", "/home/example/agent/.claude/**", "/home/example/garden/.claude/**",
@@ -90,7 +90,7 @@ struct WorkerSpecTests {
       }
     }
     // Hestia's third review on the Mac: the subagents folder too (F1), no EnterWorktree (F6), no auto mode (F2), no skill shell (F3)
-    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+    for tool in ["Edit"] {
       for dir in ["/home/example/.claude/agents/**", "/home/example/cfg/agents/**", "/home/example/cfg/skills/**", "/home/example/cfg/commands/**"] {
         #expect(deny.contains("\(tool)(/\(dir))"), "\(tool) \(dir)")
       }

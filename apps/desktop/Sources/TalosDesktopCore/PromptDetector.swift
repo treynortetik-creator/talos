@@ -69,6 +69,7 @@ public enum PromptDetector {
   static let footers = [
     "Esc to cancel", "Esc to cancel \u{00B7} Tab to amend", "Enter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} Esc to cancel",
     "Enter to confirm \u{00B7} Esc to cancel",
+    "Enter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} ctrl+g to edit in VS Code \u{00B7} Esc to cancel",
     "Esc to cancel \u{00B7} Tab to amend \u{00B7} ctrl+x ctrl+k twice to stop background agents",
   ]
   /// The idle input box's status bar, in every mode captured.

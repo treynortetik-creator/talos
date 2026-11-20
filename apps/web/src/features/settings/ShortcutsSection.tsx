@@ -6,7 +6,7 @@ const chordOf = (id: string) => DEFAULT_KEYMAP.find((e) => e.id === id)?.chord ?
 const GROUPS: KeyEntry['group'][] = ['Go to', 'Threads', 'Panels', 'App']
 
 export function ShortcutsSection({ mac = isMacPlatform() }: SectionProps & { mac?: boolean }) {
-  const listed = DEFAULT_KEYMAP.filter((e) => e.chord && e.id !== 'call' && !/^thread[2-9]$/.test(e.id))
+  const listed = DEFAULT_KEYMAP.filter((e) => e.chord && !/^thread[2-9]$/.test(e.id))
   return (
     <section aria-labelledby="shortcuts-h" data-testid="shortcuts-section">
       <h2 id="shortcuts-h" className="m-0 mb-3 font-display text-xl font-semibold">

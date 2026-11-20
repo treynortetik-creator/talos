@@ -221,7 +221,7 @@ export function createSessionController(client: TalosClient, opts: ControllerOpt
           )
     if (!pre.ok) return local(pre.message, pre.code)
     const send_ = client.sendOwnerFrame
-    if (!send_) return local('This build cannot send session controls.')
+    if (!send_) return local('This version of the app can’t control your agent.')
     const controlId = newUlid()
     const answered = new Promise<Outcome>((res) => waiters.set(controlId, res))
     timers.set(

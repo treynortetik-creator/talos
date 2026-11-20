@@ -3,6 +3,7 @@
 // reference version of that check, in TypeScript: the bridge builds the proof with `buildDialogProof` and runs the check on its
 // own answer before it writes the file, and the tests run it against the fixtures the Swift side is built against.
 import { jcs } from './canonical.ts'
+import { cleanDialogText } from './dialog-card.ts'
 import {
   DIALOG_PROOF_MAX_AGE_MS,
   DIALOG_PROOF_MAX_FUTURE_MS,
@@ -32,6 +33,8 @@ export type PaneDialog = {
   options: readonly string[]
   /** Main's development-channels dialog: which pieces of the start command changed (absent for every other dialog). The signed card must say the same. */
   launch_changed?: readonly string[] | undefined
+  /** A question's free-text option, as the Mac recorded it. The signed card must say the same, and only an answer that chose it carries a `text`. */
+  free_text?: number | undefined
 }
 
 export type DialogVerifyEnv = {
@@ -49,7 +52,7 @@ export type DialogVerifyEnv = {
 }
 
 export type DialogVerdict =
-  | { ok: true; choice: number | null; label: string | null; device_id: string }
+  | { ok: true; choice: number | null; label: string | null; device_id: string; text: string | null }
   | { ok: false; reason: 'unverified' | 'screen_changed' | 'already_answered'; step: number; why: string }
 
 const no = (
@@ -76,8 +79,11 @@ function sameFacts(binding: Record<string, unknown>, pane: PaneDialog): boolean 
       : Array.isArray(lc) &&
         lc.length === pane.launch_changed.length &&
         lc.every((x, i) => x === pane.launch_changed?.[i])
+  const sameFree =
+    pane.free_text === undefined ? p.free_text === undefined || p.free_text === null : p.free_text === pane.free_text
   return (
     sameLaunch &&
+    sameFree &&
     p.dialog_id === pane.dialog_id &&
     p.dialog_kind === pane.dialog_kind &&
     p.subject === pane.subject &&
@@ -116,6 +122,17 @@ export async function verifyDialogAnswer(input: unknown, env: DialogVerifyEnv): 
     const choice = signed.choice
     if (choice !== undefined && !(Number.isInteger(choice) && (choice as number) >= 0 && (choice as number) <= 5))
       return no(3, 'choice is not 0 to 5')
+    // a free-text answer's words are IN the signed frame: only the option the Mac recorded as free text takes any, and it must have them
+    const text = signed.text
+    if (text !== undefined) {
+      if (
+        typeof text !== 'string' ||
+        choice === undefined ||
+        choice !== env.pane.free_text ||
+        cleanDialogText(text) !== text
+      )
+        return no(3, 'a text that is not a free-text answer')
+    } else if (choice !== undefined && choice === env.pane.free_text) return no(3, 'a free-text answer with no text')
     const ts = typeof signed.ts === 'string' ? Date.parse(signed.ts) : Number.NaN
     if (!Number.isFinite(ts) || env.nowMs - ts > DIALOG_PROOF_MAX_AGE_MS || ts - env.nowMs > DIALOG_PROOF_MAX_FUTURE_MS)
       return no(3, 'the tap is too old or from the future')
@@ -142,7 +159,13 @@ export async function verifyDialogAnswer(input: unknown, env: DialogVerifyEnv): 
     const label = choice === undefined ? null : (options[choice as number] ?? null)
     if (label !== null && env.screenLabel && env.screenLabel(choice as number) !== label)
       return no(5, 'the screen no longer shows that option', 'screen_changed')
-    return { ok: true, choice: choice === undefined ? null : (choice as number), label, device_id: proof.device_id }
+    return {
+      ok: true,
+      choice: choice === undefined ? null : (choice as number),
+      label,
+      device_id: proof.device_id,
+      text: typeof text === 'string' ? text : null,
+    }
   } catch (e) {
     return no(0, `error: ${(e as Error).message}`)
   }

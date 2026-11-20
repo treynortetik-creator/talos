@@ -80,7 +80,7 @@ apps/desktop/scripts/install.sh --from-release <https URL or path> --sha256 <sha
   owned by the owner and writable by no one else; and only after the owner says yes to that exact path on a card (the yes is kept
   in the Keychain, and a different path asks again). Like the launch seal and the screen list, that yes stops accidents, not a
   deliberate program running as you ([bridge.md](bridge.md), the known gap under the screen helper's allowed list).
-- The hardened build takes `Resources/entitlements-release.plist`: Apple Events, microphone, camera, Contacts and Photos, the
+- The hardened build takes `Resources/entitlements-release.plist`: Apple Events, microphone (kept for the agent's own use; the web page never gets the microphone or camera: the window's media-capture delegate always refuses, since voice input was archived, [archived/voice.md](archived/voice.md)), camera, Contacts and Photos, the
   resources a local build already has. Without them the hardened runtime refuses them with no prompt.
 - `install.sh --from-release` installs nothing unless, in this order, the sha256 matches, the zip holds only `Talos.app`, the
   signature verifies (`--strict --deep`), Gatekeeper accepts it as notarized Developer ID, and the signer is a Developer ID

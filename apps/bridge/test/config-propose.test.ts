@@ -16,7 +16,6 @@ import {
   parseFrame,
   payloadHash,
   readConfigPath,
-  VOICE_CHOICES,
 } from '@talos-app/protocol'
 import { mkFrame } from '@talos-app/testkit'
 import { toolsFor } from '../src/tools/index.ts'
@@ -80,11 +79,9 @@ const approve = async (x: Harness, card: CardT) => x.app.resolveCard(card, 'prim
 const noCardMinted = (x: Harness) => expect(cards(x).filter((c) => c.kind === 'config')).toHaveLength(0)
 
 describe('what the list is', () => {
-  test('the agent rows are the ones the table turns on (twenty-three), none of them a device, key, enrollment or security setting', () => {
+  test('the agent rows are the ones the table turns on (twenty-one), none of them a device, key, enrollment or security setting', () => {
     expect([...AGENT_CONFIG_ALLOWLIST]).toEqual([
       'agent.name',
-      'agent.voice',
-      'agent.voice_persona',
       'owner.display_name',
       'threads',
       'default_thread',
@@ -247,8 +244,6 @@ describe('propose time', () => {
     ['quiet_window', { start: '22:00', end: '07:00', extra: 1 }],
     ['quiet_window', 'always'],
     ['voice_notes.reply_with_voice', 'sometimes'],
-    ['agent.voice', 'Not A Voice!'],
-    ['agent.voice', 'onyx'], // a well-formed guess the live-call provider would refuse
   ])('a bad value for %p (%p) is refused with the reason', async (path, value) => {
     h = await start()
     await ownerAsks(h)
@@ -256,15 +251,6 @@ describe('propose time', () => {
     expect(r.isError).toBe(true)
     expect(text(r)).toContain(path as string)
     noCardMinted(h)
-  })
-
-  test('agent.voice takes only a voice the Settings select offers, and the tool text names them', async () => {
-    h = await start()
-    await ownerAsks(h)
-    const tool = h.bridge.tools.find((t) => t.name === 'config_propose')
-    for (const v of VOICE_CHOICES) expect(JSON.stringify(tool?.inputSchema)).toContain(v)
-    const card = await proposeOk(h, [{ path: 'agent.voice', value: 'cedar' }])
-    expect(card.payload).toMatchObject({ changes: [{ path: 'agent.voice', new: 'cedar' }] })
   })
 
   test('a no-op, a duplicate path and too many changes are refused', async () => {
@@ -342,7 +328,7 @@ describe('the card', () => {
     const card = await proposeOk(h, [
       { path: 'agent.name', value: 'Hal' },
       { path: 'quiet_window', value: { start: '21:30', end: '06:30' } },
-      { path: 'voice_notes.reply_with_voice', value: 'never' },
+      { path: 'voice_notes.reply_with_voice', value: 'always' },
     ])
     expect(card.kind).toBe('config')
     expect(card.allow_edit).toBe(false)
@@ -352,7 +338,7 @@ describe('the card', () => {
     expect(h.bridge.ctx.ledger.get(card.id)?.actor).toBe('bridge')
     expect(card.body).toContain(`Agent name: ${before.name} → Hal`)
     expect(card.body).toContain('Quiet hours: off → 21:30 to 06:30')
-    expect(card.body).toContain('Voice-note replies: when I send a voice note → never')
+    expect(card.body).toContain('Spoken replies: never → always')
     expect(card.body).toContain('Why: you asked')
     expect(card.payload_hash).toBe(payloadHash(bindingFrom(card)))
     const p = ConfigCardPayload.parse(card.payload)
@@ -416,7 +402,7 @@ describe('approval applies it, through ConfigFile.applyPatch, and syncs like an 
     )
     // nothing else changed
     expect(cfg(h).owner.display_name).toBe('You')
-    expect(cfg(h).voice_notes.reply_with_voice).toBe('when_voice')
+    expect(cfg(h).voice_notes.reply_with_voice).toBe('never')
   })
 
   test('a value that changed since the card was drawn fails the card in words and writes nothing, not even the untouched ones', async () => {

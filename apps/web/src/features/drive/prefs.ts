@@ -1,6 +1,5 @@
 // Per-device driving preferences. Conveniences only, so storage failures are ignored (private window, blocked storage).
 const FALLBACK = 'talos.drive.phone_voice'
-const TAP = 'talos.drive.tap_to_talk'
 const THREAD = 'talos.drive.thread'
 
 const read = (k: string): string | null => {
@@ -21,9 +20,6 @@ const write = (k: string, v: string) => {
 /** "Use the phone's voice as a fallback": on unless switched off. */
 export const loadPhoneVoiceFallback = (): boolean => read(FALLBACK) !== '0'
 export const savePhoneVoiceFallback = (on: boolean): void => write(FALLBACK, on ? '1' : '0')
-/** Tap once to start talking and again to send, instead of holding. */
-export const loadTapToTalk = (): boolean => read(TAP) === '1'
-export const saveTapToTalk = (on: boolean): void => write(TAP, on ? '1' : '0')
 export const loadDriveThread = (): string | null => read(THREAD)
 export const saveDriveThread = (id: string): void => write(THREAD, id)
 
@@ -48,7 +44,7 @@ export const saveHeard = (h: Heard | null): void => {
     /* ignore */
   }
 }
-/** The last time the owner talked or tapped on /drive (ms). */
+/** The last time the owner tapped on /drive (ms). */
 export const loadTouch = (): number | null => {
   const n = Number(read(TOUCH))
   return Number.isFinite(n) && n > 0 ? n : null

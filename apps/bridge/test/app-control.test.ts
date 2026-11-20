@@ -44,7 +44,6 @@ const thread = (id: string, name: string, extra: Record<string, unknown> = {}) =
   kind: 'agent',
   order: 5,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   ...extra,
@@ -262,7 +261,7 @@ describe('the lock off: what the owner asked for is made at once, low or high; t
     const x = h as Harness
     await ownerAsks(x)
     const r = await propose(x, [{ path, value }])
-    expect(text(r)).toContain('applied: the owner asked')
+    expect(text(r)).toMatch(/applied: (the owner asked|the settings lock is off and nothing outside)/)
     expect(text(r)).toContain('To undo:')
     noCardMinted(x)
     await x.stop()

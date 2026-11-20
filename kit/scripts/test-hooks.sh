@@ -150,12 +150,12 @@ printf '%s' '{"session_id":"APP1","prompt":"<channel source=\"talos-app\" chat_i
 printf '{"session_id":"APP1","tool_name":"mcp__talos-app__reply","tool_input":{}}' | D clear
 [ ! -e "$SD/channel-debt-APP1.json" ] && ok "channel debt: mcp__talos-app__reply pays it" || no "talos-app reply did not clear"
 # talos-app: only the owner's own kinds owe a reply; app machinery (cards, hook events, schedules...) never does (R1-4)
-for k in text voice_note file voice_delegation; do
+for k in text file; do
   printf '%s' "{\"session_id\":\"K1\",\"prompt\":\"<channel source=\\\"talos-app\\\" thread_id=\\\"t-1\\\" message_id=\\\"m-1\\\" kind=\\\"$k\\\" trust=\\\"owner\\\">hi</channel>\"}" | D arm
   [ -s "$SD/channel-debt-K1.json" ] && ok "channel debt: talos-app kind=$k records a debt" || no "talos-app kind=$k did not arm"
   rm -f "$SD/channel-debt-K1.json"
 done
-for k in card_action hook_event hook_digest schedule_run schedule_held system voice_ended backlog app_tool_call some_future_kind; do
+for k in card_action hook_event hook_digest schedule_run schedule_held system backlog app_tool_call some_future_kind; do
   printf '%s' "{\"session_id\":\"K2\",\"prompt\":\"<channel source=\\\"talos-app\\\" thread_id=\\\"t-1\\\" kind=\\\"$k\\\">x</channel>\"}" | D arm
   [ ! -e "$SD/channel-debt-K2.json" ] && ok "channel debt: talos-app kind=$k records NO debt" || no "talos-app kind=$k armed a debt it can never pay"
   rm -f "$SD/channel-debt-K2.json"

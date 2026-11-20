@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Read aloud in the app (the Listen button on an agent message): it is mounted in the real message row, it asks the Mac with
-// ids only, it never talks over a call, a recording or another clip, it says so when the browser refuses sound, a late file does
+// ids only, it never talks over Drive or another clip, it says so when the browser refuses sound, a late file does
 // not start playing after the owner was told it failed, and sign-out stops it. The audio element is a stub (no sound anywhere);
 // the fake client is the in-memory one with a scripted Mac behind `speak`.
 import { type AttachmentRefT, type MessageT, newId } from '@talos-app/protocol'
@@ -18,7 +18,6 @@ import {
   speakKey,
   speakView,
 } from '../../src/features/threads/speak.ts'
-import { getCallController } from '../../src/features/voice/controller.ts'
 import { ClientProvider, type TalosClient, TalosClientError } from '../../src/lib/client.ts'
 import { createFakeClient } from '../../src/lib/fakeClient.ts'
 import { setPlatform, webPlatform } from '../../src/lib/platform.ts'
@@ -122,7 +121,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetSpeak()
-  getCallController().store.setState({ phase: 'idle' })
   __resetDockForTests()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -232,34 +230,16 @@ describe('a tap', () => {
 })
 
 describe('the speaker may have changed hands while the Mac worked', () => {
-  const readyAfterWork = (r: ReturnType<typeof rig>) => r.calls.length > 0
   const script = (): Script[] => [
     { state: 'working', waitS: 100 },
     { state: 'ready', media: ref() },
   ]
 
-  it('a call that started after the tap: the audio is not loaded or played, and the row says it is ready', async () => {
+  it('Drive took the speaker (it asks the dock to pause): nothing plays', async () => {
     const r = rig(script())
     mount(r.client, agentMsg())
     await tap()
-    expect(readyAfterWork(r)).toBe(true)
-    act(() => getCallController().store.setState({ phase: 'live' as never }))
-    await tick(1600)
-    expect(plays).toBe(0)
-    expect(getDockState().item).toBeNull()
-    expect(screen.getByTestId('speak-status').textContent).toBe(READY_HINT)
-    // a second tap once the call is over is instant on the Mac and plays
-    act(() => getCallController().store.setState({ phase: 'idle' }))
-    r.client.speak!.request = async () => ({ state: 'ready', media: ref() })
-    await tap()
-    expect(plays).toBe(1)
-  })
-
-  it('a recording or Drive that took the speaker (they ask the dock to pause): nothing plays', async () => {
-    const r = rig(script())
-    mount(r.client, agentMsg())
-    await tap()
-    audioDock.pause() // what recorder.ts, callController.ts and drive/index.tsx each do as they start
+    audioDock.pause() // what drive/index.tsx does as it starts
     await tick(1600)
     expect(plays).toBe(0)
     expect(getDockState().item).toBeNull()

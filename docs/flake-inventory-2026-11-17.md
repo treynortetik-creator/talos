@@ -79,9 +79,9 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 
 | count   | last      | test                                                                                                                        | note                                    |
 | ------- | --------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| 3+2+2+2 | 11-17     | threads/follow-new-text.spec.ts (iphone, pixel, desktop: rereading while a reply streams; reply from another device far up) | scroll-position race; app first         |
+| 3+2+2+2 | 11-17     | threads/follow-new-text.spec.ts (iphone, pixel, desktop: rereading while a reply streams; reply from another device far up) | FIXED 11-17/18 (below)                  |
 | 4       | 11-17     | memory/clio-graph.spec.ts [pixel]                                                                                           | real app bug, fixed by Cyclops 96f23894 |
-| 2+1     | 11-16     | threads/copy-button.spec.ts [iphone] dense rows; 44x44 hit area                                                             | layout timing                           |
+| 2+1     | 11-16     | threads/copy-button.spec.ts [iphone] dense rows; 44x44 hit area                                                             | FIXED 11-17/18 (below)                  |
 | 1 each  | 11-16..17 | schedules offline cold start, themes 375 px, composer scroll-end, review/v2-drive-review F7, Developer page fence           |                                         |
 | 1       | 11-17     | cards/permission-explain.test.tsx (vitest) Deny sends the kill                                                              |                                         |
 | 1       | 11-19     | bugreport/bug-open-speed.spec.ts:51 [iphone] one tap: the sheet is up at once                                               | load only; Titan root-causing           |
@@ -89,23 +89,27 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 
 ### D. Scripts (gate and CI tooling)
 
-| count        | last      | test                                                               | note                                                                             |
-| ------------ | --------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| 2            | 11-17     | gate-push.test.ts 60 s timeouts                                    | root cause fixed 94710fee1 (setConfig ignored the time factor)                   |
-| 1            | 11-17     | test-parallel.test.ts: hang kills its children (child alive)       | suspect a real gap: `ps` 10 s cap leaves children unkilled; also in known-flakes |
-| 1+1          | 11-17     | kit-tests test-update.sh, test-plugin.sh (killed at the 290 s cap) | load                                                                             |
-| known-flakes | —         | cpu-burn.test.ts x2                                                |                                                                                  |
-| 1 each       | 11-14..16 | ci-local-runner-status, ci-alert, gate.test, root-install-flags    |                                                                                  |
+| count        | last      | test                                                                                                                                       | note                                                                                                                                                                                                                               |
+| ------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2            | 11-17     | gate-push.test.ts 60 s timeouts                                                                                                            | root cause fixed 94710fee1 (setConfig ignored the time factor)                                                                                                                                                                     |
+| 1            | 11-17     | test-parallel.test.ts: hang kills its children (child alive)                                                                               | suspect a real gap: `ps` 10 s cap leaves children unkilled; also in known-flakes                                                                                                                                                   |
+| 1+1          | 11-17     | kit-tests test-update.sh, test-plugin.sh (killed at the 290 s cap)                                                                         | load                                                                                                                                                                                                                               |
+| known-flakes | —         | cpu-burn.test.ts x2                                                                                                                        |                                                                                                                                                                                                                                    |
+| 1 each       | 11-14..16 | ci-local-runner-status, ci-alert, gate.test, root-install-flags                                                                            |                                                                                                                                                                                                                                    |
+| 2            | 11-20     | kit-tests test-action-rules.sh "a shipped rule is slow on pathological input" (and test-hub-fence.sh, which runs it)                       | Hestia (Linux), under the gate's vitest-related load beside root-install*: 0.57 s over its budget; passes alone on the branch (2/2) and on main. A wall-clock budget under parallel load (Hestia)                                  |
+| every run    | 11-20     | root-install.test.ts "a dry run on a fresh home…", root-install-v1.test.ts "is recognized, and without --apply…" (also -flags, -preflight) | Mac-only (xcode-select, swift, the Mac install steps): fail on every Linux run, main included (Hestia). Should be skipped on non-Mac, not fail; until then a Linux pre-push --full can't pass a change that pulls them in (Hestia) |
 
 ### E. e2e
 
-| count       | last  | test                                                                                 |
-| ----------- | ----- | ------------------------------------------------------------------------------------ |
-| 1           | 11-15 | schedules.spec stall: a background run that never starts                             |
-| 1           | 11-15 | apps.spec E17 two apps each wait for their own card                                  |
-| 1 (3 total) | 11-14 | bridge-oversize-card: card.create over 256 KiB                                       |
-| 1           | 11-19 | apps.spec E10 fullscreen keeps the same frame (load)                                 |
-| 1           | 11-19 | old-client.spec:74 Run hands the agent the script once: the 10 s "Sent…" wait (load) |
+| count       | last  | test                                                                                                                              |
+| ----------- | ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1           | 11-15 | schedules.spec stall: a background run that never starts                                                                          |
+| 1           | 11-15 | apps.spec E17 two apps each wait for their own card                                                                               |
+| 1 (3 total) | 11-14 | bridge-oversize-card: card.create over 256 KiB                                                                                    |
+| 1           | 11-19 | apps.spec E10 fullscreen keeps the same frame (load)                                                                              |
+| 1+1         | 11-20 | old-client.spec:74 Run hands the agent the script once: the 10 s "Sent…" wait. APP BUG, fixed 836f73bd (below)                    |
+| 1           | 11-19 | Sub-thread launch suite + nothingIsMadeInsideAParentFolderNoSessionMayUse (40.8 s on CI at beda269; 0.25 s / 24 s locally, green) |
+| 1           | 11-20 | MainSafetyTests.aClickWhileATmuxClientIsTypingPressesNothing (8.8 s on CI at 77181e7; 0.6 s locally, green)                       |
 
 E10 (11-19, passed on retry): Titan, the e2e packages on 8 workers beside a live check-titan (a load measurement).
 
@@ -126,6 +130,41 @@ and no longer limits. TEST unless said.
   that flash on every open.
 - relay peer rotate, red main at 50b976cb (3a019fc3; the guard a634916c, 7d1846cf, 34540b43): a long fake-clock advance replayed
   days of relay timers past the server keep-alive; a test relay now keeps idle sockets, and an advance over 20,000 timers fails.
+
+### Fixed 11-20 (Delphi), Swift, red main at 95b24c3
+
+Both ROOT-FIXED in 05eb23ef, test only (the app is as designed); each shown red first, then 20 of 20 quiet and 20 of 20 beside 14 busy loops.
+
+- `SubThreadLaunchTests.nothingIsMadeInsideAParentFolderNoSessionMayUse`: ROOT-FIXED in 05eb23ef. The rig rewrote config.json after the manager was already ticking, and a tick reads the config once, so one running at that moment took the sub's wake under the old config and started a session (CI: state live, starts 1). The whole config, and the folders it points at, are written before ticking starts.
+- `PointerOwedEnterTests.aLineThatIsGoneFromTheBoxIsTypedAgainNotEntered(how: session)`: ROOT-FIXED in 05eb23ef. A fixed 0.6 s wait before the owner cleared the box; an emptied box counts as "gone" only after a tick has seen our line in it (`unseenSince`), so a late tick on a loaded machine made the test clear it first. It waits for `lineSeenByManager()` now.
+- Preventive, same file, `how: restored`: its fixed 1 s pause after the app comes back now waits for the same look (`lineSeenByManager()`). Not a seen flake and not shown red: the restored copy's first tick runs inside `comeBack`, so the look has already happened and the variant passed 12 of 12 beside 14 busy loops with the pause removed. The wait states the condition instead of a time.
+
+### Web rows checked 11-20 (Cyclops)
+
+Each run with `scripts/cpu-burn.sh` on this Mac (8 cores), all three projects unless said, no retries.
+
+- threads/follow-new-text.spec.ts: fixed at the cause after its last sighting (11-17): the reading is taken after the fonts
+  load and compares the row in view, not scrollTop (f18ee825, 524fddac); closing the keyboard clears "scrolled up" (a1b4eccf);
+  the measured bottom room is gone (e5bcecd9). 240 runs at 1x and 192 at 3x burners per core: 0 failures.
+- threads/copy-button.spec.ts: fixed after its last sighting (11-16): every hit-area box read in one synchronous read, so a
+  list still scrolling cannot fake an overlap (7262879e, bf9ee62e). 230 runs at 2x: 0 failures.
+- themes 375 px and composer scroll-end: fixed 11-17 (7ed1ecf0, 244c4d42: a GET retried once on ECONNRESET by the specs' own
+  proxy; a8807a13: offsets compared after the fonts load).
+- review/v2-drive-review F7, settings/developer fence, cards/permission-explain (vitest) Deny, schedules/offline-cold-start
+  (vitest): one sighting each, nothing changed since, not reproduced (Playwright 90 runs at 2x; vitest 10 rounds at 2x). Open
+  with no evidence; a next failure must keep its trace.
+- e2e old-client.spec:74 (11-19, again 11-20): an APP bug. The Run line said "Queued · sends when you're back online" until
+  the page had handled the relay's ack, and handling it waited on the ack's IndexedDB delete, which took over 10 s on a loaded
+  machine; the agent had the Run within 4 s. Reproduced on the saved bundle web-bundle-ca87cf72 by holding the relay's ack
+  frames (Playwright routeWebSocket). Fixed 836f73bd: an ack updates the queue and the row's receipt before the delete; the
+  line says Queued only offline, "Sending…" with the ack pending, Sent once acked; the spec waits up to 60 s for Sent (saved
+  bundles from before the fix keep the old line until they handle the ack). The first attempt (0e61c6ff) moved the wait to the
+  agent and missed the cause. Follow-up 1ef6aabd: a deleted, failed queued Run says it was removed.
+- Sleeps B, web (this commit's parent): clio-graph (the wheel, the first fit, the panel slide, the pointer releases),
+  threads-pr60 (focus after the reorder is drawn), review-scroll (polls the jump back), permission-sheet (waits for the new
+  message's unread count, the banner's own trigger, before checking no banner shows; proved not vacuous by removing the app's
+  guards: each removal fails it), agents/screenshots and settings/developer (animations done). v2-drive-recheck.spec.ts:311
+  went with the voice archive. Left: permission-sheet's shared `settle()` (two frames and 150 ms).
 
 ### Runner verdicts (not test flakes)
 
@@ -162,3 +201,9 @@ page.clock would make the web ones deterministic.
 old-client.spec:74 (11-19): refused the sign-in card's landing on Delphi at 14:52 MST, while a full gate (check-updates) and the owner's
 0.1.6 app build ran beside it; the "Sent…" status was not visible within 10 s. The same spec passed 4/4 in about 20 s on the branch and on
 main at ca35a226e in the gate's clean environment. Root fix: Cyclops.
+
+### Unidentified (Titan, 11-19)
+
+| count | last  | step                 | what was seen                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----- | ----- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | 11-19 | tests (bridge files) | Pre-push gate of titan/chronos-import (f3a27a4b, the apps/chronos import), on Titan WSL under load (Chronos's own 572-test suite was running at the same time). The serial `bun test --timeout=5000` over the about 156 bridge files the plan picked by basename failed once. The test name is LOST: the push command kept only the REFUSED line, and the gate writes no log of its own. It did not reproduce: the same 156 files passed in the parallel runner (6 jobs), and the next full pre-push passed. Since then, Titan's pushes keep the gate's whole output in a file. |

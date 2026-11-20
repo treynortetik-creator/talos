@@ -13,7 +13,7 @@ import {
 } from './frames.ts'
 import { HealthStatus } from './health.ts'
 import { peerLinkRouteDefs } from './http-peer-link.ts'
-import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId, VoiceId } from './ids.ts'
+import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId } from './ids.ts'
 import { AttachmentRef, Device, InboxItem, isAgentCardKind, isAppMessage, JwkP256 } from './models.ts'
 import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.ts'
 import { PeerCreate, PeerCreated, PeerDeleted, PeerList, PeerRotated } from './peer.ts'
@@ -261,12 +261,6 @@ export const routes = {
       bridge_online: z.boolean(),
       /** Web Push application server key (base64url). Absent when the relay has no VAPID keys. */
       vapid_public_key: z.string().optional(),
-      /** Live voice status; `reason` says why it is off. Absent on older relays. */
-      voice: z
-        .object({ available: z.boolean(), reason: z.enum(['no_key', 'unsupported_provider']).optional() })
-        .optional(),
-      /** Dictation (record, transcribe, text into the message box) status. Absent on older relays. */
-      dictate: z.object({ available: z.boolean() }).optional(),
     }),
   },
   devicesList: {
@@ -410,40 +404,6 @@ export const routes = {
     auth: 'session',
     owner: 'WP1',
     note: 'MCP app page (M3.5): 404 unless text/html with an approved app_csp; sandbox allow-scripts + buildAppCsp; 410 + rehydrate',
-  },
-  dictate: {
-    id: 'dictate',
-    method: 'POST',
-    path: '/api/dictate',
-    auth: 'session',
-    owner: 'WP4',
-    res: z.object({ text: z.string() }),
-    note: 'raw audio body (m4a, mp4, wav, webm, mp3; 25 MB); header X-Talos-CSRF: 1. Held in memory only and sent to OpenAI. 413 too_large, 415 unsupported_type, 429 rate_limited | daily_cap, 502 upstream_refused | upstream_unreachable, 503 dictate_disabled, 504 upstream_timeout',
-  },
-  voiceSession: {
-    id: 'voiceSession',
-    method: 'POST',
-    path: '/api/voice/session',
-    auth: 'session',
-    owner: 'WP4',
-    // spec 6.2 step 2 and 3. `ephemeral_key` and `expires_at` are the optional realtime fallback.
-    req: z.object({ thread_id: ThreadId, sdp: z.string().min(1).max(100_000) }),
-    res: z.object({
-      voice_session_id: VoiceId,
-      sdp_answer: z.string(),
-      max_minutes: z.number().int().positive(),
-      ephemeral_key: z.string().optional(),
-      expires_at: IsoTs.optional(),
-    }),
-  },
-  voiceSessionClose: {
-    id: 'voiceSessionClose',
-    method: 'POST',
-    path: '/api/voice/session/:id/close',
-    auth: 'session',
-    owner: 'WP4',
-    req: Empty,
-    note: '204',
   },
   catalog: {
     id: 'catalog',

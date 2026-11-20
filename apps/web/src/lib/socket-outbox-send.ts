@@ -2,7 +2,7 @@
 // that may already be delivered.
 import { newUlid, ORIGINAL_TS_FEATURE, RUN_MAX_AGE_MS, signOwnerFrame } from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
-import { DEDUPE_WINDOW_MS, MEDIA_KEPT_MS, MediaGoneError, RESIGN_AFTER_MS, RunStaleError } from './socket-constants.ts'
+import { DEDUPE_WINDOW_MS, RESIGN_AFTER_MS, RunStaleError } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { OutboxEntry } from './socket-types.ts'
 
@@ -29,17 +29,8 @@ export function createOutboxSend(c: SocketCtx) {
     })
   }
 
-  /** A send that could not be prepared: a voice note whose recording is gone cannot be fixed by trying again. */
+  /** A send that could not be prepared. */
   function sendFailed(e: OutboxEntry, err: unknown) {
-    if (err instanceof MediaGoneError) {
-      c.markFailed(e.clientMsgId, 'final')
-      c.addSystemRow(
-        'A voice note waited too long to send and its recording is no longer on the server. Discard it and record it again.',
-        `media_gone_${e.clientMsgId}`,
-        e.threadId,
-      )
-      return
-    }
     if (err instanceof RunStaleError) {
       c.markFailed(e.clientMsgId, 'final')
       // A Run that was written to a socket before may have reached the Mac and run; one that never was did not.
@@ -66,7 +57,7 @@ export function createOutboxSend(c: SocketCtx) {
 
   /** True when this entry was written to a socket (or may have been) longer ago than the relay and the Mac remember ids. */
   function mayAlreadyBeDelivered(e: OutboxEntry): boolean {
-    if (e.kind === 'voice.ask' || e.writtenAt === null) return false // never written: nothing can have been delivered
+    if (e.writtenAt === null) return false // never written: nothing can have been delivered
     // an older build did not record it: the signing time is the earliest it could have been written
     const wrote = e.writtenAt === undefined ? c.signedAtOf(e.bytes) : e.writtenAt
     return Number.isFinite(wrote) ? Date.parse(signedTs()) - wrote > DEDUPE_WINDOW_MS : true
@@ -79,7 +70,6 @@ export function createOutboxSend(c: SocketCtx) {
    * has is not delivered twice. Anything younger goes out with its original bytes.
    */
   async function freshEntry(e: OutboxEntry, restart: boolean, began: number): Promise<OutboxEntry> {
-    if (e.kind === 'voice.ask') return e
     let parsed: Record<string, unknown>
     try {
       parsed = JSON.parse(e.bytes) as Record<string, unknown>
@@ -87,13 +77,10 @@ export function createOutboxSend(c: SocketCtx) {
       return e
     }
     const signedAt = typeof parsed.ts === 'string' ? Date.parse(parsed.ts) : Number.NaN
-    // The recording was uploaded before this was first signed; the relay deletes media after BUFFER_DAYS, and sending it
-    // would point the Mac at nothing. It is shown as failed instead. A note signed again has a new `ts`, so its age is
-    // counted from `original_ts` (the first signing) when it has one, and this runs before the early return below.
+    // A message signed again has a new `ts`, so its age is counted from `original_ts` (the first signing) when it has one,
+    // and this runs before the early return below.
     const firstSigned = typeof parsed.original_ts === 'string' ? Date.parse(parsed.original_ts) : Number.NaN
     const mediaAt = Number.isFinite(firstSigned) ? firstSigned : signedAt
-    if (parsed.type === 'voice_note' && Number.isFinite(mediaAt) && Date.parse(signedTs()) - mediaAt >= MEDIA_KEPT_MS)
-      throw new MediaGoneError()
     // Same clock-free rule: the age is the saved frame's own first signing time, so a reload cannot reset it.
     if (
       parsed.type === 'message' &&

@@ -48,7 +48,6 @@ const msgId = (n: number) => `m_${ulid(n)}`
 const cardId = (n: number) => `c_${ulid(n)}`
 const evId = (n: number) => `e_${ulid(n)}`
 const mdId = (n: number) => `md_${ulid(n)}`
-const vid = `v_${ulid(70)}`
 const SIG = 'A'.repeat(86)
 const HASH = `sha256:${'5f1c'.repeat(16)}`
 const SHA = 'ab'.repeat(32)
@@ -186,7 +185,7 @@ const unsigned: Record<string, Record<string, unknown>> = {
     engine: 'fake-stt',
     status: 'done',
   },
-  reply: { ...env('reply', 26), message: agentMessage, speak: 'Done. Three sections.' },
+  reply: { ...env('reply', 26), message: agentMessage },
   receipt: { ...env('receipt', 27), message_id: msgId(23), state: 'delivered' },
   status: { ...env('status', 28), thread_id: 'general', state: 'working', label: 'Drafting', since: TS },
   presence: { ...env('presence', 29), ...presence },
@@ -238,20 +237,6 @@ const unsigned: Record<string, Record<string, unknown>> = {
   'media.fetch': { ...env('media.fetch', 46), media_id: mdId(1) },
   'media.ready': { ...env('media.ready', 47), media_id: mdId(1) },
   visibility: { ...env('visibility', 48), state: 'hidden' },
-  'voice.state': { ...env('voice.state', 49), voice_session_id: vid, state: 'live' },
-  'voice.progress': {
-    ...env('voice.progress', 50),
-    voice_delegation_id: 'vd_example',
-    text: 'Looking that up',
-    say: false,
-  },
-  'voice.ended': {
-    ...env('voice.ended', 51),
-    voice_session_id: vid,
-    thread_id: 'general',
-    duration_s: 360,
-    transcript: [{ who: 'owner', text: 'What is on today?', at: TS }],
-  },
   'device.enrolled': {
     ...env('device.enrolled', 52),
     device: { id: deviceId, name: 'iPhone (Home Screen)', pubkey_jwk: keyFile.publicJwk },
@@ -287,13 +272,6 @@ const signedSrc: Record<string, Record<string, unknown>> = {
     attachments: [],
     ...owner,
   },
-  voice_note: {
-    ...env('voice_note', 62),
-    thread_id: 'general',
-    client_msg_id: msgId(63),
-    attachment: { ...attachment, kind: 'voice_note', mime: 'audio/mp4', name: 'voice.m4a', duration_ms: 4200 },
-    ...owner,
-  },
   'card.resolve': {
     ...env('card.resolve', 64),
     card_id: card.id,
@@ -305,15 +283,6 @@ const signedSrc: Record<string, Record<string, unknown>> = {
     ...env('config.patch', 65),
     base_rev: 0,
     patch: { quiet_window: { start: '22:00', end: '06:00' } },
-    ...owner,
-  },
-  'voice.ask': {
-    ...env('voice.ask', 66),
-    voice_session_id: vid,
-    delegation_id: 'vd_example',
-    thread_id: 'general',
-    question: 'What is on my plate today?',
-    transcript_tail: [{ who: 'owner', text: 'What is on my plate today?' }],
     ...owner,
   },
 }
@@ -658,7 +627,6 @@ unsigned['health.beat'] = {
     bridge: { version: '0.4.1', started_at: TS },
     mod: { state: 'alive', last_seen: TS, expected: true },
     tts: true,
-    stt: true,
     sqlite: { fts5: true },
     search: { state: 'ready', docs: 5000 },
     memory: { state: 'ready', files: 42, truncated: false },

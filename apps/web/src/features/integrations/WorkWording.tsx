@@ -90,7 +90,7 @@ export function WorkWording({ readOnly }: { readOnly: boolean }) {
         className="min-h-11 rounded-button border border-line bg-surface px-3 text-text disabled:opacity-50"
       >
         <option value="passthrough">Pass through: nothing kept once delivered</option>
-        <option value="buffer">Buffer: the relay holds them until your Mac collects them</option>
+        <option value="buffer">Buffer: Talos online holds them until your Mac collects them</option>
       </select>
       {saved && (
         <p role="status" className="m-0 text-sm">

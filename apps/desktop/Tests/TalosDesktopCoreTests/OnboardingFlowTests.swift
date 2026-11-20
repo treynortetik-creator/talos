@@ -95,6 +95,35 @@ struct OnboardingFlowTests {
     #expect(f.step == .ready)  // carried on by itself
   }
 
+  @Test func theFinishedGettingReadyScreenShowsAfterAppleToolsAndNeverSkipsToSignIn() {
+    var f = at([.getStarted, .toolsAsked])
+    var steps: [OnboardingFlow.Step] = [f.step]
+    // the download finishes while the Apple step is still the one on screen (toolsDone had not arrived yet)
+    let fx = f.apply(.downloadDone(signedIn: false))
+    steps.append(f.step)
+    #expect(f.step == .ready && f.download == .done && f.continueLit, "ticks done, Continue lit")
+    #expect(fx == [.holdReady], "it goes on by itself after a short hold, and the app is told to hold")
+    #expect(f.stepNumber == 1 && f.segments == [.current, .todo, .todo], "the counter says Step 1 of 3 on both screens")
+    f.apply(.continuePressed)
+    steps.append(f.step)
+    #expect(steps == [.appleTools, .ready, .signIn])
+  }
+
+  @Test func afterAppleToolsTheDoneSignalThenTheFinishAlsoHoldsOnReady() {
+    var f = at([.getStarted, .toolsAsked, .toolsDone, .downloadProgress(pct: 70)])
+    #expect(f.step == .ready)
+    #expect(f.apply(.downloadDone(signedIn: true)) == [.holdReady])
+    #expect(f.step == .ready, "signed in already, still shows the finished screen first")
+    f.apply(.continuePressed)
+    #expect(f.step == .phone)
+  }
+
+  @Test func withoutAppleToolsThereIsNoHoldAndTheOldOrderStands() {
+    var f = at([.getStarted])
+    #expect(f.apply(.downloadDone(signedIn: false)).isEmpty)
+    #expect(f.step == .signIn)
+  }
+
   @Test func theAppleStepIgnoresEventsFromOtherSteps() {
     var f = at([.getStarted, .downloadDone(signedIn: true)])
     f.apply(.toolsAsked)

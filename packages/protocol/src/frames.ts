@@ -31,7 +31,6 @@ import {
   ThreadId,
   Ulid,
   ViewId,
-  VoiceId,
 } from './ids.ts'
 import { MemoryEntry, MemoryHit, MemoryLink, MemoryRootInfo, MemoryTreePath, MessageRef } from './memory.ts'
 import {
@@ -256,14 +255,6 @@ export const MessageFrame = ownerFrame('message', {
   share_content: ShareContent.optional(),
 })
 
-export const VoiceNoteFrame = ownerFrame('voice_note', {
-  thread_id: ThreadId,
-  client_msg_id: MsgId,
-  attachment: OwnerAttachmentRef,
-  /** As on `message`. */
-  original_ts: IsoTs.optional(),
-})
-
 export const MessageStoredFrame = frame('message.stored', { client_msg_id: MsgId, message: Message })
 
 export const TranscriptFrame = frame('transcript', {
@@ -275,8 +266,6 @@ export const TranscriptFrame = frame('transcript', {
 
 export const ReplyFrame = frame('reply', {
   message: Message,
-  speak: z.string().max(600).optional(),
-  voice_delegation_id: z.string().optional(),
   silent: z.boolean().optional(),
   /**
    * The notice of a setting the agent changed that decides which alerts reach the owner: the relay pushes it as `settings_changed`,
@@ -305,8 +294,8 @@ export const ReceiptFrame = frame('receipt', {
  * The line put in the thread when the Mac refuses an owner message the relay had already taken (an unknown thread, a
  * phone clock too far off). The relay stores it for every device; the sender's app adds it too, for a relay that does not.
  */
-export function refusedMessageNote(code: string, message: string, voiceNote = false): string {
-  return `Your Mac did not take a ${voiceNote ? 'voice note' : 'message'} (${code}): ${message}`
+export function refusedMessageNote(code: string, message: string): string {
+  return `Your Mac did not take a message (${code}): ${message}`
 }
 /** That line's row id, made from the id of the Mac's `error` frame, so the relay's row and the app's own are one row. */
 export const refusedMessageNoteId = (errorFrameId: string): string => `m_${errorFrameId}`
@@ -447,35 +436,6 @@ export const MediaFetchFrame = frame('media.fetch', {
 export const MEDIA_FETCH_UPDATE_APP_MESSAGE = 'Update the Talos app to load older files.'
 export const MediaReadyFrame = frame('media.ready', { media_id: MediaId })
 export const VisibilityFrame = frame('visibility', { state: z.enum(['visible', 'hidden']) })
-
-// ---- voice ------------------------------------------------------------------------------------------------------
-
-export const VoiceStateFrame = frame('voice.state', {
-  voice_session_id: VoiceId,
-  state: z.enum(['connecting', 'live', 'delegating', 'ended']),
-  reason: z.string().max(200).optional(),
-})
-
-export const VoiceAskFrame = ownerFrame('voice.ask', {
-  voice_session_id: VoiceId,
-  delegation_id: z.string(),
-  thread_id: ThreadId,
-  question: z.string().max(4000),
-  transcript_tail: z.array(z.strictObject({ who: z.enum(['owner', 'agent']), text: z.string() })).max(20),
-})
-
-export const VoiceProgressFrame = frame('voice.progress', {
-  voice_delegation_id: z.string(),
-  text: z.string().max(2000),
-  say: z.boolean(),
-})
-
-export const VoiceEndedFrame = frame('voice.ended', {
-  voice_session_id: VoiceId,
-  thread_id: ThreadId,
-  duration_s: z.number().int(),
-  transcript: z.array(z.object({ who: z.enum(['owner', 'agent']), text: z.string(), at: IsoTs })),
-})
 
 // ---- devices ----------------------------------------------------------------------------------------------------
 
@@ -1141,7 +1101,6 @@ export const frameSchemas = {
   'replay.request': ReplayRequestFrame,
   error: ErrorFrame,
   message: MessageFrame,
-  voice_note: VoiceNoteFrame,
   'message.stored': MessageStoredFrame,
   transcript: TranscriptFrame,
   reply: ReplyFrame,
@@ -1170,10 +1129,6 @@ export const frameSchemas = {
   'media.fetch': MediaFetchFrame,
   'media.ready': MediaReadyFrame,
   visibility: VisibilityFrame,
-  'voice.state': VoiceStateFrame,
-  'voice.ask': VoiceAskFrame,
-  'voice.progress': VoiceProgressFrame,
-  'voice.ended': VoiceEndedFrame,
   'device.enrolled': DeviceEnrolledFrame,
   'device.pinned': DevicePinnedFrame,
   'device.revoked': DeviceRevokedFrame,
@@ -1250,10 +1205,8 @@ export type Frame = { [K in FrameType]: FrameOf<K> }[FrameType]
 /** Owner (signed) frame types. */
 export const OWNER_FRAME_TYPES = [
   'message',
-  'voice_note',
   'card.resolve',
   'config.patch',
-  'voice.ask',
   ...SCHEDULE_OWNER_FRAME_TYPES,
   ...HEARTBEAT_OWNER_FRAME_TYPES,
   ...SESSION_OWNER_FRAME_TYPES,
@@ -1267,7 +1220,6 @@ export const OWNER_FRAME_TYPES = [
 /** Frames that are stored durably and acked (3.4 "durable" column). */
 export const DURABLE_FRAME_TYPES: readonly FrameType[] = [
   'message',
-  'voice_note',
   'transcript',
   'reply',
   'card.create',
@@ -1281,8 +1233,6 @@ export const DURABLE_FRAME_TYPES: readonly FrameType[] = [
   'thread.archive',
   'config.sync',
   'config.patch',
-  'voice.ask',
-  'voice.ended',
   'device.enrolled',
   'device.pinned',
   'device.revoked',
@@ -1299,12 +1249,9 @@ export const DURABLE_FRAME_TYPES: readonly FrameType[] = [
  */
 export const CONSUMABLE_FRAME_TYPES: readonly FrameType[] = [
   'message',
-  'voice_note',
   'card.resolve',
   'hook.event',
   'hook.digest',
-  'voice.ask',
-  'voice.ended',
   'share.item',
   'problem.item',
   'peer.message',
@@ -1320,7 +1267,6 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...COMMON,
     'hello',
     'message',
-    'voice_note',
     'card.resolve',
     'inbox.update',
     'thread.read',
@@ -1330,7 +1276,6 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'history.request',
     'media.fetch',
     'visibility',
-    'voice.ask',
     ...SCHEDULE_OWNER_FRAME_TYPES,
     ...HEARTBEAT_OWNER_FRAME_TYPES,
     ...SESSION_OWNER_FRAME_TYPES,
@@ -1364,7 +1309,6 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'catchup.summary',
     'history.page',
     'media.ready',
-    'voice.state',
     'device.pinned',
     ...SCHEDULE_BRIDGE_FRAME_TYPES,
     ...HEARTBEAT_BRIDGE_FRAME_TYPES,
@@ -1391,7 +1335,6 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'thread.archive',
     'config.sync',
     'history.page',
-    'voice.progress',
     'device.pinned',
     ...SCHEDULE_BRIDGE_FRAME_TYPES,
     ...HEARTBEAT_BRIDGE_FRAME_TYPES,
@@ -1410,15 +1353,12 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     'ready',
     'ack',
     'message',
-    'voice_note',
     'card.resolve',
     'config.patch',
     'hook.event',
     'hook.digest',
     'history.request',
     'media.fetch',
-    'voice.ask',
-    'voice.ended',
     'device.enrolled',
     'device.revoked',
     'attest.request',

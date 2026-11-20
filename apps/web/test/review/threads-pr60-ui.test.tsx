@@ -16,7 +16,6 @@ const mk = (id: string, order: number, kind: ThreadT['kind'] = 'fixed'): ThreadT
   kind,
   order,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-30T00:00:00.000Z',
 })

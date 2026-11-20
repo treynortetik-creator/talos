@@ -17,7 +17,6 @@ const thread = (id: string, order = 9) => ({
   kind: 'agent' as const,
   order,
   notify: 'all' as const,
-  voice_context: 'recent' as const,
   archived: false,
   created_at: at,
 })

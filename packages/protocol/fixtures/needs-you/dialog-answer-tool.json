@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "dialog_id": "Qd6Lm9ZtRx4Cw8PkNa3HfB",
+  "choice": 0,
+  "label": "Allow once",
+  "by": "Alex's iPhone",
+  "at": "2026-11-07T10:00:09.000Z",
+  "control_id": "dc_01M6V2TGWJCH4P49F79Q2317CD",
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T409\",\"choice\":0,\"device_id\":\"d_rjxnk4xufxem5xago5zd\",\"id\":\"01JBF3V7Q8K2M4N6P8R0S2T4AA\",\"payload_hash\":\"sha256:fff571fc44eec369970a10ac596c314567b0e335cf1cd1d828f114c2c1c4385a\",\"ts\":\"2026-11-07T10:00:09.000Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "BXS0jqmNvwj6FlUnR6LpUzVasOlPwiDh_Gm7msFP_vH8rvNbwynJjelWUON6m6UxDQBhuoo5ZcMb6FEqSwhYIg",
+    "device_id": "d_rjxnk4xufxem5xago5zd",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"Trip's session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac.\",\"body_format\":\"plain\",\"destination\":[],\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"fields\":[],\"id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T409\",\"kill_label\":\"\",\"kind\":\"dialog\",\"origin\":\"background\",\"payload\":{\"dialog_id\":\"Qd6Lm9ZtRx4Cw8PkNa3HfB\",\"dialog_kind\":\"tool_permission\",\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"options\":[\"Allow once\",\"Deny\"],\"subject\":\"Bash command · touch hello.txt && ls -l hello.txt\",\"thread\":\"trip\"},\"primary_label\":\"Answer\",\"risk\":\"low\",\"summary\":\"Trip's session is waiting for you.\",\"thread_id\":\"trip\",\"title\":\"Allow this tool request?\"}"
+  }
+}

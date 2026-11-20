@@ -64,7 +64,7 @@ export function OwnSession({ thread }: { thread: ThreadT }) {
     <div className="mt-2 border-t border-line px-2 pt-2" data-testid="own-session">
       <div className="flex min-h-11 items-center justify-between gap-2">
         <label htmlFor={`own-${thread.id}`} className="text-sm font-medium">
-          Own session
+          Its own agent
         </label>
         <Switch
           id={`own-${thread.id}`}
@@ -79,7 +79,7 @@ export function OwnSession({ thread }: { thread: ThreadT }) {
         <>
           <p className="m-0 pt-1 text-xs" data-testid="own-session-state">
             {view.unsupported
-              ? placeWords("Your Mac isn't running thread sessions right now, so main answers.", host)
+              ? placeWords("Your Mac isn't running thread agents right now, so the main agent answers.", host)
               : workerLine(w, host)}
           </p>
           {!view.unsupported && (
@@ -179,7 +179,7 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
         >
           {modelOptions.map((m) => (
             <option key={m} value={m}>
-              {m === 'inherit' ? 'Same as the main session' : m}
+              {m === 'inherit' ? 'Same as the main agent' : m}
             </option>
           ))}
         </select>
@@ -233,7 +233,7 @@ function SessionOptions({ thread, locked, apply }: { thread: ThreadT; locked: bo
         locked={locked}
         onChange={(next) => (next === undefined ? save({}, 'mcp_allow') : save({ mcp_allow: next }))}
       />
-      <p className="m-0 text-xs text-text-2">Saving restarts the session when its current turn ends.</p>
+      <p className="m-0 text-xs text-text-2">Saving restarts this thread’s agent when it finishes its current reply.</p>
       {local && (
         <p role="alert" className="m-0 text-xs text-danger">
           {local}

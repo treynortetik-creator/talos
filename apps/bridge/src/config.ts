@@ -7,10 +7,6 @@ export type BridgeEnv = {
   home: string
   relayUrl: string | undefined
   live: boolean
-  sttCmd: string[] | undefined
-  sttLongCmd: string[] | undefined
-  sttLongAfterS: number
-  sttTimeoutS: number
   ttsCmd: string[] | undefined
   ttsExt: string
   ttsTimeoutS: number
@@ -142,15 +138,10 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
   const home = processEnv.TALOS_APP_HOME || defaultHome()
   const merged: Record<string, string | undefined> = { ...readEnvFile(join(home, 'bridge.env')) }
   for (const [k, v] of Object.entries(processEnv)) if (v !== undefined && v !== '') merged[k] = v
-  const sttCmd = parseArgv(merged.TALOS_APP_STT_CMD)
   return {
     home,
     relayUrl: merged.TALOS_APP_RELAY_URL?.replace(/\/+$/, ''),
     live: flag('TALOS_APP_BRIDGE', [merged]),
-    sttCmd,
-    sttLongCmd: parseArgv(merged.TALOS_APP_STT_LONG_CMD) ?? sttCmd,
-    sttLongAfterS: num(merged.TALOS_APP_STT_LONG_AFTER_S, 30),
-    sttTimeoutS: num(merged.TALOS_APP_STT_TIMEOUT_S, 180),
     ttsCmd: parseArgv(merged.TALOS_APP_TTS_CMD),
     ttsExt: (merged.TALOS_APP_TTS_EXT || 'mp3').replace(/^\./, '').replace(/[^A-Za-z0-9]/g, '') || 'mp3',
     ttsTimeoutS: num(merged.TALOS_APP_TTS_TIMEOUT_S, 120),

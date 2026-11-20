@@ -19,7 +19,7 @@ function body(kind: RecoveryKind, wipeMode: 'all' | 'keep' | null, where: Where)
     return wipeMode === 'keep'
       ? {
           title: "Talos couldn't finish clearing this device",
-          text: 'Your session ended, and some saved chats could not be removed from this device. Your unsent messages are kept. Try again to remove the chats.',
+          text: 'You were signed out, and some saved chats could not be removed from this device. Your unsent messages are kept. Try again to remove the chats.',
         }
       : {
           title: "Talos couldn't finish clearing this device",
@@ -40,7 +40,7 @@ export function whereAmI(scope: unknown = globalThis): Where {
 }
 
 const DELETES =
-  "This deletes unsent messages, voice notes, chats saved on this device and this device's key. You will sign in and pair this device again."
+  "This deletes unsent messages, chats saved on this device and this device's key. You will sign in and pair this device again."
 
 function clearSteps(where: Where): string[] {
   if (where === 'iphone') return ['Delete the Talos app from your iPhone, then install it again.', DELETES]

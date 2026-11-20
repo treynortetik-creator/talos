@@ -56,21 +56,21 @@ function macHealthRows(s: HealthStatusT, extra: { scheduler: { state: string | n
   const full = s.relay_problems.includes('storage_full')
   rows.push({
     id: 'relay',
-    label: 'Relay',
+    label: 'Talos server',
     tone: full ? 'bad' : 'ok',
     // timeLabel names the day for a time before today: "up since 2:02 PM" today, "up since Sep 29, 2:02 PM" a month ago
-    detail: `${full ? 'Relay storage is nearly full · ' : ''}up since ${timeLabel(s.relay.up_since, now)} · v${s.relay.version}`,
+    detail: `${full ? 'Talos server storage is nearly full · ' : ''}up since ${timeLabel(s.relay.up_since, now)} · v${s.relay.version}`,
   })
 
   // Mac bridge
   if (s.bridge.online) {
-    rows.push({ id: 'bridge', label: 'Mac bridge', tone: 'ok', detail: 'connected · seen just now' })
+    rows.push({ id: 'bridge', label: 'Talos on your Mac', tone: 'ok', detail: 'connected · seen just now' })
   } else {
     const since = s.bridge.down_since ?? s.bridge.last_seen
     const red = since !== null && now - Date.parse(since) > RED_AFTER_MS
     rows.push({
       id: 'bridge',
-      label: 'Mac bridge',
+      label: 'Talos on your Mac',
       tone: red ? 'bad' : 'warn',
       detail: since ? `offline since ${timeLabel(since, now)}` : 'offline',
     })
@@ -207,7 +207,7 @@ function macWords(
     case 'asleep':
       return {
         kind,
-        cause: `Your Mac is offline${seen}. It is probably asleep, or the Claude session on it has stopped.`,
+        cause: `Your Mac is offline${seen}. It is probably asleep, or your agent has stopped.`,
         next: hostSteps('mac').asleep(days),
       }
     case 'key_refused':
@@ -219,7 +219,7 @@ function macWords(
     case 'superseded':
       return {
         kind,
-        cause: `Bridge superseded${seen}: another bridge connected with the same key and took its place, and that one has gone too.`,
+        cause: `Talos on another computer took your Mac's place${seen}, and that computer has gone too.`,
         next: hostSteps('mac').superseded,
       }
     case 'mod_quiet':

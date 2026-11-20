@@ -1,19 +1,22 @@
 // Discovery (docs/SCHEDULES.md S1.4): the first step that hits wins. All paths come from the environment.
 //   1. TALOS_APP_SCHEDULER=off            -> off
 //   2. TALOS_APP_CHRONOS_BIN              -> use it
-//   3. `chronos` on PATH, then ~/.local/share/chronos/bin/chronos -> the first that answers `chronos api version` in 5 s
+//   3. the candidates (chronosCandidates), the first that answers `chronos api version` in 5 s: `chronos` on PATH; Chronos's
+//      own runtime copy (~/.local/share/chronos); the folder the Talos kit recorded (~/.config/talos/chronos-dir); the kit's
+//      default vendor folder (~/.local/share/talos/chronos); the copy in this checkout (apps/chronos), once Chronos has a config
 //   4. nothing found                      -> none (not_installed); a 0.2 install (no `api`) is `unsupported`
 // Every step (scutil, then each candidate's `api version` and `version`) gets the smaller of its own budget and what is left
 // of DISCOVERY_TOTAL_MS, so a stuck Chronos (or two) holds the scheduler's queue for that long at most. Out of time with a
 // candidate still unasked: unanswered, never "no scheduler".
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { safeLine } from '@talos-app/protocol'
 import { stillRunning, waitChild } from '../child-wait.ts'
 import type { BridgeEnv } from '../config.ts'
 import { say } from '../owner-words.ts'
+import { REPO_DIR } from '../version.ts'
 import type { SchedulerAdapter } from './adapter.ts'
 import { AdapterError, type AdapterMeta, ChronosAdapter } from './chronos-adapter.ts'
 import { ClosedAdapter } from './closed-adapter.ts'
@@ -109,6 +112,38 @@ function isOldVersion(v: string): boolean {
   return Number(m[1]) === 0 && Number(m[2]) < 3
 }
 
+/** The owner's config folder: XDG_CONFIG_HOME when set (the kit installer honours it too), else ~/.config. */
+const configHome = (userHome: string, xdg: string | undefined) =>
+  xdg && isAbsolute(xdg) ? xdg : join(userHome, '.config')
+
+/**
+ * Where to look for Chronos when TALOS_APP_CHRONOS_BIN is not set, in order, duplicates dropped. Before 2026-11-19 a kit install
+ * (SETUP.md 9.1) was never found: the kit runs Chronos from its vendor folder, which was not on this list (Dante's setup).
+ * The copy launchd or systemd actually runs comes first: Chronos's own runtime copy (~/.local/share/chronos: always on Linux,
+ * and on a Mac whenever the source was under Desktop, Documents or Downloads). Then the folder the kit recorded (the clone it
+ * made, which runs in place otherwise), then the kit's default vendor folder, and last the copy in this checkout
+ * (apps/chronos), only once Chronos has a config: with none, Chronos answers on its defaults although nothing is installed.
+ */
+export function chronosCandidates(
+  env: Pick<BridgeEnv, 'pathDirs' | 'userHome' | 'chronosConfig'>,
+  bundled: string = join(REPO_DIR, 'apps', 'chronos', 'bin', 'chronos'),
+  xdgConfigHome: string | undefined = process.env.XDG_CONFIG_HOME,
+): string[] {
+  const bin = (dir: string) => join(dir, 'bin', 'chronos')
+  const out = env.pathDirs.map((d) => join(d, 'chronos'))
+  out.push(bin(join(env.userHome, '.local', 'share', 'chronos')))
+  try {
+    const recorded = readFileSync(join(configHome(env.userHome, xdgConfigHome), 'talos', 'chronos-dir'), 'utf8').trim()
+    if (isAbsolute(recorded) && !/[\r\n]/.test(recorded)) out.push(bin(recorded))
+  } catch {
+    // no kit record: an install without the kit, or an older kit
+  }
+  out.push(bin(join(env.userHome, '.local', 'share', 'talos', 'chronos')))
+  const config = env.chronosConfig || join(configHome(env.userHome, xdgConfigHome), 'chronos', 'config.json')
+  if (existsSync(config)) out.push(bundled)
+  return [...new Set(out)]
+}
+
 export async function discover(
   env: BridgeEnv,
   deps: {
@@ -123,6 +158,8 @@ export async function discover(
     totalMs?: number
     /** Test seam: the `scutil` that names the Mac. */
     scutilBin?: string
+    /** Test seam: the Chronos in this checkout (default apps/chronos/bin/chronos). */
+    bundledChronos?: string
   },
 ): Promise<Discovered> {
   const timeoutMs = deps.timeoutMs ?? DISCOVERY_TIMEOUT_MS
@@ -141,12 +178,7 @@ export async function discover(
     return { adapter: new ClosedAdapter('off', closedInfo()), state: 'off' }
 
   const childEnv = { path: env.pathDirs.join(':'), home: env.userHome, ...(env.tz ? { tz: env.tz } : {}) }
-  const candidates = env.chronosBin
-    ? [env.chronosBin]
-    : [
-        ...env.pathDirs.map((d) => join(d, 'chronos')),
-        join(env.userHome, '.local', 'share', 'chronos', 'bin', 'chronos'),
-      ]
+  const candidates = env.chronosBin ? [env.chronosBin] : chronosCandidates(env, deps.bundledChronos)
   let legacy: string | undefined
   let unanswered = false
   for (const bin of candidates) {

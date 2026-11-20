@@ -52,6 +52,13 @@ export type OfferState = {
   controlsSeen: string[]
   /** The dialog id an Enter was sent for: no second Enter for it, whatever arrives. */
   enterSentFor: string | null
+  /**
+   * The dialog id an Enter was sent for whose delivery is UNKNOWN (a timeout), and when (monotonic) its memory ends. Not "answered": the
+   * offer is marked disturbed (no answer for that id presses anything), the same screen is not offered again until the memory ends, and
+   * then it is a new sighting with a new id (a key that never arrived is asked for again).
+   */
+  enterUnsentFor: string | null
+  enterUnsentUntil: number
   /** The screen changed while an offer stood: what holds still next may be another dialog that looks the same. A new id. */
   disturbed: boolean
   /** Every proof that checked out, so one signed tap is used once (on disk too, dialog-proofs-used.json). */
@@ -67,11 +74,16 @@ export const newOfferState = (): OfferState => ({
   misses: 0,
   controlsSeen: [],
   enterSentFor: null,
+  enterUnsentFor: null,
+  enterUnsentUntil: 0,
   disturbed: false,
   proofsUsed: [],
   declinedTrust: false,
   declinedExit: null,
 })
+
+/** How long (seconds, monotonic) a timed-out Enter keeps the same unchanged dialog from being offered again. Twin: `unsentEnterMemory` on the Mac. */
+export const DIALOG_UNSENT_MEMORY_S = 5
 
 /** What the thread is told when the owner answered "No, exit" to the folder-trust question (null: they did not); taking it clears the mark. */
 export function declinedTrustText(o: OfferState): string | null {
@@ -242,6 +254,16 @@ export class WorkerDialogs {
       return
     }
     t.offer.misses = 0
+    // inside the memory of an Enter that may have landed: neither answerable nor offered again yet
+    if (
+      cur &&
+      t.offer.enterUnsentFor === cur.id &&
+      cur.kind === d.kind &&
+      cur.subject === d.subject &&
+      sameList(cur.options, d.options) &&
+      this.d.now() < t.offer.enterUnsentUntil
+    )
+      return
     const nowMs = this.d.wallMs()
     const lifetimeMs = WORKER_TIMING.card_lifetime_s * 1000
     // The same dialog, still there, not pressed and not seen to change: one THIS supervisor offered. A record read back from disk
@@ -273,6 +295,7 @@ export class WorkerDialogs {
     })
     t.offer.sinceAwake = this.d.now()
     t.offer.disturbed = false
+    t.offer.enterUnsentFor = null
     this.d.audit('worker_dialog_offered', { thread: t.id, kind: d.kind })
   }
 
@@ -349,13 +372,15 @@ export class WorkerDialogs {
    * `already_answered`, so the bridge need not wait. Only an answer naming that dialog id is taken; any other is left alone.
    */
   private answerLate(t: OfferTarget): void {
-    const pressed = t.offer.enterSentFor
-    if (!pressed) return
+    // an Enter of unknown delivery counts too: if it landed the dialog is gone, and a late tap for it is answered, not left waiting
+    const pressed = [t.offer.enterSentFor, t.offer.enterUnsentFor].filter((x): x is string => !!x)
+    if (pressed.length === 0) return
     const path = join(this.dir(t.id), WORKER_FILES.dialogAnswer)
     const peek = readSmallFile(path, DIALOG_ANSWER_MAX_BYTES)
-    if (peek.kind !== 'data' || parseDialogFile(DialogAnswer, peek.text)?.dialog_id !== pressed) return
+    const peeked = peek.kind === 'data' ? parseDialogFile(DialogAnswer, peek.text)?.dialog_id : undefined
+    if (!peeked || !pressed.includes(peeked)) return
     const a = this.take(t.id)
-    if (!a || a.dialog_id !== pressed || !dialogFileFresh(a.at, this.d.wallMs())) return
+    if (!a || !pressed.includes(a.dialog_id) || !dialogFileFresh(a.at, this.d.wallMs())) return
     if (this.controlSeen(t, a.control_id)) return
     this.writeResult(t.id, a, nothing('already_answered'))
   }
@@ -439,10 +464,17 @@ export class WorkerDialogs {
         const last = await this.readFresh(pane, names)
         if (!last || dialogDiffers(offer, last) || last.cursor === null || last.options[last.cursor] !== chosen)
           return nothing()
-        // a timeout may have been delivered: counted, never repeated
         const sent = await pane.sendDialogKey('Enter', offer.kind as DialogKeyKind)
         if (keyNotSent(sent)) return nothing()
-        t.offer.enterSentFor = offer.id
+        if (sent === 'sent') {
+          t.offer.enterSentFor = offer.id
+        } else {
+          // a timeout may have been delivered, so no second Enter goes for this card (disturbed refuses every answer for the id), but
+          // it is not recorded as answered either: a short memory, then the unchanged screen is offered again as a new sighting (sync)
+          t.offer.disturbed = true
+          t.offer.enterUnsentFor = offer.id
+          t.offer.enterUnsentUntil = this.d.now() + DIALOG_UNSENT_MEMORY_S
+        }
         // only a delivery the pane confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
         if (offer.kind === 'trust' && !chosen.startsWith('Yes') && sent === 'sent') t.offer.declinedTrust = true
         // the other two questions whose "no" ends the session on its own: the disclaimer's "No, exit" and the channel's "Exit"

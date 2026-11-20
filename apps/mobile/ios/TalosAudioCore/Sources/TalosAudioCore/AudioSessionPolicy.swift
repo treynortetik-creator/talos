@@ -4,8 +4,6 @@ import Foundation
 public enum AudioMode: String, Sendable, CaseIterable {
     /// A voice reply is playing (driving mode listening). Takes the audio route: other audio stops.
     case playback
-    /// A voice note is being recorded: loudspeaker, mic, Bluetooth headset allowed.
-    case record
     /// A clip is loaded and stopped (a pause, from the page or the lock screen). The session stays active and not mixing, so iOS
     /// keeps Talos as the Now Playing app: a mixing session is not eligible, and Play on the lock screen would reach Music instead.
     case paused
@@ -15,29 +13,22 @@ public enum AudioMode: String, Sendable, CaseIterable {
 
 /// The category the session is parked in. Mirrors AVAudioSession's, minus the framework.
 public struct SessionConfig: Equatable, Sendable {
-    public enum Category: Sendable { case playback, playAndRecord }
+    public enum Category: Sendable { case playback }
     public var category: Category
     /// Spoken-word mode: lets other apps' audio pause and resume around a reply.
     public var spokenAudio: Bool
     public var mixWithOthers: Bool
-    public var defaultToSpeaker: Bool
-    public var allowBluetooth: Bool
 
-    public init(category: Category, spokenAudio: Bool, mixWithOthers: Bool, defaultToSpeaker: Bool = false, allowBluetooth: Bool = false) {
+    public init(category: Category, spokenAudio: Bool, mixWithOthers: Bool) {
         self.category = category
         self.spokenAudio = spokenAudio
         self.mixWithOthers = mixWithOthers
-        self.defaultToSpeaker = defaultToSpeaker
-        self.allowBluetooth = allowBluetooth
     }
 
     /// Parked: set at launch and after every reply. Mixing, and never activated, so opening Talos does not stop his music.
     public static let parked = SessionConfig(category: .playback, spokenAudio: true, mixWithOthers: true)
     /// A reply is playing: not mixing, so it takes the route (and his podcast pauses for it).
     public static let playing = SessionConfig(category: .playback, spokenAudio: true, mixWithOthers: false)
-    /// Recording a voice note.
-    public static let recording = SessionConfig(
-        category: .playAndRecord, spokenAudio: true, mixWithOthers: false, defaultToSpeaker: true, allowBluetooth: true)
 }
 
 /// The slice of AVAudioSession the policy needs. Every call can throw; the policy never lets that reach the page as a
@@ -56,7 +47,7 @@ public final class AudioSessionPolicy: @unchecked Sendable {
     private let driver: AudioSessionDriving
     private var _mode: AudioMode = .idle
     private var interrupted = false
-    /// A deactivate that iOS refused ("busy" while something was still playing or recording). Retried by the next call.
+    /// A deactivate that iOS refused ("busy" while something was still playing). Retried by the next call.
     private var releasePending = false
     /// Called with a short, secret-free description when a deactivate fails. The app logs it.
     public var onWarning: (@Sendable (String) -> Void)?
@@ -94,10 +85,6 @@ public final class AudioSessionPolicy: @unchecked Sendable {
             try driver.apply(.playing)
             try driver.setActive(true, notifyOthers: false)
             releasePending = false
-        case .record:
-            try driver.apply(.recording)
-            try driver.setActive(true, notifyOthers: false)
-            releasePending = false
         case .idle:
             // Idle always ends parked with mode idle, even when iOS refuses to deactivate right now: the page asked to let
             // go, so nothing here may re-take the route later. A refused deactivate is remembered and retried.
@@ -124,13 +111,13 @@ public final class AudioSessionPolicy: @unchecked Sendable {
         lock.withLock { if _mode != .idle { interrupted = true } }
     }
 
-    /// The interruption ended. Take the route back only when the system says to (`shouldResume`) and a reply or recording
+    /// The interruption ended. Take the route back only when the system says to (`shouldResume`) and a reply
     /// was in progress; otherwise leave the session alone so the user's music can resume.
     public func interruptionEnded(shouldResume: Bool) throws {
         try lock.withLock {
             defer { interrupted = false }
             // A paused clip does not take the route back on its own; Play does, through `set(.playback)`.
-            guard interrupted, shouldResume, _mode == .playback || _mode == .record else { return }
+            guard interrupted, shouldResume, _mode == .playback else { return }
             try setLocked(_mode)
         }
     }

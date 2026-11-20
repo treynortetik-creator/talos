@@ -41,7 +41,8 @@ public enum OnboardingCopy {
   public static let appleTitle = "One quick Apple install first"
   public static let appleAsking = "Talos needs a free set of tools from Apple. macOS is showing its own window for it."
   public static let appleClick = "Click Install"
-  public static let appleClickRest = " in that window. It takes about 5 minutes, then Talos carries on by itself."
+  /// Apple's window asks to Install, then shows its licence with an Agree button: both are named.
+  public static let appleClickRest = ", then Agree, in Apple's window. It takes about 5 minutes, then Talos carries on by itself."
   public static let appleNoWindow = "I don't see Apple's window"
   public static let appleInstalling = "macOS is installing Apple's tools. You can leave this window; Talos carries on by itself when it's done."
   public static let appleInstallingLabel = "Installing"
@@ -50,11 +51,20 @@ public enum OnboardingCopy {
   public static let appleWindowTitle = "Apple's window looks like this"
   public static let appleWindowText =
     "The \u{201C}xcode-select\u{201D} command requires the command line developer tools. Would you like to install the tools now?"
-  public static let appleWindowButtons = ["Get Xcode", "Not Now", "Install"]
+  public static let appleWindowButtons = ["Cancel", "Install"]
+  /// Under the sketch: the second thing Apple's window asks.
+  public static let appleWindowAgree = "Then Apple shows a license: click Agree."
   public static let appleFooter = "Only on Macs that don't have these tools yet."
   /// Shown when Apple's window was closed or the install did not finish: one button.
-  public static let appleClosed = "Apple's window was closed before the install finished. Press Try again, then click Install."
+  public static let appleClosed = "Apple's window was closed before the install finished. Press Try again, then click Install and Agree."
   public static let tryAgain = "Try again"
+  public static let spaceTitle = "Not enough free space yet"
+  public static func spaceBody(have: Int64) -> String {
+    "Talos needs about \(ToolsSpace.gb(ToolsSpace.requiredBytes)) GB free on this Mac to install Apple's tools. You have \(ToolsSpace.gb(have)) GB free."
+  }
+  public static let spaceAnyway = "Try anyway"
+  public static let spaceHow = "How to free up space"
+  public static let spaceFooter = "Talos asks Apple for its tools once there is room. Try anyway lets Apple\u{2019}s own installer decide."
   public static let details = "Details"
 
   // 3 Sign in
@@ -144,7 +154,7 @@ public enum OnboardingCopy {
     var s: [String] = [
       windowTitle, welcomeTitle, welcomeBody, getStarted, robotAlt, readyTitle, readyBody, readyDownloading, readyHome, readyChecking,
       readyFooter, continueButton, appleTitle, appleAsking, appleClick, appleClickRest, appleNoWindow, appleInstalling,
-      appleInstallingLabel, appleWorking, appleWindowTitle, appleWindowText, appleFooter, appleClosed, tryAgain, signInTitle, signInBody,
+      appleInstallingLabel, appleWorking, appleWindowTitle, appleWindowText, appleWindowAgree, appleFooter, appleClosed, tryAgain, spaceTitle, spaceBody(have: 19_160_000_000), spaceHow, spaceAnyway, spaceFooter, signInTitle, signInBody,
       details, signInButton, signInNotYet, signInCouldNot, signInCodeSend, signInWaiting, signInNoBrowser, signInFooter, back, phoneTitle, phoneBody, phoneYes, phoneYesBody, phoneNo,
       phoneNoBody, pairTitle, pairScanLabel, pairPoint, pairMatch, pairNoMatch, pairFooter, pairMaking, pairConnecting, pairNoCode, pairFailed,
       offlineTitle, offlineBody, offlineSafe, offlineNote, offlineButton, downloadStopped, helloAsk, menuSetUp, menuUseFolder,

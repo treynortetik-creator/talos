@@ -68,7 +68,7 @@ function neverDelivered(e: unknown): boolean {
 export async function deliverAgentMessage(
   ctx: BridgeContext,
   message: MessageT,
-  extra: { speak?: string; voice_delegation_id?: string; silent?: boolean },
+  extra: { silent?: boolean },
 ): Promise<string> {
   const frame = replyFrame(ctx.clock.now(), message, extra)
   assertFrameFits(frame) // before the local history takes a message that could never be delivered
@@ -105,7 +105,7 @@ export const reply: ToolRecord = {
   instructions: `Messages from the Talos app arrive as <channel source="talos-app" thread_id=… message_id=… kind=… trust=…>. The owner reads the app, not this terminal. Answer with \`reply\`, passing \`thread_id\` back unchanged; never answer in a different thread. Threads are topics. Reply in the thread a message came from.`,
   told: ['main'],
   description:
-    'Send a message to the owner in a thread. Pass thread_id back unchanged from the notification. Optional: files (absolute paths), voice (read it aloud as a voice reply), speak (short spoken answer for a live call), silent (no push).',
+    'Send a message to the owner in a thread. Pass thread_id back unchanged from the notification. Optional: files (absolute paths), voice_text (the spoken version, when replies are read aloud), silent (no push).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -119,16 +119,14 @@ export const reply: ToolRecord = {
         description: 'Absolute paths, 50 MB each at most.',
       },
       format: { type: 'string', enum: ['markdown', 'plain'], description: 'Default markdown.' },
-      voice: {
-        type: 'boolean',
+      voice_text: {
+        type: 'string',
         description: say({
-          mac: 'Also send a spoken version (needs a TTS command on the Mac).',
-          linux: 'Also send a spoken version (needs a TTS command on this computer).',
+          mac: 'Spoken version, up to 1500 characters. Used when replies are read aloud (needs a TTS command on the Mac).',
+          linux:
+            'Spoken version, up to 1500 characters. Used when replies are read aloud (needs a TTS command on this computer).',
         }),
       },
-      voice_text: { type: 'string', description: 'Spoken version, up to 1500 characters.' },
-      speak: { type: 'string', description: 'Up to 600 characters, spoken on a live call.' },
-      voice_delegation_id: { type: 'string' },
       silent: { type: 'boolean' },
     },
     required: ['text'],
@@ -137,22 +135,18 @@ export const reply: ToolRecord = {
     try {
       const threadId = postThreadArg(ctx, args)
       const text = needStr(args, 'text', 32_000)
-      const speak = str(args.speak)
-      if (speak && speak.length > 600) throw new ToolError('speak is over 600 characters')
       const voiceText = str(args.voice_text)
       if (voiceText && voiceText.length > 1500) throw new ToolError('voice_text is over 1500 characters')
       const attachments = await uploadAll(ctx, filesFrom(args.files))
-      const notes: string[] = []
       const cfg = ctx.config.config
       const now = ctx.clock.now()
       // docs/V2-FEATURES.md V4.1: driving mode speaks every reply, but the TEXT goes out first and the voice follows
       const driving = drivingActive(cfg, now)
-      const wantVoice = wantVoiceReply(cfg, now, args.voice === true)
+      const wantVoice = wantVoiceReply(cfg, now)
       const spoken = wantVoice ? (spokenText(text, voiceText) ?? DETAILS_IN_THREAD) : ''
       if (wantVoice && !driving) {
         const voice = await voiceAttachment(ctx, spoken)
         if (voice.ok) attachments.push(voice.ref)
-        else if (args.voice === true) notes.push(`voice reply skipped: ${voice.reason}`)
       }
       const replyTo = str(args.reply_to)
       const message: MessageT = {
@@ -168,16 +162,13 @@ export const reply: ToolRecord = {
         created_at: new Date(ctx.clock.now()).toISOString(),
       }
       const status = await deliverAgentMessage(ctx, message, {
-        ...(speak ? { speak } : {}),
-        ...(str(args.voice_delegation_id) ? { voice_delegation_id: str(args.voice_delegation_id) as string } : {}),
         ...(args.silent === true ? { silent: true } : {}),
       })
       // never awaited: a slow TTS holds neither the reply nor this tool call
       if (wantVoice && driving) void sendVoiceFollowUp(ctx, message, spoken)
       // after the send, so a failed one never carries it; the message itself is not touched
       const inline = inlineCommandNote(text)
-      const head = notes.length ? `${status}; ${notes.join('; ')}` : status
-      return ok(inline ? `${head}\n${inline}` : head)
+      return ok(inline ? `${status}\n${inline}` : status)
     } catch (e) {
       return fail((e as Error).message)
     }

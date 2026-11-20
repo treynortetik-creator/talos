@@ -170,6 +170,8 @@ extension WorkerManager {
     } else {
       rt[id] = r
     }
+    // offered to the bridge for a card: the card is the notice, and the line (which says there is none) is the fallback after the card wait
+    if lineWaitsForCard(id) { return }
     sendNotice(id, \.dlg, kind: "prompt: \(p.hash)", text: SupervisorNotice.workerPromptLine(prompt: p))
   }
 

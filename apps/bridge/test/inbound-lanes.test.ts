@@ -24,12 +24,6 @@ describe('lanePlan', () => {
       always: false,
     })
   })
-  test("the end of a voice call keeps its place behind main's session and that thread", () => {
-    expect(lanePlan(ctx(), item({ type: 'voice.ended', thread_id: 'trip' }))).toEqual({
-      keys: [MAIN_LANE, 'trip'],
-      always: false,
-    })
-  })
   test('an answer to a card that changes settings waits for every lane', () => {
     expect(lanePlan(ctx('config'), item({ type: 'card.resolve', card_id: 'c_1' }))).toBe('barrier')
     expect(lanePlan(ctx('generic'), item({ type: 'card.resolve', card_id: 'c_1' }))).toEqual({

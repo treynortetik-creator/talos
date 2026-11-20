@@ -489,7 +489,7 @@ struct KeyGuardTests {
     let root = Self.fixtures.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sources")
     let sends = [
       ".sendDialogKey(", ".sendEscape()", "UnlessInMode(", ".send(keys:", "$0.send(", ".sendEnter(", ".sendLiteral(", ".sendBackspaces(",
-      ".sendBytes(", ".sendBytesLeavingMode(", ".cancelMode(", "hostSend(", ".send(source:", ".send(data:",
+      ".sendBytes(", ".sendBytesLeavingMode(", ".cancelMode(", "hostSend(", ".send(source:", ".send(data:", ".sendSelectNumber(", ".sendAnswerText(",
     ]
     // the gates themselves and the host implementations (what the gates call)
     let exempt = ["SupervisorKeyGuard.swift", "WorkerKeyGuard.swift", "TmuxPtyHost.swift", "PtyHost.swift", "SwiftTermPtyHost.swift"]

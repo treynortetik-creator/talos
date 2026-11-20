@@ -8,15 +8,15 @@ export function SessionDock({ threadId }: { threadId: string }) {
   return (
     <aside
       id="session-dock"
-      aria-label="Session"
+      aria-label="Your agent"
       data-testid="session-dock"
       className="flex w-[22.5rem] shrink-0 flex-col border-l border-line bg-surface"
     >
       <div className="flex items-center justify-between gap-2 px-4 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2">
-        <h2 className="m-0 font-display text-xl font-semibold">Session</h2>
+        <h2 className="m-0 font-display text-xl font-semibold">Your agent</h2>
         <button
           type="button"
-          aria-label="Close session panel"
+          aria-label="Close agent panel"
           onClick={() => {
             setSessionDockOpen(false)
             // the cross is about to leave the page: focus goes back to the chip that opens this panel

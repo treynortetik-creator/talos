@@ -17,7 +17,7 @@ const words = (o: Partial<WorkerStatusItemT> | undefined, more: Partial<SessionW
 
 describe('sessionWords', () => {
   const rows: Array<[string, Partial<WorkerStatusItemT> | undefined, Partial<SessionWordsInput>, string, string]> = [
-    ['no session yet', undefined, {}, 'none', 'No session yet'],
+    ['no session yet', undefined, {}, 'none', 'No agent yet'],
     [
       'needs you: a permission request',
       { state: 'live', turn_started_at: ago(5) },

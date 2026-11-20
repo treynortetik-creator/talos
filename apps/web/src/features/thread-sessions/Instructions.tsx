@@ -11,11 +11,11 @@ import { Button, Textarea } from '../../ui/index.ts'
 
 export const INSTRUCTIONS_TEXT = {
   title: 'Instructions',
-  about: "AGENTS.md in this thread's folder. Its sessions read it when they start.",
+  about: "AGENTS.md in this thread's folder. Its agent reads it when it starts.",
   edit: 'Edit AGENTS.md',
   none: 'No AGENTS.md yet. What you write here becomes this thread’s AGENTS.md.',
-  noFolder: 'Pick a folder for this thread’s session to give it its own instructions.',
-  saved: 'Saved. The thread’s next session reads it.',
+  noFolder: 'Pick a folder for this thread’s agent to give it its own instructions.',
+  saved: 'Saved. This thread’s agent reads it next time it starts.',
   reload: 'Reload',
   save: 'Save instructions',
   close: 'Close',

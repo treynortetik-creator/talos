@@ -12,7 +12,6 @@ import { clearRecent } from '../search/logic.ts'
 import { audioDock } from '../threads/audioDock.ts'
 import { resetSpeak } from '../threads/speak.ts'
 import { clearThreadDescriptions } from '../threads/threadMeta.ts'
-import { getCallController } from '../voice/controller.ts'
 
 export type Me = RouteRes<'me'> & { vapid_public_key?: string }
 
@@ -35,9 +34,8 @@ const http = createHttp()
 // sign back in without a new pairing (audit D2), so only a revoke removes it.
 const PRIVATE_STORES = ['cache', 'drafts', 'outbox', 'blobs', 'schedules', 'problems'] as const
 /**
- * Queued messages and voice notes. Kept when a session only ran out of time (the relay says `expired`), sent after the owner
- * signs back in. They are stored as they are in the app's browser storage (IndexedDB): the signed message text and the raw
- * audio, NOT encrypted by Talos, readable by anything that can read this browser's storage on the device. Sign-out, revoke
+ * Queued messages. Kept when a session only ran out of time (the relay says `expired`), sent after the owner
+ * signs back in. They are stored as they are in the app's browser storage (IndexedDB): the signed message text, NOT encrypted by Talos, readable by anything that can read this browser's storage on the device. Sign-out, revoke
  * and every other session end remove them, and so does "Discard" on the sign-in page.
  */
 // Problem reports waiting to be sent follow the same rule: they may hold a screenshot the owner added.
@@ -77,25 +75,17 @@ export async function retryPendingWipe(storage: Storage): Promise<boolean> {
 }
 
 /**
- * What only this tab holds in memory: playing audio, a live voice call, read-aloud asks, an unsaved Settings > Agent draft, and what the
+ * What only this tab holds in memory: playing audio, read-aloud asks, an unsaved Settings > Agent draft, and what the
  * composer kept: words of a send that failed, a prefill, dropped files, attachments. It runs on every session end, because
  * nothing else can reach it: no queue removal, Discard or sign-out in another tab empties a tab's memory, so anything left
  * could go out later under a different device key or after the owner signed out elsewhere. Each is tried even if another
  * fails; the first failure is thrown afterwards.
  */
-function endLiveCall(): void {
-  // A call open on a signed-out or revoked device would keep the microphone and the relay session. end() lets go of the
-  // microphone before anything slow, and does nothing when no call is active.
-  getCallController()
-    .end()
-    .catch(() => {})
-}
-
 function resetTabMemory(): void {
   let failure: unknown
   // Audio keeps playing across routes now (D37): a signed-out phone must go quiet, and what was listened to goes with the chats.
   // Read aloud: asks still going to the Mac stop, and the notes and failures it kept for the previous owner's messages go.
-  for (const reset of [() => audioDock.resetForSignOut(), endLiveCall, resetSpeak, resetAgentDraft, resetComposer]) {
+  for (const reset of [() => audioDock.resetForSignOut(), resetSpeak, resetAgentDraft, resetComposer]) {
     try {
       reset()
     } catch (e) {
@@ -106,9 +96,9 @@ function resetTabMemory(): void {
 }
 
 /**
- * Empties the cached threads, drafts, queued messages, voice blobs and the remembered identity. Run on sign-out and on
+ * Empties the cached threads, drafts, queued messages, any leftover recordings and the remembered identity. Run on sign-out and on
  * revoke, so a signed-out phone or browser does not keep the owner's chats (audit D21). A session that merely expired
- * passes `keepUnsent` and keeps the queued messages and voice notes. Every store is tried even if one fails; the first
+ * passes `keepUnsent` and keeps the queued messages. Every store is tried even if one fails; the first
  * failure is thrown afterwards so a caller never reports a clean wipe that was not, and the wipe is marked unfinished
  * (see `pendingWipe`) until a later run succeeds.
  */

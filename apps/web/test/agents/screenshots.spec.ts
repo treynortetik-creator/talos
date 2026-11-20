@@ -17,7 +17,9 @@ const kind = (name: string) => (name === 'iphone' ? 'phone' : 'desktop')
 
 async function settle(page: Page) {
   await page.addStyleTag({ content: '*,*::before,*::after{transition:none!important;animation:none!important}' })
-  await page.waitForTimeout(250)
+  // two frames drawn with the style in force, and no animation or transition still running
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(null)))))
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
 }
 
 for (const scheme of ['light', 'dark'] as const) {

@@ -12,9 +12,9 @@ import {
 } from '../src/tools/table.ts'
 
 describe('agent tool name lists', () => {
-  it('hold the 12 bridge tools of spec 4.4, once each', () => {
-    expect(BRIDGE_TOOLS).toHaveLength(12)
-    expect(new Set(BRIDGE_TOOLS).size).toBe(12)
+  it('hold the 11 bridge tools of spec 4.4, once each (voice_progress is archived)', () => {
+    expect(BRIDGE_TOOLS).toHaveLength(11)
+    expect(new Set(BRIDGE_TOOLS).size).toBe(11)
   })
 
   it('hold exactly these names in this order', () => {
@@ -24,7 +24,6 @@ describe('agent tool name lists', () => {
       'card',
       'card_result',
       'set_status',
-      'voice_progress',
       'list_threads',
       'create_thread',
       'archive_thread',
@@ -39,7 +38,7 @@ describe('agent tool name lists', () => {
       'schedule_run_done',
       'wake_me',
     ])
-    expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose', 'settings_read'])
+    expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose', 'settings_read', 'set_thread_instructions'])
     expect([...ATTACHMENT_BRIDGE_TOOLS]).toEqual(['retry_attachment'])
     expect([...MOD_BRIDGE_TOOLS]).toEqual(['talos_mod_hello', 'talos_mod_sync'])
   })
@@ -52,6 +51,7 @@ describe('agent tool name lists', () => {
       'card_result',
       'set_status',
       'list_threads',
+      'create_thread',
       'read_thread',
       'schedules_list',
       'schedule_propose',
@@ -60,6 +60,7 @@ describe('agent tool name lists', () => {
       'wake_me',
       'config_propose',
       'settings_read',
+      'set_thread_instructions',
       'publish_page',
       'read_inbound',
       'memory_note_read',
@@ -78,6 +79,7 @@ describe('agent tool name lists', () => {
       'attach',
       'card',
       'set_status',
+      'create_thread',
       'read_thread',
       'schedule_propose',
       'config_propose',

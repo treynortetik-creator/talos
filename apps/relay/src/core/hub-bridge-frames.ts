@@ -329,12 +329,10 @@ export const bridgeFrames = {
                 ? 'sent_always_allowed'
                 : frame.settings_changed
                   ? 'settings_changed'
-                  : frame.voice_delegation_id
-                    ? 'answer_ready'
-                    : 'reply',
+                  : 'reply',
               thread_id: frame.message.thread_id,
             },
-            frame.message.text && !frame.voice_delegation_id
+            frame.message.text
               ? {
                   // a heartbeat digest carries outside text: the push says so first, so it cannot read as Talos itself
                   text: `${frame.message.heartbeat ? 'Heartbeat: ' : ''}${frame.message.format === 'plain' ? frame.message.text : markdownToPlain(frame.message.text)}`,
@@ -369,7 +367,7 @@ export const bridgeFrames = {
   },
 
   /**
-   * The Mac refused an owner message or voice note this relay had already acked (an unknown thread, a signing time too
+   * The Mac refused an owner message this relay had already acked (an unknown thread, a signing time too
    * far off). The app dropped its copy at the ack and shows the row as sent, so the refusal is put where every device
    * reads it: the row's receipt becomes `not_delivered` (kept in message meta, so `ready` and history carry it) and one
    * system row in the same thread gives the Mac's reason. Once per message, however often the Mac repeats itself.
@@ -383,7 +381,7 @@ export const bridgeFrames = {
       client_msg_id?: unknown
       _thread: string | null
     } | null
-    if (!ev || (ev.type !== 'message' && ev.type !== 'voice_note') || typeof ev.client_msg_id !== 'string') return false
+    if (ev?.type !== 'message' || typeof ev.client_msg_id !== 'string') return false
     const msgId = ev.client_msg_id
     if (store.seen(`rf:${msgId}`) !== undefined) return true
     const threadId = ev._thread ?? this.cfg().default_thread
@@ -392,7 +390,7 @@ export const bridgeFrames = {
       thread_id: threadId,
       author: 'system',
       kind: 'text',
-      text: refusedMessageNote(frame.code, frame.message, ev.type === 'voice_note'),
+      text: refusedMessageNote(frame.code, frame.message),
       format: 'plain',
       attachments: [],
       via: 'app',

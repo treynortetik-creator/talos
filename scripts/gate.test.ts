@@ -665,14 +665,14 @@ describe('gate.sh picks the suites from the changed paths', () => {
       'apps/web/test/home/home.spec.ts': 'x\n',
       'apps/web/test/shell/shell.spec.ts': 'x\n',
       'apps/web/test/themes/themes.spec.ts': 'x\n',
-      'apps/web/test/voice/voice.spec.ts': 'x\n',
-      'apps/web/test/voice-setup/setup.spec.ts': 'x\n',
+      'apps/web/test/cards/cards.spec.ts': 'x\n',
+      'apps/web/test/cards/setup.spec.ts': 'x\n',
       'apps/web/test/helpers/fixtures.ts': 'x\n',
       'apps/web/test/help/support.ts': 'x\n',
       'apps/web/test/help/unit.test.ts': 'x\n',
       'apps/web/src/router.tsx': 'x\n',
       'apps/web/src/features/help/HelpAbout.tsx': 'x\n',
-      'apps/web/src/features/voice/Mic.tsx': 'x\n',
+      'apps/web/src/features/cards/Card.tsx': 'x\n',
       'apps/web/src/features/nospecs/X.tsx': 'x\n',
       'apps/web/src/features/contracts.ts': 'x\n',
       'apps/web/src/ui/Button.tsx': 'x\n',
@@ -706,14 +706,17 @@ describe('gate.sh picks the suites from the changed paths', () => {
     const webkit = (files: Record<string, string | null>, env2: Record<string, string> = {}) =>
       under(run(files, env2).stdout.trim().split('\n'), 'web-specs-webkit')
     const SMOKE = ['\ttest/home/home.spec.ts', '\ttest/threads/threads.spec.ts'] // the smoke set's specs that exist here
-    // WebKit: a changed spec and a feature's or spec folder's own specs; never the smoke set, never voice, never a wide change
+    // WebKit: a changed spec and a feature's or spec folder's own specs; never the smoke set, never a wide change
     expect(webkit({ 'apps/web/test/help/help.spec.ts': 'y\n' })).toEqual(['\ttest/help/help.spec.ts'])
     expect(webkit({ 'apps/web/src/features/help/HelpAbout.tsx': 'y\n' })).toEqual(['\ttest/help/help.spec.ts'])
     expect(webkit({ 'apps/web/src/ui/Button.tsx': 'y\n' })).toEqual([]) // shared code: the smoke set, on Chromium only
-    expect(webkit({ 'apps/web/src/features/voice/Mic.tsx': 'y\n' })).toEqual(['\ttest/voice-setup/setup.spec.ts']) // the iphone project leaves the voice folder out, not voice-setup
+    expect(webkit({ 'apps/web/src/features/cards/Card.tsx': 'y\n' })).toEqual([
+      '\ttest/cards/cards.spec.ts',
+      '\ttest/cards/setup.spec.ts',
+    ])
     expect(
       webkit(
-        { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/voice/Mic.tsx': 'y\n' },
+        { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/cards/Card.tsx': 'y\n' },
         { WEB_SPECS_MAX: '2' },
       ),
     ).toEqual([]) // over the cap: CI runs every browser
@@ -721,9 +724,9 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(web({ 'apps/web/src/features/help/HelpAbout.tsx': null })).toEqual(['\ttest/help/help.spec.ts']) // deleted too
     expect(web({ 'apps/web/test/help/help.spec.ts': 'y\n' })).toEqual(['\ttest/help/help.spec.ts'])
     expect(web({ 'apps/web/test/help/help.spec.ts': null })).toEqual([]) // a deleted spec runs nothing
-    expect(web({ 'apps/web/src/features/voice/Mic.tsx': 'y\n' })).toEqual([
-      '\ttest/voice-setup/setup.spec.ts',
-      '\ttest/voice/voice.spec.ts',
+    expect(web({ 'apps/web/src/features/cards/Card.tsx': 'y\n' })).toEqual([
+      '\ttest/cards/cards.spec.ts',
+      '\ttest/cards/setup.spec.ts',
     ])
     expect(web({ 'apps/web/src/Shell.tsx': 'y\n' })).toEqual([
       '\ttest/home/home.spec.ts',
@@ -760,7 +763,7 @@ describe('gate.sh picks the suites from the changed paths', () => {
     r.git('reset', '-q', '--hard', base)
     // a change across more screens than WEB_SPECS_MAX: the smoke set, and a note
     const wide = run(
-      { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/voice/Mic.tsx': 'y\n' },
+      { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/cards/Card.tsx': 'y\n' },
       { WEB_SPECS_MAX: '2' },
     )
     expect(wide.stderr).toContain('this change touches 3 web browser specs: the gate runs the smoke set')
@@ -768,7 +771,7 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(wideOut.slice(wideOut.indexOf('web-specs') + 1).filter((l) => l.startsWith('\t'))).toEqual(SMOKE)
     // exactly at the cap is not over it; a cap that is not a number is the default, never off
     const atCap = run(
-      { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/voice/Mic.tsx': 'y\n' },
+      { 'apps/web/src/features/help/HelpAbout.tsx': 'y\n', 'apps/web/src/features/cards/Card.tsx': 'y\n' },
       { WEB_SPECS_MAX: '3' },
     )
     expect(atCap.stderr).not.toContain('web browser specs: the gate runs the smoke set')

@@ -24,6 +24,8 @@ import { inspectRuleFile, ruleFileNotice, ruleKillSwitchPath } from '../action-r
 import { settingsReadText } from '../config-propose/settings-read.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { workerScheduleTool } from '../schedules/worker-scope.ts'
+import { setInstructionsAs } from '../tools/thread-setup.ts'
+import { runCreateThread } from '../tools/threads.ts'
 import { frameBytes } from '../transport.ts'
 import { readNonce, WorkersReader, writeReady } from '../worker/files.ts'
 import {
@@ -304,6 +306,24 @@ export class HubServer {
       } catch (e) {
         ctx.log.warn('hub: config_propose failed', { error: (e as Error).message })
         return answer(false, `The main bridge could not run config_propose: ${(e as Error).message}`.slice(0, 300))
+      }
+    }
+    // Setting up its sub-threads: the same tools Main has, run as the thread this connection proved (never one the request names).
+    if (msg.tool === 'create_thread' || msg.tool === 'set_thread_instructions') {
+      if (threadSessionMode(ctx.config.config, thread) !== 'dedicated')
+        return answer(
+          false,
+          `Thread "${thread}" no longer has its own session; the main session handles it now. Stop here.`,
+        )
+      try {
+        const r =
+          msg.tool === 'create_thread'
+            ? await runCreateThread(ctx, msg.args, thread)
+            : await setInstructionsAs(ctx, msg.args, thread)
+        return answer(!r.isError, r.content.map((c) => ('text' in c ? c.text : '')).join('\n'))
+      } catch (e) {
+        ctx.log.warn('hub: thread setup failed', { tool: msg.tool, error: (e as Error).message })
+        return answer(false, `The main bridge could not run ${msg.tool}: ${(e as Error).message}`.slice(0, 300))
       }
     }
     // Switched back to shared since its hello: main owns its jobs again. Finishing a run the session already claimed still lands (like

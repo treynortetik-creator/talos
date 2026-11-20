@@ -58,7 +58,7 @@ export interface AuthContract {
    * omit it (the caller falls back to reading the body first).
    */
   verifyBridgeHttpHash?(c: Context<AppEnv>, bodySha256: string): Promise<BridgeAuthResult>
-  /** Token bucket by name (`auth`, `ws`, `bridge_ws`, `hook`, `media`, `voice`, ...); 429 when empty. */
+  /** Token bucket by name (`auth`, `ws`, `bridge_ws`, `hook`, `media`, ...); 429 when empty. */
   rateLimit(name: string): MiddlewareHandler<AppEnv>
   /**
    * Takes one token from a named bucket without being middleware, for callers that must look something up first (the

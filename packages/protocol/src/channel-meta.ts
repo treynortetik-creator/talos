@@ -8,13 +8,10 @@ export const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel' as con
 
 export const CHANNEL_KINDS = [
   'text',
-  'voice_note',
   'file',
   'card_action',
   'hook_event',
   'hook_digest',
-  'voice_delegation',
-  'voice_ended',
   'backlog',
   'system',
   // Schedules (docs/SCHEDULES.md S6.3)
@@ -34,7 +31,7 @@ export const CHANNEL_KINDS = [
   'onboarding',
 ] as const
 /** `agent` is another Talos session (main or a thread lead): never the owner's word, and it approves nothing. */
-export const CHANNEL_TRUSTS = ['owner', 'owner_voice', 'external', 'system', 'agent'] as const
+export const CHANNEL_TRUSTS = ['owner', 'external', 'system', 'agent'] as const
 export const ChannelKind = z.enum(CHANNEL_KINDS)
 export const ChannelTrust = z.enum(CHANNEL_TRUSTS)
 
@@ -54,8 +51,6 @@ export const ChannelMeta = z
     user: z.string().optional(),
     written_at: z.string().optional(), // a re-signed owner message: when the words were first written
     run: z.enum(['tap']).optional(), // the Mac accepted this as the owner's tap on Run (run.ts); the only thing the agent trusts as one
-    audio_path: z.string().optional(),
-    transcript_engine: z.string().optional(),
     duration_s: z.string().optional(),
     file_path: z.string().optional(),
     file_mime: z.string().optional(),
@@ -68,8 +63,6 @@ export const ChannelMeta = z
     source: z.string().optional(),
     event_kind: z.string().optional(),
     priority: z.string().optional(),
-    voice_session_id: z.string().optional(),
-    voice_delegation_id: z.string().optional(),
     batch_count: z.string().optional(),
     // schedule_run / schedule_held (docs/SCHEDULES.md S2.2, S6.3)
     schedule_id: z.string().optional(),

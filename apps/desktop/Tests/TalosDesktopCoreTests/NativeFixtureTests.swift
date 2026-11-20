@@ -36,7 +36,7 @@ struct NativeFixtureTests {
     let n = try #require(try fixtures()["native_to_web"] as? [String: Any])
     #expect(
       Set(n.keys) == [
-        "navigate", "compose", "voice_note", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
+        "navigate", "compose", "enroll_code", "companion_reply_request", "companion_replies", "notify_permission",
         "terminal_sessions", "terminal_resume_result", "terminal_select", "run_result", "folder_picked", "capture_drop",
       ])
     let cases: [(String, NativeToWeb)] = [

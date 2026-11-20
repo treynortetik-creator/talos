@@ -45,7 +45,7 @@ export function SessionSheet({
         }
       >
         <div className="mb-4 flex items-center justify-between">
-          <SheetTitle className="m-0 font-display text-xl font-semibold">Session</SheetTitle>
+          <SheetTitle className="m-0 font-display text-xl font-semibold">Your agent</SheetTitle>
           <SheetClose aria-label="Close" className="grid size-11 place-items-center rounded-pill hover:bg-surface-2">
             <IconClose />
           </SheetClose>

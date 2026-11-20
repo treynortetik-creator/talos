@@ -1,5 +1,4 @@
 // The lines above the box: a calm note, an error, the too-long offer, and the reply bar.
-import { useState } from 'react'
 import { MAX_MESSAGE_CHARS } from '../../lib/socketClient.ts'
 import { IconAlert, IconClose } from '../../ui/icons.tsx'
 import type { ReplyTarget } from './composerStore.ts'
@@ -21,50 +20,6 @@ export function ErrorLine({ error }: { error: string }) {
   return (
     <p role="alert" className="m-0 mb-2 flex items-center gap-2 text-sm text-danger">
       <IconAlert width={16} height={16} /> {error}
-    </p>
-  )
-}
-
-/** Voice notes that could not be saved or sent yet; shown for as long as any is kept, whatever else clears the error line. */
-export function UnsavedLine({
-  count,
-  onRetry,
-  onDelete,
-}: {
-  count: number
-  onRetry: () => void
-  onDelete: () => void
-}) {
-  const [asking, setAsking] = useState(false)
-  if (asking)
-    return (
-      <p role="alert" className="m-0 mb-2 flex items-center gap-2 text-sm text-danger">
-        <IconAlert width={16} height={16} /> Delete {count} unsent voice {count === 1 ? 'note' : 'notes'}?
-        <button type="button" data-testid="error-delete-confirm" onClick={onDelete} className="min-h-11 px-2 underline">
-          Delete
-        </button>
-        <button type="button" onClick={() => setAsking(false)} className="min-h-11 px-2 underline">
-          Keep
-        </button>
-      </p>
-    )
-  return (
-    <p role="alert" className="m-0 mb-2 flex items-center gap-2 text-sm text-danger">
-      <IconAlert width={16} height={16} />{' '}
-      {count === 1
-        ? "Couldn't save the voice note on this device, so it was not sent yet."
-        : `${count} voice notes not sent yet.`}
-      <button type="button" data-testid="error-retry" onClick={onRetry} className="min-h-11 px-2 underline">
-        Retry
-      </button>
-      <button
-        type="button"
-        data-testid="error-delete"
-        onClick={() => setAsking(true)}
-        className="min-h-11 px-2 underline"
-      >
-        Delete
-      </button>
     </p>
   )
 }

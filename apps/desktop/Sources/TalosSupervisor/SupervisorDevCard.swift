@@ -102,7 +102,7 @@ extension Supervisor {
   static let mainAnswerFile = "main-dialog-answer.json"
 
   /// The default thread, where the bridge puts the card and so where the answer file is (the same `default_thread` the bridge reads).
-  private var defaultThread: String? { CrashPost.readAppConfig(probe.readFile(talosAppHome + "/config.json")).defaultThread }
+  var defaultThread: String? { CrashPost.readAppConfig(probe.readFile(talosAppHome + "/config.json")).defaultThread }
 
   /// The owner's tap, if one came: taken off the folder first (so no crash can act on it twice), checked, then pressed.
   func takeDevAnswer(launch l: inout Launch) {

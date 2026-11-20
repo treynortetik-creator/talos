@@ -103,6 +103,64 @@ test('13. Run: one tap hands the agent exactly that script; Run again and a seco
   expect(stack.bridgeLog()).not.toContain('hello from Alex Example')
 })
 
+test('13. Run: a tap while offline says Queued, and once it goes out on reconnect the line says Sent', async ({
+  stack,
+  page,
+  context,
+}) => {
+  await stack.startBridge({ autoReply: false })
+  await enrollDevice(stack, page, context)
+  await openThread(page, 'General')
+  await agentPosts(stack, POST)
+  const block = page.getByTestId('msg-agent').filter({ hasText: 'Cleanup for Alex Example' })
+  await expect(block.getByTestId('run-button')).toBeVisible()
+
+  await context.setOffline(true)
+  stack.dropAppSockets()
+  await expect(page.getByText(/You're offline/).first()).toBeVisible()
+  await block.getByTestId('run-button').click()
+  await expect(block.getByTestId('run-status')).toHaveText(/^Queued · sends when you're back online/)
+
+  await context.setOffline(false)
+  await stack.claude.waitForNotification((n) => n.meta.run === 'tap', 30_000)
+  // it went out: the line says so (it used to keep "Queued" for good, since the tap's own result never changed)
+  await expect(block.getByTestId('run-status')).toHaveText(/^Sent · the agent runs it/)
+  await expect(block.getByRole('button', { name: 'Run again', exact: true })).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(runNotes(stack)).toHaveLength(1)
+})
+
+test('13. Run: with the relay\'s ack slow, the line says Sending, never "back online", and Sent once the ack lands', async ({
+  stack,
+  page,
+  context,
+}) => {
+  // the relay's acks reach the page late, as they do on a loaded machine (old-client.spec.ts:74, 2026-11-20)
+  let slowAcks = false
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((m) => server.send(m))
+    server.onMessage((m) => {
+      if (slowAcks && typeof m === 'string' && m.includes('"type":"ack"')) setTimeout(() => ws.send(m), 12_000)
+      else ws.send(m)
+    })
+  })
+  await stack.startBridge({ autoReply: false })
+  await enrollDevice(stack, page, context)
+  await openThread(page, 'General')
+  await agentPosts(stack, POST)
+  const block = page.getByTestId('msg-agent').filter({ hasText: 'Cleanup for Alex Example' })
+  slowAcks = true
+  await block.getByTestId('run-button').click()
+  await stack.claude.waitForNotification((n) => n.meta.run === 'tap', 30_000)
+  // the agent has it, the page has not had the ack yet: on its way, and certainly not waiting to be back online
+  const line = block.getByTestId('run-status')
+  expect(await line.textContent()).not.toMatch(/back online/)
+  await expect(line).toHaveText('Sending…', { timeout: 3000 })
+  await expect(line).toHaveText(/^Sent · the agent runs it/, { timeout: 25_000 })
+  expect(runNotes(stack)).toHaveLength(1)
+})
+
 test('13. Run: a block over seven days old is refused with the plain line and nothing reaches the agent', async ({
   stack,
   page,

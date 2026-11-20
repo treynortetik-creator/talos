@@ -107,7 +107,7 @@ function ReadOnlySettings({ limits, declared }: { limits: string | null; declare
       <PermissionRelaySwitch declared={declared} />
       {limits && (
         <p className="m-0 text-sm" data-testid="relay-limits">
-          <span className="font-medium">Relay limits:</span>{' '}
+          <span className="font-medium">Talos server limits:</span>{' '}
           <span className="text-text-2">{limits}. Set on your server.</span>
         </p>
       )}

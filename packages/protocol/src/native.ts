@@ -5,15 +5,13 @@
 // one-time setup code (`POST /api/auth/enroll/session`, docs/SPEC.md 5.3).
 //
 //   web -> native   ready · notify · badge · open_external · haptic · threads · pair_status · companion_state · companion_reply · terminal_view · terminal_resume · terminal_leave · pick_folder · shell_pane · shell_pane_close · run_witness · capture_ack
-//   native -> web   navigate · compose · voice_note (reserved) · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · run_result · folder_picked · capture_drop
+//   native -> web   navigate · compose · enroll_code · companion_reply_request · notify_permission · terminal_sessions · terminal_resume_result · terminal_select · run_result · folder_picked · capture_drop
 import { z } from 'zod'
 import { normalizeEnrollCode } from './enroll.ts'
 import { MsgId, ThreadId } from './ids.ts'
 
 export const NATIVE_SHELL_API = 1
 export const NATIVE_FEATURES_MAX = 32
-/** A voice note a shell hands to the page is at most 25 MB of audio (decoded). Reserved: no shell sends one yet. */
-export const NATIVE_VOICE_NOTE_MAX_BYTES = 25 * 1024 * 1024
 
 const Feature = z.string().min(1).max(64)
 /**
@@ -274,20 +272,9 @@ const base64Bytes = (max: number, what: string) =>
       const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0
       return (s.length / 4) * 3 - pad <= max
     }, `${what} is too big or not base64`)
-const Base64Bytes = base64Bytes(NATIVE_VOICE_NOTE_MAX_BYTES, 'voice note')
 
 export const NativeNavigate = msg('navigate', { path: AppPath })
 export const NativeCompose = msg('compose', { thread_id: ThreadId, text: z.string().min(1).max(32_000) })
-export const NativeVoiceNote = msg('voice_note', {
-  thread_id: ThreadId,
-  mime: z.string().regex(/^audio\/[a-z0-9.+-]{1,60}$/i),
-  duration_ms: z
-    .number()
-    .int()
-    .min(0)
-    .max(60 * 60_000),
-  bytes_b64: Base64Bytes,
-})
 /** The one-time setup code, as the shell read it from the link or the clipboard. */
 export const NativeEnrollCode = msg('enroll_code', {
   code: z
@@ -434,7 +421,6 @@ export const NativeCaptureDrop = msg('capture_drop', {
 export const NATIVE_TO_WEB = {
   navigate: NativeNavigate,
   compose: NativeCompose,
-  voice_note: NativeVoiceNote,
   enroll_code: NativeEnrollCode,
   companion_reply_request: NativeCompanionReplyRequest,
   companion_replies: NativeCompanionReplies,
@@ -449,7 +435,6 @@ export const NATIVE_TO_WEB = {
 export const NativeToWeb = z.discriminatedUnion('type', [
   NativeNavigate,
   NativeCompose,
-  NativeVoiceNote,
   NativeEnrollCode,
   NativeCompanionReplyRequest,
   NativeCompanionReplies,

@@ -39,6 +39,10 @@ import { join } from 'node:path'
 
 process.env.TALOS_INBOX_ROOT = join(mkdtempSync(join(tmpdir(), 'talos-test-inbox-')), '.talos-inbox')
 
+// Nor does a test bridge read the launch of the Claude session a developer runs the tests from (claude-env.ts
+// talosChannelState): it says 'unknown' unless a test sets this, or hands the walk a fake process tree.
+process.env.TALOS_TEST_CHANNEL = 'unknown'
+
 // And no bridge test starts the plain explanation of permission cards on whatever `claude` it finds; the explainer's own
 // tests give it a fake CLI by path.
 process.env.TALOS_EXPLAINER = 'off'

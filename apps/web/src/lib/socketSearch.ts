@@ -51,7 +51,7 @@ export function createSocketSearch(d: SocketSearchDeps): SearchClient {
           index: r.index,
         }
       } catch (e) {
-        if (e instanceof TalosClientError && e.message === 'The relay did not answer.')
+        if (e instanceof TalosClientError && e.message === 'Talos did not answer. Try again.')
           throw new TalosClientError('internal', "Your Mac didn't answer.")
         throw e
       } finally {

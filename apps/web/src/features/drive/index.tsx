@@ -1,7 +1,7 @@
 // Driving mode screen (docs/V2-FEATURES.md V4.2, route /drive). Dark always, 22 px minimum text, no scroll, 96 px and
 // 140 px targets. Replies arrive as text at once and the voice follows; this screen plays it (see queue.ts). Cards and
 // permission requests are counted and announced once, never approved here.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useStore } from 'zustand'
@@ -10,13 +10,9 @@ import { getPlatform } from '../../lib/platform.ts'
 import type { DriveScreenProps } from '../contracts.ts'
 import { audioDock } from '../threads/audioDock.ts'
 import { loadSpeed, nextSpeed, type Speed } from '../threads/speed.ts'
-import { useCallStore } from '../voice/callStore.ts'
-import { getCallController } from '../voice/index.tsx'
-import { useVoiceAvailability } from '../voice/status.tsx'
 import { IDLE_END_MS } from './controller.ts'
 import { DRIVING_FAILED, setDriving, useDrivingState } from './driving.ts'
 import { getDrive } from './instance.ts'
-import { loadTapToTalk } from './prefs.ts'
 
 const mmss = (s: number) => {
   const t = Math.max(0, Math.floor(Number.isFinite(s) ? s : 0))
@@ -39,21 +35,8 @@ export function DriveScreen(_props: DriveScreenProps) {
   const threads = useTalos((s) => s.config?.threads)
   const d = useStore(controller.store, (s) => s)
   const q = useStore(queue.store, (s) => s)
-  const voice = useVoiceAvailability()
-  const call = getCallController()
-  const callPhase = useCallStore(call.store, (s) => s.phase)
-  // /drive mounts no composer, so the thread screen's call error line does not exist here: show the call's own error.
-  const callError = useCallStore(call.store, (s) => s.error)
-  const onCall = callPhase !== 'idle'
   const [speed, setSpeed] = useState<Speed>(loadSpeed)
   const [error, setError] = useState<string | null>(null)
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
-  // The ask belongs to the notes it was asked about: when the list empties (a Retry, a sign-out) it is closed again.
-  useEffect(() => {
-    if (d.kept === 0) setConfirmingDelete(false)
-  }, [d.kept])
-  const [talking, setTalking] = useState(false)
-  const tapMode = useRef(loadTapToTalk())
 
   const threadName = threads?.find((t) => t.id === d.thread)?.name ?? 'General'
 
@@ -120,7 +103,7 @@ export function DriveScreen(_props: DriveScreenProps) {
     return () => root?.removeAttribute('inert')
   }, [])
 
-  // Every 30 s: with under 30 min left, extend only for an owner who talked or tapped in the last 2 h. Otherwise say
+  // Every 30 s: with under 30 min left, extend only for an owner who tapped in the last 2 h. Otherwise say
   // so out loud and turn driving off, which also lets the wake lock go.
   useEffect(() => {
     if (!active) return
@@ -148,8 +131,6 @@ export function DriveScreen(_props: DriveScreenProps) {
     }
   }
   const exit = async () => {
-    // Leaving driving mode hangs up a live call started here: nothing behind /drive could end it.
-    if (call.store.getState().phase !== 'idle') void call.end()
     queue.clear()
     const r = await setDriving(client, false)
     if (!r.ok) setError(DRIVING_FAILED)
@@ -162,29 +143,13 @@ export function DriveScreen(_props: DriveScreenProps) {
     queue.applySpeed()
   }
 
-  const down = () => {
-    setTalking(true)
-    void controller.beginTalk()
-  }
-  const up = () => {
-    if (!talking) return
-    setTalking(false)
-    void controller.endTalk(true)
-  }
-
   const needsTap = !q.armed && q.current !== null
   const statusText =
-    d.status === 'listening'
-      ? 'Listening…'
-      : d.status === 'sending'
-        ? 'Sending…'
-        : d.status === 'thinking'
-          ? 'Thinking…'
-          : d.status === 'speaking'
-            ? `Speaking… ${mmss(q.position)} / ${mmss(q.duration)}`
-            : needsTap || q.blocked
-              ? 'Tap Play to hear it'
-              : 'Ready'
+    d.status === 'speaking'
+      ? `Speaking… ${mmss(q.position)} / ${mmss(q.duration)}`
+      : needsTap || q.blocked
+        ? 'Tap Play to hear it'
+        : 'Ready'
 
   return createPortal(
     <section
@@ -209,14 +174,7 @@ export function DriveScreen(_props: DriveScreenProps) {
               {error}
             </p>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              if (call.store.getState().phase !== 'idle') void call.end()
-              nav('/')
-            }}
-            className={PILL}
-          >
+          <button type="button" onClick={() => nav('/')} className={PILL}>
             Exit
           </button>
         </div>
@@ -286,74 +244,9 @@ export function DriveScreen(_props: DriveScreenProps) {
             </button>
           </div>
           <div className="contents landscape:flex landscape:min-h-0 landscape:flex-col landscape:gap-2">
-            <button
-              type="button"
-              data-testid="drive-talk"
-              aria-pressed={talking}
-              disabled={onCall}
-              onPointerDown={(e) => {
-                if (tapMode.current) return
-                e.currentTarget.setPointerCapture?.(e.pointerId)
-                down()
-              }}
-              onPointerUp={() => !tapMode.current && up()}
-              onPointerCancel={() => !tapMode.current && up()}
-              onClick={() => {
-                if (!tapMode.current) return
-                if (talking) up()
-                else down()
-              }}
-              onKeyDown={(e) => {
-                if (!tapMode.current && (e.key === ' ' || e.key === 'Enter') && !e.repeat) down()
-              }}
-              onKeyUp={(e) => {
-                if (!tapMode.current && (e.key === ' ' || e.key === 'Enter')) up()
-              }}
-              className={`${BTN} h-[140px] w-full touch-none select-none text-[28px] font-semibold ${talking ? 'bg-[var(--talos-cream)] text-[var(--talos-black)]' : ''}`}
-            >
-              {talking
-                ? tapMode.current
-                  ? 'Tap to send'
-                  : 'Release to send'
-                : tapMode.current
-                  ? 'Tap to talk'
-                  : 'Hold to talk'}
-            </button>
-            {d.kept > 0 && (
-              <p role="alert" data-testid="drive-unsaved" className="m-0 text-center">
-                {d.kept === 1 ? '1 voice note not sent yet' : `${d.kept} voice notes not sent yet`}{' '}
-                {confirmingDelete ? (
-                  <>
-                    Delete {d.kept} unsent voice {d.kept === 1 ? 'note' : 'notes'}?{' '}
-                    <button
-                      type="button"
-                      data-testid="drive-delete-confirm"
-                      onClick={() => {
-                        controller.deleteKept()
-                        setConfirmingDelete(false)
-                      }}
-                    >
-                      Delete
-                    </button>{' '}
-                    <button type="button" onClick={() => setConfirmingDelete(false)}>
-                      Keep
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button type="button" data-testid="drive-retry" onClick={() => void controller.retryNote()}>
-                      Retry
-                    </button>{' '}
-                    <button type="button" data-testid="drive-delete" onClick={() => setConfirmingDelete(true)}>
-                      Delete
-                    </button>
-                  </>
-                )}
-              </p>
-            )}
-            {(d.error || error || (callError && !onCall)) && (
+            {(d.error || error) && (
               <p role="alert" data-testid="drive-error" className="m-0 text-center">
-                {d.error ?? error ?? callError}
+                {d.error ?? error}
               </p>
             )}
             <div className="mt-auto flex flex-col gap-2">
@@ -362,23 +255,7 @@ export function DriveScreen(_props: DriveScreenProps) {
                   {d.cardsWaiting} {d.cardsWaiting === 1 ? 'card' : 'cards'} waiting · approve later
                 </p>
               )}
-              <div className="flex items-center justify-between gap-3">
-                {onCall ? (
-                  <button
-                    type="button"
-                    data-testid="drive-end-call"
-                    onClick={() => void call.end()}
-                    className={`${PILL} min-h-24 px-8 text-[28px] font-semibold`}
-                  >
-                    End call
-                  </button>
-                ) : voice.available ? (
-                  <button type="button" onClick={() => void call.start(client, d.thread)} className={PILL}>
-                    Talk live
-                  </button>
-                ) : (
-                  <span />
-                )}
+              <div className="flex items-center justify-end gap-3">
                 <button type="button" onClick={() => void exit()} className={PILL}>
                   Exit
                 </button>

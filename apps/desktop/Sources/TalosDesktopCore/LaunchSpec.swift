@@ -241,7 +241,7 @@ public struct LaunchSpec: Equatable, Sendable {
   public static func rollback(_ c: DesktopConfig, home: String) -> LaunchSpec {
     LaunchSpec(
       agentDir: c.expandedAgentDir(home: home), env: c.env, program: c.claudePath == "auto" ? "claude" : c.claudePath,
-      args: ResumeRewrite.strip(c.args), resumeId: c.session.id.flatMap { ResumeRewrite.isUUID($0) ? $0 : nil })
+      args: MainChannelFlag.ensured(ResumeRewrite.strip(c.args)), resumeId: c.session.id.flatMap { ResumeRewrite.isUUID($0) ? $0 : nil })
   }
 
   public static func shellQuote(_ s: String) -> String {

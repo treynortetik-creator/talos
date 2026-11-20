@@ -54,9 +54,8 @@ for (const size of sizes) {
           expect(b.x, 'not to the right of +').toBeGreaterThanOrEqual(a.x + a.width - 0.5)
           expect(b.x - (a.x + a.width), 'not next to +').toBeLessThanOrEqual(16)
           // the same size and plain look as the other icon buttons of the row
-          const mic = await box(composer.getByTestId('mic'))
-          expect(b.width).toBeCloseTo(mic.width, 0)
-          expect(b.height).toBeCloseTo(mic.height, 0)
+          expect(b.width).toBeCloseTo(a.width, 0)
+          expect(b.height).toBeCloseTo(a.height, 0)
           const look = await bug.evaluate((el) => {
             const s = getComputedStyle(el)
             return { border: s.borderTopWidth, shadow: s.boxShadow, bg: s.backgroundColor }
@@ -64,8 +63,6 @@ for (const size of sizes) {
           expect(look.border).toBe('0px')
           expect(look.shadow).toBe('none')
           expect(look.bg).toBe('rgba(0, 0, 0, 0)')
-          // not over the buttons on the right either
-          expect(b.x + b.width).toBeLessThanOrEqual(mic.x)
           const covered = await bug.evaluate((el) => {
             const r = el.getBoundingClientRect()
             const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)

@@ -206,8 +206,7 @@ test('/drive: start, status line, controls, no scroll, 22 px text', async ({ pag
   })
   expect(m.sh).toBeLessThanOrEqual(m.ch)
   expect(m.small).toEqual([])
-  const talk = await page.getByTestId('drive-talk').boundingBox()
-  expect(talk?.height).toBeGreaterThanOrEqual(139)
+  await expect(page.getByTestId('drive-talk')).toHaveCount(0) // no Talk: this is a listen screen
   await expect(page.getByTestId('drive-status')).toContainText('Ready', { timeout: 15_000 })
 })
 

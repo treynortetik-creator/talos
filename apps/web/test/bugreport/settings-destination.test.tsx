@@ -30,7 +30,7 @@ describe('Settings > Bug reports, the state line', () => {
   it('off, naming the saved address, when the relay does not send to it (no secret)', async () => {
     const state = show({ to: 'relay' }, 'hooks.example.com')
     await waitFor(() =>
-      expect(state()).toMatch(/^Off: an address \(hooks\.example\.com\) is saved, but your relay does not send/),
+      expect(state()).toMatch(/^Off: an address \(hooks\.example\.com\) is saved, but your Talos server does not send/),
     )
   })
   it('the host the relay sends to', async () => {

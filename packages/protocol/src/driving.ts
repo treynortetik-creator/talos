@@ -29,13 +29,13 @@ export function drivingActive(cfg: DrivingCfg, now: number): boolean {
   return Number.isFinite(t) && t > now
 }
 
-/** Driving active -> true (overrides 'never'); else 'always' -> true, 'never' -> false, 'when_voice' -> askedVoice. */
-export function wantVoiceReply(cfg: DrivingCfg, now: number, askedVoice: boolean): boolean {
+/**
+ * Driving active -> true (overrides 'never'); else 'always' -> true. 'never' -> false, and so is a stored 'when_voice' ("when I
+ * send a voice note"): that option went with voice input (docs/archived/voice.md), so an old config reads as 'never'.
+ */
+export function wantVoiceReply(cfg: DrivingCfg, now: number): boolean {
   if (drivingActive(cfg, now)) return true
-  const p = cfg.voice_notes.reply_with_voice
-  if (p === 'always') return true
-  if (p === 'never') return false
-  return askedVoice
+  return cfg.voice_notes.reply_with_voice === 'always'
 }
 
 const FENCE = /^\s*(```|~~~)/

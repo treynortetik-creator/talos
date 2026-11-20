@@ -35,6 +35,9 @@ const real = (p: string): string | null => {
   }
 }
 
+/** For folders only (see above), also for the proposal checks in config-propose/folder-check.ts. */
+export { real as realFolder }
+
 /** The folders a thread may never work in: the picker's own list (`folderRefusedRoots`), never a second copy. */
 function refusedFolder(path: string, roots: WorkerRoots): boolean {
   const list = folderRefusedRoots({

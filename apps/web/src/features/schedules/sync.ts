@@ -24,7 +24,7 @@ function errorName(e: unknown, current: string | null): string {
   if (e instanceof TalosClientError) {
     if (e.message === 'no_answer') return 'no_answer'
     // the relay or the bridge says it has no Schedules: "update", not a generic failure
-    if (e.code === 'scheduler_unavailable') return /relay/i.test(e.message) ? 'update_relay' : 'update_mac'
+    if (e.code === 'scheduler_unavailable') return /relay|Talos online/i.test(e.message) ? 'update_relay' : 'update_mac'
     return e.code
   }
   return 'internal'

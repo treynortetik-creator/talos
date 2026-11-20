@@ -10,12 +10,11 @@ export const SETTINGS_LOCKED =
   "Talos settings are locked, so I can't change them myself; the owner can unlock them in Settings."
 
 /**
- * How long the owner's words (typed or spoken) count as "they just asked for this": two hours (owner ruling 2026-11-14: he should
+ * How long the owner's words count as "they just asked for this": two hours (owner ruling 2026-11-14: he should
  * not have to repeat himself), cut short by untrusted text arriving after them (see `ownerAskedIn`).
  */
 export const OWNER_SPOKE_MS = 2 * 3600_000
 
-const VOICE_KEY = (thread: string) => `voice_ask_at:${thread}`
 const SEEN_KEY = 'trust_mode_seen'
 const OUTSIDE_KEY = (thread: string) => `outside_text_at:${thread}`
 
@@ -45,18 +44,12 @@ export function mintRisk<T>(config: Parameters<typeof trustOn>[0], kind: string,
   return trustOn(config) ? riskForTrust(true, kind, 'low') : requested
 }
 
-/** A live call asked something in `thread`: calls are not stored as message rows, so the time is kept here. */
-export function recordVoiceAsk(ctx: Pick<BridgeContext, 'store' | 'clock'>, thread: string) {
-  ctx.store.kvSet(VOICE_KEY(thread), String(ctx.clock.now()))
-}
-
 /**
  * True when the owner (not a share) spoke in `threadId` in the last two hours, and no untrusted text arrived in THIS thread
  * after his words: no share here, and no hand-off from this thread's lead (its words may carry what it read). A share or a
  * hand-off in another thread does not wipe a request he just made here (Pantheon, 2026-11-14: that was the "you haven't
  * asked" friction, and outside text reaches the agent wrapped as data wherever it lands); main's own TASK to a lead is not
- * outside text at all. With
- * trust mode on, a spoken question on a live call counts like typing. This is a label-level check, not a guard: it cannot see
+ * outside text at all. This is a label-level check, not a guard: it cannot see
  * text the agent read for itself (a web page, a file). That is covered by outside text reaching the agent wrapped as data, and
  * by every change made this way being told to the owner at once with how to undo it.
  */
@@ -101,10 +94,6 @@ export function ownerAskedAt(
     if (m.thread_id !== threadId || isShareOnly(m)) continue
     const t = Date.parse(m.created_at)
     if (now - t < OWNER_SPOKE_MS && t > spoke) spoke = t
-  }
-  if (trustOn(ctx.config.config)) {
-    const v = Number(ctx.store.kvGet(VOICE_KEY(threadId)))
-    if (Number.isFinite(v) && v <= now && now - v < OWNER_SPOKE_MS && v > spoke) spoke = v
   }
   if (spoke === Number.NEGATIVE_INFINITY) return undefined
   // this thread's lead talking to main after the owner's words is another session's text, not the owner: it cancels them

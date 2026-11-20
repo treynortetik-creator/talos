@@ -121,8 +121,6 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UIViewControllerBasedStatusBarAppearance: true
-        # Microphone for voice input in the web app. Text only; no Apple team or personal data.
-        NSMicrophoneUsageDescription: Talos uses the microphone for voice messages you record.
         # Composer "Take photo" (<input capture>) opens the camera; iOS kills the app without this key.
         NSCameraUsageDescription: Talos uses the camera to scan your relay's setup code and when you take a photo to attach to a message.
         # Long-press "Save to Photos" on an image.

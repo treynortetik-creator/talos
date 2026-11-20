@@ -43,7 +43,6 @@ Railway side.
 - **Update order.** Deploy the relay before updating the Mac. A new Mac behind an old relay refuses the old app's unsigned `media.fetch`, and the old relay turns each refusal into a row in the default thread.
 - **Rollback.** Redeploy the previous build in Railway. The database only gains columns, so older code mostly still runs. One exception: inbox and webhook events are stored sealed from the release that encrypts them (`hooks_events.event_enc`). Rolling back to the release just before that one is safe, because it already reads sealed rows. Rolling back to a build older than that cannot read them: the inbox fails to load and webhook delivery stops until you redeploy a newer build.
 - **Cost.** Roughly $1.50 to $2.50 a month of usage for the relay (memory, a little CPU, one gigabyte of volume). The Hobby
-  plan's included credit is shared with your other projects, so check the usage page. Live voice is billed separately by
-  OpenAI at about five cents a minute.
+  plan's included credit is shared with your other projects, so check the usage page.
 - **Building the image yourself.** From the repository root: `docker build -f apps/relay/Dockerfile -t talos-relay .`. The
   container runs as a non-root user, listens on `PORT` (default 8080) and expects the volume at `/data`.

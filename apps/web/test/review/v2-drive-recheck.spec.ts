@@ -1,7 +1,7 @@
 // Re-check 2026-10-30 of PR #43 at ced3060, harness copied from v2-drive-review.spec.ts. Adversarial review of PR #43 (V2 WP-V3, driving mode, web). Every test here drives the real web client in fake mode
 // (VITE_FAKE=1) through the same seams as test/drive/drive.spec.ts: the fake client's store, the signed frames it
 // records, the real /drive screen, the real queue and its one <audio data-testid="drive-audio">. Browser APIs Playwright
-// cannot exercise (speechSynthesis, MediaRecorder, Wake Lock, Media Session) are replaced by recording stubs.
+// cannot exercise (speechSynthesis, Wake Lock, Media Session) are replaced by recording stubs.
 // Each test names the finding it proves (F-numbers).
 import { expect, type Page, test } from '@playwright/test'
 
@@ -15,12 +15,11 @@ type Fake = {
   }
 }
 type Probe = {
-  spoken: Array<{ text: string; audioPlaying: boolean; recording: boolean; at: number }>
+  spoken: Array<{ text: string; audioPlaying: boolean; at: number }>
   speechCancels: number
   speechPauses: number
   audioContexts: number
   audioPlayTargets: HTMLMediaElement[]
-  recording: boolean
   wake: { granted: number; released: number }
   msHandlers: Record<string, (() => void) | null>
 }
@@ -69,12 +68,11 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
   await page.addInitScript(
     ({ wakeGrantMs }) => {
       const p = {
-        spoken: [] as Array<{ text: string; audioPlaying: boolean; recording: boolean; at: number }>,
+        spoken: [] as Array<{ text: string; audioPlaying: boolean; at: number }>,
         speechCancels: 0,
         speechPauses: 0,
         audioContexts: 0,
         audioPlayTargets: [] as HTMLMediaElement[],
-        recording: false,
         wake: { granted: 0, released: 0 },
         msHandlers: {} as Record<string, (() => void) | null>,
       }
@@ -96,7 +94,7 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
         value: {
           speaking: false,
           speak(u: { text: string }) {
-            p.spoken.push({ text: u.text, audioPlaying: driveAudioPlaying(), recording: p.recording, at: Date.now() })
+            p.spoken.push({ text: u.text, audioPlaying: driveAudioPlaying(), at: Date.now() })
             this.speaking = true
           },
           cancel() {
@@ -132,37 +130,6 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
         if (this instanceof HTMLAudioElement) p.audioPlayTargets.push(this)
         return play.call(this)
       }
-      // Microphone + MediaRecorder (engine-independent).
-      Object.defineProperty(navigator, 'mediaDevices', {
-        configurable: true,
-        value: { getUserMedia: async () => new MediaStream() },
-      })
-      class FakeRecorder {
-        static isTypeSupported(m: string) {
-          return m === 'audio/mp4'
-        }
-        state = 'inactive'
-        ondataavailable: ((e: { data: Blob }) => void) | null = null
-        onstop: ((e: Event) => void) | null = null
-        onerror: (() => void) | null = null
-        addEventListener() {}
-        start() {
-          this.state = 'recording'
-          p.recording = true
-        }
-        stop() {
-          this.state = 'inactive'
-          p.recording = false
-          setTimeout(() => {
-            this.ondataavailable?.({ data: new Blob([new Uint8Array(2000)], { type: 'audio/mp4' }) })
-            this.onstop?.(new Event('stop'))
-          }, 0)
-        }
-        pause() {}
-        resume() {}
-        requestData() {}
-      }
-      Object.defineProperty(window, 'MediaRecorder', { value: FakeRecorder, configurable: true, writable: true })
       // Wake Lock that takes `wakeGrantMs` to be granted (iOS can be slow while the page settles).
       Object.defineProperty(navigator, 'wakeLock', {
         configurable: true,
@@ -314,50 +281,4 @@ test('RC2: a new voice clip never plays on top of the phone voice reading an ear
     stillSpeaking: (window.speechSynthesis as unknown as { speaking: boolean }).speaking,
   }))
   expect(r.played && r.stillSpeaking, 'two voices at once: the clip plays over the phone voice').toBe(false)
-})
-
-// ---- RC3: Talk live from /drive has no way to end the call on /drive ---------------------------------------------------
-test('RC3: after Talk live on /drive, the call can be ended from /drive', async ({ page }) => {
-  await instrument(page)
-  // Hold the call in "connecting" (the relay is slow to answer the SDP offer): the mic is already open by then.
-  await page.route('**/api/voice/**', () => new Promise(() => {}))
-  await page.addInitScript(() => {
-    const md = navigator.mediaDevices
-    const gum = md.getUserMedia.bind(md)
-    ;(window as unknown as { __mic: number }).__mic = 0
-    md.getUserMedia = (c?: MediaStreamConstraints) => {
-      ;(window as unknown as { __mic: number }).__mic++
-      return gum(c)
-    }
-  })
-  await startOnDrive(page)
-  const live = page.getByRole('button', { name: 'Talk live' })
-  await expect(live).toBeVisible()
-  await live.click()
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __mic: number }).__mic)).toBeGreaterThan(0)
-  // The call is connecting (the mic is open). Somewhere on the driving screen there must be a way to hang up.
-  await expect(
-    page.getByTestId('drive-screen').getByRole('button', { name: /end( the)? call|hang up/i }),
-    'no End call control on /drive, and the CallBar behind it is inert',
-  ).toBeVisible({ timeout: 3_000 })
-})
-
-test('RC3b: Exit from /drive during a live call hangs it up too', async ({ page }) => {
-  await instrument(page)
-  await page.route('**/api/voice/**', () => new Promise(() => {}))
-  await startOnDrive(page)
-  await page.getByRole('button', { name: 'Talk live' }).click()
-  const end = page.getByTestId('drive-screen').getByRole('button', { name: 'End call' })
-  await expect(end).toBeVisible()
-  expect((await end.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(95)
-  await page.getByRole('button', { name: 'Exit' }).click()
-  await expect(page.getByTestId('drive-screen')).toHaveCount(0)
-  // Back on /drive (driving off): no call is left running behind it.
-  await page.evaluate(() => {
-    history.pushState({}, '', '/drive')
-    dispatchEvent(new PopStateEvent('popstate'))
-  })
-  await page.getByRole('button', { name: 'Start driving' }).click()
-  await expect(page.getByRole('button', { name: 'Talk live' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'End call' })).toHaveCount(0)
 })

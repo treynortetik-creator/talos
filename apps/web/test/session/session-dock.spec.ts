@@ -6,7 +6,7 @@ test.use({ bypassCSP: true, serviceWorkers: 'block' })
 
 const chip = (page: Page) => page.getByTestId('session-trigger')
 const dock = (page: Page) => page.getByTestId('session-dock')
-const closeBtn = (page: Page) => dock(page).getByRole('button', { name: 'Close session panel' })
+const closeBtn = (page: Page) => dock(page).getByRole('button', { name: 'Close agent panel' })
 
 test.describe('docked panel', () => {
   test.skip(({ viewport }) => (viewport?.width ?? 0) < 1024, 'the docked panel is a desktop control')
@@ -77,11 +77,10 @@ test.describe('docked panel', () => {
     await expect(d.getByTestId('session-agents')).toBeVisible()
     await expect(d.getByRole('tab')).toHaveCount(0)
     await expect(d.getByRole('tab', { name: 'Commands' })).toHaveCount(0)
-    await d.getByRole('link', { name: /Settings.*Session/ }).click()
+    await d.getByRole('link', { name: /Settings.*Your agent/ }).click()
     await expect(page).toHaveURL(/\/settings\/session$/)
     // Settings › Session keeps the lists that left the panel
-    for (const t of ['Commands', 'MCP servers', 'Plugins'])
-      await expect(page.getByRole('tab', { name: t })).toBeVisible()
+    for (const t of ['Commands', 'Tools', 'Plugins']) await expect(page.getByRole('tab', { name: t })).toBeVisible()
   })
 
   test('Agents: this session, thread sessions with their state; no remote-builders group (nothing in the app feeds one)', async ({
@@ -102,8 +101,8 @@ test.describe('docked panel', () => {
     })
     await chip(page).click()
     const agents = dock(page).getByTestId('session-agents')
-    await expect(agents.getByText('This session')).toBeVisible()
-    await expect(agents.getByText('Thread sessions')).toBeVisible()
+    await expect(agents.getByText('This agent')).toBeVisible()
+    await expect(agents.getByText('Thread agents')).toBeVisible()
     await expect(agents.getByTestId('session-thread-sessions')).toContainText('General')
     await expect(agents.getByTestId('session-thread-sessions')).toContainText('Parked')
     await expect(agents.getByText(/builders/i)).toHaveCount(0)
@@ -130,7 +129,7 @@ test.describe('docked panel: Agents, focus, the usage chip beside the thread men
     await page.goto('/t/general?fake_agents=demo')
     await chip(page).click()
     const agents = dock(page).getByTestId('session-agents')
-    await expect(agents.getByText('This session')).toBeVisible()
+    await expect(agents.getByText('This agent')).toBeVisible()
     await expect(agents.getByTestId('agents-count')).toContainText('3 active')
   })
 
@@ -189,9 +188,9 @@ test.describe('docked panel: Agents, focus, the usage chip beside the thread men
     await expect(chip(page)).not.toHaveAttribute('aria-label', /.*/)
     await page.goto('/t/general?fake_mod=offline')
     await expect(page.getByTestId('session-offline-dot')).toBeVisible()
-    await expect(page.getByTestId('session-chip')).not.toContainText('mod offline')
-    await expect(chip(page)).toHaveAttribute('aria-label', /mod offline/)
-    await expect(chip(page)).toHaveAttribute('title', /mod offline/)
+    await expect(page.getByTestId('session-chip')).not.toContainText('not connected')
+    await expect(chip(page)).toHaveAttribute('aria-label', /not connected/)
+    await expect(chip(page)).toHaveAttribute('title', /not connected/)
     expect(((await chip(page).boundingBox())?.width ?? 999) < 140).toBe(true)
   })
 })

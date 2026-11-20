@@ -34,7 +34,6 @@ async function open(page: Page) {
           kind: 'fixed',
           order: 2,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-10-28T00:00:00.000Z',
           session: 'dedicated',

@@ -151,18 +151,6 @@ final class RelayTrustControllerTests: XCTestCase {
         XCTAssertFalse(c.relayContext!.trust.state.allowsNativeFeatures)
     }
 
-    func testLeavingPassEndsWhatThePageHoldsOfTheCameraAndMicrophone() throws {
-        // WebKit keeps a grant the delegate gave under .pass and does not ask again (found in the simulator run): leaving .pass must end it.
-        try pair()
-        let c = try show()
-        settled(c)
-        XCTAssertEqual(c.mediaCaptureStops, 0, "nothing is stopped while the relay is verified")
-        stub.fallback = .unreachable(.macOffline)
-        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
-        waitFor("the banner") { c.isShowingTrustBanner }
-        XCTAssertGreaterThan(c.mediaCaptureStops, 0)
-    }
-
     func testTheBlockScreenShowsOnTimeAtLastVerifiedPlus24Hours() throws {
         // Verified 24 h minus 1.5 s ago, and the Mac does not answer: the banner shows now and the block must replace it by itself.
         try pair(verified: Date().addingTimeInterval(-24 * 3600 + 1.5))
@@ -368,12 +356,12 @@ final class RelayTrustControllerTests: XCTestCase {
             setup(t)
             return t
         }
-        // pass: every site delivers (so a refusal below is the state's doing)
+        // pass: every site delivers except the camera, which is always denied (voice input archived), so a refusal below is the state's doing for every other site
         let pass = try sites(make { $0.markPass() })
         XCTAssertEqual(pass.message("TalosRelay"), 1)
         XCTAssertEqual(pass.share(), 1)
         XCTAssertEqual(pass.prompt(), "ok")
-        XCTAssertEqual(pass.camera(), .grant)
+        XCTAssertEqual(pass.camera(), .deny, "camera and microphone are refused even on a verified relay (voice input archived)")
         XCTAssertEqual(pass.motion(), .grant)
 
         let refused: [(String, RelayTrust)] = [

@@ -280,7 +280,6 @@ describe('no agent path can set ops_read', () => {
     kind: 'fixed',
     order: 5,
     notify: 'all',
-    voice_context: 'recent',
     archived: false,
     created_at: '2026-10-28T00:00:00.000Z',
     session: 'dedicated',

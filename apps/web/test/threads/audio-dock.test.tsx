@@ -7,7 +7,6 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-li
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearLocalData } from '../../src/features/auth/session.ts'
-import { startRecorder } from '../../src/features/composer/recorder.ts'
 import { AudioPlayer, useVoiceOrder, VoiceOrderContext } from '../../src/features/threads/Attachments.tsx'
 import {
   __resetDockForTests,
@@ -20,11 +19,9 @@ import {
   savedPosition,
 } from '../../src/features/threads/audioDock.ts'
 import { NowPlaying } from '../../src/features/threads/NowPlaying.tsx'
-import { CallController } from '../../src/features/voice/callController.ts'
 import { ClientProvider, type TalosClient } from '../../src/lib/client.ts'
 import { createFakeClient } from '../../src/lib/fakeClient.ts'
 import { type AudioSessionType, type MediaHandlers, setPlatform, webPlatform } from '../../src/lib/platform.ts'
-import { fakeDeps } from '../voice/fakes.ts'
 
 const att = (over: Partial<AttachmentRefT> = {}): AttachmentRefT => ({
   media_id: newId('md'),
@@ -428,27 +425,6 @@ describe('lock screen and audio route', () => {
     expect(rec.log.lastIndexOf('media:clear')).toBeLessThan(rec.log.length - 1)
     expect(getDockState().item).not.toBeNull()
   })
-
-  it('a call starting pauses the dock', async () => {
-    const a = att()
-    audioDock.open(item(a), src(a))
-    const f = fakeDeps({ fetchResponses: [new Response('{}', { status: 503 })] })
-    await new CallController(f.deps).start(createFakeClient(), 'general')
-    expect(getDockState().playing).toBe(false)
-    expect(pauseCalls).toBeGreaterThan(0)
-  })
-
-  it('starting a voice note recording pauses the dock', async () => {
-    const a = att()
-    audioDock.open(item(a), src(a))
-    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true })
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      mediaDevices: { getUserMedia: () => Promise.reject(new Error('denied')) },
-    })
-    await expect(startRecorder()).rejects.toThrow('denied')
-    expect(getDockState().playing).toBe(false)
-  })
 })
 
 describe('a load error', () => {
@@ -592,39 +568,6 @@ async function mountDrive() {
 }
 
 describe('the audio route belongs to a clip that is playing', () => {
-  it('a recording that starts releases the route, so the microphone is not under the dock playback session', async () => {
-    const platform = recordPlatform()
-    const a = att()
-    audioDock.open(item(a), src(a))
-    expect(audioLog(platform.log).at(-1)).toBe('audio:playback')
-    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true })
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      mediaDevices: {
-        getUserMedia: () => {
-          // the route must already be given back at the moment capture is requested
-          expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
-          return Promise.reject(new Error('denied'))
-        },
-      },
-    })
-    await expect(startRecorder()).rejects.toThrow('denied')
-    expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
-    // the pill is still there, and play takes the route back
-    expect(getDockState().item).not.toBeNull()
-    audioDock.resume()
-    expect(audioLog(platform.log).at(-1)).toBe('audio:playback')
-  })
-
-  it('a call that starts releases the route', async () => {
-    const platform = recordPlatform()
-    const a = att()
-    audioDock.open(item(a), src(a))
-    const f = fakeDeps({ fetchResponses: [new Response('{}', { status: 503 })] })
-    await new CallController(f.deps).start(createFakeClient(), 'general')
-    expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
-  })
-
   it('a paused pill holds the route quietly (so the lock screen stays Talos), a clip opened without playing holds nothing, stop() gives it back', () => {
     const platform = recordPlatform()
     const a = att()
@@ -641,21 +584,6 @@ describe('the audio route belongs to a clip that is playing', () => {
     expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
   })
 
-  it('a recording that starts while the clip is already paused still gets the route back', async () => {
-    const platform = recordPlatform()
-    const a = att()
-    audioDock.open(item(a), src(a))
-    audioDock.pause()
-    expect(audioLog(platform.log).at(-1)).toBe('audio:paused')
-    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true })
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      mediaDevices: { getUserMedia: () => Promise.reject(new Error('denied')) },
-    })
-    await expect(startRecorder()).rejects.toThrow('denied')
-    expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
-  })
-
   it('Drive leaving with a paused clip does not take the route back', async () => {
     const platform = recordPlatform()
     const a = att()
@@ -663,17 +591,6 @@ describe('the audio route belongs to a clip that is playing', () => {
     const r = await mountDrive()
     await act(async () => r.unmount())
     expect(audioLog(platform.log).at(-1)).toBe('audio:auto')
-  })
-
-  it('a reply arriving during a Drive talk (reclaim while paused) does not flip the session to playback', async () => {
-    const platform = recordPlatform()
-    const a = att()
-    audioDock.open(item(a), src(a))
-    audioDock.pause()
-    platform.log.length = 0
-    platform.log.push('audio:play-and-record') // Drive's talk
-    audioDock.reclaimSession()
-    expect(audioLog(platform.log).at(-1)).toBe('audio:play-and-record')
   })
 })
 

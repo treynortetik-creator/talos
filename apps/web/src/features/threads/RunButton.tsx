@@ -129,6 +129,39 @@ function RunControl({
   const dropped = useTalos((s) =>
     sentId === null ? false : s.messages[run.threadId]?.find((m) => m.id === sentId)?.receipt === 'not_delivered',
   )
+  // A tap made while the socket was down (or before the Mac pinned this device) gets 'queued' or 'held_unpinned' back, and a
+  // later flush sends it; the tap's own result never changes after that. The row's receipt is the proof it went out: the
+  // client stamps it when the relay acks the message (then delivered, seen). A discarded or removed row has none, so a
+  // deleted Run never reads as sent. Once seen it is kept for this tap: the row can go later (deleted, a catch-up reset), and
+  // a Run that went out must never read as removed and offer to run again.
+  const receiptNow = useTalos((s) => {
+    if (sentId === null) return false
+    const r = s.messages[run.threadId]?.find((m) => m.id === sentId)?.receipt
+    return r === 'sent' || r === 'delivered' || r === 'seen'
+  })
+  const [wentOutFor, setWentOutFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (receiptNow && sentId !== null) setWentOutFor(sentId)
+  }, [receiptNow, sentId])
+  const wentOut = receiptNow || (sentId !== null && wentOutFor === sentId)
+  const online = useTalos((s) => s.connection === 'online')
+  // This tap's own row is gone (the owner deleted it after it failed). A sent Run's row may go too (deleting it changes
+  // nothing here); only a tap that never went out reads it as removed.
+  const rowHere = useTalos((s) => sentId !== null && s.messages[run.threadId]?.some((m) => m.id === sentId) === true)
+  const [sawRow, setSawRow] = useState<string | null>(null)
+  useEffect(() => {
+    if (rowHere && sentId !== null) setSawRow(sentId)
+  }, [rowHere, sentId])
+  const rowGone = sentId !== null && sawRow === sentId && !rowHere
+  // Removed means the owner deleted it after it failed: a failed message is not sent, and Delete is only offered on a failed
+  // row. So it counts only when this tap was seen failed and then left with no retry in between (a retry puts it back in the
+  // queue and clears this). A row lost any other way (a catch-up reset, an ack racing the row) never reads as removed.
+  const [sawFailed, setSawFailed] = useState<string | null>(null)
+  useEffect(() => {
+    if (sentId === null) return
+    if (failed) setSawFailed(sentId)
+    else if (queued) setSawFailed(null)
+  }, [failed, queued, sentId])
   const [asked, setAsked] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<'sent' | 'queued' | 'held_unpinned' | null>(null)
@@ -177,7 +210,7 @@ function RunControl({
   if (dedicated && !pane)
     return under(
       <p data-testid="run-blocked" className="m-0 mb-2 text-xs text-text-2">
-        This thread has its own session, so Run isn't available here.
+        This thread has its own agent, so Run isn't available here.
       </p>,
     )
 
@@ -233,6 +266,15 @@ function RunControl({
     }
   }
 
+  const outNow = result !== null && result !== 'sent' && wentOut
+  const shown = outNow ? 'sent' : result
+  const removed =
+    rowGone &&
+    sawFailed === sentId &&
+    !wentOut &&
+    (shown === 'queued' || shown === 'held_unpinned') &&
+    !failed &&
+    !queued
   let status: string | null = null
   if (busy) status = 'Sending…'
   else if (notConnected) status = NOT_CONNECTED
@@ -240,8 +282,12 @@ function RunControl({
     if (unwitnessed) status = "Couldn't confirm the click in Talos; nothing ran."
     else if (failed) status = "Didn't send. See your message below."
     else if (dropped && !queued) status = "Didn't reach your Mac. See your message below."
-    else if (result === 'held_unpinned') status = 'Queued · sends once your Mac approves this device'
-    else if (queued || result === 'queued') status = "Queued · sends when you're back online"
+    else if (removed) status = 'Removed. Nothing was sent.'
+    else if (shown === 'held_unpinned') status = 'Queued · sends once your Mac approves this device'
+    // The socket can't send: it waits to be back online. Written to a live socket but not yet acked by the relay: it is on
+    // its way, not delivered ("Sending…"). Acked: Sent.
+    else if ((queued || shown === 'queued') && !online) status = "Queued · sends when you're back online"
+    else if (queued || shown === 'queued') status = 'Sending…'
     else if (!pane) status = 'Sent · the agent runs it'
     else if (macResult?.ok)
       status = 'Ran in Terminal' // a reason beside ok is ignored: ok means it went in
@@ -250,7 +296,7 @@ function RunControl({
     else status = 'Sent · waiting for Terminal'
   }
   // A fresh tap once this one has left (or failed); never while it still waits to send, so two Runs never pile up offline.
-  const waiting = sentId !== null && !failed && (queued || result === 'held_unpinned')
+  const waiting = sentId !== null && !failed && !removed && (queued || shown === 'held_unpinned')
   const showButton = !busy && !asked && !waiting
 
   const label = pane ? 'Run in Terminal' : 'Run'

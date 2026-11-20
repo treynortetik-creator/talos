@@ -45,18 +45,10 @@ export const PAIRING_OUT = new Set(['ready', 'presence', 'device.pinned', 'ack',
 export const PAIRING_IN = new Set(['hello', 'ping', 'pong', 'visibility'])
 /**
  * App frames that show a person at the device, for the "last used" time. An action the owner took (send, resolve a card,
- * change a setting, mark unread, ask the voice agent) or a "visible" report, which the app sends on a touch, a key or a
+ * change a setting, mark unread) or a "visible" report, which the app sends on a touch, a key or a
  * return to the screen. Not here: ping/pong, catch-up, history, media and read marks, which an app sends by itself.
  */
-export const SHOWS_A_PERSON = new Set([
-  'message',
-  'voice_note',
-  'card.resolve',
-  'config.patch',
-  'thread.unread',
-  'voice.ask',
-  'visibility',
-])
+export const SHOWS_A_PERSON = new Set(['message', 'card.resolve', 'config.patch', 'thread.unread', 'visibility'])
 
 export type AppConn = {
   id: string

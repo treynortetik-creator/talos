@@ -77,6 +77,18 @@ final class UpdateController: ObservableObject {
 
   func checkAgain() { updater?.checkNow() }
 
+  /// How many checks the About window's button really started.
+  private(set) var aboutChecks = 0
+  /// Tests replace the check itself (the real one reaches the network); nil means the updater's.
+  var checkOverride: (() -> Void)?
+
+  /// The About window's Check for Updates: the same check as the menu item, once. Ignored while one is running or an update is waiting.
+  func checkFromAbout() {
+    guard !status.isBusy, status.pendingVersion == nil, status.allowClone == nil else { return }
+    aboutChecks += 1
+    if let f = checkOverride { f() } else { updater?.checkNow() }
+  }
+
   /// Reached only from `RealClickButton`.
   func updateNow() {
     updateNowPresses += 1
@@ -99,6 +111,8 @@ final class UpdateController: ObservableObject {
 struct RealClickButton: NSViewRepresentable {
   var title: String
   var accent = false
+  /// Drawn by `PillRealClickButton` (a borderless button with fixed ink text that reads the same in light and dark appearance).
+  var plain = false
   var action: () -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(action: action) }
@@ -107,12 +121,26 @@ struct RealClickButton: NSViewRepresentable {
     let b = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
     b.keyEquivalent = ""
     b.bezelStyle = .rounded
+    if plain {
+      b.isBordered = false
+      b.appearance = NSAppearance(named: .aqua)
+      b.attributedTitle = Self.inkTitle(title)
+      return b
+    }
     if accent { b.bezelColor = NSColor(red: 0xD9 / 255, green: 0x69 / 255, blue: 0x2B / 255, alpha: 1) }
     return b
   }
 
+  static func inkTitle(_ t: String) -> NSAttributedString {
+    let para = NSMutableParagraphStyle()
+    para.alignment = .center
+    let font = NSFont(name: "Inter", size: 14) ?? NSFont.systemFont(ofSize: 14, weight: .semibold)
+    return NSAttributedString(string: t, attributes: [.foregroundColor: NSColor(red: 0x14 / 255, green: 0x11 / 255, blue: 0x10 / 255, alpha: 1), .font: font, .paragraphStyle: para])
+  }
+
   func updateNSView(_ b: NSButton, context: Context) {
     b.title = title
+    if plain { b.attributedTitle = Self.inkTitle(title) }
     context.coordinator.action = action
   }
 
@@ -127,6 +155,24 @@ struct RealClickButton: NSViewRepresentable {
       }
       action()
     }
+  }
+}
+
+/// The onboarding look for a real-click button: filled Talos orange (primary) or an outlined pill (secondary), 44 pt tall, ink text.
+/// The capsule is drawn here (`OutlineCapsule` for the outline); the AppKit button on top keeps the real-click check and has no key equivalent.
+struct PillRealClickButton: View {
+  var title: String
+  var primary = false
+  var width: CGFloat = 130
+  var action: () -> Void
+
+  var body: some View {
+    ZStack {
+      if primary { Capsule().fill(OB.accent) } else { OutlineCapsule(color: OB.line) }
+      RealClickButton(title: title, plain: true, action: action).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .frame(width: width, height: 44)
+    .environment(\.colorScheme, .light)
   }
 }
 
@@ -231,8 +277,8 @@ struct UpdateWindow: View {
   /// No button here is the default: Return does nothing. Esc closes.
   @ViewBuilder private func buttons(_ s: UpdateStatus) -> some View {
     if let clone = s.allowClone {
-      Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction)
-      RealClickButton(title: AllowUpdatesCopy.allowButton, accent: true) { allow.allowFromWindow(clone: clone) }.frame(width: 120)
+      Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction).buttonStyle(PillStyle(kind: .outline, padding: 22, size: 14))
+      PillRealClickButton(title: AllowUpdatesCopy.allowButton, primary: true, width: 150) { allow.allowFromWindow(clone: clone) }
     } else if s.pendingVersion != nil {
       Button("Later") { controller.later() }.keyboardShortcut(.cancelAction)
       RealClickButton(title: "Update now", accent: true) { controller.updateNow() }.frame(width: 110)

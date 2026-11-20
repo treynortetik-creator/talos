@@ -142,7 +142,7 @@ export function usageLabel(parts: ReturnType<typeof chipParts>, phase: Phase): s
       : parts?.kind === 'off'
         ? `context ${CTX_NOT_RUNNING_TEXT}`
         : null,
-    phase === 'offline' ? 'mod offline' : null,
+    phase === 'offline' ? 'not connected' : null,
   ]
     .filter(Boolean)
     .join(', ')
@@ -170,7 +170,7 @@ export const GROUPS: ReadonlyArray<{ source: InventoryCommandT['source']; label:
   { source: 'builtin', label: 'Built-in' },
   { source: 'user', label: 'Skills' },
   { source: 'plugin', label: 'Plugins' },
-  { source: 'mcp', label: 'MCP prompts' },
+  { source: 'mcp', label: 'Tool commands' },
 ]
 
 export function groupCommands(cmds: readonly InventoryCommandT[]) {

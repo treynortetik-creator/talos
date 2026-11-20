@@ -19,7 +19,7 @@ Each frame was taken at 120 columns, then the window resized to 60 and to 30 and
   2.1.325 drew no notice for it under the box.
 
 Replaced, each by text of the same width: the working directory in the banner (`/home/alex/proj-xxx…`, also where a narrow pane
-wraps it), the plan name ("Claude Max"), and the account's usage line above the box (50%, a made-up date, the zone `UTC`).
+wraps it), the plan name ("Claude Pro"), and the account's usage line above the box (50%, a made-up date, the zone `UTC`).
 
 ## What they show under the box
 

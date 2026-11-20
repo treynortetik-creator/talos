@@ -170,10 +170,10 @@ export const WORKER_ERROR_TEXT: Record<string, string> = {
   resume_missing: "Its conversation can't be resumed. Start fresh to begin a new one",
   crash_loop: 'It kept crashing, so it was stopped',
   start_failed: "It didn't start",
-  folder_claimed: 'Another thread session works in that folder',
+  folder_claimed: 'Another thread’s agent works in that folder',
   unknown: hostSteps('mac').lookThere,
   mode_escalation_denied:
-    'It was not started: it would have more access than the main session. Narrow its settings, then press Restart',
+    'It was not started: it would have more access than the main agent. Narrow its settings, then press Restart',
 }
 
 /** A failed worker's reason for the host it is shown on: the Mac's words above, or that host's own (lib/hostWords.ts). */

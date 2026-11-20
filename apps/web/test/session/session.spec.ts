@@ -27,7 +27,7 @@ async function expectUsageGlance(page: Page) {
     await expect(page.getByTestId('session-trigger')).toContainText('31%')
     await expect(page.getByTestId('session-trigger')).toHaveAttribute(
       'aria-label',
-      'Session: weekly usage 60% used, context 31% used',
+      'Your agent: weekly usage 60% used, context 31% used',
     )
     return
   }
@@ -145,13 +145,13 @@ test('mod offline: read-only, one hint, "Mod offline"', async ({ page }) => {
   if ((page.viewportSize()?.width ?? 0) < 768) {
     await expect(page.getByTestId('session-trigger')).toHaveAttribute(
       'aria-label',
-      /weekly usage 60% used.*mod offline/,
+      /weekly usage 60% used.*not connected/,
     )
   } else {
     // The chip stays narrow: a small dot says the mod lapsed, and the words are in the button's name and tooltip.
     await expect(page.getByTestId('session-offline-dot')).toBeVisible()
-    await expect(page.getByTestId('session-chip')).not.toContainText('mod offline')
-    await expect(page.getByTestId('session-trigger')).toHaveAccessibleName(/^Session: wk 60% used.*mod offline/)
+    await expect(page.getByTestId('session-chip')).not.toContainText('not connected')
+    await expect(page.getByTestId('session-trigger')).toHaveAccessibleName(/^Your agent: wk 60% used.*not connected/)
   }
   await openSheet(page)
   await expect(page.getByTestId('mod-offline')).toBeVisible()
@@ -166,7 +166,7 @@ test('mod offline: read-only, one hint, "Mod offline"', async ({ page }) => {
 test('mod absent: nothing breaks, one hint, two "No reading yet"', async ({ page }) => {
   await openThread(page, 'absent')
   await expect(page.getByTestId('session-chip')).toHaveCount(0)
-  await expect(page.getByTestId('session-trigger')).toHaveAttribute('aria-label', 'Session')
+  await expect(page.getByTestId('session-trigger')).toHaveAttribute('aria-label', 'Your agent')
   await openSheet(page)
   await expect(page.getByTestId('mod-hint')).toHaveCount(1)
   await expect(sessionPanel(page).getByText('No reading yet')).toHaveCount(2)
@@ -178,7 +178,7 @@ test('mod absent: nothing breaks, one hint, two "No reading yet"', async ({ page
 
 test('Settings -> Session shows the same panel', async ({ page }) => {
   await page.goto('/settings/session')
-  await expect(page.getByRole('heading', { name: 'Session' }).first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Your agent' }).first()).toBeVisible()
   await expect(page.getByTestId('meter-week')).toContainText('60% used')
   await expect(page.getByTestId('meter-five')).toHaveCount(0)
 })

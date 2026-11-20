@@ -81,7 +81,19 @@ export function useComposerSend(o: {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refs and state setters are stable; the list is kept as it was
   const send = useCallback(async () => {
     const sentText = taRef.current?.value ?? text
-    if (!((sentText.trim().length > 0 || ready.length > 0) && !uploading)) return
+    if (uploading) {
+      // Enter or a tap on Send while a file is still uploading: say why nothing goes yet, never nothing at all
+      // (a text over the cap is waiting for its own .txt copy: removing that would not send it)
+      const tooLongText = sentText.trim().length > MAX_MESSAGE_CHARS
+      setNote({
+        kind: 'pending',
+        text: tooLongText
+          ? 'Waiting for the upload to finish.'
+          : 'Waiting for the upload to finish. Remove it to send without it.',
+      })
+      return
+    }
+    if (!(sentText.trim().length > 0 || ready.length > 0)) return
     // Over the protocol's cap: nothing is cleared or queued (a retry could never work). The box offers "Send as a text file".
     if (sentText.trim().length > MAX_MESSAGE_CHARS) return
     const attachments = ready.map((c) => c.ref as AttachmentRefT)

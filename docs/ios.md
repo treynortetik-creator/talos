@@ -80,6 +80,13 @@ After the upload, App Store Connect processes the build (usually 5 to 30 minutes
 
 If Apple emails about "required reason" APIs, the first thing to check is the privacy manifest; this was not verified here.
 
+## Microphone (archived)
+
+The web app no longer records or asks for the microphone (dictation, voice notes and live calls are archived, 2026-11-19:
+[archived/voice.md](archived/voice.md)). The web view always refuses the page's camera and microphone (`WebViewGuards`
+answers `.deny`), the app declares no `NSMicrophoneUsageDescription`, and the `playAndRecord` and record audio-session modes
+are gone (an old page's `record` is refused like any unknown mode); `archived/voice.md` lists what to put back.
+
 ## Checking a build by hand
 
 On a real phone, work through the checks below (the maintainer keeps a longer private checklist that is not in this repository):

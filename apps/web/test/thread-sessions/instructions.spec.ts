@@ -36,7 +36,6 @@ async function open(page: Page, o: { folder?: boolean; session?: boolean } = {})
             kind: 'fixed',
             order: 2,
             notify: 'all',
-            voice_context: 'recent',
             archived: false,
             created_at: '2026-10-28T00:00:00.000Z',
             ...(session ? { session: 'dedicated' } : {}),
@@ -90,7 +89,9 @@ test('Edit loads AGENTS.md, Save writes it to the thread folder on the Mac', asy
   await expect(save).toBeDisabled() // nothing changed yet
   await box.fill('# Atlas\n\nRun the tests before you say done.\n')
   await save.click()
-  await expect(s.getByTestId('instructions-note')).toHaveText('Saved. The thread’s next session reads it.')
+  await expect(s.getByTestId('instructions-note')).toHaveText(
+    'Saved. This thread’s agent reads it next time it starts.',
+  )
   expect(await onMac(page)).toBe('# Atlas\n\nRun the tests before you say done.\n')
   const b = await save.boundingBox()
   expect(b?.height ?? 0).toBeGreaterThanOrEqual(44) // thumb-sized

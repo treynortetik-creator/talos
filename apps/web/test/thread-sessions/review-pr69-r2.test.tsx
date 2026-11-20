@@ -26,7 +26,6 @@ const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms))
 const base = {
   kind: 'fixed' as const,
   notify: 'all' as const,
-  voice_context: 'recent' as const,
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 }
@@ -79,7 +78,7 @@ describe('PR69 review r2: the owner can always switch off', () => {
     withFeature(client)
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status() }))
-    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own session' })
+    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own agent' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -89,7 +88,7 @@ describe('PR69 review r2: the owner can always switch off', () => {
     withFeature(client)
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status() }))
-    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own session' })
+    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own agent' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     await click(sw)
     // Signing is async: the patch lands after the click settles.

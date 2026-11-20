@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Package C (D5, D16, D31): the socket client never sends a message the relay would kill the connection over, can drop a
-// failed message, notices a dead socket quickly when the app comes back to the front, and retries queued voice notes
-// on a timer.
+// failed message, notices a dead socket quickly when the app comes back to the front, and retries a send it could not
+// save on a timer.
 import { newId } from '@talos-app/protocol'
 import { FakeRelay, waitFor } from '@talos-app/testkit'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -156,40 +156,24 @@ describe('D16 coming back to the app', () => {
   })
 })
 
-describe('D31 queued voice notes', () => {
-  it('a failed upload is retried on a timer, with no reconnect needed', async () => {
-    let calls = 0
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      calls++
-      if (calls === 1) throw new TypeError('network down')
-      // Answer honestly: the client refuses a relay that reports another hash or size than it sent.
-      const h = init.headers as Record<string, string>
-      return new Response(
-        JSON.stringify({
-          media_id: newId('md'),
-          kind: 'voice_note',
-          role: 'attachment',
-          mime: 'audio/webm',
-          name: 'v.webm',
-          size: (init.body as Uint8Array).length,
-          sha256: h['X-Talos-Sha256'],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )
-    }) as typeof fetch
-    const { client, relay } = await setup({ fetchImpl, voiceRetryMs: 50 })
+describe('D31 a send that could not be saved', () => {
+  it('is retried on a timer, with no reconnect needed', async () => {
+    const storage = createMemoryStorage()
+    const put = storage.put.bind(storage)
+    let outboxPuts = 0
+    storage.put = async (store, key, value) => {
+      // the first put is the signed frame; the second, the written mark, fails once (the frame stays queued)
+      if (store === 'outbox' && ++outboxPuts === 2) throw new DOMException('quota', 'QuotaExceededError')
+      return put(store, key, value)
+    }
+    const { client, relay } = await setup({ flushRetryMs: 50 }, storage)
     try {
-      await client.queueVoiceNote({
-        threadId: 'general',
-        blob: new Blob(['abc'], { type: 'audio/webm' }),
-        name: 'v.webm',
-      })
+      await client.sendMessage({ threadId: 'general', text: 'hello' })
       await waitFor(
-        () => relay.frames.some((f) => f.direction === 'from_app' && f.raw.type === 'voice_note'),
+        () => relay.frames.some((f) => f.direction === 'from_app' && f.raw.type === 'message'),
         4000,
-        'voice note sent after the retry',
+        'message sent after the retry',
       )
-      expect(calls).toBe(2)
       expect(hellos()).toBe(1)
     } finally {
       client.close()

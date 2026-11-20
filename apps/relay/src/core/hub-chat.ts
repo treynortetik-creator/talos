@@ -1,4 +1,4 @@
-// Owner messages and voice notes from an app.
+// Owner messages from an app.
 // Handlers of the Hub class (hub.ts), which forwards to them. Dispatch and the first trust checks (session, pairing,
 // schema) are in hub-app-conn.ts and hub-app-frames.ts; some handlers here run their own device, seen-id, step-up
 // or card-state checks, so read both when auditing trust.
@@ -24,8 +24,8 @@ export type ChatCtx = {
 }
 
 export const chatFrames = {
-  /** The `message` and `voice_note` frames: the signature-device check, the duplicate check, then stored and queued. The `case` of that name in Hub.onAppFrameBuiltin. */
-  onOwnerMessage(this: ChatCtx, a: AppConn, frame: FrameOf<'message' | 'voice_note'>, raw: Record<string, unknown>) {
+  /** The `message` frame: the signature-device check, the duplicate check, then stored and queued. The `case` of that name in Hub.onAppFrameBuiltin. */
+  onOwnerMessage(this: ChatCtx, a: AppConn, frame: FrameOf<'message'>, raw: Record<string, unknown>) {
     const store = this.d.store
     if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
     // The owner just sent something from this screen: someone is here, whatever the client sends about activity.
@@ -39,16 +39,16 @@ export const chatFrames = {
       thread_id: frame.thread_id,
       seq: stamped.relay.seq,
       author: 'owner',
-      kind: frame.type === 'message' ? 'text' : 'voice_note',
+      kind: 'text',
       format: 'plain',
-      attachments: frame.type === 'message' ? frame.attachments : [frame.attachment],
+      attachments: frame.attachments,
       via: 'app',
       receipt: 'sent',
       created_at: stamped.relay.received_at,
-      ...(frame.type === 'message' ? { text: frame.text } : {}),
-      ...(frame.type === 'message' && frame.reply_to ? { reply_to: frame.reply_to } : {}),
-      ...(frame.type === 'message' && frame.refs ? { refs: frame.refs } : {}),
-      ...(frame.type === 'message' && frame.share_content ? { share_content: frame.share_content } : {}),
+      text: frame.text,
+      ...(frame.reply_to ? { reply_to: frame.reply_to } : {}),
+      ...(frame.refs ? { refs: frame.refs } : {}),
+      ...(frame.share_content ? { share_content: frame.share_content } : {}),
     }
     this.fanOut(mkFrame(this.d.clock, 'message.stored', { client_msg_id: frame.client_msg_id, message }))
     return

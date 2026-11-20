@@ -22,7 +22,6 @@ const thread = (id: string, name: string, extra: Record<string, unknown> = {}) =
   kind: 'agent',
   order: 5,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   ...extra,

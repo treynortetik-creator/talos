@@ -214,7 +214,7 @@ test('happy path: created from chat, approved with step-up, fires on the clock, 
   expect(mac.job('commit-digest')).toMatchObject({ today: 'ran' })
   await row(page, 'commit-digest').getByRole('link').click()
   const runs = page.getByRole('list', { name: 'Recent runs' })
-  await expect(runs).toContainText('Session')
+  await expect(runs).toContainText('Agent')
   // the run's report, through schedule.get{report_run_id}
   await runs.getByRole('button', { name: /Ran/ }).first().click()
   await expect(page.getByTestId('report-sheet')).toContainText('Fake report: all good.')
@@ -675,7 +675,7 @@ test('offline: the cached list stays, every action is off, and a row past its ne
   const off = page.getByTestId('offline-banner')
   await expect(off).toContainText(onHost('Your Mac is offline. This list is from'))
   await expect(off).toContainText(onHost('Changes and Run now need your Mac.'))
-  await expect(row(page, 'standup-prep')).toContainText("Waiting: agent session isn't running")
+  await expect(row(page, 'standup-prep')).toContainText("Waiting: your agent isn't running")
   await expect(row(page, 'daily-digest')).toContainText('Pending')
   await expect(page.getByRole('button', { name: 'New' })).toBeDisabled()
   await expect(page.getByRole('switch', { name: 'Daily digest runs on schedule' })).toHaveCount(0)
@@ -687,7 +687,7 @@ test('offline: the cached list stays, every action is off, and a row past its ne
   await page.reload()
   await expect(MAIN_NAV(page)).toBeVisible({ timeout: 15_000 })
   await openSchedules(page, 'standup-prep')
-  await expect(row(page, 'standup-prep')).toContainText("Waiting: agent session isn't running")
+  await expect(row(page, 'standup-prep')).toContainText("Waiting: your agent isn't running")
   await expect(page.getByTestId('offline-banner')).toBeVisible()
   // The Mac comes back: live data again, actions on.
   await stack.startBridge({ env: mac.bridgeEnv() })

@@ -27,7 +27,6 @@ describe('the default table', () => {
       needsYou: 'KeyJ',
       shortcuts: 'Slash',
       sidebar: 'Backslash',
-      call: 'KeyK',
       close: 'Escape',
     }
     for (const [id, code] of Object.entries(want)) expect(byId(id)?.chord?.code, id).toBe(code)
@@ -114,7 +113,6 @@ describe('chordLabel', () => {
     expect(chordLabel(byId('palette')?.chord ?? null, true)).toBe('⌘K')
     expect(chordLabel(byId('palette')?.chord ?? null, false)).toBe('Ctrl+K')
     expect(chordLabel(byId('thread3')?.chord ?? null, true)).toBe('⌘3')
-    expect(chordLabel(byId('call')?.chord ?? null, true)).toBe('⌘⇧K')
     expect(chordLabel(byId('close')?.chord ?? null, true)).toBe('Esc')
     expect(chordLabel(byId('newThread')?.chord ?? null, true)).toBe('')
   })

@@ -90,7 +90,6 @@ describe('D24: an approval is not swallowed by a visible window', () => {
     expect(x.fake.requests).toHaveLength(1)
     expect(x.web.sent).toHaveLength(1)
     // other chat templates still respect a visible window
-    await x.push.notify({ template: 'answer_ready', thread_id: 'general' })
     await x.push.notify({ template: 'overnight', count: 3 })
     expect(x.fake.requests).toHaveLength(1)
   })
@@ -191,14 +190,7 @@ describe('D25: card pushes are urgent and keep longer, on both transports', () =
 
   it('the protocol: only a card body carries interruption-level', () => {
     const cfg = DEFAULT_AGENT_CONFIG
-    for (const template of [
-      'reply',
-      'answer_ready',
-      'overnight',
-      'session_stopped',
-      'device_pinned',
-      'disk_low',
-    ] as const)
+    for (const template of ['reply', 'overnight', 'session_stopped', 'device_pinned', 'disk_low'] as const)
       expect(buildApnsBody(buildPushPayload({ template }, cfg)).aps).not.toHaveProperty('interruption-level')
     expect(buildApnsBody(buildPushPayload({ template: 'needs_you', card_id: CARD }, cfg)).aps).toMatchObject({
       'interruption-level': 'time-sensitive',

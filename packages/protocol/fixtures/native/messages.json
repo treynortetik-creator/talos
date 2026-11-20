@@ -898,51 +898,6 @@
         "additionalProperties": false
       }
     },
-    "voice_note": {
-      "sample": {
-        "type": "voice_note",
-        "thread_id": "general",
-        "mime": "audio/mp4",
-        "duration_ms": 1200,
-        "bytes_b64": "AAAA"
-      },
-      "json_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "voice_note"
-          },
-          "thread_id": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,31}$"
-          },
-          "mime": {
-            "type": "string",
-            "pattern": "^audio\\/[a-z0-9.+-]{1,60}$"
-          },
-          "duration_ms": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 3600000
-          },
-          "bytes_b64": {
-            "type": "string",
-            "maxLength": 34952536,
-            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
-          }
-        },
-        "required": [
-          "type",
-          "thread_id",
-          "mime",
-          "duration_ms",
-          "bytes_b64"
-        ],
-        "additionalProperties": false
-      }
-    },
     "enroll_code": {
       "sample": {
         "type": "enroll_code",

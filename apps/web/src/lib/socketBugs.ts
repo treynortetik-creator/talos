@@ -72,7 +72,7 @@ export function createSocketBugs(d: SocketBugsDeps): BugReportClient {
         throw new TalosClientError('internal', "You're offline.")
       }
       if (res.status === 429) throw new TalosClientError('rate_limited')
-      if (!res.ok) throw new TalosClientError('internal', `The relay refused the report (${res.status}).`)
+      if (!res.ok) throw new TalosClientError('internal', `Talos refused the report (${res.status}).`)
       return { id: frame.id }
     },
     async destination(): Promise<BugReportDestinationT> {
@@ -80,10 +80,10 @@ export function createSocketBugs(d: SocketBugsDeps): BugReportClient {
         credentials: 'same-origin',
         headers: { Accept: 'application/json' },
       })
-      if (!res.ok) throw new TalosClientError('internal', `The relay did not say where reports go (${res.status}).`)
+      if (!res.ok) throw new TalosClientError('internal', `Talos did not say where reports go (${res.status}).`)
       // an answer of any other shape is not believed: the line then says only what is sure
       const parsed = BugReportDestination.safeParse(await res.json())
-      if (!parsed.success) throw new TalosClientError('internal', 'The relay did not say where reports go.')
+      if (!parsed.success) throw new TalosClientError('internal', 'Talos did not say where reports go.')
       return parsed.data
     },
   }

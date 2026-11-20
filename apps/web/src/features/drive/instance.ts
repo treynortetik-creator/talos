@@ -2,9 +2,7 @@
 // page, so replies keep playing when the owner leaves /drive for another screen.
 import type { TalosClient } from '../../lib/client.ts'
 import { getPlatform } from '../../lib/platform.ts'
-import { startRecorder } from '../composer/recorder.ts'
 import { loadSpeed } from '../threads/speed.ts'
-import { getCallController } from '../voice/controller.ts'
 import { DriveController } from './controller.ts'
 import {
   loadDriveThread,
@@ -83,15 +81,9 @@ export function getDrive(client: TalosClient): Drive {
       fallbackEnabled: loadPhoneVoiceFallback,
       loadThread: loadDriveThread,
       saveThread: saveDriveThread,
-      recorder: () => startRecorder(undefined, { analyse: false }),
       persist: { loadHeard, saveHeard, loadTouch, saveTouch, loadLocal, saveLocal },
-      audioSession: { set: (t) => getPlatform().audioSession.set(t) },
     })
     controller.watch()
-    // A live call (Talk live, here or from a thread) holds every clip and stops the phone voice until it ends.
-    const calls = getCallController().store
-    controller.setOnCall(calls.getState().phase !== 'idle')
-    calls.subscribe((s) => controller.setOnCall(s.phase !== 'idle'))
     d = { controller, queue, audio }
     instances.set(client, d)
   }

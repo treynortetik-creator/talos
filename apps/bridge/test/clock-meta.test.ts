@@ -4,7 +4,7 @@ import { ChannelMeta, CONFIG_PROPOSE_FEATURE, type MessageT, newId, runText } fr
 import { clockMeta, humanGap, localTime, systemZone } from '../src/clock-meta.ts'
 import { HistoryStore } from '../src/history-store.ts'
 import { agentInstructions, INSTRUCTIONS, selfMapBlock } from '../src/instructions.ts'
-import { fixture, type Harness, startHarness, tempHome } from './helpers.ts'
+import { type Harness, startHarness, tempHome } from './helpers.ts'
 
 describe('localTime', () => {
   test('a zone without daylight saving keeps one offset all year (Honolulu)', () => {
@@ -110,34 +110,6 @@ describe('the clock on a real inbound message', () => {
     await h.waitNotes(3)
     expect(h.notes[1]?.meta.since_last).toBe('2h 10m')
     expect(h.notes[2]?.meta.since_last).toBe('30m')
-  })
-
-  test('a voice note carries local_time', async () => {
-    h = await startHarness({
-      env: { TALOS_APP_STT_CMD: JSON.stringify([fixture('fake-stt.sh'), '{in}']) },
-      config: (c) => ({ ...c, timezone: 'Asia/Kolkata' }),
-    })
-    const res = await fetch(`${h.relay.httpUrl}/api/media`, {
-      method: 'POST',
-      headers: { 'content-type': 'audio/mp4', 'x-talos-name': 'note.m4a', 'x-talos-duration-ms': '5000' },
-      body: 'audio bytes',
-    })
-    const ref = (await res.json()) as Record<string, unknown>
-    await h.app.sendVoiceNote('general', { ...ref, kind: 'voice_note', role: 'attachment' })
-    await h.waitNotes(1)
-    const m = h.notes[0]?.meta ?? {}
-    expect(m.kind).toBe('voice_note')
-    expect(m.local_time).toBe(localTime(m.ts as string, 'Asia/Kolkata') as string)
-    expect(m.local_time).toMatch(/\+05:30$/)
-  })
-
-  test('a spoken question on a live call carries local_time', async () => {
-    h = await startHarness({ config: (c) => ({ ...c, timezone: 'Pacific/Honolulu' }) })
-    await h.app.sendVoiceAsk('general', 'What is on my plate?', [])
-    await h.waitNotes(1)
-    const m = h.notes[0]?.meta ?? {}
-    expect(m.kind).toBe('voice_delegation')
-    expect(m.local_time).toBe(localTime(m.ts as string, 'Pacific/Honolulu') as string)
   })
 })
 
@@ -265,23 +237,14 @@ const cardArgs = () => ({
 })
 
 describe('which notes carry since_last', () => {
-  test('a typed message, a voice note and a Run tap do', async () => {
-    h = await startHarness({
-      env: { TALOS_APP_STT_CMD: JSON.stringify([fixture('fake-stt.sh'), '{in}']) },
-      config: (c) => ({ ...c, timezone: 'UTC' }),
-    })
+  test('a typed message and a Run tap do', async () => {
+    h = await startHarness({ config: (c) => ({ ...c, timezone: 'UTC' }) })
     const t0 = Date.now() - 60 * 60_000
     await h.app.sendMessage('general', 'before', { ts: iso(t0) })
     await h.waitNotes(1)
-    const res = await fetch(`${h.relay.httpUrl}/api/media`, {
-      method: 'POST',
-      headers: { 'content-type': 'audio/mp4', 'x-talos-name': 'note.m4a', 'x-talos-duration-ms': '5000' },
-      body: 'audio bytes',
-    })
-    const ref = (await res.json()) as Record<string, unknown>
-    await h.app.sendVoiceNote('general', { ...ref, kind: 'voice_note', role: 'attachment' })
+    await h.app.sendMessage('general', 'after')
     await h.waitNotes(2)
-    expect(h.notes[1]?.meta.kind).toBe('voice_note')
+    expect(h.notes[1]?.meta.kind).toBe('text')
     expect(h.notes[1]?.meta.since_last).toMatch(/^(1h|59m|60m)/)
     const run = await h.app.buildMessage('general', runText('echo hi\n', 'sh') as string, {
       intent: 'run',
@@ -291,17 +254,6 @@ describe('which notes carry since_last', () => {
     await h.waitNotes(3)
     expect(h.notes[2]?.meta.run).toBe('tap')
     expect(h.notes[2]?.meta.since_last).toBeDefined()
-  })
-
-  test('a voice question on a call has local_time and no since_last, even after the owner wrote earlier', async () => {
-    h = await startHarness({ config: (c) => ({ ...c, timezone: 'UTC' }) })
-    await h.app.sendMessage('general', 'before', { ts: iso(Date.now() - 20 * 60_000) })
-    await h.waitNotes(1)
-    await h.app.sendVoiceAsk('general', 'What is on my plate?', [])
-    await h.waitNotes(2)
-    expect(h.notes[1]?.meta.kind).toBe('voice_delegation')
-    expect(h.notes[1]?.meta.local_time).toBeDefined()
-    expect(h.notes[1]?.meta.since_last).toBeUndefined()
   })
 
   test('a card decision has local_time and no since_last, even after the owner wrote earlier', async () => {
@@ -342,8 +294,8 @@ describe('which notes carry since_last', () => {
   })
 
   test('the instructions say exactly that', () => {
-    expect(INSTRUCTIONS).toContain('A typed message, a voice note or a Run tap also carries `since_last`')
-    expect(INSTRUCTIONS).toContain('card decisions, spoken questions on a call, and config or schedule cards do not')
+    expect(INSTRUCTIONS).toContain('A typed message or a Run tap also carries `since_last`')
+    expect(INSTRUCTIONS).toContain('card decisions, and config or schedule cards, do not')
   })
 })
 

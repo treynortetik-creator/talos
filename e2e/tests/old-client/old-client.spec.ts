@@ -79,12 +79,20 @@ test('old client: Run hands the agent the script once', async ({ stack, page, co
   })
   expect(res.isError).toBeFalsy()
   await page.getByRole('button', { name: 'Run', exact: true }).click()
-  // yesterday's page says "Sent to your Mac…", today's "Sent · the agent runs it" (2026-11-18): the spec runs on both
+  // The real condition first: the agent has the Run. The page signs it and saves it before it writes it to the socket, and
+  // under a machine's heaviest load (two gates and a Swift release build, 11-19) that took over 10 s while the line said
+  // "Sending…", which is right. So the wait is on the agent, with room for that load, and not on a guessed 10 s for the line.
+  const note = await stack.claude.waitForNotification((n) => n.meta.run === 'tap', 60_000)
+  expect(note.content).toContain('echo old-client run')
+  // Then the line says Sent once the page has handled the relay's ack. A saved bundle from before 2026-11-20 shows "Queued ·
+  // sends when you're back online" until then, and handled the ack only after an IndexedDB delete that took over 10 s on a
+  // loaded machine (Delphi's gate, 11-20), so the wait is on that, with the same room as the agent's. Yesterday's page says
+  // "Sent to your Mac…", today's "Sent · the agent runs it" (2026-11-18): the spec runs on both.
   await expect(
     page.getByRole('status').filter({ hasText: /^(Sent to your Mac|Sent · the agent runs it)/ }),
-  ).toBeVisible()
-  const note = await stack.claude.waitForNotification((n) => n.meta.run === 'tap')
-  expect(note.content).toContain('echo old-client run')
+  ).toBeVisible({ timeout: 60_000 })
+  // once: a moment for a second copy (a later flush) to arrive before counting
+  await page.waitForTimeout(500)
   expect(stack.claude.notifications.filter((n) => n.meta.run === 'tap')).toHaveLength(1)
 })
 

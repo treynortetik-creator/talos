@@ -126,25 +126,22 @@ export function createSocketDispatch(c: SocketCtx) {
   function applyStoredOwnerFrame(raw: Record<string, unknown>) {
     // Validate against the app->relay schema first: a malformed or old-version frame is skipped, never rendered.
     const parsed = parseFrame(raw, { direction: 'app_to_relay' })
-    if (!parsed.ok || (parsed.frame.type !== 'message' && parsed.frame.type !== 'voice_note')) return
+    if (!parsed.ok || parsed.frame.type !== 'message') return
     const seq = (raw.relay as { seq?: number } | undefined)?.seq
     const id = String(raw.client_msg_id)
     if (findMessage(id)) {
       if (seq !== undefined) c.patchMessage(id, (m) => ({ ...m, seq }))
       return
     }
-    const isVoice = raw.type === 'voice_note'
     c.upsertMessage({
       id,
       thread_id: String(raw.thread_id),
       ...(seq !== undefined ? { seq } : {}),
       author: 'owner',
-      kind: isVoice ? 'voice_note' : 'text',
-      ...(isVoice ? {} : { text: String(raw.text ?? '') }),
+      kind: 'text',
+      text: String(raw.text ?? ''),
       format: 'plain',
-      attachments: (parsed.frame.type === 'voice_note'
-        ? [parsed.frame.attachment]
-        : parsed.frame.attachments) as AttachmentRefT[],
+      attachments: parsed.frame.attachments as AttachmentRefT[],
       via: 'app',
       created_at: typeof raw.ts === 'string' ? raw.ts : new Date(now()).toISOString(),
       receipt: 'sent',
@@ -192,7 +189,6 @@ export function createSocketDispatch(c: SocketCtx) {
     historyErrors,
     inboxSettled: c.inboxSettled,
     onAcked: c.onAcked,
-    dropFromOutbox: c.dropFromOutbox,
     flushOutbox: c.flushOutbox,
     flushReads: () => c.flushReads(),
     dispatch,
@@ -209,7 +205,6 @@ export function createSocketDispatch(c: SocketCtx) {
   }
 
   function dispatch(frame: Frame, isCatchup = false) {
-    if (frame.type === 'voice.state' && frame.state === 'ended') void c.dropVoiceAsks()
     applyFrame(frame, isCatchup)
     c.emit(frame.type, frame as unknown as Record<string, unknown>)
   }

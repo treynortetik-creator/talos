@@ -16,7 +16,7 @@ const whole = (n: number) => Math.min(TERMINAL_RECT_MAX, Math.max(0, Math.round(
 
 const MAIN: TerminalSessionItemT = {
   id: 'main',
-  name: 'Main',
+  name: 'Main agent',
   state: 'unknown',
   key: '1',
   panel: 'terminal',
@@ -287,7 +287,7 @@ function Screen({ bridge }: { bridge: ShellBridge }) {
         // biome-ignore lint/a11y/useSemanticElements: a tab strip is a tablist; the arrows move between the tabs
         <div
           role="tablist"
-          aria-label="Sessions"
+          aria-label="Agents"
           data-testid="terminal-tabs"
           onKeyDown={onTabKeys}
           className="flex h-11 shrink-0 items-stretch overflow-x-auto border-b border-line bg-surface"
@@ -323,7 +323,8 @@ function Screen({ bridge }: { bridge: ShellBridge }) {
         </Space>
         {hasStrip && shown && (
           <p className="shrink-0 border-t border-line bg-surface px-4 py-2 text-xs text-text-2">
-            Typing here goes to {current.name}&apos;s session. Ctrl+1 to 9 switch tabs.
+            Typing here goes to {current.id === 'main' ? 'the main agent' : `${current.name}'s agent`}. Ctrl+1 to 9
+            switch tabs.
           </p>
         )}
       </div>

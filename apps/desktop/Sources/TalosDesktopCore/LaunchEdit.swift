@@ -23,7 +23,7 @@ public enum LaunchEdit {
   /// What the box shows: the program and its arguments, shell-quoted. No `cd`, no environment, no conversation id.
   public static func line(for cfg: DesktopConfig) -> String {
     let program = cfg.claudePath == "auto" ? "claude" : cfg.claudePath
-    return ([LaunchSpec.shellQuote(program)] + ResumeRewrite.strip(cfg.args).map(LaunchSpec.shellQuote)).joined(separator: " ")
+    return ([LaunchSpec.shellQuote(program)] + MainChannelFlag.ensured(ResumeRewrite.strip(cfg.args)).map(LaunchSpec.shellQuote)).joined(separator: " ")
   }
 
   /// The names (never the values) of the environment variables the launch carries, sorted.
@@ -64,8 +64,11 @@ public enum LaunchEdit {
     if spec.resumeId != nil || dropsConversationFlag { no.append(resumePointer) }
     if !no.isEmpty { return .refused(no.joined(separator: " ")) }
     let path = spec.program == "claude" ? "auto" : spec.program
-    if path == cfg.claudePath && spec.args == ResumeRewrite.strip(cfg.args) { return .unchanged }
-    return .updated(claudePath: path, args: spec.args)
+    // the saved command always carries the Talos channel: a line without it is saved with it, so deleting it from the box changes nothing
+    let args = MainChannelFlag.ensured(spec.args)
+    let saved = MainChannelFlag.ensured(ResumeRewrite.strip(cfg.args))
+    if path == cfg.claudePath && MainChannelFlag.withoutTalosChannel(args) == MainChannelFlag.withoutTalosChannel(saved) { return .unchanged }
+    return .updated(claudePath: path, args: args)
   }
 
   /// The config after an accepted edit: only `claude_path` and `args` differ. Environment and conversation ids are copied

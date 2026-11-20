@@ -48,6 +48,12 @@ export type BridgeStatusFile = {
    * started. Only the time: never the turn or the thread. The Mac's missed-turn watch never re-sends a message the owner stopped.
    */
   last_stop_at: string | null
+  /**
+   * Whether the claude this bridge runs under was started with the Talos channel (claude-env.ts talosChannelState). 'off': the
+   * owner's messages are never pushed in, though every outbound tool works. 'unknown' from a bridge that predates it or found
+   * no claude above it.
+   */
+  talos_channel: 'on' | 'off' | 'unknown'
   updated_at: string
 }
 export const GOVERNOR_STATES = ['ok', 'paused', 'park_all', 'off', 'unknown'] as const
@@ -71,6 +77,7 @@ export const STATUS_KEYS = [
   'last_owner_at',
   'main_resend',
   'last_stop_at',
+  'talos_channel',
   'updated_at',
 ] as const
 export const STATUS_RELAY_KEYS = ['connected', 'last_connect_at', 'last_close_code'] as const
@@ -140,6 +147,8 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
     // an older bridge never wrote it: null, "no stop known"
     last_stop_at:
       typeof o.last_stop_at === 'string' && !Number.isNaN(Date.parse(o.last_stop_at)) ? o.last_stop_at : null,
+    // an older bridge never wrote it, and a value this build does not know is not trusted: 'unknown', never a failure
+    talos_channel: o.talos_channel === 'on' || o.talos_channel === 'off' ? o.talos_channel : 'unknown',
     updated_at: o.updated_at,
   }
 }
@@ -185,6 +194,8 @@ export type StatusWriterOptions = {
   commit?: string | undefined
   /** Computed once at start (the environment of a running process does not change). */
   sessionMarkerInherited?: boolean | 'unknown'
+  /** What talosChannelState found at start (default 'unknown'). */
+  talosChannel?: 'on' | 'off' | 'unknown'
   snapshot: () => StatusSnapshot
   pid?: number
   alive?: (pid: number) => boolean
@@ -286,6 +297,7 @@ export class StatusWriter {
         last_owner_at: body.last_owner_at ?? null,
         main_resend: true,
         last_stop_at: body.last_stop_at ?? null,
+        talos_channel: this.o.talosChannel ?? 'unknown',
         updated_at: new Date(this.o.clock.now()).toISOString(),
       }
       writeJsonAtomic(this.o.path, file, 0o600)

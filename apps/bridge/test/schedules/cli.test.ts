@@ -116,6 +116,27 @@ describe('talos-app schedules adopt (S3.7)', () => {
     expect(again.asked).toEqual(['Approve "Nightly Sync" as it is on disk now? [y/N] '])
   })
 
+  // Lemnos on Dante's setup: adopt asked y/N per job in a terminal. --yes answers every question yes, without one.
+  test('--yes approves every job and converts a `both` job, asks nothing, and prints each answer', async () => {
+    const box = legacyBox()
+    box.handWrite({ id: 'both-job', name: 'Both Job', time: '07:30', prompt: 'Do it.\n', in_session: true })
+    const { out, io, asked } = cliIO([])
+    expect(await runCli(['schedules', 'adopt', '--yes'], io, env(box))).toBe(0)
+    expect(asked).toEqual([])
+    const s = snapshot(box)
+    expect(s.session_runner).toBe('talos')
+    expect(s.approval_required).toBe(true)
+    expect(s.schedules.filter((j) => j.today === 'held').map((j) => j.id)).toEqual([])
+    expect(s.schedules.find((j) => j.id === 'both-job')?.runner).toBe('session')
+    expect(out.join('\n')).toContain('Approve "Morning Brief" as it is on disk now? [y/N] yes (--yes)')
+    // anything else after adopt is a usage error, and changes nothing (a fresh box: nothing adopted yet)
+    const fresh = legacyBox()
+    const bad = cliIO([])
+    expect(await runCli(['schedules', 'adopt', '--all'], bad.io, env(fresh))).toBe(1)
+    expect(snapshot(fresh).session_runner).toBe('hook')
+    expect(bad.asked).toEqual([])
+  })
+
   test('a `both` job: y converts it to session-only (and it is not held); n keeps the switch refused', async () => {
     const box = new ChronosBox(MON_0700_EDT)
     cleanup.push(() => box.dispose())

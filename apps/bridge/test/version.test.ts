@@ -17,7 +17,7 @@ describe('resolveVersion', () => {
       run: fake({
         'git rev-parse --show-toplevel': '/x',
         'git rev-parse --short=7 HEAD': 'abc1234',
-        'git describe --tags --always --dirty': 'abc1234-dirty',
+        'git describe --tags --exclude=archive/* --always --dirty': 'abc1234-dirty',
       }),
     })
     expect(r).toEqual({ version: 'abc1234-dirty', commit: 'abc1234' })
@@ -42,7 +42,7 @@ describe('resolveVersion', () => {
       run: fake({
         'git rev-parse --show-toplevel': '/other',
         'git rev-parse --short=7 HEAD': 'ffff000',
-        'git describe --tags --always --dirty': 'ffff000',
+        'git describe --tags --exclude=archive/* --always --dirty': 'ffff000',
       }),
     })
     expect(r).toEqual({ version: '0.0.0', commit: undefined })

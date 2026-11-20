@@ -23,6 +23,16 @@ extension WorkerRig {
     env["FAKE_RV_EMPTY_ENTER_LOG"] = root + "/empty-enter.log"
   }
 
+  /// The manager has LOOKED at the box in a tick after it typed the pointer and found our line there. Until then an emptied box reads
+  /// as a screen that has not caught up, and a line never seen is held, never typed again (`unseenSince`, WorkerOwedPointer.swift). A
+  /// fixed pause is not that look: a loaded machine can have the tick late. Read on the manager's own queue, between ticks.
+  func lineSeenByManager(_ id: String = "trip") -> Bool {
+    mgr.queue.sync {
+      guard let r = mgr.rt[id] else { return false }
+      return r.enterOwed && r.owed.unseenSince == nil
+    }
+  }
+
   /// The box is on the screen and holds nothing.
   var boxIsEmpty: Bool {
     let s = screen()
@@ -101,10 +111,12 @@ struct PointerOwedEnterTests {
     if how == "restored" {
       r.appGone("crash")
       _ = r.comeBack(tmux: shim)  // the Enter is still held: it looks at our line, and that is the first look
-      usleep(1_000_000)
+      // the copy's own first look at our line (not a fixed pause: a loaded machine can have that tick late)
+      #expect(r.wait(10) { r.lineSeenByManager() }, "the restored manager never looked at the line: \(r.why("trip"))")
       #expect(r.screen().contains(PointerTyper.text))
     } else {
-      usleep(600_000)
+      // the manager's own look at our line, in a tick after the typing: only after it is an empty box "gone" (not a screen still catching up)
+      #expect(r.wait(10) { r.lineSeenByManager() }, "the manager never looked at the line: \(r.why("trip"))")
     }
     r.ownerClears()
     usleep(1_000_000)  // several ticks with the box empty (or, once the fix is in, our line typed again)

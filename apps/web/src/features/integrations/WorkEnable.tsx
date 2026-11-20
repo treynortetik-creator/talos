@@ -73,13 +73,13 @@ export function WorkEnableDialog({
             <>
               <span className="block">{gate.note}</span>
               <span className="block">
-                Titles, senders and short previews of matching messages leave {spec.name} and pass through your relay to{' '}
-                {agent} on your Mac.
+                Titles, senders and short previews of matching messages leave {spec.name} and pass through Talos online
+                to {agent} on your Mac.
               </span>
               <span className="block">
                 {gate.retention === 'passthrough'
-                  ? 'Passthrough: nothing is kept on the relay once it reaches your Mac, and anything undelivered after an hour is dropped.'
-                  : `Buffered: the relay keeps events for up to ${days} until your Mac collects them.`}
+                  ? 'Passthrough: nothing is kept online once it reaches your Mac, and anything undelivered after an hour is dropped.'
+                  : `Buffered: Talos online keeps events for up to ${days} until your Mac collects them.`}
               </span>
             </>
           ) : (

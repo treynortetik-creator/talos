@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util'
 import { DeviceId, type Frame, HookDigestFrame, isIanaZone, signRotation } from '@talos-app/protocol'
 import { certifyRotation, rotationsProblem } from './attest.ts'
 import { Bridge } from './bridge.ts'
-import { launchEnv } from './claude-env.ts'
+import { CHANNEL_OFF_TEXT, launchEnv } from './claude-env.ts'
 import { checkCodex, runCodex } from './codex.ts'
 import { assertSecureRelayUrl, type BridgeEnv, defaultHome, loadEnv, paths } from './config.ts'
 import { parseConfig } from './config-file.ts'
@@ -506,6 +506,8 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
     }),
   )
   io.out(`bridge: ${describeBridge(live).text}`)
+  if ((live.state === 'live' || live.state === 'stale') && live.status.talos_channel === 'off')
+    io.out(`FAIL: ${CHANNEL_OFF_TEXT}`)
   if (!runningBridge(live).running) io.out(`bridge version: ${BRIDGE_VERSION} (the code on disk; no bridge is running)`)
   else if (cr.commit && !cr.note) io.out(`bridge version: ${BRIDGE_VERSION} (running)`)
   else if (cr.commit) io.out(`bridge version: ${cr.commit} (running); this folder is now at ${BRIDGE_VERSION}`)
@@ -519,7 +521,7 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
   io.out(`bridge key id: ${key?.keyId ?? 'none (run talos-app init)'}`)
   io.out(`last connect: ${lastConnect}`)
   io.out(`queue depth: ${queue}`)
-  io.out(`STT: ${env.sttCmd ? 'configured' : 'not configured'}  TTS: ${env.ttsCmd ? 'configured' : 'not configured'}`)
+  io.out(`TTS: ${env.ttsCmd ? 'configured' : 'not configured'}`)
 }
 
 /** Injection points for tests; the real CLI passes none. */

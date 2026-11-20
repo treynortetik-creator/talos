@@ -63,7 +63,7 @@ function SessionSheet({
       <div data-testid="session-sheet" className="text-text">
         <div className="flex items-start gap-2">
           <SheetTitle className="m-0 flex-1 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">
-            This thread's session
+            This thread's agent
           </SheetTitle>
           <SheetClose className="-mt-2 -mr-2 grid size-11 shrink-0 place-items-center rounded-pill hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus">
             <IconClose width={18} height={18} />

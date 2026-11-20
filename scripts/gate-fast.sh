@@ -10,8 +10,8 @@
 # files, so following imports further selects about 283 of the 371 bridge test files for almost any change. Everything else
 # the planned gate runs (the e2e and old-client steps, and the browser specs of a changed feature or helper) is CI's after the push.
 # The browser specs the fast gate runs are the change's own: each changed apps/web/test/**/*.spec.ts that is still there (not a
-# feature's folder of specs, not the smoke set), on every Playwright project that takes it (desktop, iphone, pixel; chromium-media
-# for voice; iphone-se for its one spec), under the heavy lock; a fast gate with no such spec takes no lock. A deleted spec runs
+# feature's folder of specs, not the smoke set), on every Playwright project that takes it (desktop, iphone, pixel;
+# iphone-se for its one spec), under the heavy lock; a fast gate with no such spec takes no lock. A deleted spec runs
 # nothing; more than WEB_SPECS_MAX of them is the full gate. Names count only as written with their
 # extension, as every bridge import is (allowImportingTsExtensions).
 # It runs the full gate instead (FAST=0, FAST_WHY says why) for a change to: the keep-out list (scripts/gate-fast-keepout.txt,
@@ -177,7 +177,7 @@ fast_plan() {
     t="$(web_spec_itself "$f")"
     [ -n "$t" ] || continue
     web+=("$t")
-    case "$t" in */voice/*) ;; *) webkit+=("$t") ;; esac # the iphone and pixel projects leave the voice folder out
+    webkit+=("$t")
   done
   uniq_into web "${web[@]+"${web[@]}"}"
   uniq_into webkit "${webkit[@]+"${webkit[@]}"}"
@@ -312,11 +312,11 @@ function fastPlan(c) {
     }
     if (sorted(bun).length > 60) return true
     // the change's own browser specs (web_spec_itself's twin): each changed apps/web/test/**/*.spec.ts still there, as the path
-    // relative to apps/web; the voice folder is not on the iphone and pixel projects. Over WEB_SPECS_MAX: the full gate.
+    // relative to apps/web. Over WEB_SPECS_MAX: the full gate.
     const web = sorted(changed.filter((f) => glob('apps/web/test/*.spec.ts')(f) && exists(f)).map((f) => f.slice('apps/web/'.length)))
     const cap = /^[0-9]+$/.test(process.env.WEB_SPECS_MAX || '') ? Number(process.env.WEB_SPECS_MAX) : 40
     if (web.length > cap) return true
-    picked = { bun: sorted(bun), web, webkit: web.filter((w) => !glob('*/voice/*')(w)) }
+    picked = { bun: sorted(bun), web, webkit: web }
     return false
   }
   let picked = null

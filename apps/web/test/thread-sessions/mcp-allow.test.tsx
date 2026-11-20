@@ -26,7 +26,6 @@ const trip: ThreadT = {
   kind: 'fixed',
   order: 2,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   session: 'dedicated',
@@ -79,19 +78,19 @@ const patches = (c: FakeClient) => c.sent.filter((f) => f.type === 'config.patch
 describe('the MCP servers control', () => {
   it('starts off with no list, and says what that means', async () => {
     const { box } = await mount()
-    expect(
-      (within(box).getByRole('switch', { name: 'Limit MCP servers' }) as HTMLElement).getAttribute('aria-checked'),
-    ).toBe('false')
-    expect(box.textContent).toMatch(/whatever servers Claude Code gives it/)
-    expect(within(box).queryByLabelText('Add a server')).toBeNull()
+    expect((within(box).getByRole('switch', { name: 'Limit tools' }) as HTMLElement).getAttribute('aria-checked')).toBe(
+      'false',
+    )
+    expect(box.textContent).toMatch(/your agent gets the tools it normally has/)
+    expect(within(box).queryByLabelText('Add a tool')).toBeNull()
   })
 
   it('turning it on saves an empty list (talos-app only); turning it off removes the list', async () => {
     const { client, box } = await mount()
-    await userEvent.click(within(box).getByRole('switch', { name: 'Limit MCP servers' }))
+    await userEvent.click(within(box).getByRole('switch', { name: 'Limit tools' }))
     await waitFor(() => expect(list(client)).toEqual([]))
     expect(box.textContent).toMatch(/Only talos-app and these/)
-    await userEvent.click(within(box).getByRole('switch', { name: 'Limit MCP servers' }))
+    await userEvent.click(within(box).getByRole('switch', { name: 'Limit tools' }))
     await waitFor(() => expect(list(client)).toBeUndefined())
     expect(patches(client)).toHaveLength(2)
     // off is a null, not an omitted key: a patch that only leaves a key out keeps it (an old client must not wipe the list)
@@ -102,8 +101,8 @@ describe('the MCP servers control', () => {
 
   it('adds servers by name (a connector name with a space too) and removes them, one signed patch each', async () => {
     const { client, box } = await mount({ mcp_allow: ['github'] })
-    expect(within(box).getByRole('list', { name: 'Allowed MCP servers' }).textContent).toMatch(/github/)
-    const add = within(box).getByLabelText('Add a server')
+    expect(within(box).getByRole('list', { name: 'Allowed tools' }).textContent).toMatch(/github/)
+    const add = within(box).getByLabelText('Add a tool')
     await userEvent.type(add, 'claude.ai Gmail{Enter}')
     await waitFor(() => expect(list(client)).toEqual(['github', 'claude.ai Gmail']))
     await userEvent.click(within(box).getByRole('button', { name: 'Remove github' }))
@@ -113,7 +112,7 @@ describe('the MCP servers control', () => {
 
   it('refuses a duplicate, talos-app and a bad name in words, and sends nothing', async () => {
     const { client, box } = await mount({ mcp_allow: ['github'] })
-    const add = within(box).getByLabelText('Add a server')
+    const add = within(box).getByLabelText('Add a tool')
     for (const [text, said] of [
       ['github', /already on the list/],
       ['talos-app', /always allowed/],
@@ -129,22 +128,24 @@ describe('the MCP servers control', () => {
   it('is read-only with the Mac offline', async () => {
     const { client, box } = await mount({ mcp_allow: ['github'] })
     act(() => client.store.setState((s) => ({ ...s, presence: { ...s.presence, bridge_online: false } })))
-    expect((within(box).getByRole('switch', { name: 'Limit MCP servers' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((within(box).getByLabelText('Add a server') as HTMLInputElement).disabled).toBe(true)
+    expect((within(box).getByRole('switch', { name: 'Limit tools' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(box).getByLabelText('Add a tool') as HTMLInputElement).disabled).toBe(true)
     expect((within(box).getByRole('button', { name: 'Remove github' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it("a refusal from the Mac leaves the saved list showing, in the Mac's words", async () => {
     const { client, box } = await mount({ mcp_allow: ['github'] })
     client.failNextPatchWith('thread_session_refused', 'thread "trip": those session settings are not valid')
-    await userEvent.type(within(box).getByLabelText('Add a server'), 'slack{Enter}')
+    await userEvent.type(within(box).getByLabelText('Add a tool'), 'slack{Enter}')
     expect((await screen.findAllByRole('alert')).map((a) => a.textContent).join(' ')).toMatch(/Your Mac said no/)
     expect(list(client)).toEqual(['github'])
   })
 
   it('says that saving restarts the session when its turn ends', async () => {
     const { box } = await mount()
-    expect(box.parentElement?.textContent).toMatch(/Saving restarts the session when its current turn ends\./)
+    expect(box.parentElement?.textContent).toMatch(
+      /Saving restarts this thread’s agent when it finishes its current reply\./,
+    )
     expect(box.parentElement?.textContent).not.toMatch(/next time this thread's session starts/)
   })
 })

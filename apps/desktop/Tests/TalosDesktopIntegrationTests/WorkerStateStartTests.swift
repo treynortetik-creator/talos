@@ -48,7 +48,7 @@ struct WorkerStateStartTests {
     #expect(inject.hasPrefix("f='\(hookDir)/thread-state.py'; ") && inject.contains(" inject '\(r.agentDir)' "))
     #expect(commands(json, "PreCompact").first?.contains(" save '\(r.agentDir)' ") == true)
     let allow = (json["permissions"] as? [String: Any])?["allow"] as? [String] ?? []
-    #expect(allow.contains("Edit(/\(r.agentDir)/threads/trip.state.md)") && allow.contains("Write(/\(r.agentDir)/threads/trip.state.md)"))
+    #expect(allow == ["Edit(/\(r.agentDir)/threads/trip.state.md)"], "\(allow)")
     // the flag is in the environment the worker process really got (the fake claude writes it down)
     #expect(r.lines(r.envLog + ".trip").contains("TALOS_APP_THREAD_STATE=1"), "\(r.lines(r.envLog + ".trip"))")
     #expect(!auditLines(r).contains { $0.contains("worker_state_seed_failed") })

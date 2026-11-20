@@ -60,7 +60,6 @@ const base = {
   kind: 'fixed',
   order: 2,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 } as const
@@ -455,7 +454,7 @@ describe('frames, errors, meta', () => {
     }
     expect(ChannelMeta.safeParse(meta).success).toBe(true)
     expect(ChannelMeta.safeParse({ ...meta, routed: 'worker' }).success).toBe(false)
-    expect(CHANNEL_KINDS).toHaveLength(18) // 15, `wake` (wake_me), `peer_message` (linked agents) and `onboarding` (the setup hello, trust system): none of them is a fallback kind
+    expect(CHANNEL_KINDS).toHaveLength(15) // 12, `wake` (wake_me), `peer_message` (linked agents) and `onboarding` (the setup hello, trust system): none of them is a fallback kind
   })
 
   it('session.state may say which session it describes; absent = main', () => {

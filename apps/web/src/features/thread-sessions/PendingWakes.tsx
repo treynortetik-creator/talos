@@ -64,7 +64,7 @@ export function PendingWakes({ threadId }: { threadId: string }) {
         tabIndex={-1}
         className="m-0 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2 outline-none"
       >
-        {whose === 'thread' ? 'Wake-ups for this session' : 'Wake-ups for the main session'}
+        {whose === 'thread' ? 'Wake-ups for this thread’s agent' : 'Wake-ups for the main agent'}
       </h3>
       {shown.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-1 p-0">

@@ -11,7 +11,6 @@ import { loadEnv, type RelayEnv } from './env.ts'
 import { registerModules } from './modules.ts'
 import { buildApp } from './routes.ts'
 import type { RelayServices } from './services.ts'
-import { shutdownVoice } from './voice/index.ts'
 
 export { loadEnv } from './env.ts'
 export { migrate } from './migrate.ts'
@@ -30,7 +29,7 @@ export type RunningRelay = {
 /** Above the upload guard's 10 minute ceiling, so the guard (408) always speaks first. */
 export const REQUEST_TIMEOUT_MS = 11 * 60_000
 
-/** Boots a relay. `registerModules` runs the core, auth, hooks and voice registrations. */
+/** Boots a relay. `registerModules` runs the core, auth and hooks registrations. */
 export async function startRelay(
   opts: Partial<Omit<CreateOptions, 'env'>> & {
     env: RelayEnv
@@ -94,7 +93,6 @@ export async function startRelay(
       // no new connection while this one drains: a client coming straight back must reach the next relay, not this one (a
       // dropped dial is retried within the client's restart window)
       stopping = true
-      shutdownVoice(services)
       runtimeOf(services).stop()
       // Say "restarting" (1012) so clients come straight back, give them up to 500 ms to finish closing, then terminate what
       // is left: a client that never finished its handshake, or a phone that went half-open, would otherwise keep close()

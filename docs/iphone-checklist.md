@@ -12,12 +12,10 @@ date and result next to each line.
    message text.
 4. Lock the phone and have the agent reply. A push arrives; tapping it opens the right thread. A card push opens that card.
 5. The badge number matches the number of things under "Needs you".
-6. Hold the microphone for five seconds, slide up to lock, slide left to cancel, then record and send one. The transcript
-   appears under the bubble.
+6. (Archived 2026-11-19, voice notes removed: [archived/voice.md](archived/voice.md).) The composer has no microphone button and
+   the app never asks for the microphone.
 7. An agent voice reply plays inline, seeks, plays at 1.5x, through the loudspeaker and through AirPods.
-8. Live call: audio comes out of the loudspeaker (not the earpiece), interrupting works, the hand-off chip appears, a
-   filler line plays after twenty seconds of waiting, the answer is spoken. Lock the screen during a call: the call ends
-   cleanly and the answer arrives as a push.
+8. (Archived 2026-11-19, live calls removed: [archived/voice.md](archived/voice.md).) There is no call button, in a thread or on /drive.
 9. Airplane mode, send a message, switch it off: it is delivered once.
 10. Switch the Mac off: the app shows the Mac-offline banner. Open a thread older than seven days: it says the history
     lives on your Mac.

@@ -52,7 +52,6 @@ function setup() {
         kind: 'agent',
         order: 9,
         notify: 'all',
-        voice_context: 'recent',
         archived: false,
         created_at: '2026-01-01T00:00:00.000Z',
       },
@@ -62,7 +61,6 @@ function setup() {
         kind: 'agent',
         order: 10,
         notify: 'all',
-        voice_context: 'recent',
         archived: false,
         created_at: '2026-01-01T00:00:00.000Z',
       },
@@ -128,8 +126,8 @@ describe('lead init', () => {
     expect(s.run(['init', 'trip', '--folder', dir, '--agent-dir', s.agentDir], { pathDirs: [bin, '/tmp/x'] })).toBe(0)
     const d = JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8')).permissions.deny as string[]
     expect(d).toContain(`Edit(/${s.base}/.zshrc)`)
-    expect(d).toContain(`NotebookEdit(/${s.base}/.ssh/**)`)
-    expect(d).toContain(`Write(/${bin}/**)`)
+    expect(d).toContain(`Edit(/${s.base}/.ssh/**)`)
+    expect(d).toContain(`Edit(/${bin}/**)`) // Edit( ) covers Write and NotebookEdit
     expect(d.some((r) => r.includes('/tmp/x'))).toBe(false)
     expect(d).not.toContain(`Read(/${s.base}/.zshrc)`)
     // lead check leaves the PATH-derived rules out
@@ -571,9 +569,7 @@ describe('lead check', () => {
       [
         'an autostart folder deny is missing',
         (j) => {
-          j.permissions.deny = j.permissions.deny.filter(
-            (d) => !(d.startsWith('NotebookEdit(//') && d.includes('/.ssh')),
-          )
+          j.permissions.deny = j.permissions.deny.filter((d) => !(d.startsWith('Edit(//') && d.includes('/.ssh')))
         },
         /deny rule/,
       ],

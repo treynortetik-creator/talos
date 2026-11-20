@@ -56,8 +56,11 @@ extension WorkerManager {
     case .choose(let choice, let label):
       guard offer.kind != .login else { return .nothing(.notOffered) }  // a login dialog has nothing to choose
       guard offer.options.indices.contains(choice), ExactText.equal(offer.options[choice], label) else { return .nothing(.screenChanged) }
+      // the free-text option needs the owner's words, which only the phone card carries: a popup click on it presses nothing
+      guard choice != offer.free_text else { return .nothing(.screenChanged) }
       let o = press(id, offer, choice, label)
       guard o.outcome == .pressed else {
+        if o.reason == .unconfirmed { return .nothing(.unconfirmed) }
         switch o.blocked {
         case .typing?: return .nothing(.typing)
         case .unreadable?: return .nothing(.couldNotCheck)

@@ -38,7 +38,7 @@ export function buildRows(input: {
   }
   rows.push({ label: 'Protocol', value: `v${PROTOCOL_VERSION}` })
   if (input.relay) rows.push({ label: 'Server build', value: input.relay })
-  if (input.bridge) rows.push({ label: 'Bridge build', value: input.bridge })
+  if (input.bridge) rows.push({ label: 'Talos on your computer (build)', value: input.bridge })
   return rows
 }
 

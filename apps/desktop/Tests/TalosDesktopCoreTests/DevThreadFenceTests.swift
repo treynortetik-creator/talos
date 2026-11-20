@@ -121,7 +121,7 @@ struct DevThreadFenceTests {
     let want = WorkerFence.workerFilesDeny(talosHome: t.talosHome)
     let h = t.talosHome
     // the whole workers folder (the hook copy, every session's settings, MCP config, nonce, launch file), as the Linux twin has it
-    for tool in ["Edit", "Write", "NotebookEdit", "MultiEdit"] {
+    for tool in ["Edit"] {
       for r in ["\(tool)(/\(h)/workers/**)", "\(tool)(/\(h)/workers)", "\(tool)(/\(h.lowercased())/workers/**)"] {
         #expect(want.contains(r), "\(r)")
       }
@@ -151,7 +151,7 @@ struct DevThreadFenceTests {
     let open = try WorkerSpec.build(off(t))
     #expect(throws: WorkerSpec.BuildError.workerFilesOpen) { try stripped(open) { all.contains($0) }.validate(threadFence: false) }
     // one rule short is refused too
-    let hook = "Write(/\(t.talosHome)/workers/**)"
+    let hook = "Edit(/\(t.talosHome)/workers/**)"
     #expect(throws: WorkerSpec.BuildError.workerFilesOpen) { try stripped(open) { $0 == hook }.validate(threadFence: false) }
     let fenced = try WorkerSpec.build(fenceInputs(t))
     #expect(throws: WorkerSpec.BuildError.workerFilesOpen) { try stripped(fenced) { all.contains($0) }.validate() }

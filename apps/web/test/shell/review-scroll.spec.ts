@@ -307,11 +307,13 @@ test('the CSS lock turns a stray page scroll into a stuck page (screen reader / 
   })
   await page.mouse.move(640, 300)
   await page.mouse.wheel(0, -3000)
-  await page.waitForTimeout(300)
-  const after = await page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)
-  expect(y === 0 || after === 0, `page jumped to ${y}px and the wheel cannot bring it back (still ${after}px)`).toBe(
-    true,
-  )
+  if (y !== 0) {
+    await expect
+      .poll(() => page.evaluate(() => document.scrollingElement?.scrollTop ?? 0), {
+        message: `page jumped to ${y}px and the wheel cannot bring it back`,
+      })
+      .toBe(0)
+  }
 })
 
 // ---------------------------------------------------------------------------------------------------------------

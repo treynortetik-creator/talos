@@ -19,7 +19,6 @@ const mk = (id: string, name: string, order: number, extra: Record<string, unkno
   kind: 'fixed',
   order,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   ...extra,
@@ -68,7 +67,7 @@ const config = (page: Page) =>
 
 test('Settings shows thread sessions allowed on a config that never wrote the switch', async ({ page }) => {
   await setUp(page, '/settings/thread-sessions')
-  await expect(page.getByRole('switch', { name: 'Allow threads to have their own session' })).toHaveAttribute(
+  await expect(page.getByRole('switch', { name: 'Allow threads to have their own agent' })).toHaveAttribute(
     'aria-checked',
     'true',
   )

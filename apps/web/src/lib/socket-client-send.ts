@@ -1,39 +1,18 @@
 // The client methods that send, retry and discard messages.
 
 import { newId } from '@talos-app/protocol'
-import { NotSentError, TalosClientError, type VoiceAskArgs } from './client.ts'
+import { NotSentError, TalosClientError } from './client.ts'
 import { MAX_MESSAGE_CHARS, overFrameLimit } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
-import type { PendingVoice, SocketClient } from './socket-types.ts'
+import type { SocketClient } from './socket-types.ts'
 
 export function createClientSend(
   c: SocketCtx,
-): Pick<
-  SocketClient,
-  | 'outboxSize'
-  | 'retryMessage'
-  | 'discardMessage'
-  | 'fetchMedia'
-  | 'reportPresence'
-  | 'onFrame'
-  | 'sendMessage'
-  | 'sendVoiceNote'
-  | 'queueVoiceNote'
-  | 'sendVoiceAsk'
-> {
-  const { discarding, listeners, now, deadlineHits, queueKeptAt, set, storage, store, uploadFailures } = c
+): Pick<SocketClient, 'outboxSize' | 'retryMessage' | 'discardMessage' | 'fetchMedia' | 'onFrame' | 'sendMessage'> {
+  const { discarding, listeners, now, set, store } = c
   return {
-    outboxSize: () => c.outbox.length + c.voiceQueue.length,
+    outboxSize: () => c.outbox.length,
     retryMessage(clientMsgId) {
-      // A voice note that failed to upload: it starts over with a full set of tries.
-      if (c.voiceQueue.some((x) => x.clientMsgId === clientMsgId)) {
-        uploadFailures.delete(clientMsgId)
-        deadlineHits.delete(clientMsgId)
-        c.clearFailed(clientMsgId)
-        c.refreshQueued()
-        void c.flushOutbox()
-        return
-      }
       const e = c.outbox.find((x) => x.clientMsgId === clientMsgId)
       if (!e) return
       if (overFrameLimit(e.bytes)) return // can never succeed: the owner can Edit or Delete it
@@ -53,13 +32,6 @@ export function createClientSend(
       try {
         await c.withEntryLock(clientMsgId, async () => {
           for (const e of c.outbox.filter((x) => x.clientMsgId === clientMsgId)) await c.dropFromOutbox(e.id)
-          const v = c.voiceQueue.find((x) => x.clientMsgId === clientMsgId)
-          if (v) {
-            c.voiceQueue = c.voiceQueue.filter((x) => x.clientMsgId !== clientMsgId)
-            uploadFailures.delete(clientMsgId)
-            deadlineHits.delete(clientMsgId)
-            await storage.del('blobs', clientMsgId)
-          }
         })
       } finally {
         discarding.delete(clientMsgId)
@@ -75,9 +47,6 @@ export function createClientSend(
     },
     fetchMedia(mediaId) {
       void c.fetchMediaSigned(mediaId)
-    },
-    reportPresence() {
-      c.onActivity()
     },
     onFrame(type, listener) {
       const s = listeners.get(type) ?? new Set()
@@ -122,83 +91,6 @@ export function createClientSend(
         }))
         throw e
       }
-    },
-    async sendVoiceNote({ threadId, attachment }) {
-      const clientMsgId = newId('m')
-      c.upsertMessage({
-        id: clientMsgId,
-        thread_id: threadId,
-        author: 'owner',
-        kind: 'voice_note',
-        format: 'plain',
-        attachments: [attachment],
-        transcript: { text: '', engine: '', status: 'pending' },
-        via: 'app',
-        created_at: new Date(now()).toISOString(),
-      })
-      try {
-        return await c.enqueue('voice_note', threadId, clientMsgId, { attachment: c.ownerAttachment(attachment) })
-      } catch (e) {
-        // Nothing was queued: the row shown for it goes too, so there is no note that looks sent but is not.
-        set((st) => ({
-          messages: { ...st.messages, [threadId]: c.rowsOf(st.messages, threadId).filter((m) => m.id !== clientMsgId) },
-        }))
-        throw e
-      }
-    },
-    async queueVoiceNote({ threadId, blob, durationMs, waveform, name }) {
-      const clientMsgId = newId('m')
-      const began = c.epoch
-      const owner = await c.ensureKey()
-      const entry: PendingVoice = {
-        deviceId: owner.deviceId,
-        createdAt: new Date(now()).toISOString(),
-        clientMsgId,
-        threadId,
-        mime: blob.type,
-        name,
-        blob,
-        order: ++c.outboxOrder,
-        ...(durationMs ? { durationMs } : {}),
-        ...(waveform ? { waveform } : {}),
-      }
-      // Saved before it joins the queue or shows a row: a recording that could not be saved says so (the caller sees the
-      // throw) and never turns up later on its own.
-      if (c.epoch !== began || (c.closed && !queueKeptAt.get(c.epoch - 1)))
-        throw new TalosClientError('internal', 'Signed out')
-      try {
-        await storage.put('blobs', clientMsgId, entry)
-      } catch (e) {
-        await storage.del('blobs', clientMsgId).catch(() => {})
-        throw e
-      }
-      if (c.epoch !== began) {
-        await storage.del('blobs', clientMsgId).catch(() => {})
-        throw new TalosClientError('internal', 'Signed out')
-      }
-      c.voiceQueue.push(entry)
-      c.upsertMessage({
-        id: clientMsgId,
-        thread_id: threadId,
-        author: 'owner',
-        kind: 'voice_note',
-        format: 'plain',
-        attachments: [],
-        via: 'app',
-        created_at: new Date(now()).toISOString(),
-      })
-      c.refreshQueued()
-      void c.flushOutbox()
-      return { clientMsgId, state: c.sendState() }
-    },
-    async sendVoiceAsk(args: VoiceAskArgs) {
-      return c.enqueue('voice.ask', args.threadId, args.delegationId, {
-        voice_session_id: args.voiceSessionId,
-        delegation_id: args.delegationId,
-        thread_id: args.threadId,
-        question: args.question,
-        transcript_tail: args.transcriptTail,
-      })
     },
   }
 }

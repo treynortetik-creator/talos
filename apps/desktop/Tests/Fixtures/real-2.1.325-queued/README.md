@@ -19,7 +19,7 @@ reads before a pointer (a second message to a busy thread session is typed exact
   columns for the `-30` frames; `queued-several-30` has three messages queued.
 - Each frame was taken twice: plain (`.txt`) and with escapes (`-e`, `.ansi.txt`). Afterwards the `claude` process was stopped by
   its own pid and the tmux server by its socket.
-- The working directory in the banner was replaced by `/home/alex/proj-xxx…` of the same width, and the plan name by "Claude Max".
+- The working directory in the banner was replaced by `/home/alex/proj-xxx…` of the same width, and the plan name by "Claude Pro".
 
 ## What they show
 

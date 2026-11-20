@@ -227,8 +227,13 @@ export const historyFrames = {
         ...(x.reply_to ? { reply_to: x.reply_to } : {}),
         ...(x.share_content ? { share_content: x.share_content } : {}),
       }
-    } else if (f.type === 'voice_note') {
-      const x = f as unknown as FrameOf<'voice_note'>
+    } else if ((f.type as string) === 'voice_note') {
+      // A row stored before voice notes were archived (docs/archived/voice.md): history still shows it. Nothing writes one now.
+      const x = f as unknown as {
+        client_msg_id: MessageT['id']
+        thread_id: string
+        attachment: NonNullable<MessageT['attachments']>[number]
+      }
       m = {
         id: x.client_msg_id,
         thread_id: x.thread_id,

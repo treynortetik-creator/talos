@@ -200,7 +200,7 @@ public struct BridgeGuard: Sendable {
 
     public enum Permission: Equatable, Sendable { case grant, deny }
 
-    /// Camera, microphone and motion: only the top frame on the relay origin outside /media/ (the same test as a plugin call).
+    /// Motion (camera and microphone are always denied by the web view delegates since the voice-input archive): only the top frame on the relay origin outside /media/ (the same test as a plugin call).
     /// An iframe of agent-written HTML, another origin or a missing origin is denied.
     public func devicePermission(isMainFrame: Bool, frameOrigin: Origin?, pageURL: URL?, trust: RelayTrustState) -> Permission {
         allowsPluginCall(isMainFrame: isMainFrame, frameOrigin: frameOrigin, pageURL: pageURL, trust: trust) ? .grant : .deny

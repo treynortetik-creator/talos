@@ -19,7 +19,6 @@ const work: ThreadT = {
   kind: 'fixed',
   order: 2, // where ThreadEditor puts a new thread: after everything, the Inbox included
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 }

@@ -16,7 +16,7 @@ import {
 } from './shareAttachment.ts'
 
 export const MANUAL_SHARE_HELP = "Open the file, then use Safari's share button."
-const EXPIRED = 'This file expired from the relay; ask the agent to resend.'
+const EXPIRED = 'This file has expired; ask your agent to send it again.'
 
 // One native share runs at a time (the shell ignores a second request too), so the busy flag is shared by every attachment.
 // What ends it lives here with it, not in a mounted hook: the shell's answer, or the download budget running out. Leaving the

@@ -36,8 +36,8 @@ export const AgentConfig = z.object({
   rev: z.number().int().nonnegative(), // bumped on every write; optimistic concurrency
   agent: z.object({
     name: z.string().min(1).max(32).default('Talos'),
-    voice: z.string().max(32).default('meridian'), // GPT-Live stock voice id; changeable in Settings -> Voice
-    voice_persona: z.string().max(4000).default(''), // injected into the live-voice prompt
+    // archived: voice input (docs/archived/voice.md). Old files may still carry `voice` and `voice_persona` here: a key this
+    // schema does not name is dropped on read, so they are accepted and ignored.
   }),
   owner: z.object({ display_name: z.string().min(1).max(40).default('You') }),
   threads: z.array(Thread).min(1).max(40), // must contain the system thread 'inbox'
@@ -61,7 +61,8 @@ export const AgentConfig = z.object({
     retention: z.enum(['passthrough', 'buffer']).default('passthrough'),
   }),
   voice_notes: z.object({
-    reply_with_voice: z.enum(['when_voice', 'always', 'never']).default('when_voice'),
+    // 'when_voice' ("when I send a voice note") is archived with voice input: still accepted, read as 'never' (docs/archived/voice.md).
+    reply_with_voice: z.enum(['when_voice', 'always', 'never']).default('never'),
     /** Driving mode (docs/V2-FEATURES.md V4.1): every reply is spoken until then. The bridge clamps it to now + 12 h. */
     driving_until: IsoTs.nullable().default(null),
   }),

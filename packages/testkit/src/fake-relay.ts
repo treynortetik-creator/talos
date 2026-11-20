@@ -737,8 +737,7 @@ export class FakeRelay {
     switch (frame.type) {
       case 'ping':
         return this.sendTo(ws, 'to_app', mkFrame('pong', { nonce: frame.nonce }))
-      case 'message':
-      case 'voice_note': {
+      case 'message': {
         const dup = this.seenClientMsg.get(frame.client_msg_id)
         if (dup !== undefined) return this.sendTo(ws, 'to_app', mkFrame('ack', { ref: frame.id, seq: dup }))
         const stamped = this.stamp(raw)
@@ -752,14 +751,14 @@ export class FakeRelay {
           thread_id: frame.thread_id,
           seq,
           author: 'owner',
-          kind: frame.type === 'message' ? 'text' : 'voice_note',
+          kind: 'text',
           format: 'plain',
-          attachments: frame.type === 'message' ? frame.attachments : [frame.attachment],
+          attachments: frame.attachments,
           via: 'app',
           created_at: now(),
-          ...(frame.type === 'message' ? { text: frame.text } : {}),
+          text: frame.text,
           // like the real relay (hub.ts): the quote survives the echo
-          ...(frame.type === 'message' && frame.reply_to ? { reply_to: frame.reply_to } : {}),
+          ...(frame.reply_to ? { reply_to: frame.reply_to } : {}),
         }
         this.sendToApps(mkFrame('message.stored', { client_msg_id: frame.client_msg_id, message }))
         return this.forwardOwnerFrame(stamped)
@@ -803,9 +802,6 @@ export class FakeRelay {
         // like the real relay: no passkey step-up for any setting (2026-11-14)
         return this.acceptOwnerFrame(ws, frame.id, raw)
       }
-      case 'voice.ask':
-        // The real relay acks an accepted ask WITHOUT a seq (the voice module forwards it; it is not an app event).
-        return this.acceptOwnerFrame(ws, frame.id, raw, false)
       case 'inbox.update': {
         if (this.inboxError)
           return this.error(ws, 'to_app', this.inboxError, 'The relay could not save that.', frame.id)
@@ -894,12 +890,12 @@ export class FakeRelay {
     this.sendToBridge(raw, { durable: false })
   }
 
-  private acceptOwnerFrame(ws: WebSocket, id: string, raw: Record<string, unknown>, ackSeq = true) {
+  private acceptOwnerFrame(ws: WebSocket, id: string, raw: Record<string, unknown>) {
     const stamped = this.stamp(raw)
     const seq = (stamped.relay as { seq: number }).seq
     this.seenOwnerIds.set(id, seq)
     this.refSockets.set(id, ws)
-    this.sendTo(ws, 'to_app', mkFrame('ack', ackSeq ? { ref: id, seq } : { ref: id }))
+    this.sendTo(ws, 'to_app', mkFrame('ack', { ref: id, seq }))
     this.forwardOwnerFrame(stamped)
   }
 

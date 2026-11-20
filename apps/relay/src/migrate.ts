@@ -1,6 +1,6 @@
 // The migration runner (spec 9, seam `apps/relay/migrations/README.md`). Seam: ownership stays with WP0.
 // Plain SQL files `migrations/<module>/NNNN_<name>.sql`, applied in lexical order per module, modules in the order
-// core, auth, hooks, voice; one transaction per file; applied files are recorded in `_migrations`.
+// core, auth, hooks, voice (voice has no code any more, only its tables: docs/archived/voice.md); one transaction per file; applied files are recorded in `_migrations`.
 // Every table a file creates must be prefixed with its module (`core_`, `auth_`, `hooks_`, `voice_`), checked inside
 // the transaction so a violation rolls the file back.
 import { readdirSync, readFileSync, statSync } from 'node:fs'

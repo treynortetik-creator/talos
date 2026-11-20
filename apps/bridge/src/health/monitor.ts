@@ -1,5 +1,5 @@
 // The bridge's half of the health alarms (docs/V2-FEATURES.md V2.2). Every 60 s, and within 2 s of a change, the live
-// bridge tells the relay what it is: version, whether the Talos mod is reporting, whether a TTS / STT command is set, and
+// bridge tells the relay what it is: version, whether the Talos mod is reporting, whether a TTS command is set, and
 // whether this Mac's SQLite has FTS5, and how many bytes are free on its disk. The relay watchdog decides what is worth a push; this side only reports.
 //
 // No content, ever: no thread names, no paths (free space is a bare number), no text. A test pins the beat's keys.
@@ -172,7 +172,8 @@ export class HealthMonitor implements HealthService {
         expected,
       },
       tts: Boolean(this.ctx.env.ttsCmd?.length),
-      stt: Boolean(this.ctx.env.sttCmd?.length),
+      // Voice input is archived, so never on. Still sent: a relay from before the archive requires the field and would drop the beat.
+      stt: false,
       sqlite: { fts5: this.fts5 },
       ...(free !== null ? { disk_free_bytes: free } : {}),
       ...(byAge ? { media_by_age: byAge } : {}),

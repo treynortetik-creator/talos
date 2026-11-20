@@ -75,7 +75,6 @@ function repo(omit: string[] = []) {
   const src = join(T, 'src')
   mkdirSync(join(src, 'scripts'), { recursive: true })
   git(src, 'init', '-q', '-b', 'main')
-  writeFileSync(join(src, 'scripts/mic-preflight.mjs'), "console.log('ok')\n")
   for (const [f, text] of Object.entries(FIXTURE).filter(([f]) => !omit.includes(f))) {
     mkdirSync(dirname(join(src, f)), { recursive: true })
     writeFileSync(join(src, f), text)
@@ -86,6 +85,7 @@ function repo(omit: string[] = []) {
   git(T, 'clone', '-q', '--bare', src, origin)
   const clone = join(T, 'clone')
   git(T, 'clone', '-q', origin, clone)
+  mkdirSync(join(clone, 'scripts'), { recursive: true }) // a folder git does not keep when it is empty
   const copy = join(clone, 'scripts', 'ci-local.sh')
   writeFileSync(copy, readFileSync(script, 'utf8'))
   copyCiLocalParts(join(clone, 'scripts'))

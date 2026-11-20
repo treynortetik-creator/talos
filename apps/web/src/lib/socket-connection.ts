@@ -105,8 +105,6 @@ export function createSocketConnection(c: SocketCtx) {
         }
         c.ready = true
         c.connection++
-        c.uploadAbort?.abort() // an upload begun on the old connection: the flush below starts it again
-        c.round++
         c.attempt = 0
         c.restartUntil = 0
         c.lastPong = now()

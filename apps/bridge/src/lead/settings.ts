@@ -100,8 +100,11 @@ export type LeadSettingsOpts = {
   protect?: readonly string[]
 }
 
-const READERS = ['Read', 'Grep', 'Glob'] as const
-const WRITERS = ['Edit', 'Write', 'NotebookEdit'] as const
+/** Claude Code matches a file path in a rule with Read( ) for every reading tool and Edit( ) for every writing one, and with no other
+ * tool name (Write( ), NotebookEdit( ), Grep( ), Glob( ) never match, MultiEdit is no tool: 2.1.39 and 2.1.322 alike), so a path rule is
+ * one of those two (test/path-rules-read-edit.test.ts). */
+const READERS = ['Read'] as const
+const WRITERS = ['Edit'] as const
 
 function needAbs(p: string, what: string): string {
   if (!p || !isAbsolute(p)) throw new Error(`${what} must be an absolute path`)

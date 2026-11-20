@@ -57,13 +57,13 @@ export const useTerminalSessions = create<TerminalSessionsState>((set, get) => (
 export function resumeSentence(outcome: ResumeOutcome, verb: 'resume' | 'start'): string {
   switch (outcome) {
     case 'asked':
-      return `Asked to ${verb} the session. It shows here as soon as it is up.`
+      return `Asked to ${verb} your agent. It shows here as soon as it is up.`
     case 'already_pending':
-      return `A ${verb} is already waiting. It shows here as soon as the session is up.`
+      return `A ${verb} is already waiting. It shows here as soon as your agent is up.`
     case 'park_pending':
       return 'A park is pending; try again in a moment.'
     case 'failed':
-      return `Couldn't ask to ${verb} the session. Send the thread a message instead.`
+      return `Couldn't ask to ${verb} your agent. Send the thread a message instead.`
   }
 }
 

@@ -199,7 +199,7 @@ describe('Copy diagnostics (D62)', () => {
     expect(sent).toContain('Running in: Browser')
     expect(sent).toContain('Mac app: 0.9.1') // the version reaches the pasted text through the real button
     expect(sent).toMatch(/Relay version: \S+/)
-    expect(sent).toContain('Relay: OK')
+    expect(sent).toContain('Talos server: OK')
     expect((await screen.findByRole('status')).textContent).toMatch(/Copied/)
   })
 

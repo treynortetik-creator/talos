@@ -18,9 +18,9 @@ export const THREAD_RENAMED_EVENT = 'thread.renamed'
 export const THREAD_ARCHIVED_EVENT = 'thread.archived'
 export const THREAD_UNARCHIVED_EVENT = 'thread.unarchived'
 export const SETTING_CHANGED_EVENT = 'setting.changed'
-/** Who made a change: the owner (a signed `config.patch`), an agent proposal the owner approved on a card, or one applied directly because the owner asked (agent_asked; agent_trust in older logs). */
+/** Who made a change: the owner (a signed `config.patch`), an agent proposal the owner approved on a card, or one applied directly because the owner asked (agent_asked; agent_trust in older logs), or one applied directly because the settings lock is off and nothing outside reached the agent since his words (agent_quiet: a thread's session set-up). */
 // agent_trust: written by bridges before the settings-on-request change (kept so older logs still read)
-export const CONFIG_EVENT_SOURCES = ['owner', 'agent_card', 'agent_trust', 'agent_asked'] as const
+export const CONFIG_EVENT_SOURCES = ['owner', 'agent_card', 'agent_trust', 'agent_asked', 'agent_quiet'] as const
 export type ConfigEventSource = (typeof CONFIG_EVENT_SOURCES)[number]
 
 /** The bug report a paired device sent, as stored by the relay. */

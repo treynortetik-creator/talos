@@ -124,6 +124,11 @@ export class ConfigFile {
     this.schema = opts.schema ?? AgentConfig
   }
 
+  /** The folders a thread may never work in, as the writes judge them (the agent folder too, when the process knows it). */
+  get folderRoots(): WorkerRoots {
+    return this.roots
+  }
+
   /** Loads (throws a readable error when missing or invalid). */
   load(): AgentConfigT {
     const raw = readJsonFile(this.path)

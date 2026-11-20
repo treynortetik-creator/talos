@@ -71,7 +71,8 @@ describe('D5 big paste', () => {
     expect(file.size).toBe(300_000)
     await waitFor(() => expect(box().value).toBe(''))
     expect(screen.queryByTestId('too-long')).toBeNull()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()) // the file is ready to go
+    // the file is ready to go: Send (always shown) turns on
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' }).getAttribute('aria-disabled')).toBeNull())
   })
 
   it('if that upload fails, the text is NOT cleared', async () => {

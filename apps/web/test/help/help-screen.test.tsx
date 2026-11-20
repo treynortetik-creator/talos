@@ -126,9 +126,9 @@ describe('the Help page', () => {
     }
   })
 
-  it('"iphone relay address" finds the limit about the iPhone app\'s relay address', async () => {
+  it('"iphone server address" finds the limit about the iPhone app\'s server address', async () => {
     open()
-    await userEvent.type(await screen.findByRole('searchbox', { name: 'Search Help' }), 'iphone relay address')
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'Search Help' }), 'iphone server address')
     expect(screen.getByTestId('help-count').textContent).toMatch(/^\d+ matching parts?\.$/)
     expect(screen.getByText(/fixed when the iPhone app is built/)).toBeTruthy()
   })

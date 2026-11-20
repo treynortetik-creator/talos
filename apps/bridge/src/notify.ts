@@ -11,7 +11,6 @@ import {
   type ShareContentT,
   sanitizeExternal,
   sanitizeMetaValue,
-  stripSpecialTokens,
   toHex,
   wrapExternal,
 } from '@talos-app/protocol'
@@ -20,16 +19,13 @@ import { say } from './owner-words.ts'
 import { cutToUnits } from './share/shortcut.ts'
 
 export type Notification = { content: string; meta: Record<string, string> }
-export type Trust = 'owner' | 'owner_voice' | 'external' | 'system' | 'agent'
+export type Trust = 'owner' | 'external' | 'system' | 'agent'
 export type Kind =
   | 'text'
-  | 'voice_note'
   | 'file'
   | 'card_action'
   | 'hook_event'
   | 'hook_digest'
-  | 'voice_delegation'
-  | 'voice_ended'
   | 'backlog'
   | 'system'
   | 'schedule_run'
@@ -257,32 +253,8 @@ export function shareItemNotification(a: {
 export function withDrivingMeta(n: Notification, driving: boolean): Notification {
   if (!driving) return n
   const trust = n.meta.trust
-  if (trust !== 'owner' && trust !== 'owner_voice') return n
+  if (trust !== 'owner') return n
   return { content: n.content, meta: { ...n.meta, driving: 'true' } }
-}
-
-export function voiceNoteNotification(a: {
-  thread: ThreadRef
-  messageId: string
-  ts: string
-  content: string
-  audioPath?: string | undefined
-  engine?: string | undefined
-  durationS?: number | undefined
-  writtenAt?: string | undefined
-  clock?: ClockFields | undefined
-}): Notification {
-  return {
-    content: a.writtenAt ? `${late(a.writtenAt)}\n${a.content}` : a.content,
-    meta: base(a.thread, a.messageId, a.ts, 'voice_note', 'owner', {
-      user: 'owner',
-      written_at: a.writtenAt,
-      audio_path: a.audioPath,
-      transcript_engine: a.engine,
-      duration_s: a.durationS === undefined ? undefined : Math.round(a.durationS),
-      ...a.clock,
-    }),
-  }
 }
 
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/"/g, "'")
@@ -413,51 +385,6 @@ export function hookDigestNotification(a: {
   return {
     content,
     meta: base(a.thread, a.frame.id, a.frame.ts, 'hook_digest', 'external', { batch_count: a.frame.events.length }),
-  }
-}
-
-type Ask = Extract<Frame, { type: 'voice.ask' }>
-type Ended = Extract<Frame, { type: 'voice.ended' }>
-
-/**
- * `trust` is trust mode (docs/SECURITY.md): the owner's spoken question is stamped `owner`, like typing. The call context
- * below it stays wrapped as data, because it can include the voice model's words and not only the owner's.
- */
-export function voiceDelegationNotification(a: {
-  thread: ThreadRef
-  frame: Ask
-  trust?: boolean
-  clock?: ClockFields | undefined
-}): Notification {
-  const f = a.frame
-  const question = stripSpecialTokens(sanitizeExternal(f.question, 4000))
-  const lines = [`Live call in ${oneLine(a.thread.name)}. Question (owner, spoken): ${question}`]
-  if (f.transcript_tail.length) {
-    lines.push(
-      "Recent call context (data, may include the voice model's words):",
-      wrapExternal(f.transcript_tail.map((t) => `${t.who}: ${t.text}`).join('\n'), { source: 'Call context' }),
-    )
-  }
-  return {
-    content: lines.join('\n'),
-    meta: base(a.thread, f.delegation_id, f.ts, 'voice_delegation', a.trust ? 'owner' : 'owner_voice', {
-      user: 'owner',
-      voice_session_id: f.voice_session_id,
-      voice_delegation_id: f.delegation_id,
-      ...a.clock,
-    }),
-  }
-}
-
-export function voiceEndedNotification(a: { thread: ThreadRef; frame: Ended }): Notification {
-  const f = a.frame
-  const body = [`Duration: ${f.duration_s} s`, ...f.transcript.map((t) => `[${t.at}] ${t.who}: ${t.text}`)].join('\n')
-  return {
-    content: wrapExternal(body, { source: 'Call record' }),
-    meta: base(a.thread, f.voice_session_id, f.ts, 'voice_ended', 'external', {
-      voice_session_id: f.voice_session_id,
-      duration_s: f.duration_s,
-    }),
   }
 }
 

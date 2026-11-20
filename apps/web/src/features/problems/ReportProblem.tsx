@@ -161,7 +161,7 @@ export function ReportProblem({
       {status.held > 0 && (
         <p className="m-0 text-sm text-warn">
           {status.held} repeat report{status.held === 1 ? ' was' : 's were'} held back (the same problem is sent once
-          every 10 minutes, and {PROBLEM_LIMITS.perSession} a session at most).
+          every 10 minutes, and {PROBLEM_LIMITS.perSession} for each visit at most).
         </p>
       )}
     </div>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# stt.sh: transcribe an audio file (a phone voice note, a recording) locally. Free, on-device, nothing is sent anywhere.
+# stt.sh: transcribe an audio file (a phone recording, a meeting) locally. Free, on-device, nothing is sent anywhere.
 #
 #   bash scripts/stt.sh <audio-file> [whisper-model]     whisper model default: base.en (about 150 MB; small.en is better, 490 MB)
 #

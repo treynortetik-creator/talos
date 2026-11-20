@@ -206,6 +206,22 @@ public struct TmuxCommands: Equatable, Sendable {
     ]
   }
 
+  /// The number key of a numbered Select (a tool permission's row, a question's row): `1` to `9`, by the digit itself, and nothing else.
+  /// Leaves copy mode first, in the same invocation.
+  public func sendSelectNumber(_ n: SelectNumber) -> [String] {
+    base + [
+      "if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "send-keys -t \(paneTarget) -X cancel", ";", "send-keys", "-t", paneTarget, "-l", "--", String(n.value),
+    ]
+  }
+
+  /// The owner's own words for a question's free-text row, typed literally (`-l`: tmux reads no key name in it). Only a text `PaneSelect.cleanAnswerText`
+  /// passed (`AnswerText` can be made from no other). Leaves copy mode first.
+  public func sendAnswerText(_ t: AnswerText) -> [String] {
+    base + [
+      "if-shell", "-F", "-t", paneTarget, "#{pane_in_mode}", "send-keys -t \(paneTarget) -X cancel", ";", "send-keys", "-t", paneTarget, "-l", "--", Self.literalArg(t.text),
+    ]
+  }
+
   /// Escape, by key name, for the computer-use permission dialog (`ComputerUseDismiss`): the only key sent to it. Leaves copy mode first,
   /// in the same invocation, as `sendDialogKey` does.
   public func sendEscape() -> [String] {
@@ -333,5 +349,23 @@ public struct TmuxCommands: Equatable, Sendable {
     var rows = out.components(separatedBy: "\n").map { $0.replacingOccurrences(of: "\r", with: "") }
     while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeLast() }
     return rows
+  }
+}
+
+/// The number key a Select row is chosen by: one digit, 1 to 9.
+public struct SelectNumber: Equatable, Sendable {
+  public let value: Int
+  public init?(_ n: Int) {
+    guard (1...9).contains(n) else { return nil }
+    value = n
+  }
+}
+
+/// A free-text answer that passed `PaneSelect.cleanAnswerText`: one line, at most 500 characters, no control or invisible character.
+public struct AnswerText: Equatable, Sendable {
+  public let text: String
+  public init?(_ raw: String) {
+    guard let t = PaneSelect.cleanAnswerText(raw), t == raw else { return nil }
+    text = t
   }
 }

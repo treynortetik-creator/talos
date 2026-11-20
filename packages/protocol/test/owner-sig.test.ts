@@ -130,7 +130,7 @@ describe('owner signatures', () => {
 describe('raw JSON rule (3.5)', () => {
   it('sign raw, zod-parse, verify the parsed value: FAILS when a defaulted field was omitted', async () => {
     const k = await createDeviceKey()
-    // A model with defaults: Thread. The raw object omits notify, voice_context and archived.
+    // A model with defaults: Thread. The raw object omits notify and archived.
     const raw = {
       id: 'general',
       name: 'General',

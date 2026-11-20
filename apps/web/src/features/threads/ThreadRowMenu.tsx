@@ -102,7 +102,7 @@ export function ThreadRowMenu({
     if (unread > 0) return client.markThreadRead(thread.id, readUpTo(client.store.getState()), { needConnection: true })
     return client.markThreadUnread(thread.id)
   }
-  const unreadFailed = 'Could not reach the relay. Try again when you are back online.'
+  const unreadFailed = 'Can’t reach Talos. Try again when you are back online.'
   const onToggleRead = () => {
     if (toggleRead()) setOpen(false)
     else setNote(unreadFailed)

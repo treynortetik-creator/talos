@@ -12,8 +12,6 @@ const THREAD_FORM = /^threads\.<id>\.([\w.]+)$/
 function show(path: string, value: unknown, scope?: string): string {
   if (path === 'default_thread' && scope !== undefined) return value === scope ? '"this thread"' : '"another thread"'
   if (value === undefined) return '(not set)'
-  if (path === 'agent.voice_persona')
-    return typeof value === 'string' && value ? `(set, ${value.length} characters)` : '(none)'
   if (path === 'theme')
     return value && typeof value === 'object' && Object.keys(value).length ? '(custom theme)' : '(default)'
   const j = JSON.stringify(value) ?? '(not set)'

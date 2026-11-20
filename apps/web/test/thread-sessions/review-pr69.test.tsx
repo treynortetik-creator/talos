@@ -28,7 +28,6 @@ const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms))
 const base = {
   kind: 'fixed' as const,
   notify: 'all' as const,
-  voice_context: 'recent' as const,
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 }
@@ -137,7 +136,7 @@ describe('PR69 review: Own session switch writes config', () => {
     }))
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status() }))
-    await click(screen.getByRole('switch', { name: 'Allow threads to have their own session' }))
+    await click(screen.getByRole('switch', { name: 'Allow threads to have their own agent' }))
     // Signing is async: the patch lands after the click settles.
     await waitFor(() => expect(patches(client).at(-1)?.patch).toEqual({ dedicated: { enabled: false } }))
     expect(patches(client).at(-1)?.osig).toBeTruthy()
@@ -274,7 +273,9 @@ describe('PR69 review: status', () => {
         status: status({ governor: { state: 'park_all', resets_at: '2026-10-30T18:00:00.000Z' } }),
       }),
     )
-    expect(screen.getByTestId('thread-sessions-paused').textContent).toMatch(/paused until .*Main keeps answering/)
+    expect(screen.getByTestId('thread-sessions-paused').textContent).toMatch(
+      /paused until .*The main agent keeps answering/,
+    )
   })
 
   it('a thread-scoped session.state and ready.thread_session_states never replace main in the session store', async () => {
@@ -403,7 +404,7 @@ describe('PR69 review: older Mac', () => {
     mount(client, <ThreadSessionsSection readOnly={false} />)
     expect(screen.getByTestId('thread-sessions').textContent).toContain('needs a newer Talos')
     // turning things off is never refused by the bridge (docs/OPTION-C.md); the app must still offer it
-    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own session' })
+    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own agent' })
     await click(sw)
     await waitFor(() => expect((client.store.getState().config as AgentConfigT).dedicated?.enabled).toBe(false))
   })

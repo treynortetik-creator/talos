@@ -209,7 +209,7 @@ export function PhoneHeader({
       {supported && (
         <button
           type="button"
-          aria-label={`Session${usage ? `: ${usage}` : ''}`}
+          aria-label={`Your agent${usage ? `: ${usage}` : ''}`}
           aria-haspopup="dialog"
           data-testid="session-trigger"
           data-phone-opener="session"

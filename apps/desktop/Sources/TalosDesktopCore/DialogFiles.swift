@@ -16,15 +16,19 @@ public struct DialogOffer: Codable, Equatable, Sendable {
   /// With a `devChannels` offer: which pieces of Main's start command differ from the one the owner last confirmed (`folder`, `program`,
   /// `flags`, `env`; names only, never a value). Empty = changed (or never confirmed) but the Mac cannot say what. nil = not a launch change.
   public var launch_changed: [String]?
+  /// A question's free-text option (the index in `options` of `Other…`), when the screen offers one; a card draws a text field for it and the
+  /// owner's signed text is typed through the key gate. nil for everything else.
+  public var free_text: Int?
   public var seen_at: String
   public var expires_at: String
 
   public static let launchPieces: Set<String> = ["folder", "program", "flags", "env"]
 
   public init(
-    id: String, kind: DialogReader.Kind, subject: String?, options: [String], cursor: Int?, launch_changed: [String]? = nil, seen_at: String,
-    expires_at: String
+    id: String, kind: DialogReader.Kind, subject: String?, options: [String], cursor: Int?, launch_changed: [String]? = nil, free_text: Int? = nil,
+    seen_at: String, expires_at: String
   ) {
+    self.free_text = free_text
     self.id = id
     self.kind = kind
     self.subject = subject
@@ -44,6 +48,7 @@ public struct DialogOffer: Codable, Equatable, Sendable {
     try c.encode(options, forKey: .options)
     try c.encode(cursor, forKey: .cursor)
     try c.encodeIfPresent(launch_changed, forKey: .launch_changed)
+    try c.encodeIfPresent(free_text, forKey: .free_text)
     try c.encode(seen_at, forKey: .seen_at)
     try c.encode(expires_at, forKey: .expires_at)
   }
@@ -58,7 +63,8 @@ public struct DialogOffer: Codable, Equatable, Sendable {
       options.count <= 6, kind == .login ? options.isEmpty : !options.isEmpty,
       options.allSatisfy({ (1...120).contains($0.count) }), subject.map({ (1...500).contains($0.count) }) ?? true,
       cursor.map({ options.indices.contains($0) }) ?? true, ISOTime.parse(seen_at) != nil, ISOTime.parse(expires_at) != nil,
-      launch_changed.map({ $0.count <= 4 && $0.allSatisfy(Self.launchPieces.contains) }) ?? true
+      launch_changed.map({ $0.count <= 4 && $0.allSatisfy(Self.launchPieces.contains) }) ?? true,
+      free_text.map({ kind == .agentQuestion && options.indices.contains($0) }) ?? true
     else { return false }
     return true
   }
@@ -199,7 +205,11 @@ public enum DialogResult {
 
   public enum Outcome: String, Sendable { case pressed, nothingPressed = "nothing_pressed", opened }
   /// Why nothing was pressed: the proof did not check out, the screen was not the dialog offered, or the dialog was answered already.
-  public enum Reason: String, Sendable { case screenChanged = "screen_changed", alreadyAnswered = "already_answered", unverified }
+  public enum Reason: String, Sendable {
+    case screenChanged = "screen_changed", alreadyAnswered = "already_answered", unverified
+    /// A key was sent and the Mac has not seen it take (a timeout, or the prompt still on screen): not "pressed", and not "nothing happened" either.
+    case unconfirmed
+  }
 
   public static func encode(
     dialogId: String, controlId: String, outcome: Outcome, choice: Int? = nil, label: String? = nil, reason: Reason? = nil, at: Double

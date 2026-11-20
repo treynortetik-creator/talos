@@ -64,7 +64,7 @@ const OTHER_DURABLE = new Set(['config.patch', 'device.enrolled', 'device.revoke
  * Frames the owner already believes went through when the Mac refuses them: the relay acked the message (the app shows
  * "sent") or answered the notification tap with "done". Their refusal is only final once the relay has it.
  */
-const REFUSAL_MUST_ARRIVE = new Set<string>(['native.act', 'message', 'voice_note'])
+const REFUSAL_MUST_ARRIVE = new Set<string>(['native.act', 'message'])
 const MAX_AGE_MS = 8 * 24 * 3600_000
 /** "Undo to here" is asked for and answered at once (the relay holds it 5 minutes): a request held longer is refused. */
 const UNDO_REQUEST_MAX_AGE_MS = 10 * 60_000
@@ -322,7 +322,7 @@ export class Inbound {
       // second copy is left to the one-by-one path below, which finds it seen and consumes it without a second note
       const inBacklog = new Set<string>()
       for (const it of items) {
-        if (it.frame.type !== 'message' && it.frame.type !== 'voice_note') continue
+        if (it.frame.type !== 'message') continue
         it.owner = await this.verifyOwner(it)
         const msgId = (it.frame as Of<'message'>).client_msg_id
         // A Run is never folded into a backlog note: that note gets a fresh time, and a Run is judged on its own age.
@@ -423,7 +423,7 @@ export class Inbound {
   }
 
   /**
-   * A replayed notification tap, message or voice note this Mac already refused. A send only says the frame was handed to
+   * A replayed notification tap or message this Mac already refused. A send only says the frame was handed to
    * the socket: the first refusal, and the `consumed` after it, may have died with that socket (the relay replaying the
    * frame is the sign), while the relay told the phone "done" or the app shows "sent". So the stored outcome is sent
    * again; the relay turns it into the failed-tap push, or into the message's failed row, once however often it hears it.
@@ -538,9 +538,7 @@ export class Inbound {
     const f = it.frame
     switch (f.type) {
       case 'message':
-      case 'voice_note':
       case 'card.resolve':
-      case 'voice.ask':
       case 'session.control':
       case 'thread.session.control':
       case 'agent.recover':
@@ -549,15 +547,13 @@ export class Inbound {
         const owner =
           it.owner ?? (await this.verifyOwner(it, f.type === 'undo.request' ? UNDO_REQUEST_MAX_AGE_MS : MAX_AGE_MS))
         if (!owner.ok) return this.ownerFailed(it, owner)
-        // the owner check is carried on the item to onMessage / onVoiceNote, which note his device once (inbound-messages.ts)
-        if (f.type === 'message' || f.type === 'voice_note') it.owner = owner
+        // the owner check is carried on the item to onMessage, which notes his device once (inbound-messages.ts)
+        if (f.type === 'message') it.owner = owner
         if (f.type === 'thread.session.control') return onThreadSessionControl(this.ctx, f, () => this.done(it))
         if (f.type === 'agent.recover') return onAgentRecover(this.ctx, f, it.raw, () => this.done(it))
         if (f.type === 'undo.request') return onUndoRequest(this.ctx, f, () => this.done(it))
         if (f.type === 'message') return this.onMessage(it, f)
-        if (f.type === 'voice_note') return this.onVoiceNote(it, f)
         if (f.type === 'card.resolve') return this.onCardResolve(it, f)
-        if (f.type === 'voice.ask') return this.onVoiceAsk(it, f)
         if (f.type === 'session.control') return this.ctx.session.onControl(f, () => this.done(it))
         return this.onConfigPatch(it, f)
       }
@@ -567,8 +563,6 @@ export class Inbound {
         return this.onHookEvent(it, f)
       case 'hook.digest':
         return this.onHookDigest(it, f)
-      case 'voice.ended':
-        return this.onVoiceEnded(it, f)
       case 'share.item':
         return this.onShareItem(it, f)
       case 'problem.item':
@@ -592,7 +586,7 @@ export class Inbound {
 
   // ---- cards -----------------------------------------------------------------------------------------------------
 
-  // ---- voice, hooks ------------------------------------------------------------------------------------------------
+  // ---- hooks ------------------------------------------------------------------------------------------------
 
   // ---- frame families ------------------------------------------------------------------------------------------
   // The handlers live in inbound-*.ts, one file per family. Each method here forwards to its handler with the same arguments.
@@ -672,14 +666,6 @@ export class Inbound {
     return messagesFrames.replyContext.apply(this, args)
   }
 
-  voiceNoteContent(...args: Parameters<typeof messagesFrames.voiceNoteContent>) {
-    return messagesFrames.voiceNoteContent.apply(this, args)
-  }
-
-  private onVoiceNote(...args: Parameters<typeof messagesFrames.onVoiceNote>) {
-    return messagesFrames.onVoiceNote.apply(this, args)
-  }
-
   private handleBacklog(...args: Parameters<typeof messagesFrames.handleBacklog>) {
     return messagesFrames.handleBacklog.apply(this, args)
   }
@@ -718,14 +704,6 @@ export class Inbound {
 
   private onConfigPatch(...args: Parameters<typeof configFrames.onConfigPatch>) {
     return configFrames.onConfigPatch.apply(this, args)
-  }
-
-  private onVoiceAsk(...args: Parameters<typeof eventsFrames.onVoiceAsk>) {
-    return eventsFrames.onVoiceAsk.apply(this, args)
-  }
-
-  private onVoiceEnded(...args: Parameters<typeof eventsFrames.onVoiceEnded>) {
-    return eventsFrames.onVoiceEnded.apply(this, args)
   }
 
   private onShareItem(...args: Parameters<typeof eventsFrames.onShareItem>) {

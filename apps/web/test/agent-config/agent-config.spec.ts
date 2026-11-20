@@ -21,16 +21,13 @@ test('an edit sends a merge patch with the current base_rev, touching only allow
   expect(typeof frame.osig).toBe('string')
 })
 
-test('Live-call context moved to Thread settings: it saves at once, from the latest thread list', async ({ page }) => {
+test('Thread settings has no Live-call context switch (the live call is archived), and Settings > Agent has none either', async ({
+  page,
+}) => {
   await page.goto('/t/general?settings=1') // the real app in fake mode: the cards harness has no thread screen
   await page.waitForFunction(() => Boolean((window as unknown as { __talos?: unknown }).__talos))
-  await page.getByRole('switch', { name: /Live-call context/ }).click()
-  await expect.poll(async () => (await sentFrames(page)).filter((f) => f.type === 'config.patch').length).toBe(1)
-  const frame = (await sentFrames(page)).filter((f) => f.type === 'config.patch').at(-1) as {
-    patch: { threads: Array<{ id: string; voice_context: string }> }
-  }
-  expect(Object.keys(frame.patch)).toEqual(['threads'])
-  expect(frame.patch.threads.find((t) => t.id === 'general')?.voice_context).toBe('none')
+  await expect(page.getByTestId('thread-switches')).toHaveCount(0)
+  await expect(page.getByRole('switch', { name: /Live-call context/ })).toHaveCount(0)
   await open(page, '/settings/agent')
   await expect(page.getByRole('switch', { name: /Live-call context/ })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Manage threads' })).toBeVisible()

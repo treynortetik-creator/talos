@@ -45,6 +45,21 @@ export function formatPeerLinkCode(origin: string, connId: string, token: string
 }
 
 /**
+ * A pasted code as a chat client or a shell may hand it over: trimmed, with ONE pair of surrounding <...>, "...", '...' or backticks
+ * and ONE trailing "." or "," taken off first (so it sits outside the pair). Nothing else is loosened: the result still goes
+ * through parsePeerLinkCode, whose host rules stay. Never throws, never logs.
+ */
+export function cleanPastedLinkCode(raw: string): string {
+  if (typeof raw !== 'string') return ''
+  let s = raw.trim()
+  s = s.replace(/[.,]$/, '') // one trailing dot or comma, outside any pair
+  const pairs: Record<string, string> = { '<': '>', '"': '"', "'": "'", '`': '`' }
+  const close = pairs[s[0] ?? '']
+  if (close !== undefined && s.length >= 2 && s.endsWith(close)) s = s.slice(1, -1)
+  return s.trim()
+}
+
+/**
  * Reads a pasted code. Refuses anything that is not exactly `talos-link:<hostname>[:443]/<conn_id>/<token>`: no scheme but ours,
  * no IP literal, no port but 443, no userinfo, no extra path, query or fragment. Surrounding whitespace is trimmed; inside, none.
  */

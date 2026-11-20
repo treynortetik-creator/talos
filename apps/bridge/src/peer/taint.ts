@@ -31,8 +31,8 @@ export function readTaint(ctx: Pick<BridgeContext, 'store'>): PeerTaint | undefi
   return undefined
 }
 
-/** Kinds that are the owner's own words to main: typed, spoken, a voice note, a file, a call, a Run tap, a backlog of them. */
-const OWNER_WORDS = new Set(['text', 'voice_note', 'file', 'voice_delegation', 'backlog'])
+/** Kinds that are the owner's own words to main: typed, a file, a Run tap, a backlog of them. */
+const OWNER_WORDS = new Set(['text', 'file', 'backlog'])
 
 /** Called for every notification handed to the main session. */
 export function notePeerTaint(ctx: Pick<BridgeContext, 'store' | 'clock'>, n: { meta: Record<string, string> }): void {
@@ -48,12 +48,7 @@ export function notePeerTaint(ctx: Pick<BridgeContext, 'store' | 'clock'>, n: { 
         at: ctx.clock.now(),
       }
       ctx.store.kvSet(KEY, JSON.stringify(taint))
-    } else if (
-      (trust === 'owner' || trust === 'owner_voice') &&
-      OWNER_WORDS.has(kind ?? '') &&
-      !n.meta.run &&
-      n.meta.share_only !== 'true'
-    ) {
+    } else if (trust === 'owner' && OWNER_WORDS.has(kind ?? '') && !n.meta.run && n.meta.share_only !== 'true') {
       ctx.store.kvDelete(KEY)
     }
   } catch {

@@ -139,17 +139,6 @@ public enum WebPolicy {
     return !isMediaPath(u)
   }
 
-  /// What the web view asks to capture.
-  public enum MediaKind: Sendable { case microphone, camera, cameraAndMicrophone }
-
-  /// Microphone only, and only for the relay's own page: the main frame on the relay origin, not under /media/ (the same
-  /// gate as script messages, 5.3). Dictation, voice notes and live calls need it. Camera, iframes, agent pages and any
-  /// other origin stay refused. macOS still asks the owner once for the app's own microphone permission.
-  public static func grantsMedia(_ kind: MediaKind, sender: Sender, mainFrameURL: URL?, relay: RelayOrigin) -> Bool {
-    guard kind == .microphone, let u = mainFrameURL, relay.contains(u) else { return false }
-    return accepts(sender, relay: relay)
-  }
-
   /// What this Mac app can do for the page, listed in the user agent so the page never asks for something an older app drops.
   public static let shellFeatures = ["pick-folder", ShellPane.shellFeature]
 

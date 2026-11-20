@@ -318,7 +318,7 @@ export function startCompanionFeed(
     subscribeCompanionReplies(schedule), // what the page holds or shows changes the frame
     client.onFrame('reply', (f) => {
       // The same filter as the native banner (notify.ts).
-      if (f.silent || f.voice_delegation_id) return
+      if (f.silent) return
       if (f.message.author !== 'agent') return
       const threadId = f.message.thread_id
       // Muted, or "Needs you only": notify.ts and the relay's push both keep a plain reply quiet for those, so the pet does too.

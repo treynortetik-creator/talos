@@ -6,7 +6,6 @@ import * as core from './core/index.ts'
 import * as hooks from './hooks/index.ts'
 import type { RelayServices } from './services.ts'
 import * as session from './session/index.ts'
-import * as voice from './voice/index.ts'
 
 export async function registerModules(services: RelayServices): Promise<void> {
   // The relay refuses to boot with a test hook registered outside NODE_ENV=test (spec 5.4).
@@ -16,6 +15,5 @@ export async function registerModules(services: RelayServices): Promise<void> {
   await core.register(services)
   await auth.register(services)
   await hooks.register(services)
-  await voice.register(services)
   await session.register(services)
 }

@@ -14,11 +14,12 @@ enum OnboardingLive {
     agent.holdStart = true
     var deps = OnboardingCoordinator.Deps(pairing: LivePhonePairing(config: { model.supervisor.currentConfig() }, web: web))
     deps.home = home
-    deps.provision = { progress, tools in
-      await provision(agent: agent, progress: progress, tools: tools, schedulerNote: { model.notice = $0 })
+    deps.provision = { progress, tools, ignoreSpace in
+      await provision(agent: agent, progress: progress, tools: tools, ignoreSpace: ignoreSpace, schedulerNote: { model.notice = $0 })
     }
     deps.isOnline = { await Reachability.githubAnswers() }
     deps.checkSignIn = { await signInCheck(model: model) }
+    deps.appleApps = LiveApps()
     deps.askAppleAgain = { _ = ProcessRunner.run(["/usr/bin/xcode-select", "--install"], timeout: 15) }
     deps.hasRelay = { web.hasRelay }
     deps.startAgent = { model.beginSession(model) }
@@ -34,8 +35,15 @@ enum OnboardingLive {
   /// Talos's code and tools, the agent's folder, then the scheduler. Each step is the existing one; this reports how far it is.
   static func provision(
     agent: AgentFolderFlow, progress: @escaping @Sendable (Int) -> Void, tools: @escaping @Sendable (OnboardingCoordinator.ToolsSignal) -> Void,
-    schedulerNote: @MainActor (String) -> Void
+    ignoreSpace: Bool = false, schedulerNote: @MainActor (String) -> Void
   ) async -> ProvisionOutcome {
+    // Apple's installer refuses when the Mac is short of room (it asked for 19.18 GB on macOS 26): ask the owner to make room BEFORE
+    // triggering it, never after it has put its own error on screen
+    if !ignoreSpace, !CloneProvisioner.commandLineToolsInstalled(),
+      let have = ToolsSpace.shortfall(available: ToolsSpace.availableBytes(home: NSHomeDirectory()))
+    {
+      return .needSpace(have: have)
+    }
     let ok = await agent.ensureCheckout { step, state in
       progress(ProvisionProgress.percent(step: step, state: state))
       guard step == .developerTools else { return }
@@ -83,6 +91,21 @@ enum OnboardingLive {
       case .unknown: return .init(claude: claude.path, env: env, signedIn: nil)
       }
     }.value
+  }
+}
+
+/// Apple's installer helper, found and raised through the system's own running-app list. `activate` also opens the helper's bundle again,
+/// which raises a window that is behind another app's even where a plain activate is not allowed to take the front.
+struct LiveApps: AppActivating {
+  func isRunning(bundleID: String) -> Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
+
+  func activate(bundleID: String) -> Bool {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { return false }
+    DispatchQueue.main.async {
+      app.activate(options: [.activateAllWindows])
+      if let url = app.bundleURL { NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in } }
+    }
+    return true
   }
 }
 

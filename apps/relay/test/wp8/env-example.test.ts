@@ -19,7 +19,7 @@ describe('.env.example', () => {
   })
 
   it('contains no real secret', () => {
-    for (const k of ['DATA_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'OPENAI_API_KEY', 'BRIDGE_PUBKEY'])
+    for (const k of ['DATA_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'BRIDGE_PUBKEY'])
       expect(assigned.get(k), k).toBe('')
   })
 

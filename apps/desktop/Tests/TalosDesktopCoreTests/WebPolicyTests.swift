@@ -67,20 +67,6 @@ struct WebPolicyTests {
     .init(isMainFrame: main, scheme: scheme, host: host, port: port, mainFramePath: path)
   }
 
-  @Test func theMicrophoneIsForTheRelaysOwnPageOnly() {
-    let page = u("https://relay.example.com/t/general")
-    #expect(WebPolicy.grantsMedia(.microphone, sender: sender(path: "/t/general"), mainFrameURL: page, relay: relay))
-    #expect(!WebPolicy.grantsMedia(.camera, sender: sender(path: "/t/general"), mainFrameURL: page, relay: relay))
-    #expect(!WebPolicy.grantsMedia(.cameraAndMicrophone, sender: sender(path: "/t/general"), mainFrameURL: page, relay: relay))
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(main: false), mainFrameURL: page, relay: relay))  // an iframe
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(host: "evil.example"), mainFrameURL: page, relay: relay))
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(host: ""), mainFrameURL: page, relay: relay))  // opaque
-    let agentPage = u("https://relay.example.com/media/x/page")
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(path: "/media/x/page"), mainFrameURL: agentPage, relay: relay))
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(), mainFrameURL: u("https://evil.example/"), relay: relay))
-    #expect(!WebPolicy.grantsMedia(.microphone, sender: sender(), mainFrameURL: nil, relay: relay))
-  }
-
   @Test func theNativeHandlerAcceptsOnlyTheRelaysMainFrame() {
     #expect(WebPolicy.accepts(sender(), relay: relay))
     #expect(WebPolicy.accepts(sender(path: "/t/general"), relay: relay))

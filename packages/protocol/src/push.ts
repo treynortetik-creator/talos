@@ -26,7 +26,6 @@ export type PushPayloadT = z.infer<typeof PushPayload>
 export type PushTemplate =
   | 'reply' // New reply in {thread}
   | 'needs_you' // Needs you in {thread}
-  | 'answer_ready' // Answer ready in {thread}
   | 'overnight' // Overnight: {n} items
   | 'session_stopped' // {agent}'s Mac session stopped
   | 'device_pinned' // New device pinned
@@ -62,7 +61,6 @@ export type PushTemplate =
 const PUSH_TEMPLATE_FLAGS: Record<PushTemplate, true> = {
   reply: true,
   needs_you: true,
-  answer_ready: true,
   overnight: true,
   session_stopped: true,
   device_pinned: true,
@@ -210,7 +208,6 @@ export function buildPushPayload(intent: PushIntent, config: PushConfig): PushPa
   const T = {
     reply: { body: `New reply in ${thread}`, kind: 'reply' },
     needs_you: { body: `Needs you in ${thread}`, kind: 'card' },
-    answer_ready: { body: `Answer ready in ${thread}`, kind: 'voice_result' },
     overnight: { body: `Overnight: ${n} items`, kind: 'digest' },
     session_stopped: { body: `${agent}'s Mac session stopped`, kind: 'system' },
     device_pinned: { body: 'New device pinned', kind: 'system' },

@@ -101,7 +101,7 @@ export function Banners() {
       key: 'two-bridges',
       testId: 'bridge-notice',
       icon: 'clock',
-      cause: 'Another bridge connected with your key and replaced an earlier one.',
+      cause: "Talos on another computer took your Mac's place.",
       detail: hostSteps(host).rotate,
     })
   }

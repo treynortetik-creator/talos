@@ -156,7 +156,7 @@ struct MacHomesConfigTests {
     w.sup.mutateConfig { $0.claudePath = path; $0.args = args }
     w.sup.drain()
     let disk = try #require(try ConfigFile.load(w.path))
-    #expect(disk.args == ["--new-flag", "1"])
+    #expect(disk.args == MainChannelFlag.ensured(["--new-flag", "1"]), "the launch box saves the Talos channel with the line")
     #expect(disk.env == ["TOKEN": "keep-me"])
     #expect(disk.session.id == c.session.id && disk.session.previousIds == ["p1", "p2"] && disk.session.confirmedAt == "t")
     // a refused edit changes nothing on disk

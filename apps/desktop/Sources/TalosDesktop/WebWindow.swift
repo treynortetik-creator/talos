@@ -744,24 +744,13 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
     return nil
   }
 
-  /// The microphone for the relay's own page only (dictation, voice notes, live calls); never the camera, an iframe, an
-  /// agent page or another origin (WebPolicy.grantsMedia). Until 2026-11-03 every request was refused (DESKTOP-SPEC 5.1).
+  /// The page never gets the camera or the microphone (voice input archived 2026-11-19, docs/archived/voice.md; refused the same
+  /// way before 2026-11-03, DESKTOP-SPEC 5.1). The agent's own microphone is a separate matter (entitlement and Info.plist text).
   func webView(
     _ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
     type: WKMediaCaptureType, decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
   ) {
-    let kind: WebPolicy.MediaKind
-    switch type {
-    case .microphone: kind = .microphone
-    case .camera: kind = .camera
-    default: kind = .cameraAndMicrophone
-    }
-    let path = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
-    let sender = WebPolicy.Sender(
-      isMainFrame: frame.isMainFrame, scheme: origin.protocol, host: origin.host,
-      port: origin.port == 0 ? nil : origin.port, mainFramePath: path)
-    guard let relay else { return decisionHandler(.deny) }  // the same relay navigation uses: none means no microphone
-    decisionHandler(WebPolicy.grantsMedia(kind, sender: sender, mainFrameURL: webView.url, relay: relay) ? .grant : .deny)
+    decisionHandler(.deny)
   }
 
   /// File attachments in the composer.

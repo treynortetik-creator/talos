@@ -45,16 +45,16 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
   return (
     <section aria-labelledby="thread-sessions-h" className="flex flex-col gap-3" data-testid="thread-sessions">
       <h2 id="thread-sessions-h" className="m-0 font-display text-xl font-semibold">
-        Thread sessions
+        Thread agents
       </h2>
       {!status && (
-        <p className="m-0 text-text-2">{placeWords('Your Mac needs a newer Talos for thread sessions.', host)}</p>
+        <p className="m-0 text-text-2">{placeWords('Your Mac needs a newer Talos for thread agents.', host)}</p>
       )}
       {/* turning it off is never refused, so the switch stays reachable on a Mac that no longer reports a status */}
       {(status || enabled) && (
         <div className="flex min-h-11 items-center justify-between gap-3">
           <label htmlFor="thread-sessions-on" className="text-sm font-medium">
-            Allow threads to have their own session
+            Allow threads to have their own agent
           </label>
           <Switch
             id="thread-sessions-on"
@@ -74,18 +74,18 @@ export function ThreadSessionsSection({ readOnly }: SettingsSectionProps) {
         <>
           <p className="m-0 text-sm text-text-2">
             {supported
-              ? 'Then turn on Own session in a thread’s settings. Everything else stays with the main session.'
-              : 'Your Mac app isn’t running thread sessions. Main answers every thread.'}
+              ? 'Then turn on Its own agent in a thread’s settings. Everything else stays with the main agent.'
+              : 'Your Mac app isn’t running thread agents. The main agent answers every thread.'}
           </p>
           {paused && (
             <p className="m-0 text-sm" role="status" data-testid="thread-sessions-paused">
               {warnOnly
-                ? 'Limits are close: thread sessions still start, but may run out sooner'
-                : 'Saving limits: thread sessions paused'}
+                ? 'Limits are close: thread agents still start, but may run out sooner'
+                : 'Saving limits: thread agents paused'}
               {g?.resets_at
                 ? `${warnOnly ? ', until' : ' until'} ${new Date(g.resets_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
                 : ''}
-              {warnOnly ? '.' : '. Main keeps answering.'}
+              {warnOnly ? '.' : '. The main agent keeps answering.'}
             </p>
           )}
           <Limits readOnly={readOnly} />
@@ -117,22 +117,22 @@ type LimitKey = 'max_live' | 'five_hour' | 'weekly' | 'park_all'
 const LIMITS: Array<{ key: LimitKey; label: string; hint: string; min: number; max: number }> = [
   {
     key: 'max_live',
-    label: 'Sessions running at once',
+    label: 'Agents running at once',
     hint: 'From 1 to 6. More use more of your plan.',
     min: 1,
     max: 6,
   },
   {
     key: 'five_hour',
-    label: 'Stop starting new sessions at (5-hour usage, %)',
+    label: 'Stop starting new agents at (5-hour usage, %)',
     hint: 'From 1 to 100.',
     min: 1,
     max: 100,
   },
-  { key: 'weekly', label: 'Stop starting new sessions at (weekly usage, %)', hint: 'From 1 to 100.', min: 1, max: 100 },
+  { key: 'weekly', label: 'Stop starting new agents at (weekly usage, %)', hint: 'From 1 to 100.', min: 1, max: 100 },
   {
     key: 'park_all',
-    label: 'Park every session at (usage, %)',
+    label: 'Park every agent at (usage, %)',
     hint: 'From 1 to 100. Each parks after its current turn.',
     min: 1,
     max: 100,
@@ -226,7 +226,7 @@ function Limits({ readOnly }: { readOnly: boolean }) {
       <div className="flex min-h-11 items-center justify-between gap-3">
         <label htmlFor={offId} className="text-sm">
           Ignore my usage limits
-          <span className="block text-xs text-text-2">Sessions then start and run whatever the usage says.</span>
+          <span className="block text-xs text-text-2">Agents then start and run whatever the usage says.</span>
         </label>
         <Switch
           id={offId}

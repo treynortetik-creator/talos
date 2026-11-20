@@ -7,7 +7,6 @@ export const SPEC_CORE_TOOLS = [
   'card',
   'card_result',
   'set_status',
-  'voice_progress',
   'list_threads',
   'create_thread',
   'archive_thread',

@@ -38,17 +38,12 @@ afterEach(async () => {
   await relay.stop()
 })
 
-const owned = () =>
-  relay.frames.filter((f) => f.direction === 'from_app' && (f.raw.type === 'message' || f.raw.type === 'voice_note'))
-const sentSummary = () => owned().map((f) => (f.raw.type === 'message' ? String(f.raw.text) : 'voice'))
+const owned = () => relay.frames.filter((f) => f.direction === 'from_app' && f.raw.type === 'message')
+const sentSummary = () => owned().map((f) => String(f.raw.text))
 
 async function queueThree() {
   await client.sendMessage({ threadId: 'general', text: 'first' })
-  await client.queueVoiceNote({
-    threadId: 'general',
-    blob: new Blob(['abc'], { type: 'audio/webm' }),
-    name: 'v.webm',
-  })
+  await client.sendMessage({ threadId: 'general', text: 'second' })
   await client.sendMessage({ threadId: 'general', text: 'third' })
   expect(client.outboxSize()).toBe(3)
 }
@@ -73,11 +68,10 @@ async function expireSession(reason: string | null = 'expired', wipes = true) {
 }
 
 describe('a session that expires with messages waiting', () => {
-  it('keeps the queue and sends each message and voice note once, in typed order, after sign-in', async () => {
+  it('keeps the queue and sends each message once, in typed order, after sign-in', async () => {
     await queueThree()
     await expireSession()
-    expect((await storage.all('outbox')).length).toBe(2)
-    expect((await storage.all('blobs')).length).toBe(1)
+    expect((await storage.all('outbox')).length).toBe(3)
     expect(owned()).toHaveLength(0)
 
     // sign in again: the page starts a client on the same storage, with the network back
@@ -86,7 +80,7 @@ describe('a session that expires with messages waiting', () => {
     await client.start({ pinned: true })
     await waitFor(() => owned().length === 3, 8000, 'all three delivered')
     await waitFor(() => client.outboxSize() === 0, 8000, 'queue empty after acks')
-    expect(sentSummary()).toEqual(['first', 'voice', 'third'])
+    expect(sentSummary()).toEqual(['first', 'second', 'third'])
 
     // another reconnect must not send any of them again
     const hellos = relay.frames.filter((f) => f.direction === 'from_app' && f.raw.type === 'hello').length
@@ -118,7 +112,7 @@ describe('sign-out and revoke still empty everything', () => {
   it('revoke after a 401 already kept the queue: the new key wipes it and nothing is sent', async () => {
     await queueThree()
     await expireSession()
-    expect((await storage.all('outbox')).length).toBe(2)
+    expect((await storage.all('outbox')).length).toBe(3)
     // the relay refuses the old key (revoked); signing in makes a new one
     await make().ensureDevice({ replace: true })
     expect((await storage.all('outbox')).length).toBe(0)
@@ -158,8 +152,7 @@ describe('a session replaced by a fresh sign-in keeps the queue', () => {
   it('another tab whose cookie was replaced by signing in again does not wipe what is waiting', async () => {
     await queueThree()
     await expireSession('signed_in_again', false)
-    expect((await storage.all('outbox')).length).toBe(2)
-    expect((await storage.all('blobs')).length).toBe(1)
+    expect((await storage.all('outbox')).length).toBe(3)
     expect((await storage.all('cache')).length).toBe(1) // the newer sign-in's chats are not emptied either
   })
 })
@@ -184,14 +177,14 @@ describe('only a session that ran out of time keeps the queue', () => {
 })
 
 describe('what is waiting is visible again after the cache was cleared', () => {
-  it('every kept message and voice note gets its row back, shown as waiting, and delivery marks it sent', async () => {
+  it('every kept message gets its row back, shown as waiting, and delivery marks it sent', async () => {
     await queueThree()
     await expireSession()
     online = false
     client = make()
     await client.start({ pinned: true })
     const rows = (client.store.getState().messages.general ?? []).filter((m) => m.author === 'owner')
-    expect(rows.map((m) => m.text ?? m.kind).sort()).toEqual(['first', 'third', 'voice_note'].sort())
+    expect(rows.map((m) => m.text).sort()).toEqual(['first', 'second', 'third'])
     expect(client.meta.getState().queuedIds).toHaveLength(3)
 
     // a row exists for each, so one that fails later can be seen and retried, and delivery marks them sent
@@ -207,16 +200,14 @@ describe('what is waiting is visible again after the cache was cleared', () => {
   })
 })
 
-describe('a recording that cannot be saved is not queued and leaves no row', () => {
-  it('queueVoiceNote throws, shows nothing, and nothing is sent later', async () => {
+describe('a message that cannot be saved is not queued and leaves no row', () => {
+  it('sendMessage whose save fails removes its row and queues nothing', async () => {
     const real = storage.put.bind(storage)
     storage.put = async (store, key, value) => {
-      if (store === 'blobs') throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      if (store === 'outbox') throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
       return real(store, key, value)
     }
-    await expect(
-      client.queueVoiceNote({ threadId: 'general', blob: new Blob(['abc'], { type: 'audio/webm' }), name: 'v.webm' }),
-    ).rejects.toThrow()
+    await expect(client.sendMessage({ threadId: 'general', text: 'hello' })).rejects.toThrow()
     expect(client.outboxSize()).toBe(0)
     expect(client.store.getState().messages.general ?? []).toHaveLength(0)
     storage.put = real
@@ -227,67 +218,9 @@ describe('a recording that cannot be saved is not queued and leaves no row', () 
     await waitFor(() => client.store.getState().connection === 'online', 4000, 'online')
     expect(owned()).toHaveLength(0)
   })
-
-  it('sendVoiceNote whose save fails removes its row and queues nothing', async () => {
-    const real = storage.put.bind(storage)
-    storage.put = async (store, key, value) => {
-      if (store === 'outbox') throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
-      return real(store, key, value)
-    }
-    await expect(
-      client.sendVoiceNote({
-        threadId: 'general',
-        attachment: {
-          media_id: 'md_01JZ0000000000000000000000',
-          kind: 'voice_note',
-          role: 'attachment',
-          mime: 'audio/webm',
-          name: 'v.webm',
-          size: 3,
-          sha256: 'a'.repeat(64),
-        },
-      }),
-    ).rejects.toThrow()
-    expect(client.outboxSize()).toBe(0)
-    expect(client.store.getState().messages.general ?? []).toHaveLength(0)
-  })
 })
 
-describe('nothing writes the queue after a sign-out', () => {
-  it('an upload that finishes after sign-out writes no row, and a failed wipe is not hidden', async () => {
-    let finishUpload: (() => void) | undefined
-    const slow = createSocketClient({
-      storage,
-      wsUrl: `${relay.wsBase}/ws`,
-      backoff: { baseMs: 20, maxMs: 40 },
-      isOnline: () => online,
-      fetchImpl: ((url: string, init?: RequestInit) =>
-        new Promise<Response>((resolve) => {
-          finishUpload = () => resolve(fetch(`${relay.httpUrl}${url}`, init))
-        })) as typeof fetch,
-    })
-    client.close()
-    client = slow
-    await client.ensureDevice()
-    await client.start({ pinned: true })
-    await client.queueVoiceNote({
-      threadId: 'general',
-      blob: new Blob(['abc'], { type: 'audio/webm' }),
-      name: 'v.webm',
-    })
-    online = true
-    client.close()
-    client = slow
-    await client.start({ pinned: true })
-    await waitFor(() => finishUpload !== undefined, 8000, 'the upload is in flight')
-    client.close() // signed out while it uploads
-    await clearLocalData(storage)
-    finishUpload?.()
-    await new Promise((r) => setTimeout(r, 300)) // let the late upload land, if it is going to
-    expect((await storage.all('outbox')).length).toBe(0)
-    expect((await storage.all('blobs')).length).toBe(0)
-  })
-
+describe('a revoked key', () => {
   it('replacing a revoked key tells the owner what was removed, and a wipe that fails is an error, not a silence', async () => {
     await queueThree()
     client.close()

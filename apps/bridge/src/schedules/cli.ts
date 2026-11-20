@@ -32,9 +32,13 @@ export async function cmdSchedules(env: BridgeEnv, args: string[], rawIo: CliIO)
   const io = inert(rawIo)
   const [sub, ...rest] = args
   if (sub === undefined || sub === 'list') return list(env, io)
-  if (sub === 'adopt') return adopt(env, io)
+  if (sub === 'adopt') {
+    const extra = rest.filter((a) => a !== '--yes')
+    if (extra.length) throw new SchedulesCliError('usage: talos-app schedules [adopt [--yes] | notify <message>]')
+    return adopt(env, io, rest.includes('--yes'))
+  }
   if (sub === 'notify') return notify(env, rest, io)
-  throw new SchedulesCliError('usage: talos-app schedules [adopt | notify <message>]')
+  throw new SchedulesCliError('usage: talos-app schedules [adopt [--yes] | notify <message>]')
 }
 
 async function list(env: BridgeEnv, io: CliIO) {
@@ -52,7 +56,19 @@ const yes = (a: string) => /^\s*y(es)?\s*$/i.test(a)
  * S3.7. List every job, approve each unapproved one (y/N) as it is on disk, offer to turn `both` jobs into session-only
  * jobs, and only then switch Chronos to session_runner talos + approval_required true. Safe to run again.
  */
-async function adopt(env: BridgeEnv, io: CliIO) {
+async function adopt(env: BridgeEnv, rawIo: CliIO, all = false) {
+  // --yes: every question answered yes, each one still printed (approve each job as it is on disk, and turn each `both` job
+  // into a session-only one), so it runs without a terminal. Every other rule still holds: a heartbeat that needs a passing
+  // test stays on hold, and Chronos still checks each change.
+  const io: CliIO = all
+    ? {
+        ...rawIo,
+        prompt: async (q: string) => {
+          rawIo.out(`${q}yes (--yes)`)
+          return 'y'
+        },
+      }
+    : rawIo
   const d = await discovery(env)
   const chronos = d.chronos
   if (!chronos) {

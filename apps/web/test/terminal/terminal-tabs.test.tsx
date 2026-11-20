@@ -115,7 +115,7 @@ describe('the strip', () => {
   it('has a tab for Main and every thread with its state word, as a tablist', () => {
     mount()
     list()
-    expect(screen.getByRole('tablist', { name: 'Sessions' })).toBeTruthy()
+    expect(screen.getByRole('tablist', { name: 'Agents' })).toBeTruthy()
     const names = screen.getAllByRole('tab').map((t) => t.textContent)
     expect(names).toEqual(['Mainworking', 'OC Testlive', 'Workparked', 'Penny Gothicneeds you', 'Brokenfailed'])
     expect(tab(/^Main/).getAttribute('aria-selected')).toBe('true')
@@ -238,7 +238,7 @@ describe('what stands in place of the terminal', () => {
     list()
     fireEvent.click(tab(/^OC Test/))
     expect(screen.queryByTestId('terminal-panel')).toBeNull()
-    expect(screen.getByText(/Typing here goes to OC Test's session/)).toBeTruthy()
+    expect(screen.getByText(/Typing here goes to OC Test's agent/)).toBeTruthy()
     fireEvent.click(tab(/^Work/))
     const panel = screen.getByTestId('terminal-panel')
     expect(panel.dataset.panel).toBe('resume')
@@ -259,7 +259,7 @@ describe('what stands in place of the terminal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Asking…' })) // a second press while waiting asks nothing more
     expect(posted.filter((m) => m.type === 'terminal_resume')).toHaveLength(1)
     fromMac({ type: 'terminal_resume_result', thread_id: 'p', outcome: 'asked' })
-    expect(screen.getByTestId('terminal-resume-note').textContent).toMatch(/Asked to resume the session/)
+    expect(screen.getByTestId('terminal-resume-note').textContent).toMatch(/Asked to resume your agent/)
     expect(screen.getByRole('button', { name: 'Resume' }).getAttribute('aria-disabled')).toBe('false')
     fireEvent.click(tab(/^Broken/))
     expect(screen.getByTestId('terminal-resume-note').textContent).toBe('')

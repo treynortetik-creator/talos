@@ -21,7 +21,8 @@ struct MainChannelFlagLaunchTests {
     #expect(r.wait(30) { r.starts.count >= 1 }, "started: \(r.audit)")
     let first = try #require(r.starts.first)
     #expect(first.contains("--dangerously-load-development-channels") && first.contains("server:talos-app"), "first start: \(first)")
-    #expect(r.config.args == ["--dangerously-skip-permissions"], "the owner's saved command is not rewritten")
+    #expect(r.config.args == ["--dangerously-skip-permissions", MainChannelFlag.flag, "server:talos-app"], "the saved command carries the flag too, once: \(r.config.args)")
+    #expect(r.audit.contains("channels_flag_saved"), "audit: \(r.audit)")
     // the update's restart is the same cold restart (`Supervisor.restartMain(onto:)` calls `restartCold`)
     r.sup.restartCold()
     #expect(r.wait(30) { r.starts.count >= 2 }, "restarted: \(r.starts) \(r.audit)")
@@ -61,7 +62,7 @@ struct MainChannelFlagLaunchTests {
       LaunchSeal.isConfirmed(
         r.config, fingerprint: r.config.launchFingerprint(resolvedClaude: claude, args: launched),
         parts: r.config.launchParts(resolvedClaude: claude, args: launched), trust: r.trust), "after: the seal covers the launched argv")
-    #expect(r.config.args == ["--dangerously-skip-permissions"], "the saved command is as the owner left it")
+    #expect(r.config.args == ["--dangerously-skip-permissions", MainChannelFlag.flag, "server:talos-app"], "the saved command carries the flag, once: \(r.config.args)")
     // the next restart (an update's) comes back with no stall and no second migration
     r.sup.restartCold()
     #expect(r.wait(30) { r.starts.count >= 2 && isRunning(r.phase()) }, "restart: \(r.phase()) \(r.audit)")
@@ -82,5 +83,49 @@ struct MainChannelFlagLaunchTests {
     r.start()
     #expect(r.wait(30) { r.sup.tickNow(); return r.sup.status.needsYou == .confirmColdStart }, "the owner is asked: \(r.audit)")
     #expect(!r.audit.contains("channels_flag_reseal") && r.config.confirmedLaunchMac == nil)
+  }
+
+  /// The permission picker's rewrite (and an agent's request) keeps the Talos channel in the saved command, once; on a supervisor that is
+  /// not Main's, or with the option off, nothing is added.
+  @Test func aPermissionModeChangeKeepsTheFlagInTheSavedCommandOnce() throws {
+    let r = try Rig(
+      .direct, scenario: "idle.sh", timings: Rig.defaultTimings(),
+      configure: { c in c.args = ["--dangerously-skip-permissions"] })
+    defer { r.teardown() }
+    r.tuneOptions = { $0.addsChannelsFlag = true }
+    _ = r.makeSupervisor()
+    r.sup.changePermissionMode(.ask, restart: false)
+    #expect(r.wait(10) { r.config.args == ["--permission-mode", "default", MainChannelFlag.flag, "server:talos-app"] }, "\(r.config.args)")
+    r.sup.changePermissionMode(.auto, restart: false)
+    #expect(r.wait(10) { r.config.args == ["--permission-mode", "auto", MainChannelFlag.flag, "server:talos-app"] }, "once: \(r.config.args)")
+    // a command that names the flag with another channel keeps it, and ours joins it
+    r.sup.mutateConfig { $0.args = [MainChannelFlag.flag, "server:other"] }
+    r.sup.changePermissionMode(.bypass, restart: false)
+    #expect(
+      r.wait(10) { Set(AutoConfirmGuard.channels(inArgv: r.config.args)) == ["server:other", "server:talos-app"] && r.config.args.contains("--dangerously-skip-permissions") },
+      "\(r.config.args)")
+  }
+
+  /// A seal over the saved flags that cannot be carried over (the Keychain is unreadable at this start) is never lost to the saved
+  /// command's rewrite: nothing is written, and the next start, with the Keychain back, carries it over with no new question.
+  @Test func anOldSealIsNotLostWhenTheKeychainCannotBeReadAtAStart() throws {
+    let r = try Rig(
+      .direct, scenario: "dev-dialog.sh", timings: Rig.defaultTimings(),
+      configure: { c in c.args = ["--dangerously-skip-permissions"] })  // sealed by the rig over exactly these saved flags
+    defer { r.teardown() }
+    r.tuneOptions = { $0.addsChannelsFlag = true }
+    _ = r.makeSupervisor()
+    r.trust.available = false
+    r.start()
+    #expect(r.wait(30) { r.starts.count >= 1 }, "started: \(r.audit)")
+    #expect(r.config.args == ["--dangerously-skip-permissions"], "the old seal is kept: nothing is written: \(r.config.args)")
+    #expect(!r.audit.contains("channels_flag_saved") && !r.audit.contains("channels_flag_reseal"), Comment(rawValue: r.audit))
+    r.sup.stop()
+    #expect(r.wait(20) { r.sup.tickNow(); if case .stopped(.user) = r.phase() { return true } else { return false } }, "\(r.phase())")
+    r.trust.available = true  // the Keychain is back
+    r.start()
+    #expect(r.wait(30) { r.sup.tickNow(); return isRunning(r.phase()) }, "running with no new question: \(r.phase()) \(r.audit)")
+    #expect(r.audit.contains("channels_flag_reseal"), "carried over now: \(r.audit)")
+    #expect(r.config.args == ["--dangerously-skip-permissions", MainChannelFlag.flag, "server:talos-app"], "\(r.config.args)")
   }
 }

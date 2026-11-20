@@ -1,7 +1,7 @@
 // The Clio graph in a real browser (fake mode: the made-up notes in lib/fakeV2.ts). From Clio, Graph opens the 3D view of
 // the notes and their links; it says how many it shows, draws into a canvas, and Back returns to Clio. The 3D library loads
 // only here. The graph fills the content area, zooms with the wheel, and a chosen note slides a panel in from the right.
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page, test } from '@playwright/test'
 
 // the notes are read only once the layout has stopped (200 ticks or 15 s) and the first fit is done: on a CI machine under
 // load that alone can take most of the default 30 s
@@ -42,6 +42,33 @@ async function settledNode(page: Page, i: number) {
   }
 }
 
+/** Two animation frames have been drawn since now: the page has had its chance to run what the last input set going. */
+async function nextFrames(page: Page) {
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(null)))))
+}
+
+/** The pointers the graph's controls hold are none: a held press was let go (read after the release, so any error the
+ * release threw has been delivered to the page-error listener before the caller checks it). */
+async function noPointersHeld(page: Page) {
+  await expect.poll(() => page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
+}
+
+/** A box that has stopped moving (a panel's slide is done), three reads in a row the same. */
+async function stillBox(target: Locator) {
+  const seen: string[] = []
+  await expect
+    .poll(
+      async () => {
+        const b = await target.boundingBox()
+        seen.push(JSON.stringify(b && { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width) }))
+        const last = seen.slice(-3)
+        return b !== null && last.length === 3 && last.every((v) => v === last[0])
+      },
+      { intervals: [100] },
+    )
+    .toBe(true)
+}
+
 /** A settled note whose spot is the canvas itself (not under the floating title or search), as an owner would click it. */
 async function clickableNode(page: Page) {
   const count = await page.evaluate(() => document.querySelectorAll('canvas').length)
@@ -63,7 +90,11 @@ test('Graph opens the notes in 3D, says what it shows, and Back returns to Clio'
   await expect(graph.getByRole('heading', { name: 'Clio graph' })).toBeVisible()
   await expect(graph.getByTestId('clio-graph-meta')).toHaveText(/^\d+ notes · \d+ links?$/)
   await expect(graph.locator('canvas')).toHaveCount(1, { timeout: 15_000 })
-  await page.waitForTimeout(1500)
+  // the layout has stopped and the first framing has begun (the graph turns slowly, so the notes never hold still: fitted is
+  // the sign; the zoom-to-fit glide may still be under way, and nothing compares this picture)
+  await expect
+    .poll(() => page.evaluate(() => (window as Hooks).__clioGraphFitted?.() === true), { timeout: 30_000 })
+    .toBe(true)
   await page.screenshot({ path: info.outputPath(`clio-graph-${info.project.name}.png`) })
   await graph.getByRole('searchbox', { name: 'Find a note' }).fill('zzzz-nothing')
   await expect(graph.getByText('No note matches.')).toBeVisible()
@@ -97,10 +128,8 @@ test('the wheel zooms the graph', async ({ page }, info) => {
   await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + (box?.height ?? 0) / 2)
   const before = await page.evaluate(() => (window as Hooks).__clioGraphCamera?.() ?? 0)
   await page.mouse.wheel(0, -400)
-  await page.waitForTimeout(500)
-  const after = await page.evaluate(() => (window as Hooks).__clioGraphCamera?.() ?? 0)
   expect(before).toBeGreaterThan(0)
-  expect(after).toBeLessThan(before)
+  await expect.poll(() => page.evaluate(() => (window as Hooks).__clioGraphCamera?.() ?? 0)).toBeLessThan(before)
 })
 
 test('choosing a note slides its panel in beside a live graph, links browse inside it, and Escape closes it', async ({
@@ -128,7 +157,7 @@ test('choosing a note slides its panel in beside a live graph, links browse insi
       })
       .toBe(0)
   }
-  await page.waitForTimeout(400)
+  await stillBox(panel) // the slide is done
   await page.screenshot({ path: info.outputPath(`clio-graph-panel-${info.project.name}.png`) })
   if (i === 2) {
     // fake notes sort as ideas, plan, todo; Todo links to Ideas: the link opens Ideas in the panel, Back returns to Todo
@@ -162,7 +191,7 @@ test('a mouse press released where the graph never heard it does not break the n
     c.dispatchEvent(new PointerEvent('pointerdown', { ...at, pointerId: 2, button: 0, buttons: 1 }))
     c.ownerDocument.dispatchEvent(new PointerEvent('pointerup', { ...at, pointerId: 2, button: 0, buttons: 0 }))
   })
-  await page.waitForTimeout(300)
+  await nextFrames(page) // the page has had its frames to throw; a handler's error is thrown on the event itself
   // synthetic pointers are not real active pointers, so the browser refuses their pointer capture: that is the test's own
   // doing, not the graph's; the crash it guards against was a TypeError reading a pointer's position
   expect(errors.filter((m) => !/^NotFoundError|PointerCapture/.test(m))).toEqual([])
@@ -248,9 +277,8 @@ for (const stray of STRAYS)
     }, stray.send)
     await page.mouse.move(spot.x + 30, spot.y - 20)
     await page.mouse.up()
-    await page.waitForTimeout(200)
+    await noPointersHeld(page)
     expect(errors).toEqual([])
-    expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
   })
 
 test('a press whose release was missed, then a new press and release, leaves nothing held', async ({ page }) => {
@@ -281,9 +309,8 @@ test('a press whose release was missed, then a new press and release, leaves not
     document.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch' }))
   }, held[0])
   await page.mouse.up()
-  await page.waitForTimeout(200)
+  await noPointersHeld(page)
   expect(errors).toEqual([])
-  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
 })
 
 test('a second mouse button pressed during a drag, then both released, leaves nothing held', async ({ page }) => {
@@ -298,9 +325,8 @@ test('a second mouse button pressed during a drag, then both released, leaves no
   await page.mouse.move(spot.x + 20, spot.y)
   await page.mouse.up({ button: 'right' })
   await page.mouse.up()
-  await page.waitForTimeout(200)
+  await noPointersHeld(page)
   expect(errors).toEqual([])
-  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
 })
 
 test('dragging a note throws nothing and leaves nothing held', async ({ page }) => {
@@ -314,9 +340,8 @@ test('dragging a note throws nothing and leaves nothing held', async ({ page }) 
   await page.mouse.down()
   await page.mouse.move(at.x + 40, at.y + 25, { steps: 5 })
   await page.mouse.up()
-  await page.waitForTimeout(200)
+  await noPointersHeld(page)
   expect(errors).toEqual([])
-  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
 })
 
 test('a press on the open note panel released on the graph, and the other way round, throw nothing', async ({
@@ -346,7 +371,6 @@ test('a press on the open note panel released on the graph, and the other way ro
   await page.mouse.down()
   await page.mouse.move(mid.x, mid.y, { steps: 4 })
   await page.mouse.up()
-  await page.waitForTimeout(200)
+  await noPointersHeld(page)
   expect(errors).toEqual([])
-  expect(await page.evaluate(() => (window as Hooks).__clioGraphPointers?.())).toEqual([])
 })

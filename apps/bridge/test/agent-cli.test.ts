@@ -38,6 +38,9 @@ function world(
     lastDevice?: { id: string; minutes: number }
     handoff?: { lead: string; minutes: number }
     sub?: string // a sub-thread of general with this id
+    dedicated?: string[] // threads with their own session
+    edit?: (c: Record<string, any>) => Record<string, any> // a change to the config after those
+    workers?: string // the supervisor's workers.json, as written
     badHandoffs?: boolean // a handoffs table the query cannot read
     history?: boolean
   } = {},
@@ -45,16 +48,34 @@ function world(
   const home = tempHome('talos-agentcli-')
   homes.push(home)
   const cfg = loadExampleConfig('default')
+  if (o.workers !== undefined) writeFileSync(join(home, 'workers.json'), o.workers)
   if (!o.noConfig)
     writeFileSync(
       join(home, 'config.json'),
-      JSON.stringify({
-        ...cfg,
-        ...(o.sub
-          ? { threads: [...cfg.threads, { ...cfg.threads[0], id: o.sub, name: 'Sub', parent_id: 'general' }] }
-          : {}),
-        ...(o.lock ? { settings_lock: true } : {}),
-      }),
+      JSON.stringify(
+        (o.edit ?? ((c: Record<string, unknown>) => c))({
+          ...cfg,
+          ...(o.sub
+            ? { threads: [...cfg.threads, { ...cfg.threads[0], id: o.sub, name: 'Sub', parent_id: 'general' }] }
+            : {}),
+          ...(o.lock ? { settings_lock: true } : {}),
+          ...(o.dedicated
+            ? {
+                dedicated: { enabled: true },
+                threads: [
+                  ...(o.sub ? [] : cfg.threads),
+                  ...o.dedicated.map((id) => ({
+                    ...cfg.threads[0],
+                    id,
+                    name: `Thread ${id}`,
+                    kind: 'agent',
+                    session: 'dedicated',
+                  })),
+                ],
+              }
+            : {}),
+        }),
+      ),
       {
         mode: 0o600,
       },
@@ -223,7 +244,7 @@ describe('(A) one rule for every agent session: nothing outside reached any thre
   const runs = (w: World, raw: Record<string, string>) => {
     for (const a of FOUR) expect(gate(w, a, { raw }), a.join(' ')).toBeUndefined()
   }
-  const REFUSES = /outside text.*ask again in his own words.*terminal/s
+  const REFUSES = /outside text.*terminal/s
   const sessions: Array<[string, Record<string, string>]> = [
     ['main', MAIN],
     ['a thread session', thread('trip')],
@@ -292,6 +313,98 @@ describe('(A) one rule for every agent session: nothing outside reached any thre
       for (const a of OTHERS) expect(gate(w, a, { raw }), a.join(' ')).toBeUndefined()
     })
   }
+  test('a tainted DEDICATED thread refuses every label, naming the thread; his words in it free them (P2 review, B1)', () => {
+    for (const raw of [thread('trip'), {}, thread('general'), MAIN]) {
+      const w = world({
+        dedicated: ['trip'],
+        owner: [{ thread: 'general', minutes: -2 }],
+        outside: { trip: -10 },
+        devices: devs,
+        lastDevice: { id: D1, minutes: -2 },
+      })
+      for (const r of refused(w, raw)) {
+        expect(r).toMatch(REFUSES)
+        expect(r).toContain('thread trip')
+      }
+    }
+    for (const raw of [thread('trip'), {}, thread('general'), MAIN]) {
+      const w = world({
+        dedicated: ['trip'],
+        owner: [
+          { thread: 'general', minutes: -2 },
+          { thread: 'trip', minutes: -1 },
+        ],
+        outside: { trip: -10 },
+        devices: devs,
+        lastDevice: { id: D1, minutes: -1 },
+      })
+      runs(w, raw)
+    }
+  })
+  describe('a session that outlives its thread being dedicated (the supervisor lets it finish its turn)', () => {
+    const busy = JSON.stringify({
+      v: 1,
+      supervisor: { pid: 1, heartbeat_at: '2026-11-19T00:00:00.000Z', workers_supported: true },
+      threads: {
+        trip: {
+          state: 'busy',
+          session_id: '6f1c2a9e-4b3d-4c8e-9a71-2d5e8f0b3c41',
+          tmux: 't-trip',
+          pane_pid: 1,
+          cwd: '/home/alex/trip',
+          error: null,
+        },
+      },
+    })
+    const parked = busy.replace('"busy"', '"parked"')
+    const tainted = (o: Parameters<typeof world>[0]) =>
+      world({
+        owner: [{ thread: 'general', minutes: -2 }],
+        outside: { trip: -10 },
+        devices: devs,
+        lastDevice: { id: D1, minutes: -2 },
+        ...o,
+      })
+    const switches: Array<[string, (c: Record<string, any>) => Record<string, any>]> = [
+      [
+        'set to shared',
+        (c) => ({ ...c, threads: c.threads.map((t: any) => (t.id === 'trip' ? { ...t, session: 'shared' } : t)) }),
+      ],
+      [
+        'archived',
+        (c) => ({ ...c, threads: c.threads.map((t: any) => (t.id === 'trip' ? { ...t, archived: true } : t)) }),
+      ],
+      ['the master switch off', (c) => ({ ...c, dedicated: { enabled: false } })],
+    ]
+    for (const [what, edit] of switches) {
+      test(`${what} mid-turn (workers.json still lists it busy): refused for every label; once it is parked, runs`, () => {
+        for (const raw of [MAIN, thread('trip'), {}]) {
+          for (const r of refused(tainted({ dedicated: ['trip'], edit, workers: busy }), raw)) {
+            expect(r).toMatch(REFUSES)
+            expect(r).toContain('thread trip')
+          }
+        }
+        runs(tainted({ dedicated: ['trip'], edit, workers: parked }), MAIN)
+      })
+    }
+    test('a workers.json that cannot be read fails closed (every thread counts); no file at all means no session', () => {
+      for (const bad of ['{ not json', JSON.stringify({ v: 2, threads: {} }), '[]']) {
+        const w = tainted({ workers: bad })
+        for (const r of refused(w, MAIN)) expect(r).toMatch(REFUSES)
+      }
+      runs(tainted({}), MAIN)
+    })
+  })
+  test('outside text in a thread Main serves, older than his words elsewhere: Main runs, as before', () => {
+    const w = world({
+      owner: [{ thread: 'general', minutes: -2 }],
+      outside: { trip: -10 },
+      devices: devs,
+      lastDevice: { id: D1, minutes: -2 },
+    })
+    runs(w, MAIN)
+    runs(w, thread('trip'))
+  })
   test('the owner spoke more than two hours ago and nothing outside came since: runs (no two-hour ask)', () => {
     runs(
       world({ owner: [{ thread: 'general', minutes: -300 }], devices: devs, lastDevice: { id: D1, minutes: -300 } }),

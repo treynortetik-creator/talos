@@ -86,7 +86,7 @@ export function UnderPicker({
         </p>
       )}
       <p className="m-0 text-xs text-text-2">
-        A sub-thread uses its parent's folder, model and MCP servers unless it sets its own.
+        A sub-thread uses its parent's folder, model and tools unless it sets its own.
       </p>
     </div>
   )

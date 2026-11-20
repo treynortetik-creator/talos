@@ -17,7 +17,7 @@ public final class MainAndWorkersPopupSource: NeedsYouPopupSource, @unchecked Se
 
   public func popupOffers() -> [NeedsYouPopupItem] {
     workers.popupOffers() + (main.mainPopupItem().map { [$0] } ?? []) + (main.apiKeyPopupItem().map { [$0] } ?? [])
-      + (main.safetyPopupItem().map { [$0] } ?? [])
+      + (main.safetyPopupItem().map { [$0] } ?? []) + (main.panePopupItem().map { [$0] } ?? [])
   }
 
   public func popupAnswer(thread: String, dialogId: String, action: NeedsYouPopupAction, completion: @escaping @Sendable (PopupAnswerResult) -> Void) {
@@ -70,6 +70,14 @@ extension Supervisor {
         return .nothing(.notOffered)
       }
       let r = safetyClick(choice, label: label, offer: offer, launch: &l)
+      launch = l
+      return r
+    }
+    if var l = launch, let offer = l.paneOffer, ExactText.equal(offer.id, dialogId) {
+      guard case .choose(let choice, let label) = action, let expires = ISOTime.parse(offer.expires_at), options.wallClock() / 1000 < expires else {
+        return .nothing(.notOffered)
+      }
+      let r = paneClick(choice, label: label, offer: offer, launch: &l)
       launch = l
       return r
     }

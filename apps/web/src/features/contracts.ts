@@ -25,22 +25,6 @@ export type EventRowProps = {
   onOpen?: (item: InboxItemT) => void
 }
 
-export type LiveCallButtonProps = {
-  threadId: string
-  /** No server voice key, Mac offline, or already on a call. */
-  disabled?: boolean
-}
-
-export type CallBarProps = {
-  threadId: string
-  onEnd: () => void
-}
-
-export type CallScreenProps = {
-  threadId: string
-  onEnd: () => void
-}
-
 export type SettingsSectionProps = {
   /** Config edits are read-only: the Mac is offline, or this device is reconnecting to the relay. */
   readOnly: boolean

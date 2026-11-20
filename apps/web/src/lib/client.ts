@@ -119,20 +119,13 @@ export type CardResolveInput = {
   note?: string
   /** Which button of a dialog card, as its index in the card's options. */
   choice?: number
+  /** The owner's own words for a dialog card's free-text option (signed in the frame). */
+  text?: string
   /**
    * "Always allow <kind>" (always-allow.ts): only with action 'primary' on a card of a SEND_KINDS kind, and only when the
    * bridge says ALWAYS_ALLOW_FEATURE. Goes inside the signed frame.
    */
   always?: true
-}
-
-export type VoiceAskArgs = {
-  voiceSessionId: string
-  delegationId: string
-  threadId: string
-  /** Exactly what the owner said; the frame is signed over it. */
-  question: string
-  transcriptTail: Array<{ who: 'owner' | 'agent'; text: string }>
 }
 
 /** Typed HTTP API (spec 3.8). Every shape comes from the route table in `@talos-app/protocol`. */
@@ -173,11 +166,8 @@ export interface TalosClient {
     /** Refuse (`NotSentError`, `mac_offline`) before anything is stored when the message could only be queued: a pane Run is never queued. */
     requireLive?: boolean
   }): Promise<SendResult>
-  sendVoiceNote(args: { threadId: string; attachment: AttachmentRefT }): Promise<SendResult>
-  /** Signs and sends a `voice.ask` (the owner speaking through the voice model; side effects only via a card). */
-  sendVoiceAsk(args: VoiceAskArgs): Promise<SendResult>
   /**
-   * Subscribes to a frame type as it arrives from the relay (`voice.state`, `reply` with `voice_delegation_id`,
+   * Subscribes to a frame type as it arrives from the relay (`reply`,
    * `card.update`, ...). State-bearing frames also update `store`; this is for things the store does not keep.
    */
   onFrame<T extends FrameType>(type: T, listener: (frame: FrameOf<T>) => void): () => void
@@ -239,11 +229,6 @@ export interface TalosClient {
    * with `TalosClientError` when offline, not pinned, or the relay refuses it (`error{ref}`).
    */
   sendAppRequest?(frame: Record<string, unknown>): Promise<void>
-  /**
-   * Tells the relay a person is here while the screen shows (throttled, never while hidden). A live voice call needs no
-   * touching, so it calls this on a timer to keep spoken answers from also buzzing the phone.
-   */
-  reportPresence?(): void
   /** Forces a reconnect attempt now ("Retry now"). */
   reconnect(): void
   /**

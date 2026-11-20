@@ -6,7 +6,6 @@ the repo, start at [`AGENTS.md`](../AGENTS.md).
 ```
  Phone / desktop PWA  ──HTTPS + WSS (passkey session)──▶  Relay (Hono, Node 24, SQLite on a volume)
                                                             ▲   │  /hook/<integration>/<id>  ◀── Slack, GitHub, Gmail script ...
-                                                            │   │  /api/voice/session ──▶ voice model (key stays on the relay)
                                       outbound WSS (Ed25519 challenge)
                                                             │   ▼
  Mac: Bridge (Bun, MCP stdio server "talos-app")  ⇄  live Claude Code session (channel notifications in, tools out)
@@ -25,18 +24,18 @@ the repo, start at [`AGENTS.md`](../AGENTS.md).
 Every folder with a `package.json` is a pnpm workspace package (`pnpm-workspace.yaml`); the Swift app and the Claude Code
 plugin are the two parts that are not.
 
-| Path                    | Role                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `packages/protocol`     | Frames, models, zod schemas, canonical JSON, signatures, route table. The single source of truth.                   |
-| `packages/testkit`      | `FakeRelay`, `FakeBridge`, `FakeApp`, `FakeClaude`, fake clock, fixtures, contract suites.                          |
-| `packages/integrations` | Verifiers, normalizers, pollers, setup specs, Apps Script texts. `./catalog` is the browser-safe part.              |
-| `apps/relay`            | HTTP + WebSocket server (Hono, Node 24, SQLite). Source folders: `core`, `auth`, `hooks`, `voice`, `session`, `v2`. |
-| `apps/web`              | The PWA (React 19, Vite).                                                                                           |
-| `apps/bridge`           | The Mac side (Bun): MCP channel server, local history, media, STT/TTS, device pins, the `talos-app` command.        |
-| `apps/mobile`           | The iPhone app: a Capacitor shell that loads the web app from the relay.                                            |
-| `apps/desktop`          | The Mac menu-bar app (Swift, built with Swift Package Manager, not pnpm). See `docs/desktop.md`.                    |
-| `e2e`                   | End-to-end suite: the built relay, the built app and the real bridge together.                                      |
-| `plugins/talos-app-mod` | Optional Claude Code plugin that gives the bridge a closer view of the session. See its README.                     |
+| Path                    | Role                                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `packages/protocol`     | Frames, models, zod schemas, canonical JSON, signatures, route table. The single source of truth.          |
+| `packages/testkit`      | `FakeRelay`, `FakeBridge`, `FakeApp`, `FakeClaude`, fake clock, fixtures, contract suites.                 |
+| `packages/integrations` | Verifiers, normalizers, pollers, setup specs, Apps Script texts. `./catalog` is the browser-safe part.     |
+| `apps/relay`            | HTTP + WebSocket server (Hono, Node 24, SQLite). Source folders: `core`, `auth`, `hooks`, `session`, `v2`. |
+| `apps/web`              | The PWA (React 19, Vite).                                                                                  |
+| `apps/bridge`           | The Mac side (Bun): MCP channel server, local history, media, TTS, device pins, the `talos-app` command.   |
+| `apps/mobile`           | The iPhone app: a Capacitor shell that loads the web app from the relay.                                   |
+| `apps/desktop`          | The Mac menu-bar app (Swift, built with Swift Package Manager, not pnpm). See `docs/desktop.md`.           |
+| `e2e`                   | End-to-end suite: the built relay, the built app and the real bridge together.                             |
+| `plugins/talos-app-mod` | Optional Claude Code plugin that gives the bridge a closer view of the session. See its README.            |
 
 `protocol`, `testkit` and `integrations` export TypeScript source (`./src/index.ts`, no build step); Vite, esbuild, Vitest
 and Bun all consume it.

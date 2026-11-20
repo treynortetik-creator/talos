@@ -63,7 +63,7 @@ describe('testHeartbeat on the socket', () => {
     const oldRelay = rig({ relayFeatures: [] })
     await expect(oldRelay.c.testHeartbeat(hbConfig(), { windowH: 24, withAgent: false })).rejects.toMatchObject({
       code: 'scheduler_unavailable',
-      message: expect.stringMatching(/relay/),
+      message: expect.stringMatching(/Talos online/),
     })
     expect(oldMac.sent).toHaveLength(0)
     expect(oldRelay.sent).toHaveLength(0)

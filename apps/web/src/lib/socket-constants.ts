@@ -1,11 +1,6 @@
 // Sizes, limits and timings of the socket client, and the errors its queue raises. Nothing here reads state.
 /** Re-sign a queued frame once it is this old: the Mac's own limit is 8 days, and this leaves two days to get it there. */
 export const RESIGN_AFTER_MS = 6 * 24 * 3600_000
-/** The relay's default for how long it keeps uploaded media (BUFFER_DAYS). A voice note signed longer ago than this may point at media it has deleted. */
-export const MEDIA_KEPT_MS = 7 * 24 * 3600_000
-
-/** A queued voice note that waited so long that the recording it points at is probably gone from the relay. */
-export class MediaGoneError extends Error {}
 /** A Run (a message with `intent: 'run'`, protocol run.ts) that waited in the queue longer than a day: the tap approved a script for that moment, so it is not sent. */
 export class RunStaleError extends Error {
   /** The frame was written to a socket before: the Mac may have it, and may have run it. */
@@ -48,22 +43,6 @@ export function overFrameLimit(frame: string): boolean {
 }
 /** After the app comes back to the front: how long a ping may go unanswered before the socket is called dead. */
 export const WAKE_PROBE_MS = 2_500
-export const TERMINAL_UPLOAD = new Set([400, 413, 415])
-/**
- * How many uploads of one voice note may fail in a row, on one connection that stays up, before it is shown as failed.
- * Every try starts with a live, confirmed socket, so a failure is the upload path itself (the relay answered the socket and
- * refused the upload, a daily upload limit, a recording that cannot be read), not a lost connection: a dropped socket
- * does not count, and a new connection starts the count again. Nothing the relay sends says how long such a refusal lasts
- * (its 429 now carries Retry-After, which this count does not read), so this is a judgement: one failure may be a blip, a second one a coincidence, a third
- * is a pattern. With the default 10 s between tries that is about 20 s of waiting before the text behind it is released.
- */
-export const VOICE_UPLOAD_TRIES = 3
-/** How long the flush waits for one queued voice upload before it lets go of it (it stays queued) and moves on. */
-export const VOICE_UPLOAD_DEADLINE_MS = 120_000
-/** The deadline grows with the recording: 30 s plus the time to send it at 50 KB/s, so a long note on a slow link is not cut at 120 s. */
-export const voiceUploadDeadlineMs = (bytes: number) =>
-  Math.max(VOICE_UPLOAD_DEADLINE_MS, 30_000 + Math.ceil(bytes / 50_000) * 1000)
-
 /** How long a config.patch waits for the Mac to apply it after the relay stored it. */
 export const CONFIG_APPLY_MS = 20_000
 

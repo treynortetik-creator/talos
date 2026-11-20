@@ -1,9 +1,8 @@
 // WP-V3: what /drive does with incoming replies: queue voice, fall back to the phone's voice after 20 s, count cards.
 import { AgentConfig, type MessageT } from '@talos-app/protocol'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { DriveController } from '../../src/features/drive/controller.ts'
 import { createVoiceQueue } from '../../src/features/drive/queue.ts'
-import { captureInFlight, resetAppUpdate } from '../../src/lib/appUpdate.ts'
 import { createFakeClient, type FakeClient } from '../../src/lib/fakeClient.ts'
 
 const NOW = Date.parse('2026-10-28T16:00:00.000Z')
@@ -40,15 +39,12 @@ function setup(
   opts: { fallback?: boolean; cards?: boolean; heard?: { seq: number; until: number }; remote?: boolean } = {},
 ) {
   const client: FakeClient = createFakeClient({ now: () => NOW })
-  const wipes: Array<() => void> = []
-  Object.assign(client, { onQueueWiped: (fn: () => void) => void wipes.push(fn) })
   if (!opts.cards) client.store.setState((s) => ({ ...s, cards: [] }))
   const timers: Timer[] = []
   let clock = 0
   let h = 0
   const spoken: string[] = []
   let cancelCount = 0
-  const sessions: string[] = []
   const audio = new Audio()
   let drive!: DriveController
   const queue = createVoiceQueue({
@@ -81,22 +77,6 @@ function setup(
       if (i >= 0) timers.splice(i, 1)
     },
     fallbackEnabled: () => opts.fallback ?? true,
-    recorder: async () => ({
-      stop: async () => ({
-        blob: new Blob(['x'], { type: 'audio/webm' }),
-        mime: 'audio/webm',
-        durationMs: 1500,
-        waveform: '',
-        endedByItself: false,
-      }),
-      cancel: () => {},
-      pause: () => {},
-      resume: () => {},
-      snapshot: async () => new Blob([]),
-      elapsedMs: () => 1500,
-      endedByItself: () => false,
-    }),
-    audioSession: { set: (t) => void sessions.push(t) },
     loadThread: () => 'general',
     saveThread: () => {},
   })
@@ -133,14 +113,10 @@ function setup(
       return { ...s, messages: { ...s.messages, [msg.thread_id]: [...(s.messages[msg.thread_id] ?? []), msg] } }
     })
   return {
-    wipe: () => {
-      for (const f of wipes) f()
-    },
     client,
     drive,
     queue,
     spoken,
-    sessions,
     cancels: () => cancelCount,
     advance,
     drivingOn,
@@ -254,53 +230,6 @@ describe('DriveController', () => {
     expect(t.spoken).toEqual([])
   })
 
-  it('talking: recording pauses playback and switches the audio session; sending shows Thinking', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    await t.queue.unlock()
-    t.push({ kind: 'voice_note', attachments: [voiceAtt('md_01JBF3V7Q8K2M4N6P8R0S2T4AB')] })
-    expect(t.queue.store.getState().playing).toBe(true)
-    await t.drive.beginTalk()
-    expect(t.queue.store.getState().playing).toBe(false)
-    expect(t.drive.store.getState().status).toBe('listening')
-    expect(t.sessions.at(-1)).toBe('play-and-record')
-    await t.drive.endTalk(true)
-    expect(t.sessions.at(-1)).toBe('playback')
-    expect(t.client.sent.some((f) => f.type === 'voice_note' && f.thread_id === 'general')).toBe(true)
-    // The old reply picks up where it stopped.
-    expect(t.queue.store.getState().playing).toBe(true)
-    expect(t.drive.store.getState().status).toBe('speaking')
-  })
-
-  it('after a question with nothing playing the status is Thinking until the agent answers', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(t.drive.store.getState().status).toBe('thinking')
-    t.push({ text: 'Done.' })
-    expect(t.drive.store.getState().status).toBe('ready')
-  })
-
-  it('a second question restarts the Thinking wait instead of keeping the first one running', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    t.advance(60_000)
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(t.drive.store.getState().status).toBe('thinking')
-    // 100 s after the first question, 40 s after the second: the first one's 90 s wait must not end the second's
-    t.advance(40_000)
-    expect(t.drive.store.getState().status).toBe('thinking')
-    t.advance(50_000) // 90 s after the second question: no answer came, so it gives up
-    expect(t.drive.store.getState().status).toBe('ready')
-  })
-
   it('history with a seq at or below the one seen at activation is never spoken', () => {
     const t = setup()
     t.drive.watch()
@@ -348,66 +277,6 @@ describe('DriveController', () => {
     t.audio.dispatchEvent(new Event('ended'))
     t.advance(2_000)
     expect(t.spoken).toEqual(['Inbox.'])
-  })
-
-  it('a talk holds off an automatic app reload from the first sound until its send settles, sent or cancelled', async () => {
-    resetAppUpdate()
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    await t.drive.beginTalk()
-    expect(captureInFlight(), 'listening').toBe(true)
-    await t.drive.endTalk(false)
-    expect(captureInFlight(), 'cancelled').toBe(false)
-    await t.drive.beginTalk()
-    expect(captureInFlight()).toBe(true)
-    await t.drive.endTalk(true)
-    expect(t.client.sent.some((f) => f.type === 'voice_note')).toBe(true)
-    expect(captureInFlight(), 'sent').toBe(false)
-  })
-
-  it("overlapping talks: a second talk's end never uncovers the first's upload, nor the first's the second", async () => {
-    resetAppUpdate()
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    const pending: { finish?: () => void } = {}
-    const upload = t.client.uploadMedia.bind(t.client)
-    t.client.uploadMedia = ((blob: Blob, meta: never) =>
-      new Promise((done) => {
-        pending.finish = () => void upload(blob, meta).then(done)
-      })) as typeof t.client.uploadMedia
-    await t.drive.beginTalk()
-    const first = t.drive.endTalk(true) // A uploads, held open
-    await new Promise((r) => setTimeout(r, 0))
-    expect(pending.finish, 'A is uploading').toBeDefined()
-    await t.drive.beginTalk() // B starts during A's upload
-    await t.drive.endTalk(false) // B is cancelled
-    expect(captureInFlight(), "A's audio is still only in memory").toBe(true)
-    pending.finish?.()
-    await first
-    expect(captureInFlight(), 'both settled').toBe(false)
-  })
-
-  it('the phone voice waits while Talk is held and never starts one while a clip plays', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    t.push({ text: 'Hello.' })
-    await t.drive.beginTalk()
-    t.advance(25_000)
-    expect(t.spoken).toEqual([])
-    await t.drive.endTalk(false)
-    t.advance(2_000)
-    expect(t.spoken).toEqual(['Hello.'])
-  })
-
-  it('starting to talk cancels speech that is already going', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    await t.drive.beginTalk()
-    expect(t.cancels()).toBe(1)
   })
 
   it('a clip that fails is skipped with a spoken note, and its text is still read by the phone', async () => {
@@ -462,21 +331,6 @@ describe('DriveController', () => {
     expect(t.spoken).toEqual(['After.'])
   })
 
-  it('a live call holds the queue and the phone voice until it ends, and cancels speech when it starts', () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    t.push({ text: 'During the call.' })
-    const before = t.cancels()
-    t.drive.setOnCall(true)
-    expect(t.cancels()).toBe(before + 1)
-    t.advance(30_000)
-    expect(t.spoken).toEqual([])
-    t.drive.setOnCall(false)
-    t.advance(2_000)
-    expect(t.spoken).toEqual(['During the call.'])
-  })
-
   it('a clip that breaks after it started gets its text read by the phone (its backup had been cancelled)', async () => {
     const t = setup()
     t.drive.watch()
@@ -492,278 +346,5 @@ describe('DriveController', () => {
     t.drive.onClipFail(cur, { started: true })
     t.advance(2_000)
     expect(t.spoken).toEqual(['Broke mid-clip.'])
-  })
-
-  it('a finished recording goes through the queue first, never uploaded from the controller', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    const queue = vi.spyOn(t.client, 'queueVoiceNote')
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(queue).toHaveBeenCalledTimes(1)
-    expect(queue.mock.calls[0]?.[0]).toMatchObject({ threadId: 'general' })
-  })
-
-  it('a save that fails while online sends the note directly', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValue(new Error('full'))
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(t.client.sent.some((f) => f.type === 'voice_note')).toBe(true)
-    expect(t.drive.store.getState().error).toBeNull()
-    expect(t.drive.store.getState().kept).toBe(0)
-  })
-
-  it('a save that fails while offline keeps the recording, and Retry saves it', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    t.client.store.setState((s) => ({ ...s, connection: 'offline' }))
-    const queue = vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValueOnce(new Error('full'))
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(t.drive.store.getState().error).toMatch(/Tap to try again/)
-    expect(t.drive.store.getState().kept).toBe(1)
-    expect(t.client.sent.some((f) => f.type === 'voice_note')).toBe(false)
-    await t.drive.retryNote()
-    expect(queue).toHaveBeenCalledTimes(2)
-    expect(queue.mock.calls[1]?.[0].blob).toBe(queue.mock.calls[0]?.[0].blob) // the same recording
-    expect(t.drive.store.getState().kept).toBe(0)
-    expect(t.drive.store.getState().error).toBeNull()
-  })
-
-  it('a note taken offline is kept, and the owner is told it will send later', async () => {
-    const t = setup()
-    t.drive.watch()
-    t.drivingOn()
-    t.client.store.setState((s) => ({ ...s, connection: 'offline' }))
-    const queue = vi.spyOn(t.client, 'queueVoiceNote')
-    await t.drive.beginTalk()
-    await t.drive.endTalk(true)
-    expect(queue).toHaveBeenCalledTimes(1)
-    expect(t.drive.store.getState().error).toBeFalsy()
-    expect(t.drive.store.getState().status).not.toBe('thinking')
-  })
-
-  describe('kept recordings are a list', () => {
-    const offlineSetup = () => {
-      resetAppUpdate()
-      const t = setup()
-      t.drive.watch()
-      t.drivingOn()
-      t.client.store.setState((s) => ({ ...s, connection: 'offline' }))
-      return t
-    }
-    const talk = async (t: ReturnType<typeof setup>) => {
-      await t.drive.beginTalk()
-      await t.drive.endTalk(true)
-    }
-
-    it('a second note that fails never drops the first: one Retry saves both, each once', async () => {
-      const t = offlineSetup()
-      const queue = vi
-        .spyOn(t.client, 'queueVoiceNote')
-        .mockRejectedValueOnce(new Error('full'))
-        .mockRejectedValueOnce(new Error('full'))
-      await talk(t)
-      await talk(t)
-      expect(t.drive.store.getState().kept).toBe(2)
-      await t.drive.retryNote()
-      expect(queue).toHaveBeenCalledTimes(4)
-      const blobs = queue.mock.calls.map((c) => c[0].blob)
-      expect(blobs[2]).toBe(blobs[0])
-      expect(blobs[3]).toBe(blobs[1])
-      expect(t.drive.store.getState().kept).toBe(0)
-      expect(captureInFlight()).toBe(false)
-    })
-
-    it('a Retry racing a new note removes only the note it retried', async () => {
-      const t = offlineSetup()
-      let release!: () => void
-      const gate = new Promise<void>((r) => {
-        release = r
-      })
-      const queue = vi
-        .spyOn(t.client, 'queueVoiceNote')
-        .mockRejectedValueOnce(new Error('full')) // the first note is kept
-        .mockImplementationOnce(async () => {
-          await gate // its Retry is in flight
-          return { clientMsgId: 'm_1', state: 'queued' }
-        })
-        .mockRejectedValueOnce(new Error('full')) // the second note, saved meanwhile, fails too
-      await talk(t)
-      const retry = t.drive.retryNote()
-      await talk(t)
-      expect(t.drive.store.getState().kept).toBe(2)
-      release()
-      await retry
-      expect(t.drive.store.getState().kept).toBe(1)
-      queue.mockClear()
-      await t.drive.retryNote()
-      expect(queue).toHaveBeenCalledTimes(1) // the second note is still there, and is saved by the next Retry
-      expect(t.drive.store.getState().kept).toBe(0)
-    })
-
-    it('Retry stays after the next talk clears the error, and a reload is held off meanwhile', async () => {
-      const t = offlineSetup()
-      vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValueOnce(new Error('full'))
-      await talk(t)
-      await t.drive.beginTalk() // clears the error line
-      await t.drive.endTalk(false)
-      expect(t.drive.store.getState().error).toBeNull()
-      expect(t.drive.store.getState().kept).toBe(1)
-      expect(captureInFlight()).toBe(true)
-      await t.drive.retryNote()
-      expect(captureInFlight()).toBe(false)
-    })
-
-    it('a Retry that fails again for several notes speaks once, not once per note', async () => {
-      const t = offlineSetup()
-      vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValue(new Error('full'))
-      await talk(t)
-      await talk(t)
-      await talk(t)
-      const say = vi.spyOn(t.drive, 'say')
-      await t.drive.retryNote()
-      expect(say.mock.calls.filter((c) => /Couldn't save that/.test(String(c[0])))).toHaveLength(1)
-      expect(t.drive.store.getState().kept).toBe(3)
-    })
-
-    it('a direct-send fallback upload that hangs times out, and the note stays kept', async () => {
-      const real = globalThis.setTimeout
-      const spy = vi
-        .spyOn(globalThis, 'setTimeout')
-        .mockImplementation(((fn: () => void, ms?: number, ...a: unknown[]) =>
-          real(fn, ms === 120_000 ? 100 : ms, ...a)) as unknown as typeof setTimeout)
-      try {
-        const t = setup()
-        t.drive.watch()
-        t.drivingOn()
-        vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValue(new Error('full'))
-        t.client.uploadMedia = vi.fn(() => new Promise<never>(() => {})) as typeof t.client.uploadMedia
-        await talk(t)
-        expect(t.drive.store.getState().kept).toBe(1)
-        expect(t.client.sent.some((f) => f.type === 'voice_note')).toBe(false)
-        expect(t.drive.store.getState().status).not.toBe('sending')
-      } finally {
-        spy.mockRestore()
-      }
-    })
-
-    it('a sign-out that wipes the queue clears the kept notes and releases the hold', async () => {
-      const t = offlineSetup()
-      vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValue(new Error('full'))
-      await talk(t)
-      expect(captureInFlight()).toBe(true)
-      t.wipe()
-      expect(t.drive.store.getState().kept).toBe(0)
-      expect(captureInFlight()).toBe(false)
-    })
-
-    it('Delete drops the kept notes and releases the hold', async () => {
-      const t = offlineSetup()
-      const queue = vi.spyOn(t.client, 'queueVoiceNote').mockRejectedValue(new Error('full'))
-      await talk(t)
-      await talk(t)
-      t.drive.discardKept()
-      expect(t.drive.store.getState().kept).toBe(0)
-      expect(captureInFlight()).toBe(false)
-      await t.drive.retryNote()
-      expect(queue).toHaveBeenCalledTimes(2) // nothing left to retry
-    })
-
-    describe('a wipe or a Delete while a Retry or a save is running', () => {
-      const gated = () => {
-        let release!: () => void
-        const gate = new Promise<void>((r) => {
-          release = r
-        })
-        return { gate, release }
-      }
-
-      it('a sign-out in the middle of a Retry sends no later note', async () => {
-        const t = offlineSetup()
-        const g = gated()
-        const queue = vi
-          .spyOn(t.client, 'queueVoiceNote')
-          .mockRejectedValueOnce(new Error('full'))
-          .mockRejectedValueOnce(new Error('full'))
-          .mockImplementationOnce(async () => {
-            await g.gate
-            return { clientMsgId: 'm_1', state: 'queued' }
-          })
-          .mockResolvedValue({ clientMsgId: 'm_2', state: 'queued' })
-        await talk(t)
-        await talk(t)
-        const retry = t.drive.retryNote()
-        t.wipe()
-        g.release()
-        await retry
-        expect(queue).toHaveBeenCalledTimes(3)
-        expect(t.drive.store.getState().kept).toBe(0)
-        expect(captureInFlight()).toBe(false)
-      })
-
-      it('Delete in the middle of a Retry sends none of the deleted notes', async () => {
-        const t = offlineSetup()
-        const g = gated()
-        const queue = vi
-          .spyOn(t.client, 'queueVoiceNote')
-          .mockRejectedValueOnce(new Error('full'))
-          .mockRejectedValueOnce(new Error('full'))
-          .mockImplementationOnce(async () => {
-            await g.gate
-            return { clientMsgId: 'm_1', state: 'queued' }
-          })
-          .mockResolvedValue({ clientMsgId: 'm_2', state: 'queued' })
-        await talk(t)
-        await talk(t)
-        const retry = t.drive.retryNote()
-        t.drive.discardKept()
-        g.release()
-        await retry
-        expect(queue).toHaveBeenCalledTimes(3)
-        expect(t.drive.store.getState().kept).toBe(0)
-      })
-
-      it('a save that fails after a sign-out is not kept again', async () => {
-        const t = offlineSetup()
-        const g = gated()
-        vi.spyOn(t.client, 'queueVoiceNote').mockImplementationOnce(async () => {
-          await g.gate
-          throw new Error('full')
-        })
-        const talking = talk(t)
-        await new Promise((r) => setTimeout(r, 10))
-        t.wipe()
-        g.release()
-        await talking
-        expect(t.drive.store.getState().kept).toBe(0)
-        expect(captureInFlight()).toBe(false)
-      })
-
-      it('Delete keeps a note that is still being saved when it fails', async () => {
-        const t = offlineSetup()
-        const g = gated()
-        vi.spyOn(t.client, 'queueVoiceNote')
-          .mockRejectedValueOnce(new Error('full')) // the first note is kept
-          .mockImplementationOnce(async () => {
-            await g.gate
-            throw new Error('full')
-          })
-        await talk(t)
-        const second = talk(t)
-        await new Promise((r) => setTimeout(r, 10))
-        t.drive.deleteKept() // the owner confirmed Delete for the first
-        expect(t.drive.store.getState().kept).toBe(0)
-        g.release()
-        await second
-        expect(t.drive.store.getState().kept).toBe(1)
-        expect(captureInFlight()).toBe(true)
-      })
-    })
   })
 })

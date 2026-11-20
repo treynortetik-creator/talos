@@ -116,19 +116,4 @@ describe('activity reports', () => {
     fakeWindow.dispatchEvent(new Event('wheel')) // a person scrolling still counts
     await waitFor(() => visibilityFrames().length === 1, 3000, 'wheel report')
   })
-
-  it('reportPresence (a live call) sends a visible frame, throttled and never while hidden', async () => {
-    await start()
-    ;(client as SocketClient).reportPresence?.()
-    await waitFor(() => visibilityFrames().length === 1, 3000, 'presence report')
-    ;(client as SocketClient).reportPresence?.() // inside 15 s
-    t += 20_000
-    visible = false
-    ;(client as SocketClient).reportPresence?.()
-    await new Promise((r) => setTimeout(r, 100))
-    expect(visibilityFrames()).toHaveLength(1)
-    visible = true
-    ;(client as SocketClient).reportPresence?.()
-    await waitFor(() => visibilityFrames().length === 2, 3000, 'second presence report')
-  })
 })

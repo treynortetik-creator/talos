@@ -12,7 +12,7 @@ import {
 } from '@talos-app/protocol'
 
 export const SHELL_KINDS: readonly AgentKindT[] = ['shell', 'monitor']
-export const MOD_MISSING_TEXT = 'Needs the Talos mod (Settings → Session).'
+export const MOD_MISSING_TEXT = 'Needs the Talos mod (Settings → Your agent).'
 export const EMPTY_TEXT = 'No agents running.'
 /** An empty snapshot from a mod that has since lapsed: the app cannot claim nothing runs now. */
 export const EMPTY_OFFLINE_TEXT = 'No agents when the mod was last seen.'

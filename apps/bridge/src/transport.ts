@@ -12,7 +12,7 @@ export interface Transport {
   readonly live: boolean
   /** Frames the relay stores (reply, card.*, transcript, thread.*, config.sync, inbox.update, device.pinned). */
   sendDurable(frame: Frame): Promise<DurableResult>
-  /** ack, error, receipt, status, voice.progress, history.page. Dropped when there is no socket. */
+  /** ack, error, receipt, status, history.page. Dropped when there is no socket. */
   sendEphemeral(frame: Frame): boolean
 }
 

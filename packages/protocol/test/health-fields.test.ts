@@ -7,7 +7,6 @@ const _beat = {
   bridge: { version: '0.4.1', started_at: '2026-10-29T12:00:00.000Z' },
   mod: { state: 'alive', last_seen: null, expected: true },
   tts: true,
-  stt: false,
   sqlite: { fts5: true },
 }
 const status = {

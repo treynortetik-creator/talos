@@ -104,7 +104,6 @@ beforeAll(async () => {
           kind: 'fixed',
           order: 5,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-10-28T00:00:00.000Z',
           session: 'dedicated',
@@ -185,10 +184,6 @@ describe('read_inbound: pointers to the notes an owner message names', () => {
     expect(performance.now() - t0).toBeLessThan(1000)
     expect(m.content.length).toBeGreaterThan(5980)
     expect(m.notes?.map((n) => n.path)).toEqual(['people/ada-quillen.md'])
-  })
-  test('a voice note from the owner gets them too', () => {
-    const m = one(OWNER, { kind: 'voice_note', trust: 'owner_voice' })
-    expect(m.notes).toHaveLength(2)
   })
   test('the same note is not pointed at again (once per session)', () => {
     expect(one().notes).toHaveLength(2)

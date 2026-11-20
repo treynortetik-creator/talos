@@ -197,11 +197,7 @@ export function createSocketState(c: SocketCtx) {
     set((s) => ({ unread: { ...s.unread, [threadId]: (ownValue(s.unread, threadId) ?? 0) + 1 } }))
   }
   const setQueued = (ids: string[]) => setMeta({ queuedIds: ids })
-  const refreshQueued = () =>
-    setQueued([
-      ...c.outbox.filter((e) => e.kind !== 'voice.ask').map((e) => e.clientMsgId),
-      ...c.voiceQueue.map((v) => v.clientMsgId),
-    ])
+  const refreshQueued = () => setQueued(c.outbox.map((e) => e.clientMsgId))
 
   const markFailed = (clientMsgId: string, kind: 'retry' | 'final') => {
     setMeta({ failed: { ...meta.getState().failed, [clientMsgId]: kind } })

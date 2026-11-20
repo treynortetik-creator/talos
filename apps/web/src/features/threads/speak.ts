@@ -7,7 +7,6 @@ import { SPEAK_FEATURE, SPEAK_POLL_MS } from '@talos-app/protocol'
 import { useSyncExternalStore } from 'react'
 import { type TalosClient, TalosClientError } from '../../lib/client.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
-import { getCallController } from '../voice/controller.ts'
 import { audioDock, subscribeDock } from './audioDock.ts'
 import { mediaUrl } from './media.ts'
 
@@ -92,12 +91,11 @@ export function cancelSpeak(id: string): void {
 }
 
 /**
- * True when the speaker belongs to someone else by the time the audio is ready: a call is live, a recording, a call or Drive
+ * True when the speaker belongs to someone else by the time the audio is ready: Drive
  * asked the dock to step aside since the tap, or another clip is playing right now. The tap is not a licence to talk over any of
  * that, minutes later and from another screen.
  */
 function speakerTaken(pausesAtTap: number, key: string): boolean {
-  if (getCallController().store.getState().phase !== 'idle') return true
   if (audioDock.pauseRequestCount() !== pausesAtTap) return true
   const s = audioDock.state()
   return Boolean(s.item && s.item.key !== key && s.playing)

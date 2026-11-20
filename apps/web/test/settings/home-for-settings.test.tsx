@@ -18,10 +18,10 @@ import { resetAgentDraft } from '../../src/features/agent-config/draftStore.ts'
 import { OfferedModels } from '../../src/features/session/OfferedModels.tsx'
 import { SettingsScreen, WRITES_SYNCED_CONFIG } from '../../src/features/settings/SettingsScreen.tsx'
 import { NotificationsSection } from '../../src/features/settings/sections.tsx'
+import { VoiceSettingsSection } from '../../src/features/spoken-replies/index.tsx'
 import { ThreadSessionsSection } from '../../src/features/thread-sessions/ThreadSessionsSection.tsx'
 import { ThreadEditor } from '../../src/features/threads/manage/ThreadEditor.tsx'
 import { ThreadSettings } from '../../src/features/threads/ThreadSettings.tsx'
-import { VoiceSettingsSection } from '../../src/features/voice/index.tsx'
 import { ClientProvider } from '../../src/lib/client.ts'
 import type { FakeClient } from '../../src/lib/fakeClient.ts'
 import { createMemoryStorage } from '../../src/lib/storage.ts'
@@ -55,7 +55,6 @@ const trip: ThreadT = {
   kind: 'fixed',
   order: 2,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 }
@@ -275,38 +274,12 @@ describe('Thread settings', () => {
       client,
     )
 
-  it('Live-call context saves at once from the LATEST list, never a stale copy', async () => {
+  it('has no Live-call context switch on any thread (the live call is archived)', () => {
     const client = setup()
     withTrip(client)
     open(client, 'trip')
-    // a second caller (the agent, another device) renames a thread after the sheet opened
-    client.store.setState((s) => {
-      const c = s.config as AgentConfigT
-      const threads = c.threads.map((x) => (x.id === 'general' ? { ...x, name: 'Renamed elsewhere' } : x))
-      return { ...s, config: { ...c, rev: c.rev + 1, threads }, threads }
-    })
-    await userEvent.click(screen.getByRole('switch', { name: /Live-call context/ }))
-    await waitFor(() => expect(cfg(client).threads.find((x) => x.id === 'trip')?.voice_context).toBe('none'))
-    const sent = lastPatch(client)?.threads as ThreadT[]
-    // the other edit is not overwritten: that thread goes without a name (a stale copy would send its old one back)
-    expect(sent.find((x) => x.id === 'general')).not.toHaveProperty('name')
-  })
-
-  it('a refusal leaves the switch on the saved value', async () => {
-    const client = setup()
-    withTrip(client)
-    open(client, 'trip')
-    client.failNextPatchWith('config_conflict')
-    await userEvent.click(screen.getByRole('switch', { name: /Live-call context/ }))
-    expect((await screen.findAllByRole('alert'))[0]?.textContent).toMatch(/changed the threads at the same time/)
-    expect(screen.getByRole('switch', { name: /Live-call context/ }).getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('Live-call context is hidden on the Inbox (M20)', () => {
-    const client = setup()
-    open(client, 'inbox')
     expect(screen.queryByRole('switch', { name: /Live-call context/ })).toBeNull()
-    expect(screen.queryByTestId('thread-switches')).toBeNull() // and no empty container left behind (R1-10)
+    expect(screen.queryByTestId('thread-switches')).toBeNull()
   })
 
   it('has no Default thread checkbox, and says archive is the only way to remove a thread (O8)', () => {
@@ -365,7 +338,7 @@ describe('Own session: model, effort, folder and idle time', () => {
     dedicated(client)
     const box = await mount(client)
     expect(screen.queryByText(/Model and effort changes apply when this thread's session restarts/)).toBeNull()
-    expect(box.textContent).toMatch(/Saving restarts the session when its current turn ends\./)
+    expect(box.textContent).toMatch(/Saving restarts this thread’s agent when it finishes its current reply\./)
   })
 
   it('model and effort save at once', async () => {
@@ -448,51 +421,47 @@ describe('Own session: model, effort, folder and idle time', () => {
 
 // ---- Voice -------------------------------------------------------------------------------------------------------------
 describe('Voice section', () => {
-  it('Voice-note replies moved here: saves at once, M7 words, reverts on refusal', async () => {
+  it('Spoken replies: saves at once, says what each choice does, reverts on refusal', async () => {
     const client = setup()
     renderWith(<VoiceSettingsSection readOnly={false} />, client)
-    const sel = screen.getByLabelText('Voice-note replies') as HTMLSelectElement
+    const sel = screen.getByLabelText('Spoken replies') as HTMLSelectElement
     const box = screen.getByTestId('spoken-replies')
     expect(box.textContent).toMatch(/Always still sends text if your Mac has no speech command/)
     expect(box.textContent).toMatch(/Never is overridden by Driving mode/)
-    await userEvent.selectOptions(sel, 'never')
-    await waitFor(() => expect(cfg(client).voice_notes.reply_with_voice).toBe('never'))
-    expect(lastPatch(client)).toEqual({ voice_notes: { reply_with_voice: 'never' } })
-    client.failNextPatchWith('config_conflict')
     await userEvent.selectOptions(sel, 'always')
-    expect((await within(box).findByRole('alert')).textContent).toBeTruthy()
-    expect(sel.value).toBe('never')
-  })
-
-  it('names the live-call voice as such, and edits the live-call personality with its own Save', async () => {
-    const client = setup()
-    renderWith(<VoiceSettingsSection readOnly={false} />, client)
-    expect(screen.getByLabelText('Live-call voice')).toBeTruthy()
-    const box = screen.getByLabelText('Live-call personality') as HTMLTextAreaElement
-    const save = screen.getByRole('button', { name: 'Save personality' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    await userEvent.type(box, 'Calm and brief.')
-    await userEvent.click(save)
-    await waitFor(() => expect(cfg(client).agent.voice_persona).toBe('Calm and brief.'))
-    expect(lastPatch(client)).toEqual({ agent: { voice_persona: 'Calm and brief.' } })
-    // too long never reaches the wire (the box stops at 4000)
-    expect(box.maxLength).toBe(4000)
-  })
-
-  it('a refused personality keeps the words in the box and says so', async () => {
-    const client = setup()
-    renderWith(<VoiceSettingsSection readOnly={false} />, client)
-    await userEvent.type(screen.getByLabelText('Live-call personality'), 'Keep me')
+    await waitFor(() => expect(cfg(client).voice_notes.reply_with_voice).toBe('always'))
+    expect(lastPatch(client)).toEqual({ voice_notes: { reply_with_voice: 'always' } })
     client.failNextPatchWith('config_conflict')
-    await userEvent.click(screen.getByRole('button', { name: 'Save personality' }))
-    expect((await screen.findByText(/Not saved/)).textContent).toBeTruthy()
-    expect((screen.getByLabelText('Live-call personality') as HTMLTextAreaElement).value).toBe('Keep me')
+    await userEvent.selectOptions(sel, 'never')
+    expect((await within(box).findByRole('alert')).textContent).toBeTruthy()
+    expect(sel.value).toBe('always')
+  })
+
+  it("an old 'when I send a voice note' choice reads as Never, and the list does not offer it (voice notes are off)", () => {
+    const client = setup()
+    client.store.setState((s) => {
+      const c = s.config as AgentConfigT
+      return { ...s, config: { ...c, voice_notes: { ...c.voice_notes, reply_with_voice: 'when_voice' } } }
+    })
+    renderWith(<VoiceSettingsSection readOnly={false} />, client)
+    const sel = screen.getByLabelText('Spoken replies') as HTMLSelectElement
+    expect(sel.value).toBe('never')
+    expect(Array.from(sel.options).map((o) => o.textContent)).toEqual(['Always', 'Never'])
+  })
+
+  it('has no live-call voice, microphone mode or personality, and keeps Driving', () => {
+    const client = setup()
+    renderWith(<VoiceSettingsSection readOnly={false} />, client)
+    expect(screen.queryByLabelText('Live-call voice')).toBeNull()
+    expect(screen.queryByLabelText('Live-call personality')).toBeNull()
+    expect(screen.queryByText('Microphone')).toBeNull()
+    expect(screen.queryByText(/Tap to talk/)).toBeNull()
+    expect(screen.getByTestId('driving-row')).toBeTruthy()
   })
 
   it('is read-only with the Mac offline', () => {
     renderWith(<VoiceSettingsSection readOnly />, setup({ macOffline: true }))
-    expect((screen.getByLabelText('Voice-note replies') as HTMLSelectElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Live-call personality') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Spoken replies') as HTMLSelectElement).disabled).toBe(true)
   })
 })
 
@@ -529,7 +498,7 @@ describe('Thread sessions limits', () => {
   it('saves the cap and each limit at once, only the touched key', async () => {
     const client = setup()
     const box = await mount(client)
-    const cap = within(box).getByLabelText('Sessions running at once')
+    const cap = within(box).getByLabelText('Agents running at once')
     await userEvent.clear(cap)
     await userEvent.type(cap, '2{Enter}')
     await waitFor(() => expect(cfg(client).dedicated?.max_live).toBe(2))
@@ -546,14 +515,14 @@ describe('Thread sessions limits', () => {
   it('out-of-range values never reach the wire and say what is allowed', async () => {
     const client = setup()
     const box = await mount(client)
-    const cap = within(box).getByLabelText('Sessions running at once')
+    const cap = within(box).getByLabelText('Agents running at once')
     for (const bad of ['0', '7', '2.5', '-1']) {
       await userEvent.clear(cap)
       await userEvent.type(cap, `${bad}{Enter}`)
       expect((await within(box).findByTestId('limits-error')).textContent).toMatch(/from 1 to 6/)
     }
     expect(patches(client)).toHaveLength(0)
-    const pa = within(box).getByLabelText(/Park every session/)
+    const pa = within(box).getByLabelText(/Park every agent/)
     await userEvent.clear(pa)
     await userEvent.type(pa, '101{Enter}')
     expect((await within(box).findByTestId('limits-error')).textContent).toMatch(/from 1 to 100/)
@@ -563,7 +532,7 @@ describe('Thread sessions limits', () => {
   it('a refusal from the Mac shows in its words, and the box is back on the saved number', async () => {
     const client = setup()
     const box = await mount(client)
-    const cap = within(box).getByLabelText('Sessions running at once') as HTMLInputElement
+    const cap = within(box).getByLabelText('Agents running at once') as HTMLInputElement
     client.failNextPatchWith('thread_session_refused', 'those thread session settings are not valid')
     await userEvent.clear(cap)
     await userEvent.type(cap, '4{Enter}')
@@ -576,7 +545,7 @@ describe('Thread sessions limits', () => {
   it('the inputs are disabled with the Mac offline', async () => {
     const client = setup({ macOffline: true })
     const box = await mount(client, true)
-    expect((within(box).getByLabelText('Sessions running at once') as HTMLInputElement).disabled).toBe(true)
+    expect((within(box).getByLabelText('Agents running at once') as HTMLInputElement).disabled).toBe(true)
   })
 })
 

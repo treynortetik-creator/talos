@@ -210,6 +210,10 @@ rm -f "$PL_OUT"
 NC_OUT="$(mktemp)"
 if bash scripts/nested-code-test.sh >"$NC_OUT" 2>&1; then ok "nested-code-test.sh: $(grep -c '^  ok' "$NC_OUT") cases green"
 else bad "nested-code-test.sh is red"; grep 'FAIL' "$NC_OUT" | head -20; fi
+BM_OUT="$(mktemp)"
+if bash scripts/bundle-modes-check-test.sh >"$BM_OUT" 2>&1; then ok "bundle-modes-check-test.sh: $(grep -c '^ok' "$BM_OUT") cases green"
+else bad "bundle-modes-check-test.sh is red"; grep 'FAIL' "$BM_OUT" | head -20; fi
+rm -f "$BM_OUT"
 RS_OUT="$(mktemp "${TMPDIR:-/tmp}/talos-rpath-out-XXXXXX")"
 if bash scripts/rpath-scrub-test.sh >"$RS_OUT" 2>&1; then ok "rpath-scrub-test.sh: $(grep -c '^  ok' "$RS_OUT") cases green"
 else bad "rpath-scrub-test.sh is red"; grep 'FAIL' "$RS_OUT" | head -20; fi

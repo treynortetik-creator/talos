@@ -39,9 +39,6 @@ export const LIMITS: Record<string, Limit[]> = {
     { capacity: 30, windowMs: MIN },
     { capacity: 600, windowMs: DAY },
   ],
-  voice: [{ capacity: 10, windowMs: HOUR }],
-  // Dictation: a tap per message. One budget for the owner; the daily megabyte cap (DICTATE_DAILY_MAX_MB) is on top.
-  dictate: [{ capacity: 40, windowMs: HOUR }],
   // Schedules (docs/SCHEDULES.md S2.4). sched_read is keyed per socket; the rest are one budget for the single owner.
   sched_read: [{ capacity: 12, windowMs: MIN }],
   sched_patch: [{ capacity: 30, windowMs: HOUR }],
@@ -93,8 +90,6 @@ const GLOBAL = new Set([
   'media',
   'media_refused',
   'problems',
-  'voice',
-  'dictate',
   'sched_patch',
   'sched_run_now',
   'sched_control',

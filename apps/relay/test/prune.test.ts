@@ -2,7 +2,6 @@
 import { fakeClock } from '@talos-app/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HelloGuard } from '../src/auth/limits.ts'
-import { pruneVoiceUsage } from '../src/voice/manager.ts'
 import { afterEachReset, makeHarness } from './auth/helpers.ts'
 import { startTestRelay, type TestRelay } from './core/harness.ts'
 
@@ -58,21 +57,5 @@ describe('retention of leftovers (#34)', () => {
     const inner = g as unknown as { fails: Map<string, number[]>; blocked: Map<string, number> }
     expect(inner.fails.size).toBe(0)
     expect(inner.blocked.size).toBe(0)
-  })
-
-  it('closed voice_usage rows older than 8 days are pruned; open and recent ones stay', async () => {
-    const clock = fakeClock()
-    relay = await startTestRelay({ clock })
-    const db = relay.relay.services.db
-    const ins = db.prepare('insert into voice_usage (voice_session_id, started_at, seconds, open) values (?, ?, 5, ?)')
-    const iso = (ms: number) => new Date(clock.now() - ms).toISOString()
-    ins.run('v_old', iso(9 * DAY), 0)
-    ins.run('v_open_old', iso(9 * DAY), 1)
-    ins.run('v_recent', iso(1 * DAY), 0)
-    expect(pruneVoiceUsage(relay.relay.services)).toBe(1)
-    const ids = (
-      db.prepare('select voice_session_id id from voice_usage order by id').all() as Array<{ id: string }>
-    ).map((r) => r.id)
-    expect(ids).toEqual(['v_open_old', 'v_recent'])
   })
 })

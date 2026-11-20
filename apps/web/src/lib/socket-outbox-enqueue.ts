@@ -24,7 +24,8 @@ export function createOutboxEnqueue(c: SocketCtx) {
       type: kind,
       id: newUlid(),
       ts: signedTs(),
-      ...(kind === 'voice.ask' ? {} : { thread_id: threadId, client_msg_id: clientMsgId }),
+      thread_id: threadId,
+      client_msg_id: clientMsgId,
       ...fields,
       device_id: k.deviceId,
     }
@@ -91,14 +92,9 @@ export function createOutboxEnqueue(c: SocketCtx) {
     fields: Record<string, unknown>,
   ): Promise<SendResult> {
     const began = c.epoch
-    const entry = await signAndStore(kind, threadId, clientMsgId, fields)
+    await signAndStore(kind, threadId, clientMsgId, fields)
     const state = sendState()
     if (state === 'sent') {
-      // Behind a voice note that is not on the wire yet: it is queued, and the flush sends both in order.
-      if (c.holdsForVoice(entry)) {
-        void c.flushOutbox()
-        return { clientMsgId, state: 'queued' }
-      }
       try {
         if (!(await c.sendEntry(clientMsgId, began))) return { clientMsgId, state: 'queued' }
       } catch {

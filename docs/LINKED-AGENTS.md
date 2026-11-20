@@ -28,7 +28,7 @@ A peer is named by what THIS Mac calls the other one (`work`, `home`). Linking i
 The code is a bearer credential for 15 minutes: whoever pastes it first links to whoever made it. If a code is stolen and used first,
 the owner's own `peer accept` fails with "this link code can't be used: it expired, was already used, or is wrong", leaves nothing behind on
 B, and A's thread gets the row "Link to <name> was taken by another install; run talos-app peer remove <name>" (A notices a second
-use of the code). Ask for a new code with `peer link` again (it replaces the old one). A relay that is not on public https cannot make a code:
+use of the code). Ask for a new code with `peer link` again once the old one has expired (15 minutes), or cancel it first with `talos-app peer remove <name>`: while a code is waiting, a second `peer link` is refused ("a link code is already waiting for <name>; use it or cancel it with talos-app peer remove <name>."). A relay that is not on public https cannot make a code:
 use the manual way below. `--cap N` works as below.
 
 ### Manual, two steps (the fallback)
@@ -82,7 +82,7 @@ reached main the bridge remembers which peers have spoken (kept across restarts)
   the owner.
 - A send to the speaking peer without `in_reply_to` counts as the reply to its latest message: one step further along the chain,
   the RESULT rule and the cap of 6 apply. An explicit `in_reply_to` keeps the plain rules.
-- The taint ends when the owner speaks to main: a typed message, a voice note, a file, a call. A card decision, a Run tap (an
+- The taint ends when the owner speaks to main: a typed message, a file. A card decision, a Run tap (an
   approval) and a share with no typed words do not end it; a share with the owner's own comment does.
 
 The limit: the bridge cannot see where a turn of the agent ends, so it cannot tell "still working on that message" from "moved on".

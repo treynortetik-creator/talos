@@ -48,3 +48,40 @@ test("a desktop window whose thread column is narrow (the sidebar beside it) get
   expect(Math.abs(box.width - row.width), 'box spans the row').toBeLessThan(2)
   expect(plus.y, 'plus is below the box').toBeGreaterThanOrEqual(box.y + box.height)
 })
+
+// Send is always on screen in its place (the owner, 2026-11-20: "there's no button to hit Send"). With nothing to send it is
+// drawn dimmed and does nothing; typing turns it on where it already is, so the row keeps its height on a phone and the box
+// keeps its width on a computer.
+for (const [name, size] of [
+  ['a phone', { width: 390, height: 844 }],
+  ['a wide column', { width: 1280, height: 800 }],
+] as const) {
+  test(`${name}: the empty box shows Send dimmed, it sends nothing, and typing turns it on with nothing moving`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size)
+    await page.goto('/t/general')
+    const field = page.getByLabel('Message', { exact: true })
+    await expect(field).toBeVisible()
+    const send = page.getByRole('button', { name: 'Send', exact: true })
+    await expect(send).toBeVisible()
+    await expect(send).toHaveAttribute('aria-disabled', 'true')
+    const empty = await geometry(page)
+    const emptySend = await send.boundingBox()
+    expect(empty.row.height, 'a row as high as its buttons').toBeGreaterThanOrEqual(empty.plus.height - 1)
+    const before = await page.getByTestId('msg-owner').count()
+    await send.click({ force: true }) // a real tap on the dimmed button: it lands, and does nothing
+    await field.focus()
+    await field.press('Enter')
+    await page.waitForTimeout(300)
+    expect(await page.getByTestId('msg-owner').count(), 'an empty Send sends nothing').toBe(before)
+    await field.fill('x')
+    await expect(send).not.toHaveAttribute('aria-disabled', 'true')
+    const typed = await geometry(page)
+    const typedSend = await send.boundingBox()
+    expect(Math.abs(typed.row.height - empty.row.height), 'the row keeps its height').toBeLessThan(1)
+    expect(Math.abs(typed.box.width - empty.box.width), 'the box keeps its width').toBeLessThan(1)
+    expect(Math.abs(typed.plus.y - empty.plus.y), 'plus does not move').toBeLessThan(1)
+    expect(typedSend && emptySend && Math.abs(typedSend.x - emptySend.x) < 1, 'Send does not move').toBe(true)
+  })
+}

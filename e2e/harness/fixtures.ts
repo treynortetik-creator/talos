@@ -180,14 +180,6 @@ export async function sendText(page: Page, text: string): Promise<void> {
   await page.getByTestId('composer').getByRole('button', { name: 'Send', exact: true }).click()
 }
 
-/** Hold-free voice note: tap the mic (locks), record a moment of the fake microphone, send. */
-export async function sendVoiceNote(page: Page, ms = 900): Promise<void> {
-  await page.getByTestId('mic').click()
-  await expect(page.getByTestId('recorder-locked')).toBeVisible()
-  await page.waitForTimeout(ms)
-  await page.getByRole('button', { name: 'Send voice note' }).click()
-}
-
 export const card = (page: Page, id: string) => page.locator(`[data-card-id="${id}"]`)
 
 export function cardIdFrom(result: { content: Array<{ text?: string }> }): string {

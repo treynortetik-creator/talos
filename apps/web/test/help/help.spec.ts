@@ -51,7 +51,7 @@ const STATUS = {
   beat: {
     mod: { state: 'alive', last_seen: '2026-10-29T20:00:00.000Z', expected: true },
     tts: true,
-    stt: true,
+
     sqlite: { fts5: true },
   },
 }

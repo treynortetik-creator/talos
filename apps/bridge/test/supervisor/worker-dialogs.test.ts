@@ -148,6 +148,7 @@ async function answerFor(
     ts?: string
     at?: string
     control?: string
+    frameId?: string
     card?: (c: CardT) => void
   } = {},
 ) {
@@ -164,7 +165,7 @@ async function answerFor(
   const raw = await signOwnerFrame(
     {
       v: 1,
-      id: '01JBF3V7Q8K2M4N6P8R0S2T4AA',
+      id: o.frameId ?? '01JBF3V7Q8K2M4N6P8R0S2T4AA',
       ts: o.ts ?? new Date(NOW).toISOString(),
       type: 'card.resolve',
       card_id: card.id,
@@ -296,9 +297,119 @@ describe('the answer', () => {
     x.pane.sendDialogKey = async (k: PtyDialogKey, kind?: string) =>
       (await send(k, kind)) && k === 'Enter' ? 'unknown' : 'sent'
     await x.d.answer(x.target, x.pane)
-    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 0 }) // counted, never repeated
-    expect(x.target.offer.enterSentFor).not.toBeNull()
+    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 0 }) // never repeated for this card
+    expect(x.target.offer.enterSentFor).toBeNull() // not answered for good: delivery is unknown
     expect(x.target.offer.declinedTrust).toBe(false)
+    // so the exit that follows is a crash, not the owner's stop: nothing to say, and the session is restarted as for any crash
+    expect(declinedTrustText(x.target.offer)).toBeNull()
+  })
+  /** A pane whose Enter is swallowed (the screen never changes) and answered with `reply`. */
+  const swallowEnter = (x: X, reply: PtySendResult) => {
+    x.pane.sendDialogKey = async (k: PtyDialogKey) => {
+      x.pane.keys.push(k)
+      return k === 'Enter' ? reply : 'sent'
+    }
+  }
+  const CTL2 = 'dc_01M6V2TGWJCH4P49F79Q2317CE'
+  const CTL3 = 'dc_01M6V2TGWJCH4P49F79Q2317CF'
+  const FRAME2 = '01JBF3V7Q8K2M4N6P8R0S2T4AB'
+  const FRAME3 = '01JBF3V7Q8K2M4N6P8R0S2T4AC'
+  it('an Enter that timed out on an unchanged screen is offered again after the 5 s memory, as a new card; the old card then presses nothing', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    swallowEnter(x, 'unknown')
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Enter'])
+    await x.sync()
+    expect(x.offer().id).toBe(first.id) // inside the memory: not offered again
+    x.advance(4.9)
+    await x.sync()
+    expect(x.offer().id).toBe(first.id)
+    x.advance(0.2)
+    await x.sync()
+    const again = x.offer()
+    expect(again.id).not.toBe(first.id) // past it: a new sighting
+    expect(again).toMatchObject({ kind: first.kind, subject: first.subject, options: first.options })
+    expect(x.target.offer.disturbed).toBe(false)
+    // a tap for the old card: refused, no key
+    await answerFor(x, { dialog: first, choice: 0, control: CTL2 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', control_id: CTL2 })
+    expect(x.pane.keys).toEqual(['Enter'])
+    // a tap for the new card is taken
+    await answerFor(x, { choice: 0, control: CTL3 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Enter', 'Enter'])
+  })
+  it('during the memory the old card cannot press either (the screen is treated as changed under it)', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    swallowEnter(x, 'unknown')
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    // a FRESH signed answer (its own frame id and time), so the replay guard is not what refuses it
+    await answerFor(x, {
+      dialog: first,
+      choice: 0,
+      control: CTL2,
+      frameId: FRAME2,
+      ts: new Date(NOW + 1000).toISOString(),
+    })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'screen_changed', control_id: CTL2 })
+    expect(x.pane.keys).toEqual(['Enter'])
+  })
+  it('a late tap for an Enter of unknown delivery that landed (the dialog is gone) is answered already_answered, nothing pressed, file taken', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    swallowEnter(x, 'unknown')
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    x.pane.at = 'idle' // it landed: the dialog goes
+    await x.d.sync(x.target, x.pane, (await x.pane.visibleRows()) as string[], { kind: 'none' } as Screen, true)
+    expect(x.target.dialog()).toBeUndefined()
+    await answerFor(x, {
+      dialog: first,
+      choice: 0,
+      control: CTL2,
+      frameId: FRAME2,
+      ts: new Date(NOW + 1000).toISOString(),
+    })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'already_answered', control_id: CTL2 })
+    expect(existsSync(join(x.dir, 'dialog-answer.json'))).toBe(false)
+    expect(x.pane.keys).toEqual(['Enter'])
+    // another dialog id is left where it is, as for a pressed one
+    const other = { ...first, id: 'other-dialog-id-0123456789' }
+    await answerFor(x, { dialog: other, choice: 0, control: CTL3, frameId: FRAME3 })
+    await x.d.answer(x.target, x.pane)
+    expect(existsSync(join(x.dir, 'dialog-answer.json'))).toBe(true)
+    expect(x.result()).toMatchObject({ control_id: CTL2 })
+  })
+  it('a confirmed Enter is the answer for good: no memory, the card’s id is the pressed one, and a tap for it is refused', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    swallowEnter(x, 'sent')
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.target.offer.enterSentFor).toBe(first.id)
+    expect(x.target.offer.enterUnsentFor).toBeNull()
+    expect(x.target.offer.declinedTrust).toBe(true) // confirmed: the exit that follows is the owner's
+    await answerFor(x, {
+      dialog: first,
+      choice: 0,
+      control: CTL2,
+      frameId: FRAME2,
+      ts: new Date(NOW + 1000).toISOString(),
+    })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'already_answered', control_id: CTL2 })
+    expect(x.pane.keys).toEqual(['Enter'])
   })
   it('a key the guard refused is no press: nothing pressed, never reported as pressed (Fable R3-5)', async () => {
     const x = await setup()

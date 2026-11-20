@@ -5,7 +5,6 @@ import {
   bridgeKeyId,
   FORM_SENDABLE_TYPES,
   parseBridgeAuthHeader,
-  trustOn,
   verifyBridgeHttp as verifyBridgeHttpSignature,
   verifyChallenge,
 } from '@talos-app/protocol'
@@ -19,7 +18,6 @@ import { COOKIE_NAME, clientIp, readCookie, relayHost, sessionCookie, sessionTtl
 const sessions = new WeakMap<object, Session>()
 
 const MEDIA_PATH = '/api/media'
-const DICTATE_PATH = '/api/dictate'
 const FORM_TYPES = FORM_SENDABLE_TYPES
 
 /** Looks up the cookie session for this request (and caches it on the request). */
@@ -90,8 +88,8 @@ export function createAuthImplementation(
     if (c.req.header('x-talos-csrf') !== '1') return c.json({ error: 'csrf_header' }, 403)
     const type = c.req.header('content-type')
     const path = new URL(c.req.url).pathname
-    if (path === MEDIA_PATH || path === DICTATE_PATH) {
-      // The media upload and dictation carry their own type; only the types an HTML form can send are refused.
+    if (path === MEDIA_PATH) {
+      // The media upload carries its own type; only the types an HTML form can send are refused.
       if (type && FORM_TYPES.test(type)) return c.json({ error: 'csrf_content_type' }, 403)
     } else if (type === undefined) {
       // No content type is fine only with no body at all.

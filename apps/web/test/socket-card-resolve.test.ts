@@ -109,7 +109,7 @@ describe('an approval nobody answers', () => {
     const err = await outcome
     expect(err).toBeInstanceOf(TalosClientError)
     expect((err as TalosClientError).code).toBe('internal')
-    expect((err as TalosClientError).message).toBe('The relay did not answer.')
+    expect((err as TalosClientError).message).toBe('Talos did not answer. Try again.')
     expect(err).toBeInstanceOf(NoAnswerError) // it left the phone; whether it ran is unknown
     stillPending()
     vi.useRealTimers()

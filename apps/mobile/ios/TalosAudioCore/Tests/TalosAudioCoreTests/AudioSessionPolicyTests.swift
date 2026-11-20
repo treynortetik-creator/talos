@@ -65,18 +65,6 @@ final class AudioSessionPolicyTests: XCTestCase {
         XCTAssertEqual(s.events.count, before)
     }
 
-    func testRecordingUsesPlayAndRecordWithSpeakerAndBluetooth() throws {
-        let s = FakeSession()
-        let p = AudioSessionPolicy(driver: s)
-        try p.set(.record)
-        XCTAssertEqual(s.events, [.apply(.recording), .active(true, false)])
-        XCTAssertEqual(SessionConfig.recording.category, .playAndRecord)
-        XCTAssertTrue(SessionConfig.recording.defaultToSpeaker)
-        // recording then playback (the order the drive controller uses) re-categorises before it activates
-        try p.set(.playback)
-        XCTAssertEqual(s.events.suffix(2), [.apply(.playing), .active(true, false)])
-    }
-
     func testIdleWhenAlreadyIdleDoesNotDeactivateAnInactiveSession() throws {
         let s = FakeSession()
         let p = AudioSessionPolicy(driver: s)
@@ -90,7 +78,7 @@ final class AudioSessionPolicyTests: XCTestCase {
         let p = AudioSessionPolicy(driver: s)
         try p.set(.playback)
         s.failNext = true
-        XCTAssertThrowsError(try p.set(.record))
+        XCTAssertThrowsError(try p.set(.paused))
         XCTAssertEqual(p.mode, .playback)
     }
 
@@ -118,7 +106,7 @@ final class AudioSessionPolicyTests: XCTestCase {
         try p.configureAtLaunch()
         p.reset()
         XCTAssertEqual(s.events, [.apply(.parked), .apply(.parked)])
-        try p.set(.record)
+        try p.set(.playback)
         p.reset()
         XCTAssertEqual(p.mode, .idle)
         XCTAssertEqual(s.events.suffix(2), [.active(false, true), .apply(.parked)])
@@ -151,7 +139,7 @@ final class AudioSessionPolicyTests: XCTestCase {
                 g.addTask {
                     switch i % 4 {
                     case 0: try? p.set(.playback)
-                    case 1: try? p.set(.record)
+                    case 1: try? p.set(.paused)
                     case 2: p.reset()
                     default: p.interruptionBegan(); try? p.interruptionEnded(shouldResume: true)
                     }
@@ -163,8 +151,9 @@ final class AudioSessionPolicyTests: XCTestCase {
     }
 
     func testModeStringsMatchTheWebAdapter() {
-        XCTAssertEqual(Set(AudioMode.allCases.map(\.rawValue)), ["playback", "paused", "record", "idle"])
+        XCTAssertEqual(Set(AudioMode.allCases.map(\.rawValue)), ["playback", "paused", "idle"])
         XCTAssertNil(AudioMode(rawValue: "PLAYBACK"))
         XCTAssertNil(AudioMode(rawValue: "auto"))
+        XCTAssertNil(AudioMode(rawValue: "record"))  // an old page: refused cleanly
     }
 }

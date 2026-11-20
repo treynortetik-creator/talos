@@ -93,7 +93,7 @@ describe('the peer taint', () => {
     expect((await send(a, { peer: 'play', in_reply_to: f.msg.id })).isError).toBe(true)
   })
 
-  test("a card decision does not clear it; the owner's own message and a voice note do", async () => {
+  test("a card decision does not clear it; the owner's own message and a file do", async () => {
     const a = await three()
     await deliver(a, 'work')
     await ownerTapsCard(a)
@@ -112,18 +112,18 @@ describe('the peer taint', () => {
     })
     expect((await send(a, { peer: 'play' })).isError, 'a scheduled run is not the owner speaking').toBe(true)
     await a.bridge.ctx.emit({
-      content: 'a voice note',
+      content: 'a file',
       meta: {
         chat_id: 'general',
         thread_id: 'general',
         thread_name: 'General',
         message_id: 'm_b',
         ts: new Date().toISOString(),
-        kind: 'voice_note',
+        kind: 'file',
         trust: 'owner',
       },
     })
-    expect((await send(a, { peer: 'play' })).isError, 'voice note').toBeFalsy()
+    expect((await send(a, { peer: 'play' })).isError, 'file').toBeFalsy()
     await deliver(a, 'work')
   })
 

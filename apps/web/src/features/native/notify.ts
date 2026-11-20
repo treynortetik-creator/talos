@@ -66,8 +66,8 @@ export function startNativeNotify(
         })
         return
       }
-      // A reply spoken to a live voice call, or marked silent, never makes a banner.
-      if (f.silent || f.voice_delegation_id) return
+      // A reply marked silent never makes a banner.
+      if (f.silent) return
       if (f.message.author !== 'agent') return
       emit({ template: 'reply', thread_id: f.message.thread_id })
     }),

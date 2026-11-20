@@ -34,36 +34,6 @@ import {
   ThreadSessionValue,
 } from './thread-setup-fields.ts'
 
-/**
- * Stock voices GPT-Live documents. The default, `meridian`, is documented as North American. One list for the Settings
- * select and for `agent.voice` proposals: a guessed id the provider would refuse never reaches a card.
- */
-export const VOICE_CHOICES = [
-  'meridian',
-  'marin',
-  'alloy',
-  'ash',
-  'ballad',
-  'beacon',
-  'bossa',
-  'cedar',
-  'cinder',
-  'coral',
-  'delta',
-  'echo',
-  'gleam',
-  'quartz',
-  'ripple',
-  'sage',
-  'shida',
-  'shimmer',
-  'stone',
-  'tempo',
-  'verse',
-  'vesper',
-  'willow',
-] as const
-
 const QuietWindow = z
   .object({ start: HHMM, end: HHMM })
   .strict()
@@ -116,7 +86,7 @@ type PathRules<P extends string> = string extends P
 export type AgentRule = {
   /** The setting's name on a card: "Agent name: Talos -> Atlas". */
   readonly label: string
-  /** The setting in the sentence that tells the agent which settings it may change ("agent name, live-call voice and ..."). */
+  /** The setting in the sentence that tells the agent which settings it may change ("agent name, the owner's name and ..."). */
   readonly phrase: string
   /** The value it takes, in the tool's argument text ("agent.name (1-32 chars)"). */
   readonly hint: string
@@ -206,34 +176,6 @@ export const SETTINGS_TABLE = defineSettingsTable({
     risk: 'low',
     agentRule: { label: 'Agent name', phrase: 'agent name', hint: '1-32 chars', value: Plain(1, 32) },
     default: 'Talos',
-  },
-  'agent.voice': {
-    phone: 'section',
-    agent: true,
-    risk: 'low',
-    agentRule: {
-      label: 'Live-call voice',
-      phrase: 'live-call voice',
-      hint: `one of ${VOICE_CHOICES.join(', ')}`,
-      value: z.enum(VOICE_CHOICES),
-    },
-    default: 'meridian',
-  },
-  // The text injected into the live-voice prompt: an agent writing its own standing prompt is the one thing a card cannot make safe.
-  // The text added to the live-voice prompt: the agent sets it only when the owner asks for a persona, and the owner is told at once
-  // what it now says and how to undo it. High: whatever it says, the voice reads it on every call.
-  'agent.voice_persona': {
-    phone: 'section',
-    agent: true,
-    risk: 'high',
-    agentRule: {
-      label: 'Live-call persona',
-      phrase: 'live-call persona',
-      hint: 'up to 4000 chars; empty for none',
-      value: z.string().max(4000),
-      show: none,
-    },
-    default: '',
   },
   'owner.display_name': {
     phone: 'section',
@@ -391,15 +333,16 @@ export const SETTINGS_TABLE = defineSettingsTable({
     phone: 'section',
     agent: true,
     risk: 'low',
+    // 'when_voice' ("when I send a voice note") is archived (docs/archived/voice.md): the config still accepts it and reads it
+    // as 'never', but nothing offers it and the agent may not set it.
     agentRule: {
-      label: 'Voice-note replies',
-      phrase: 'voice-note replies',
-      hint: '"when_voice", "always" or "never"',
-      value: z.enum(['when_voice', 'always', 'never']),
-      show: (v) =>
-        ({ when_voice: 'when I send a voice note', always: 'always', never: 'never' })[String(v)] ?? String(v),
+      label: 'Spoken replies',
+      phrase: 'spoken replies',
+      hint: '"always" or "never"',
+      value: z.enum(['always', 'never']),
+      show: (v) => ({ always: 'always', never: 'never', when_voice: 'never' })[String(v)] ?? String(v),
     },
-    default: 'when_voice',
+    default: 'never',
   },
   'voice_notes.driving_until': {
     phone: 'section',
@@ -952,7 +895,7 @@ export function readSettingValue(config: AgentConfigT, path: AgentSettingPath): 
   return v ?? AGENT_RULES[path].whenAbsent
 }
 
-/** The settings the agent may change, as a sentence part: "agent name, live-call voice and the app theme". */
+/** The settings the agent may change, as a sentence part: "agent name, the owner's name and the app theme". */
 export const AGENT_SETTINGS_PHRASE: string = (() => {
   const p = AGENT_SETTING_PATHS.map((x) => AGENT_RULES[x].phrase)
   return p.length < 2 ? p.join('') : `${p.slice(0, -1).join(', ')} and ${p[p.length - 1]}`
@@ -968,7 +911,7 @@ const PATH_FORMS: Array<{ form: string; hint: string }> = AGENT_SETTING_PATHS.fl
     : [{ form: p, hint: AGENT_RULES[p].hint }],
 )
 
-/** The value rules in the tool's argument text: "agent.name (1-32 chars), agent.voice (one of ...), ...". */
+/** The value rules in the tool's argument text: "agent.name (1-32 chars), owner.display_name (1-40 chars), ...". */
 export const AGENT_VALUE_HINTS: string = PATH_FORMS.map((f) => `${f.form} (${f.hint})`).join(', ')
 
 /** The paths a proposal may name, as the tool lists them. */

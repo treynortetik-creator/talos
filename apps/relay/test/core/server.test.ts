@@ -60,7 +60,7 @@ describe('security headers and static serving', () => {
     expect(h('strict-transport-security')).toBe('max-age=63072000')
     expect(h('x-content-type-options')).toBe('nosniff')
     expect(h('referrer-policy')).toBe('no-referrer')
-    expect(h('permissions-policy')).toBe('microphone=(self), camera=(), geolocation=(), payment=()')
+    expect(h('permissions-policy')).toBe('microphone=(), camera=(), geolocation=(), payment=()')
     expect(h('cross-origin-opener-policy')).toBe('same-origin')
     expect(h('cross-origin-resource-policy')).toBe('same-origin')
   })
@@ -252,7 +252,6 @@ describe('headless posts and bridge HTTP', () => {
         kind: 'agent',
         order: 5,
         notify: 'all',
-        voice_context: 'recent',
         archived: false,
         created_at: new Date().toISOString(),
       },

@@ -169,346 +169,6 @@
       }
     ]
   },
-  "agent.voice": {
-    "apply": [
-      {
-        "v": "marin",
-        "r": {
-          "ok": true,
-          "at": "marin",
-          "disk_rev": 1,
-          "disk_at": "marin"
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "ok": true,
-          "at": "x",
-          "disk_rev": 1,
-          "disk_at": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "ok": true,
-          "at": "meridian",
-          "disk_rev": 1,
-          "disk_at": "meridian"
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "ok": true,
-          "at": "Not/AZone",
-          "disk_rev": 1,
-          "disk_at": "Not/AZone"
-        }
-      }
-    ],
-    "load_missing": {
-      "loads": true,
-      "at": "meridian"
-    },
-    "load_garbled": [
-      {
-        "v": 5,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "loads": true,
-          "at": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice"
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "loads": true,
-          "at": "Not/AZone"
-        }
-      },
-      {
-        "v": "marin",
-        "r": {
-          "loads": true,
-          "at": "marin"
-        }
-      }
-    ]
-  },
-  "agent.voice_persona": {
-    "apply": [
-      {
-        "v": "calm",
-        "r": {
-          "ok": true,
-          "at": "calm",
-          "disk_rev": 1,
-          "disk_at": "calm"
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "ok": true,
-          "at": "x",
-          "disk_rev": 1,
-          "disk_at": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "ok": true,
-          "at": "",
-          "disk_rev": 1,
-          "disk_at": ""
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "ok": false,
-          "code": "bad_frame",
-          "message": "config.json invalid at agent.voice_persona",
-          "disk_rev": 0
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "ok": true,
-          "at": "Not/AZone",
-          "disk_rev": 1,
-          "disk_at": "Not/AZone"
-        }
-      }
-    ],
-    "load_missing": {
-      "loads": true,
-      "at": ""
-    },
-    "load_garbled": [
-      {
-        "v": 5,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "loads": true,
-          "at": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "loads": false,
-          "error": "config.json invalid at agent.voice_persona"
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "loads": true,
-          "at": "Not/AZone"
-        }
-      },
-      {
-        "v": "calm",
-        "r": {
-          "loads": true,
-          "at": "calm"
-        }
-      }
-    ]
-  },
   "owner.display_name": {
     "apply": [
       {
@@ -690,7 +350,6 @@
             "kind": "fixed",
             "order": 0,
             "notify": "all",
-            "voice_context": "recent",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           },
@@ -701,7 +360,6 @@
             "kind": "system",
             "order": 1,
             "notify": "all",
-            "voice_context": "none",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           }
@@ -716,7 +374,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -727,7 +384,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -741,7 +397,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -752,7 +407,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -918,7 +572,6 @@
             "kind": "fixed",
             "order": 0,
             "notify": "all",
-            "voice_context": "recent",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           },
@@ -929,7 +582,6 @@
             "kind": "system",
             "order": 1,
             "notify": "all",
-            "voice_context": "none",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           }
@@ -944,7 +596,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -955,7 +606,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -1880,9 +1530,9 @@
         "v": null,
         "r": {
           "ok": true,
-          "at": "when_voice",
+          "at": "never",
           "disk_rev": 1,
-          "disk_at": "when_voice"
+          "disk_at": "never"
         }
       },
       {
@@ -1924,7 +1574,7 @@
     ],
     "load_missing": {
       "loads": true,
-      "at": "when_voice"
+      "at": "never"
     },
     "load_garbled": [
       {
@@ -4793,15 +4443,11 @@
       "r": {
         "ok": true,
         "at": {
-          "name": "Talos",
-          "voice": "meridian",
-          "voice_persona": ""
+          "name": "Talos"
         },
         "disk_rev": 1,
         "disk_at": {
-          "name": "Talos",
-          "voice": "meridian",
-          "voice_persona": ""
+          "name": "Talos"
         }
       }
     },
@@ -4937,12 +4583,12 @@
       "r": {
         "ok": true,
         "at": {
-          "reply_with_voice": "when_voice",
+          "reply_with_voice": "never",
           "driving_until": null
         },
         "disk_rev": 1,
         "disk_at": {
-          "reply_with_voice": "when_voice",
+          "reply_with_voice": "never",
           "driving_until": null
         }
       }

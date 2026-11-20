@@ -63,16 +63,11 @@ web_smoke() { local t; for t in $WEB_SMOKE; do [ -e "apps/web/test/$t" ] && echo
 web_specs_in() { local d t; for d in "$@"; do for t in apps/web/test/"$d"/*.spec.ts; do [ -e "$t" ] && echo "${t#apps/web/}"; done; done; return 0; }
 # The change's own browser specs, which also run on WebKit and on Pixel (the iphone and pixel projects): a changed spec, and the
 # specs of a changed feature or spec folder. Never the smoke set (shared code is not WebKit-specific; CI's browser job runs
-# every project for all of it), and never the voice folder's specs (the iphone and pixel projects leave a voice folder out at any
-# depth, the config's **/voice/**; voice-setup is another folder, and they take it). So: a change to the voice feature's source
-# owns the voice-setup specs only (the voice folder's own run on chromium-media, with the desktop step); a spec in a voice folder
-# owns nothing; a support file in a voice folder nested in another folder (cards/voice/helper.ts) is that top folder's support file,
-# so it owns that folder's specs; one in the top voice folder owns nothing. A WebKit-only failure (Tab skips buttons there) reached
+# every project for all of it). A WebKit-only failure (Tab skips buttons there) reached
 # main when the gate ran Chromium alone. The second count says the same in plan-check.cjs (webOwn).
 web_own_specs_for() {
   local f="$1" x
   case "$f" in
-    apps/web/test/voice/* | apps/web/test/*/voice/*.spec.ts) ;; # the config's **/voice/** leaves these out (voice-setup is not one)
     apps/web/test/*.spec.ts) [ -e "$f" ] && echo "${f#apps/web/}" ;;
     apps/web/test/helpers/* | apps/web/test/*.test.ts | apps/web/test/*.test.tsx) ;;
     apps/web/test/*/*)
@@ -80,7 +75,6 @@ web_own_specs_for() {
       web_specs_in "${x%%/*}"
       ;;
     apps/web/src/*.test.ts | apps/web/src/*.test.tsx) ;;
-    apps/web/src/features/voice/*) web_specs_in voice-setup ;; # the voice folder's specs are chromium-media's alone
     apps/web/src/features/*/*)
       x="${f#apps/web/src/features/}"
       web_specs_in "${x%%/*}"
@@ -99,8 +93,7 @@ web_specs_max() {
   case "$max" in '' | *[!0-9]*) max=40 ;; esac
   echo "$max"
 }
-# The Playwright projects (apps/web/playwright.config.ts) the gate names for the lists. WEB runs on desktop and chromium-media (the
-# voice folder's only project); WEBKIT, the own specs, on iphone and pixel, and on iphone-se for the spec its testMatch names.
+# The Playwright projects (apps/web/playwright.config.ts) the gate names for the lists. WEB runs on desktop; WEBKIT, the own specs, on iphone and pixel, and on iphone-se for the spec its testMatch names.
 # A project added to or changed in the config is changed here too: scripts/gate-web-specs.test.ts reads the config and checks.
 spec_on_iphone_se() { case "$1" in */cards/permission-sheet.spec.ts) return 0 ;; esac; return 1; }
 web_webkit_projects() { # the projects of the WebKit and Pixel step, one line
@@ -115,7 +108,7 @@ web_projects_report() { # one "web projects: <spec> -> <projects>" line per plan
     in_web=0 in_wk=0 p=""
     for w in "${WEB[@]+"${WEB[@]}"}"; do [ "$w" != "$s" ] || in_web=1; done
     for w in "${WEBKIT[@]+"${WEBKIT[@]}"}"; do [ "$w" != "$s" ] || in_wk=1; done
-    if [ "$in_web" = 1 ]; then case "$s" in */voice/*) p=chromium-media ;; *) p=desktop ;; esac; fi
+    [ "$in_web" != 1 ] || p=desktop
     if [ "$in_wk" = 1 ]; then
       p="${p:+$p }iphone"
       ! spec_on_iphone_se "$s" || p="$p iphone-se"
@@ -132,7 +125,7 @@ web_specs_for() { # prints the specs, relative to apps/web, a changed (or delete
     apps/web/test/*.spec.ts) [ -e "$f" ] && echo "${f#apps/web/}" ;;
     apps/web/test/*.test.ts | apps/web/test/*.test.tsx) ;; # unit tests (Vitest), not browser specs
     apps/web/test/*/*)
-      # a spec folder's own support file (cards/e2e.ts, voice/fakes.ts): that folder's specs, and the smoke set
+      # a spec folder's own support file (cards/e2e.ts): that folder's specs, and the smoke set
       x="${f#apps/web/test/}"
       web_specs_in "${x%%/*}"
       web_smoke
@@ -140,8 +133,8 @@ web_specs_for() { # prints the specs, relative to apps/web, a changed (or delete
     apps/web/src/features/*/*)
       x="${f#apps/web/src/features/}"
       x="${x%%/*}"
-      # a feature's own specs (voice has a setup folder of its own); a feature with none gets the smoke set
-      if [ "$x" = voice ]; then out="$(web_specs_in voice voice-setup)"; else out="$(web_specs_in "$x")"; fi
+      # a feature's own specs; a feature with none gets the smoke set
+      out="$(web_specs_in "$x")"
       if [ -n "$out" ]; then echo "$out"; else web_smoke; fi
       ;;
     apps/web/src/Shell.tsx) web_specs_in shell; web_smoke ;;

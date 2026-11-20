@@ -179,14 +179,13 @@ describe('startNativeNotify', () => {
     expect(n).toHaveLength(1)
     expect(JSON.stringify(n[0])).not.toContain('SECRET')
   })
-  it('visible page, silent reply, voice reply and owner message make none', () => {
+  it('visible page, silent reply and owner message make none', () => {
     const t = setup(true)
     let bg = false
     startNativeNotify(t.client, t.bridge, { background: () => bg, now: () => new Date('2026-01-05T18:00:00Z') })
     t.emit('reply', reply())
     bg = true
     t.emit('reply', reply({ silent: true }))
-    t.emit('reply', reply({ voice_delegation_id: 'v1' }))
     t.emit('reply', reply({ message: { author: 'owner', thread_id: threadId } }))
     expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(0)
   })

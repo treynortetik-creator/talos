@@ -104,7 +104,7 @@ export function ShareButton({ att, floating = false }: { att: AttachmentRefT; fl
           <span>Try again</span>
         </button>
         <span role="alert" className={floating ? 'sr-only' : 'text-sm text-text-2'}>
-          This file expired from the relay; ask the agent to resend.
+          This file has expired; ask your agent to send it again.
         </span>
       </>
     )

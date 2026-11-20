@@ -1,7 +1,7 @@
 // Adversarial review of PR #43 (V2 WP-V3, driving mode, web). Every test here drives the real web client in fake mode
 // (VITE_FAKE=1) through the same seams as test/drive/drive.spec.ts: the fake client's store, the signed frames it
 // records, the real /drive screen, the real queue and its one <audio data-testid="drive-audio">. Browser APIs Playwright
-// cannot exercise (speechSynthesis, MediaRecorder, Wake Lock, Media Session) are replaced by recording stubs.
+// cannot exercise (speechSynthesis, Wake Lock, Media Session) are replaced by recording stubs.
 // Each test names the finding it proves (F-numbers).
 import { expect, type Page, test } from '@playwright/test'
 
@@ -15,12 +15,11 @@ type Fake = {
   }
 }
 type Probe = {
-  spoken: Array<{ text: string; audioPlaying: boolean; recording: boolean; at: number }>
+  spoken: Array<{ text: string; audioPlaying: boolean; at: number }>
   speechCancels: number
   speechPauses: number
   audioContexts: number
   audioPlayTargets: HTMLMediaElement[]
-  recording: boolean
   wake: { granted: number; released: number }
   msHandlers: Record<string, (() => void) | null>
 }
@@ -67,12 +66,11 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
   await page.addInitScript(
     ({ wakeGrantMs }) => {
       const p = {
-        spoken: [] as Array<{ text: string; audioPlaying: boolean; recording: boolean; at: number }>,
+        spoken: [] as Array<{ text: string; audioPlaying: boolean; at: number }>,
         speechCancels: 0,
         speechPauses: 0,
         audioContexts: 0,
         audioPlayTargets: [] as HTMLMediaElement[],
-        recording: false,
         wake: { granted: 0, released: 0 },
         msHandlers: {} as Record<string, (() => void) | null>,
       }
@@ -94,7 +92,7 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
         value: {
           speaking: false,
           speak(u: { text: string }) {
-            p.spoken.push({ text: u.text, audioPlaying: driveAudioPlaying(), recording: p.recording, at: Date.now() })
+            p.spoken.push({ text: u.text, audioPlaying: driveAudioPlaying(), at: Date.now() })
             this.speaking = true
           },
           cancel() {
@@ -130,37 +128,6 @@ async function instrument(page: Page, opts: { wakeGrantMs?: number } = {}) {
         if (this instanceof HTMLAudioElement) p.audioPlayTargets.push(this)
         return play.call(this)
       }
-      // Microphone + MediaRecorder (engine-independent).
-      Object.defineProperty(navigator, 'mediaDevices', {
-        configurable: true,
-        value: { getUserMedia: async () => new MediaStream() },
-      })
-      class FakeRecorder {
-        static isTypeSupported(m: string) {
-          return m === 'audio/mp4'
-        }
-        state = 'inactive'
-        ondataavailable: ((e: { data: Blob }) => void) | null = null
-        onstop: ((e: Event) => void) | null = null
-        onerror: (() => void) | null = null
-        addEventListener() {}
-        start() {
-          this.state = 'recording'
-          p.recording = true
-        }
-        stop() {
-          this.state = 'inactive'
-          p.recording = false
-          setTimeout(() => {
-            this.ondataavailable?.({ data: new Blob([new Uint8Array(2000)], { type: 'audio/mp4' }) })
-            this.onstop?.(new Event('stop'))
-          }, 0)
-        }
-        pause() {}
-        resume() {}
-        requestData() {}
-      }
-      Object.defineProperty(window, 'MediaRecorder', { value: FakeRecorder, configurable: true, writable: true })
       // Wake Lock that takes `wakeGrantMs` to be granted (iOS can be slow while the page settles).
       Object.defineProperty(navigator, 'wakeLock', {
         configurable: true,
@@ -260,15 +227,6 @@ async function startOnDrive(page: Page) {
   await expect(page.getByTestId('drive-status')).toBeVisible()
 }
 
-/** Holds the talk button (pointer down) and returns a release function. */
-async function holdTalk(page: Page) {
-  const box = await page.getByTestId('drive-talk').boundingBox()
-  if (!box) throw new Error('no talk button')
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  await page.mouse.down()
-  return () => page.mouse.up()
-}
-
 // The PWA service worker has a fetch handler; in WebKit, requests that pass through it bypass page.route, so the media
 // stubs above were never hit on iphone (the preview server answered /media/* with index.html, error code 4) and F1, F4
 // and F9 failed there for a harness reason. Blocking the worker keeps every request on the stubs. (Re-check 2026-10-30.)
@@ -329,38 +287,7 @@ test("F2b: a late clip for one thread does not cancel another thread's phone-voi
   expect(await replySpeech(page)).toContain('Inbox reply.')
 })
 
-// ---- F3: speech ignores recording and playing audio -----------------------------------------------------------------
-test('F3a: the phone voice never speaks while the owner is holding Talk (recording pauses playback)', async ({
-  page,
-}) => {
-  await instrument(page)
-  await page.clock.install()
-  await startOnDrive(page)
-  await pushAgent(page, { id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4J1', text: 'Long answer coming.' })
-  await page.clock.runFor(15_000)
-  const release = await holdTalk(page)
-  await expect(page.getByTestId('drive-status')).toContainText('Listening')
-  await page.clock.runFor(8_000) // the 20 s fallback comes due mid-sentence
-  const during = await probe(page, (p) => p.spoken.filter((s) => s.recording).map((s) => s.text))
-  await release()
-  expect(during, 'speechSynthesis talked into the microphone').toEqual([])
-})
-
-test('F3b: starting to talk stops the phone voice that is already speaking', async ({ page }) => {
-  await instrument(page)
-  await page.clock.install()
-  await startOnDrive(page)
-  await pushAgent(page, { id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4J2', text: 'A long spoken fallback.' })
-  await page.clock.runFor(21_000)
-  expect(await replySpeech(page)).toEqual(['A long spoken fallback.'])
-  const before = await probe(page, (p) => p.speechCancels + p.speechPauses)
-  const release = await holdTalk(page)
-  await expect(page.getByTestId('drive-status')).toContainText('Listening')
-  const after = await probe(page, (p) => p.speechCancels + p.speechPauses)
-  await release()
-  expect(after, 'speechSynthesis kept talking over the recording').toBeGreaterThan(before)
-})
-
+// ---- F3: speech ignores playing audio -------------------------------------------------------------------------------
 test('F3c: a card announcement never talks over a voice reply that is playing', async ({ page }) => {
   await instrument(page)
   await startOnDrive(page)
@@ -380,17 +307,13 @@ test('F3c: a card announcement never talks over a voice reply that is playing', 
   expect(overlaps, 'speechSynthesis and the reply clip at the same time').toEqual([])
 })
 
-// ---- F4: Web Audio sneaks in through the recorder; one element only for playback ------------------------------------
+// ---- F4: Web Audio never sneaks in; one element only for playback -----------------------------------------------------
 test('F4: /drive plays every clip on the one shared element and never creates an AudioContext', async ({ page }) => {
   await instrument(page)
   await startOnDrive(page)
   await pushAgent(page, { id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4L1', text: 'One.' })
   await pushAgent(page, voice('m_01JBF3V7Q8K2M4N6P8R0S2T4L2', 'm_01JBF3V7Q8K2M4N6P8R0S2T4L1', 'md_ok6'))
   await expect.poll(() => audioPaused(page)).toBe(false)
-  const release = await holdTalk(page)
-  await expect(page.getByTestId('drive-status')).toContainText('Listening')
-  await page.waitForTimeout(600)
-  await release()
   await pushAgent(page, { id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4L3', text: 'Two.' })
   await pushAgent(page, voice('m_01JBF3V7Q8K2M4N6P8R0S2T4L4', 'm_01JBF3V7Q8K2M4N6P8R0S2T4L3', 'md_ok7'))
   await page.getByRole('button', { name: 'Next reply' }).click()
@@ -402,7 +325,7 @@ test('F4: /drive plays every clip on the one shared element and never creates an
   }))
   expect(r.elements).toBe(1)
   expect(r.allDrive).toBe(true)
-  expect(r.contexts, 'the hold-to-talk recorder opens an AudioContext (WebKit 291892)').toBe(0)
+  expect(r.contexts, 'an AudioContext was created (WebKit 291892)').toBe(0)
 })
 
 // ---- F5: a manual pause is never forgotten -------------------------------------------------------------------------

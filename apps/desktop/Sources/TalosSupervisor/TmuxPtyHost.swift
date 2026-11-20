@@ -367,6 +367,22 @@ public final class TmuxPtyHost: PtyHost, @unchecked Sendable {
   }
 
   @discardableResult
+  public func sendSelectNumber(_ n: SelectNumber) -> SendOutcome {
+    guard lock.withLock({ paneId }) != nil else { return .failed }
+    let r = tmux(commands.sendSelectNumber(n))
+    if r.timedOut { return .unknown }
+    return r.ok ? .sent : .failed
+  }
+
+  @discardableResult
+  public func sendAnswerText(_ t: AnswerText) -> SendOutcome {
+    guard lock.withLock({ paneId }) != nil else { return .failed }
+    let r = tmux(commands.sendAnswerText(t))
+    if r.timedOut { return .unknown }
+    return r.ok ? .sent : .failed
+  }
+
+  @discardableResult
   public func sendEscape() -> SendOutcome {
     guard lock.withLock({ paneId }) != nil else { return .failed }
     let r = tmux(commands.sendEscape())

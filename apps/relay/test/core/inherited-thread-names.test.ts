@@ -19,7 +19,6 @@ const thread = (id: string, over: Record<string, unknown> = {}) => ({
   kind: 'agent',
   order: 5,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: at,
   ...over,

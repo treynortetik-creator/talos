@@ -38,20 +38,20 @@ function Keys({ onAction, mac }: { onAction: (id: string) => void; mac: boolean 
 describe('Cmd+K', () => {
   const press = (init: KeyboardEventInit) =>
     window.dispatchEvent(new KeyboardEvent('keydown', { cancelable: true, ...init }))
-  it('Cmd+K opens the palette on a Mac and Ctrl+K elsewhere; Cmd+Shift+K still calls and does not', () => {
+  it('Cmd+K opens the palette on a Mac and Ctrl+K elsewhere; Cmd+Shift+K is no longer a chord', () => {
     const onAction = vi.fn()
     const off = render(<Keys onAction={onAction} mac />)
     press({ code: 'KeyK', key: 'k', metaKey: true })
     press({ code: 'KeyK', key: 'k', ctrlKey: true })
     expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette'])
     press({ code: 'KeyK', key: 'K', metaKey: true, shiftKey: true })
-    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette', 'call'])
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette'])
     press({ code: 'KeyK', key: 'k', metaKey: true, altKey: true })
-    expect(onAction).toHaveBeenCalledTimes(2)
+    expect(onAction).toHaveBeenCalledTimes(1)
     off.unmount()
     render(<Keys onAction={onAction} mac={false} />)
     press({ code: 'KeyK', key: 'k', ctrlKey: true })
-    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette', 'call', 'palette'])
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['palette', 'palette'])
   })
 })
 

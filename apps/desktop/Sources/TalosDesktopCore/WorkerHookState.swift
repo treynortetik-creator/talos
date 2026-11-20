@@ -74,10 +74,11 @@ extension WorkerHook {
     }
     let refused = CharacterSet(charactersIn: "*?[]{}()!\\\"'`").union(CharacterSet(charactersIn: "\u{0}"..."\u{1f}")).union(CharacterSet(charactersIn: "\u{7f}"))
     let ok = forms.filter { $0.hasPrefix("/") && $0.rangeOfCharacter(from: refused) == nil }
-    return ["Edit", "Write"].flatMap { tool in ok.map { "\(tool)(/\($0)/threads/\(threadId).state.md\(tail))" } }
+    // Edit( ) alone: it covers the Write tool too (WorkerFence.tools)
+    return ok.map { "Edit(/\($0)/threads/\(threadId).state.md\(tail))" }
   }
 
-  /// The two rules that let a thread's session edit its own live state file without a prompt: that exact path, for Edit and Write. No
+  /// The rules that let a thread's session edit its own live state file without a prompt: that exact path, as Edit( ) (it covers Write). No
   /// glob, no folder: a sibling (another thread's file, a `.bak`, a `..` path) is not covered.
   public static func stateAllowRules(agentDir: String, threadId: String) -> [String] {
     stateRules(agentDir: agentDir, threadId: threadId, tail: "")

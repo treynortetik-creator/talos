@@ -117,9 +117,9 @@ const SETTINGS_TEXT: Record<string, string> = {
   Account: SECTIONS_TSX.Account ?? '',
   Notifications: `${SECTIONS_TSX.Notifications ?? ''}\n${corpus(web('pwa/NativePushRow.tsx'))}`,
   Agent: corpus(dir('agent-config')),
-  Session: corpus(dir('session')),
-  'Thread sessions': corpus(dir('thread-sessions')),
-  Voice: corpus([...web('voice/index.tsx'), ...dir('drive')]),
+  'Your agent': corpus(dir('session')),
+  'Thread agents': corpus(dir('thread-sessions')),
+  Voice: corpus([...web('spoken-replies/index.tsx'), ...dir('drive')]),
   Integrations: corpus(dir('integrations')),
   'Share from other apps': corpus(dir('share')),
   Health: corpus(dir('health')),
@@ -139,7 +139,7 @@ const MAC_TAB_TEXT: Record<string, string> = {
 /** Each thread-settings label, with the one file that draws it. */
 const THREAD_LABEL_FILE: Record<string, string> = {
   Notifications: 'threads/manage/ThreadEditor.tsx',
-  'Own session': 'thread-sessions/OwnSession.tsx',
+  'Its own agent': 'thread-sessions/OwnSession.tsx',
 }
 
 const SPEC = read(join(MAC, 'TalosDesktopCore/AppMenuSpec.swift'))
@@ -352,7 +352,7 @@ const BROWSER_ENTRY: Record<string, string> = {
   'Open the Needs-you list': 'needsYou',
   'Open thread 1 to 9, in the order of the thread list': 'thread1',
   'Search this thread': 'findInThread',
-  'Open or close the Session panel': 'sessionPanel',
+  'Open or close the Agent panel': 'sessionPanel',
   'Show the keyboard shortcuts': 'shortcuts',
   'Fold or unfold the sidebar': 'sidebar',
   'Close the side panel': 'close',
@@ -459,14 +459,8 @@ describe('Help keyboard shortcuts are wired to real handlers', () => {
     expect(read(join(WEB, 'Shell.tsx'))).toContain("detectShell() === 'desktop'")
   })
 
-  it('a key whose action does nothing would be caught: the live-call chord is such a key today', () => {
-    const call = DEFAULT_KEYMAP.find((e) => e.id === 'call')
-    expect(call && actionIsHandled(call.act)).toBe(false)
-    // had Help still listed ⌘⇧K, this is the failure the check exists to produce
-    const withCall = [...browserRows(), { what: 'Start a live call', keys: '⌘⇧K' }]
-    expect(browserKeyProblems(withCall, { ...BROWSER_ENTRY, 'Start a live call': 'call' })).toEqual([
-      '"Start a live call": call is in the table but its action does nothing',
-    ])
+  it('the live-call chord is gone from the table and from Help (the live call is archived)', () => {
+    expect(DEFAULT_KEYMAP.find((e) => e.id === 'call')).toBeUndefined()
     expect(allText()).not.toContain('⌘⇧K')
   })
 
@@ -498,7 +492,7 @@ const lacks =
     expect(rd(rel), `${rel} has: ${snippet}`).not.toContain(norm(snippet))
 const S = 'apps/web/src/features/settings/sections.tsx'
 const NATIVE = 'apps/web/src/features/pwa/NativePushRow.tsx'
-const VOICE = 'apps/web/src/features/voice/index.tsx'
+const VOICE = 'apps/web/src/features/spoken-replies/index.tsx'
 const QUIT = 'apps/desktop/Sources/TalosDesktopCore/QuitPlan.swift'
 const SPEC_F = 'apps/desktop/Sources/TalosDesktopCore/AppMenuSpec.swift'
 const MENU_SWIFT = 'apps/desktop/Sources/TalosDesktop/AppMenu.swift'
@@ -583,9 +577,7 @@ const CLAIMS: Record<string, Proof[]> = {
   'Effort changes apply from the next message.': [
     has('apps/web/src/features/session/SessionPanel.tsx', 'Applies from the next message'),
   ],
-  'It applies from your next call.': [has(VOICE, 'Applies to your next call.')],
   'Your Mac reads them with its speech command.': [has(VOICE, 'your Mac reads it with its speech command')],
-  'That is a different voice from the live-call voice.': [has(VOICE, 'a different voice from the live-call voice')],
   'Both are saved on this device only.': [
     has('apps/web/src/lib/theme.ts', 'localStorage.getItem(KEY)'),
     has('apps/web/src/lib/theme.ts', 'localStorage.getItem(SIZE_KEY)'),
@@ -600,8 +592,8 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/desktop/Sources/TalosDesktop/UpdateWindow.swift', 'RealClickButton(title: AllowUpdatesCopy.allowButton'),
     has('apps/desktop/Sources/TalosDesktopCore/UpdateStatus.swift', 'public static let allowButton = "Allow updates"'),
   ],
-  'With tmux the agent keeps running.': [has(QUIT, 'with tmux it keeps running')],
-  'Without it Talos stops the agent first, waiting at most 15 seconds.': [
+  'With tmux your agent keeps running.': [has(QUIT, 'with tmux it keeps running')],
+  'Without it Talos stops your agent first, waiting at most 15 seconds.': [
     has(QUIT, "On the app's own terminal the agent is stopped first"),
     has(QUIT, 'public static let stopLimit: Double = 15'),
   ],
@@ -683,7 +675,7 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/features/palette/actions.ts', 'if (!ctx.currentThreadId) return false'),
     has('apps/web/src/lib/useKeyboard.ts', '!== false'),
   ],
-  'In a thread that has a Session panel.': [has('apps/web/src/Shell.tsx', 'if (!hasSession) return false')],
+  'In a thread that has an Agent panel.': [has('apps/web/src/Shell.tsx', 'if (!hasSession) return false')],
   'The list is also in Settings.': [has('apps/web/src/features/settings/SettingsScreen.tsx', "id: 'shortcuts'")],
   'On the app’s main screens.': [has('apps/web/src/Shell.tsx', 'useGlobalKeys(handlers, { macApp })')],
   'Not on this Help page or the sign-in screen.': [
@@ -707,7 +699,7 @@ const CLAIMS: Record<string, Proof[]> = {
     has(THREAD_ED, "Archive only: a thread can't be deleted. Restore it any time."),
     () => expect(rd('packages/protocol/src/http.ts')).not.toMatch(/threadDelete|deleteThread|thread\.delete/i),
   ],
-  'The relay address (the server the app talks to) is fixed when the iPhone app is built.': [
+  'The server address is fixed when the iPhone app is built.': [
     has('docs/ios.md', 'It loads the relay origin fixed at build time'),
   ],
   'The Devices list shows a device’s name and lets you end it.': [
@@ -715,11 +707,6 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/features/settings/DeviceRow.tsx', 'Revoke'),
   ],
   'It has no rename.': [lacks(S, 'Rename device'), () => expect(rd(S)).not.toMatch(/renameDevice/i)],
-  'They are two voices.': [has(VOICE, 'a different voice from the live-call voice')],
-  'The live-call voice is a Settings choice; spoken replies use your Mac’s speech command.': [
-    has(VOICE, 'your Mac reads it with its speech command'),
-    () => expect(SETTINGS_TEXT.Voice).toContain('Live-call voice'),
-  ],
 }
 
 /** Every sentence of every note, limit answer and key text. */

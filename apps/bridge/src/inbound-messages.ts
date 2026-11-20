@@ -1,22 +1,14 @@
-// Owner messages and voice notes, one at a time and as a backlog after the Mac was offline.
+// Owner messages, one at a time and as a backlog after the Mac was offline.
 // Handlers of the Inbound class (inbound.ts), which forwards to them. Dispatch and the first trust checks are in inbound.ts;
 // some handlers here run their own seen-id, age or card-state checks, so read both when auditing trust.
 import type { AttachmentRefT, MessageT } from '@talos-app/protocol'
 import { type AttachmentSource, attachmentDropNote } from './attachment-retry.ts'
 import { clockMeta, localTime } from './clock-meta.ts'
 import { type BridgeContext, defaultThreadRef, threadRef } from './context.ts'
-import { receiptFrame, transcriptFrame } from './frames-out.ts'
+import { receiptFrame } from './frames-out.ts'
 import type { Inbound } from './inbound.ts'
 import { BACKLOG_PART_BYTES, backlogRowBytes, type Item, type Of, oneLine } from './inbound-shared.ts'
-import {
-  type BacklogItem,
-  backlogNotification,
-  shownName,
-  textNotification,
-  voiceNoteNotification,
-  wrapShared,
-} from './notify.ts'
-import { transcribe } from './stt.ts'
+import { type BacklogItem, backlogNotification, shownName, textNotification, wrapShared } from './notify.ts'
 
 /**
  * The owner's last message time ("what did I miss" counts from it). Sessions deliver side by side (inbound-lanes.ts), so
@@ -31,9 +23,9 @@ export function bumpLastOwnerTs(ctx: BridgeContext, ts: string): void {
  * Which device the owner's latest message came from (kv `last_owner_device`, `{device_id, at}`), and when the BRIDGE received the
  * frame: `at` is `Item.receivedAt`, stamped when the frame came off the transport (never the phone's clock, and never the time its
  * turn in a busy lane came, so outside text that landed in between still counts as after his words). It moves forward in receive
- * order (`at` is the earlier of that and the relay's own received_at, when it has one). Called once per message the bridge has not seen (a resent client_msg_id never moves it), from onMessage, onVoiceNote and the
+ * order (`at` is the earlier of that and the relay's own received_at, when it has one). Called once per message the bridge has not seen (a resent client_msg_id never moves it), from onMessage and the
  * backlog. `devices revoke` from the agent reads the device so it never locks him out, and the agent checks read `at` as "when he
- * last spoke" (agent-cli.ts). Only his own typed or spoken message counts: a share is not him speaking, and nothing from a peer, a
+ * last spoke" (agent-cli.ts). Only his own typed message counts: a share is not him speaking, and nothing from a peer, a
  * hook or the agent comes through here.
  */
 export function noteOwnerDevice(ctx: Pick<BridgeContext, 'store'>, it: Item): void {
@@ -47,6 +39,17 @@ export function noteOwnerDevice(ctx: Pick<BridgeContext, 'store'>, it: Item): vo
     const prev = JSON.parse(ctx.store.kvGet('last_owner_device') ?? 'null') as { at?: number } | null
     if (typeof prev?.at === 'number' && prev.at > at) return // an earlier arrival processed later: keep the later receive
     ctx.store.kvSet('last_owner_device', JSON.stringify({ device_id: it.owner.deviceId, at }))
+  } catch {
+    // a store that refuses the write: the revoke check then has no record and refuses
+  }
+  // and per thread, for a thread session's own dating (agent-quiet.ts ownerWordsInThread)
+  try {
+    const thread = (it.frame as { thread_id?: unknown }).thread_id
+    if (typeof thread === 'string') {
+      const key = `last_owner_at:${thread}`
+      const was = Number(ctx.store.kvGet(key))
+      if (!(Number.isFinite(was) && was > at)) ctx.store.kvSet(key, String(at))
+    }
   } catch {
     // a store that refuses the write: the revoke check then has no record and refuses
   }
@@ -163,157 +166,48 @@ export const messagesFrames = {
     this.ctx.transport.sendEphemeral(receiptFrame(this.ctx.clock.now(), messageId, 'delivered', undo))
   },
 
-  /** Download, transcribe, and produce the content for one voice note (shared by single and backlog paths). */
-  async voiceNoteContent(this: Inbound, f: Of<'voice_note'>) {
-    const { ctx } = this
-    const att = f.attachment
-    const dl = await this.fetchAttachments([att], f.thread_id)
-    const durationS = att.duration_ms === undefined ? undefined : att.duration_ms / 1000
-    const file = dl.files[0]
-    if (!file) {
-      this.fire(transcriptFrame(ctx.clock.now(), f.client_msg_id, '', 'none', 'failed'))
-      return {
-        content: dl.notes[0] ?? '(voice note could not be fetched or verified and was dropped)',
-        status: 'failed' as const,
-        engine: 'none',
-        durationS,
-        file: undefined,
-      }
-    }
-    if (ctx.env.sttCmd || ctx.env.sttLongCmd)
-      this.fire(transcriptFrame(ctx.clock.now(), f.client_msg_id, '', 'stt', 'pending'))
-    const r = await transcribe(ctx.env, file.path, durationS)
-    if (r.status === 'done') {
-      this.fire(transcriptFrame(ctx.clock.now(), f.client_msg_id, r.text, r.engine, 'done'))
-      return { content: r.text, status: 'done' as const, engine: r.engine, durationS, file }
-    }
-    if (r.status === 'failed') {
-      this.fire(transcriptFrame(ctx.clock.now(), f.client_msg_id, '', r.engine, 'failed'))
-      return {
-        content: `(voice note; transcription failed: ${r.reason})`,
-        status: 'failed' as const,
-        engine: r.engine,
-        durationS,
-        file,
-      }
-    }
-    this.fire(transcriptFrame(ctx.clock.now(), f.client_msg_id, '', 'none', 'failed'))
-    return {
-      content: '(voice note; no transcriber configured)',
-      status: 'failed' as const,
-      engine: undefined,
-      durationS,
-      file,
-    }
-  },
-
-  async onVoiceNote(this: Inbound, it: Item, f: Of<'voice_note'>) {
-    const { ctx } = this
-    if (ctx.store.hasSeen(f.client_msg_id)) return this.done(it)
-    if (!ctx.config.thread(f.thread_id))
-      return this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
-    noteOwnerDevice(ctx, it)
-    const thread = threadRef(ctx, f.thread_id)
-    const v = await this.voiceNoteContent(f)
-    this.record({
-      id: f.client_msg_id,
-      thread_id: f.thread_id,
-      ...(this.seq(it) !== undefined ? { seq: this.seq(it) as number } : {}),
-      author: 'owner',
-      kind: 'voice_note',
-      text: v.status === 'done' ? v.content : '',
-      attachments: [f.attachment],
-      transcript: {
-        text: v.status === 'done' ? v.content : '',
-        engine: (v.engine ?? 'none').slice(0, 40),
-        status: v.status,
-      },
-      created_at: f.ts,
-    })
-    await ctx.emit(
-      voiceNoteNotification({
-        thread,
-        messageId: f.client_msg_id,
-        ts: f.ts,
-        content: v.content,
-        writtenAt: f.original_ts,
-        audioPath: v.file?.path,
-        engine: v.engine,
-        durationS: v.durationS,
-        clock: clockMeta(ctx, thread.id, f.ts, f.client_msg_id),
-      }),
-    )
-    bumpLastOwnerTs(ctx, f.ts)
-    this.afterOwnerNotify(thread.id, f.client_msg_id)
-    this.done(it, [f.client_msg_id])
-  },
-
   async handleBacklog(this: Inbound, items: Item[]) {
     const { ctx } = this
     // one row per message that is kept, with the files it carried: the rows are cut into notifications below
     const rows: Array<{ it: Item; entry: BacklogItem; files: Array<{ path: string; mime: string; name: string }> }> = []
     for (const it of items) {
-      const f = it.frame as Of<'message'> | Of<'voice_note'>
+      const f = it.frame as Of<'message'>
       if (!ctx.config.thread(f.thread_id)) {
         this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
         continue
       }
       noteOwnerDevice(ctx, it) // the backlog is only messages not seen before
       const thread = threadRef(ctx, f.thread_id)
-      if (f.type === 'message') {
-        const { files: fs, notes, refMeta } = await this.messageExtras(f)
-        const replyTo = this.replyContext(f)
-        this.record(this.messageRow(it, f))
-        if (refMeta?.memory_path)
-          notes.push(
-            `(attached note: ${oneLine(refMeta.memory_path)}${refMeta.memory_changed ? ', changed since you opened it' : ''})`,
-          )
-        rows.push({
-          it,
-          files: fs,
-          entry: {
-            thread,
-            messageId: f.client_msg_id,
-            at: f.ts,
-            text: f.text,
-            ...(replyTo ? { replyTo } : {}),
-            // outside material: wrapped as data exactly as the single-message path does, file names included
-            ...(f.share_content && (Object.keys(f.share_content).length > 0 || fs.length > 0)
-              ? {
-                  noteFiles: notes,
-                  shared: wrapShared(
-                    f.share_content,
-                    'Shared page',
-                    undefined,
-                    fs.map((x) => x.name),
-                  ),
-                }
-              : { noteFiles: [...fs.map((x) => shownName(x.name)), ...notes] }),
-          },
-        })
-      } else {
-        const v = await this.voiceNoteContent(f)
-        this.record({
-          id: f.client_msg_id,
-          thread_id: f.thread_id,
-          ...(this.seq(it) !== undefined ? { seq: this.seq(it) as number } : {}),
-          author: 'owner',
-          kind: 'voice_note',
-          text: v.status === 'done' ? v.content : '',
-          attachments: [f.attachment],
-          transcript: {
-            text: v.status === 'done' ? v.content : '',
-            engine: (v.engine ?? 'none').slice(0, 40),
-            status: v.status,
-          },
-          created_at: f.ts,
-        })
-        rows.push({
-          it,
-          files: v.file ? [v.file] : [],
-          entry: { thread, messageId: f.client_msg_id, at: f.ts, text: `(voice note) ${v.content}` },
-        })
-      }
+      const { files: fs, notes, refMeta } = await this.messageExtras(f)
+      const replyTo = this.replyContext(f)
+      this.record(this.messageRow(it, f))
+      if (refMeta?.memory_path)
+        notes.push(
+          `(attached note: ${oneLine(refMeta.memory_path)}${refMeta.memory_changed ? ', changed since you opened it' : ''})`,
+        )
+      rows.push({
+        it,
+        files: fs,
+        entry: {
+          thread,
+          messageId: f.client_msg_id,
+          at: f.ts,
+          text: f.text,
+          ...(replyTo ? { replyTo } : {}),
+          // outside material: wrapped as data exactly as the single-message path does, file names included
+          ...(f.share_content && (Object.keys(f.share_content).length > 0 || fs.length > 0)
+            ? {
+                noteFiles: notes,
+                shared: wrapShared(
+                  f.share_content,
+                  'Shared page',
+                  undefined,
+                  fs.map((x) => x.name),
+                ),
+              }
+            : { noteFiles: [...fs.map((x) => shownName(x.name)), ...notes] }),
+        },
+      })
     }
     if (!rows.length) return
     const oldest = Math.min(...items.map((i) => this.receivedAtOf(i)))
@@ -344,7 +238,7 @@ export const messagesFrames = {
       )
       bumpLastOwnerTs(ctx, part[part.length - 1]?.it.frame.ts ?? new Date(now).toISOString())
       for (const { it } of part) {
-        const f = it.frame as Of<'message'> | Of<'voice_note'>
+        const f = it.frame as Of<'message'>
         this.afterOwnerNotify(f.thread_id, f.client_msg_id)
         this.done(it, [f.client_msg_id])
       }

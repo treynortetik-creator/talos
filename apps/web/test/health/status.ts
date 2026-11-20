@@ -14,7 +14,7 @@ export function statusOf(over: Partial<HealthStatusT> = {}): HealthStatusT {
     mod: { state: 'alive', last_seen: '2026-10-29T19:59:57.000Z', expected: true },
     push: { subscriptions: 1, last_ok_at: '2026-10-29T18:00:00.000Z', last_error_at: null },
     ntfy: false,
-    beat: { mod: { state: 'alive', last_seen: AT, expected: true }, tts: true, stt: true, sqlite: { fts5: true } },
+    beat: { mod: { state: 'alive', last_seen: AT, expected: true }, tts: true, sqlite: { fts5: true } },
     ...over,
   }
 }

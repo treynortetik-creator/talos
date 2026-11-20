@@ -72,19 +72,6 @@ describe('owner frames', () => {
     expect(got.relay).toMatchObject({ seq: expect.any(Number) })
   })
 
-  it('never forwards a voice.ask from an app: only the voice module may emit one (FOLLOWUPS PR3)', async () => {
-    relay = await startTestRelay()
-    const k = kit(relay)
-    const app = await k.connectedApp()
-    const bridge = await k
-      .bridge({ pinnedDevices: { [app.device.deviceId]: app.device.publicJwk }, consume: 'manual' })
-      .connect()
-    const ask = await app.sendVoiceAsk('general', 'what is on my plate?')
-    expect((await app.expectFrame('error', (f) => f.ref === ask.id)).code).toBe('bad_frame')
-    await sleep(120)
-    expect(bridge.rec.of('voice.ask', 'in')).toHaveLength(0)
-  })
-
   it('refuses a config.patch outside the allowlist with config_field_forbidden, before the bridge sees it', async () => {
     relay = await startTestRelay()
     const k = kit(relay)
@@ -94,26 +81,6 @@ describe('owner frames', () => {
     expect((await app.expectFrame('error', (f) => f.ref === bad.id)).code).toBe('config_field_forbidden')
     await sleep(80)
     expect(bridge.rec.of('config.patch', 'in')).toHaveLength(0)
-  })
-
-  it('a voice note is stored and forwarded like a message', async () => {
-    relay = await startTestRelay()
-    const k = kit(relay)
-    const app = await k.connectedApp()
-    const bridge = await k.bridge({ verifyOwner: false, autoReply: false }).connect()
-    const sent = await app.sendVoiceNote('general', {
-      media_id: newId('md'),
-      kind: 'voice_note',
-      role: 'attachment',
-      mime: 'audio/webm',
-      name: 'note.webm',
-      size: 1200,
-      sha256: 'a'.repeat(64),
-      duration_ms: 3000,
-    })
-    const stored = await app.expectFrame('message.stored', (f) => f.client_msg_id === sent.client_msg_id)
-    expect(stored.message.kind).toBe('voice_note')
-    await bridge.expectFrame('voice_note', (f) => f.id === sent.id, { direction: 'in' })
   })
 })
 

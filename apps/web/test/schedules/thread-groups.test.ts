@@ -25,7 +25,7 @@ describe('groupByThread', () => {
   it("Main first, then each thread in the list's order; a thread that is archived or gone folds into Main", () => {
     const g = group()
     expect(g.map((x) => x.key)).toEqual([MAIN_GROUP, 'trip', 'garden', 'shared_one'])
-    expect(g[0]?.name).toBe('Main')
+    expect(g[0]?.name).toBe('Main agent')
     expect(g[0]?.rows.map((r) => r.id).sort()).toEqual(['daily-summary', 'gone-thread-job'])
     expect(g[1]?.rows.map((r) => r.id)).toEqual(['packing-check', 'trip-backup', 'trip-both', 'hotel-watch']) // on jobs before the off one
     expect(g[1]?.name).toBe('Trip')
@@ -87,13 +87,13 @@ describe("jobRunnerText: the job's own runner decides", () => {
     permissions: 'full' | 'restricted' = 'full',
   ) => ({ runner, kind, permissions })
   it('only a session job in a thread with its own session reads "own session"', () => {
-    expect(jobRunnerText(j('session'), 'own_live', 'Trip')).toEqual({ text: "Runs in Trip's own session", own: true })
-    expect(jobRunnerText(j('session'), 'main', 'Rota')).toEqual({ text: 'Run by Main', own: false })
+    expect(jobRunnerText(j('session'), 'own_live', 'Trip')).toEqual({ text: "Run by Trip's own agent", own: true })
+    expect(jobRunnerText(j('session'), 'main', 'Rota')).toEqual({ text: 'Run by your main agent', own: false })
   })
   it('a session job with restricted permissions is headless: never "own session"', () => {
     for (const g of ['own_live', 'own_parked', 'own', 'main'] as const)
       expect(jobRunnerText(j('session', 'claude', 'restricted'), g, 'Trip')).toEqual({
-        text: 'Runs in the background, no session',
+        text: 'Runs in the background, no agent needed',
         own: false,
       })
   })
@@ -103,8 +103,8 @@ describe("jobRunnerText: the job's own runner decides", () => {
       expect(jobRunnerText(j('both'), g, 'Trip').own).toBe(false)
       expect(jobRunnerText(j('session', 'command'), g, 'Trip').own).toBe(false)
     }
-    expect(jobRunnerText(j('headless'), 'own_live', 'Trip').text).toBe('Runs in the background, no session')
-    expect(jobRunnerText(j('both'), 'own_live', 'Trip').text).toBe('Run by Main, with a background backup')
+    expect(jobRunnerText(j('headless'), 'own_live', 'Trip').text).toBe('Runs in the background, no agent needed')
+    expect(jobRunnerText(j('both'), 'own_live', 'Trip').text).toBe('Run by your main agent, with a background backup')
   })
 })
 
@@ -129,10 +129,10 @@ describe('runnerOf', () => {
   })
   it('the words', () => {
     expect(RUNNER_WORDS).toEqual({
-      own_live: 'own session · live',
-      own_parked: 'own session · parked',
-      own: 'own session',
-      main: 'run by Main',
+      own_live: 'own agent · live',
+      own_parked: 'own agent · parked',
+      own: 'own agent',
+      main: 'run by your main agent',
     })
   })
 })

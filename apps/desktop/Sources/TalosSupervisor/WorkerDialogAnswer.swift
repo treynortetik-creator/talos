@@ -15,7 +15,7 @@ import TalosDesktopCore
 /// can read exactly the same, and the tap was for the one the card showed); no tmux client typed within `clientQuiet`; the screen is read again,
 /// as the same kind of dialog with the same labels (and the same subject, if the offer had one). Then ONE arrow at a time, each followed by a read that must show the highlighted
 /// row one step on; Enter only when the highlighted label is the signed choice's, never twice for one dialog. Anything else sends nothing
-/// more and the result says "nothing pressed" and why. A key whose send timed out counts as sent: it is never repeated.
+/// more and the result says "nothing pressed" and why. An Enter whose send timed out is not repeated for that card, and is not counted as answered either: after a short memory the same unchanged dialog is offered again, new id.
 extension WorkerManager {
   /// How long an arrow gets to show on the screen, and the pause between looks. Claude redraws within a frame; this is slack for a busy Mac.
   static let echoWait: Double = 2
@@ -60,7 +60,7 @@ extension WorkerManager {
   /// dialog id is taken; any other is left where it is. Each control id once, the same file rules as every result.
   private func answerLate(_ id: String) {
     guard let r = rt[id] else { return }
-    let answered = [r.offer.enterSentFor, r.offer.openedFor].compactMap { $0 }
+    let answered = [r.offer.enterSentFor, r.offer.enterUnsentFor, r.offer.openedFor].compactMap { $0 }  // an Enter of unknown delivery too: if it landed, the dialog is gone
     guard !answered.isEmpty else { return }
     let path = dir(id) + "/" + DialogAnswerRequest.fileName
     guard case .answer(let peek) = DialogAnswerFile.read(path: path), answered.contains(where: { ExactText.equal($0, peek.dialogId) }) else { return }
@@ -81,7 +81,7 @@ extension WorkerManager {
   /// Whether this answer is the owner's: the one place that decides it, so where the proof's key comes from can change without touching the
   /// rest. The Mac's own record of the dialog (`offer`, in memory) is what the signed card must equal.
   func isAuthentic(_ id: String, _ offer: DialogOffer, _ a: DialogAnswerRequest) -> DialogProofCheck.Verdict {
-    let pane = DialogProofCheck.Pane(thread: id, dialogId: offer.id, kind: offer.kind, subject: offer.subject, options: offer.options)
+    let pane = DialogProofCheck.Pane(thread: id, dialogId: offer.id, kind: offer.kind, subject: offer.subject, options: offer.options, freeText: offer.free_text)
     let devices = options.talosHome + "/devices.json"
     return DialogProofCheck.verify(
       a,
@@ -114,7 +114,7 @@ extension WorkerManager {
         rt[id]?.offer.openedFor = offer.id  // once per dialog id, for the popup's button too
         return .init(outcome: .opened)
       }
-      return press(id, offer, choice, label)
+      return press(id, offer, choice, label, text: DialogProofCheck.signedText(a))
     }
   }
 
@@ -138,14 +138,16 @@ extension WorkerManager {
 
   /// Whether a tmux client may be typing: one typed within `clientQuiet` (`.typing`), or the clients could not be read (`.unreadable`). Unlike
   /// the pointer's guard, which says "not typing" for what it cannot read, a key into a dialog is never sent on a guess.
-  private func typingBlock(_ id: String) -> AnswerOutcome.Blocked? {
+  func typingBlock(_ id: String) -> AnswerOutcome.Blocked? {
     let c = run(tmux(id).listClientsActivity())
     guard c.ok, let times = TmuxCommands.parseClientActivity(c.out) else { return .unreadable }
     guard let last = times.max() else { return nil }
     return now() - last < options.clientQuiet ? .typing : nil
   }
 
-  func press(_ id: String, _ offer: DialogOffer, _ choice: Int, _ chosen: String) -> AnswerOutcome {
+  func press(_ id: String, _ offer: DialogOffer, _ choice: Int, _ chosen: String, text: String? = nil) -> AnswerOutcome {
+    // a tool permission or the agent's question: one number key (and a free-text answer's words), each checked against the offered screen
+    if offer.kind == .toolPermission || offer.kind == .agentQuestion { return pressPane(id, offer, choice, chosen, text: text) }
     // every key states the offered dialog's kind, and the key guard lets it go only onto that dialog, read exactly (`KeyGuard`)
     guard let intent = KeyGuard.intent(for: offer.kind) else { return .nothing() }
     for _ in 0...offer.options.count {
@@ -159,8 +161,16 @@ extension WorkerManager {
         guard let last = readDialog(id), DialogAnswer.differs(offered: offer.dialog, fresh: last) == nil, let c = last.cursor,
           last.options.indices.contains(c), ExactText.equal(last.options[c], chosen)
         else { return .nothing() }
-        guard let sent = sendKey(id, tmux(id).sendDialogKey(.enter), intent), sent.ok || sent.timedOut else { return .nothing() }  // a timeout may have been delivered: counted, never repeated
-        rt[id]?.offer.enterSentFor = offer.id
+        guard let sent = sendKey(id, tmux(id).sendDialogKey(.enter), intent), sent.ok || sent.timedOut else { return .nothing() }
+        if sent.ok {
+          rt[id]?.offer.enterSentFor = offer.id
+        } else {
+          // a timeout may have been delivered, so no second Enter goes for this card (disturbed refuses every answer for the id), but it is not
+          // recorded as answered either: a short memory, then the unchanged screen is offered again as a new sighting (`syncOffer`)
+          rt[id]?.offer.disturbed = true
+          rt[id]?.offer.enterUnsentFor = offer.id
+          rt[id]?.offer.enterUnsentUntil = awake() + options.unsentEnterMemory
+        }
         // only a delivery tmux confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
         if offer.kind == .trust, !chosen.hasPrefix("Yes"), sent.ok { rt[id]?.offer.declinedTrust = true }
         // the other two questions whose "no" ends the session on its own: the disclaimer's "No, exit" and the channel's "Exit"

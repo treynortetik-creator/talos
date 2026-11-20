@@ -130,7 +130,7 @@ export function AgentSettingsSection({ readOnly, readOnlyWhy = 'mac' }: Settings
       <Group title="Threads">
         <p className="m-0 text-sm text-text-2">
           Names, order, icons, colors and archiving live in Manage threads. Each thread's own settings (notifications,
-          live-call context, its own session) are in that thread's settings.
+          live-call context, its own agent) are in that thread's settings.
         </p>
         <Link
           to="/threads?manage=1"

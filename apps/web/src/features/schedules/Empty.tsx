@@ -94,7 +94,7 @@ export function EmptyState({
       mascot = 'worried'
       break
     case 'update_relay':
-      title = 'Update your Talos relay to use Schedules.'
+      title = 'Update Talos online to use Schedules.'
       mascot = 'worried'
       break
     case 'update_app':
@@ -116,7 +116,7 @@ export function EmptyState({
       body = (
         <p className="text-sm text-text-2">
           <Ticks
-            text={placeWords('Remove that setting on your Mac and restart your session to turn them back on.', host)}
+            text={placeWords('Remove that setting on your Mac and restart your agent to turn them back on.', host)}
           />
         </p>
       )

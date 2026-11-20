@@ -298,11 +298,11 @@ describe('every script path in SETUP.md exists and mentions the flags shown', ()
   })
 })
 
-describe('the voice lines in SETUP.md, written to a real bridge.env and read by the bridge', () => {
+describe('the spoken-reply lines in SETUP.md, written to a real bridge.env and read by the bridge', () => {
   const printfLines = codeLines.filter((l) => l.startsWith("printf 'TALOS_APP_") && l.includes('bridge.env'))
 
-  it('are there (STT, TTS, extension)', () => {
-    expect(printfLines.length).toBe(3)
+  it('are there (TTS, extension)', () => {
+    expect(printfLines.length).toBe(2)
   })
 
   it('produce argv that points at the agent folder scripts, with the placeholders the bridge fills in', () => {
@@ -314,9 +314,7 @@ describe('the voice lines in SETUP.md, written to a real bridge.env and read by 
       expect(r.status, r.stderr).toBe(0)
     }
     const env = parseEnvFile(readFileSync(join(home, '.config', 'talos', 'app', 'bridge.env'), 'utf8'))
-    const stt = parseArgv(env.TALOS_APP_STT_CMD)
     const tts = parseArgv(env.TALOS_APP_TTS_CMD)
-    expect(stt).toEqual([join(home, 'talos-agent', 'scripts', 'stt.sh'), '{in}'])
     expect(tts).toEqual([join(home, 'talos-agent', 'scripts', 'tts.sh'), 'file', '{out}', '{text}'])
     expect(env.TALOS_APP_TTS_EXT).toBe('m4a')
   })

@@ -13,6 +13,7 @@ ok    bridge.env mode: missing
 ok    bridge key: id <keyid>
 ok    config.json: rev 0
 ok    search (FTS5): available
+ok    linked agents: none
 ok    codex (optional): <varies>
 ok    other relaying channels: none found
 warn  ask rules: permission_relay is on but no permissions.ask rules were found. In bypass mode nothing prompts, so nothing reaches the phone. Run: talos-app install-ask-rules --agent-dir <dir> --dry-run

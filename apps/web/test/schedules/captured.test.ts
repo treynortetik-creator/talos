@@ -86,7 +86,7 @@ describe('what the statuses mean (13: a job through offered, agent_busy, no_sess
     expect(words).toEqual([
       'Waiting for the agent', // offered
       'Waiting for the agent', // agent_busy
-      "Waiting: agent session isn't running", // no_session
+      "Waiting: your agent isn't running", // no_session
       'Running…',
       'Failed',
     ])

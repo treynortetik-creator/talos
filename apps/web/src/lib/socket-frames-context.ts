@@ -12,7 +12,7 @@ export type FrameContext = {
   set: (fn: (s: ClientState) => Partial<ClientState>) => void
   now: () => number
   lostIds: Set<string>
-  ackedRefs: Map<string, { clientMsgId: string; threadId: string; voiceNote: boolean }>
+  ackedRefs: Map<string, { clientMsgId: string; threadId: string }>
   patchMessage: (id: string, fn: (m: MessageT) => MessageT) => void
   upsertMessage: (m: MessageT) => void
   upsertCard: (card: CardT) => void
@@ -56,7 +56,6 @@ export type FrameContext = {
   historyErrors: Map<string, (e: TalosClientError) => void>
   inboxSettled: (frameId: string, outcome?: InboxOutcome) => boolean
   onAcked: (frameId: string) => Promise<void>
-  dropFromOutbox: (frameId: string) => Promise<void>
   flushOutbox: () => Promise<void>
   flushReads: () => void
   dispatch: (frame: Frame, isCatchup?: boolean) => void

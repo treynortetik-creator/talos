@@ -101,7 +101,7 @@ export function HeartbeatSetupScreen() {
           </p>
           {!canTest ? (
             <p role="status" data-testid="hb-needs-update" className="m-0 text-sm text-warn">
-              Update Talos on your Mac and your relay to test and turn on a heartbeat.
+              Update Talos on your Mac and the Talos server to test and turn on a heartbeat.
             </p>
           ) : null}
 

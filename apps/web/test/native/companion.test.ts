@@ -325,7 +325,7 @@ describe('the feed, against the real client store', () => {
     for (const fr of companionFrames()) expect(WebToNative.safeParse(fr).success).toBe(true)
   })
 
-  it('a reply with no relay seq, a silent one, a voice one, an owner one and a muted thread raise nothing', async () => {
+  it('a reply with no relay seq, a silent one, an owner one and a muted thread raise nothing', async () => {
     const muted = AgentConfig.parse({
       ...readyFixture.agent_config,
       threads: config.threads.map((t) => (t.id === 'inbox' ? { ...t, notify: 'off' } : t)),
@@ -335,13 +335,7 @@ describe('the feed, against the real client store', () => {
     await waitFor(() => companionFrames().length >= 1, 2000, 'first frame')
     const owner = reply({}, 13) as unknown as { message: { author: string } }
     owner.message.author = 'owner'
-    const ignored = [
-      reply({}, undefined),
-      reply({ silent: true }, 10),
-      reply({ voice_delegation_id: 'v_1' }, 11),
-      reply({}, 12, 'inbox'),
-      owner,
-    ]
+    const ignored = [reply({}, undefined), reply({ silent: true }, 10), reply({}, 12, 'inbox'), owner]
     // One at a time, each proven to have reached the store, then given time to (wrongly) produce a frame.
     for (const [i, f] of ignored.entries()) {
       relay.sendToApps(f)

@@ -14,6 +14,7 @@ import {
   DialogId,
   DialogKind,
   type DialogKindT,
+  FreeText,
   LaunchChanged,
   type WorkerDialogT,
 } from './dialog-files.ts'
@@ -39,6 +40,9 @@ export const DIALOG_UNVERIFIED_TEXT = 'Answer on the Mac'
 export const DIALOG_ALREADY_ANSWERED_TEXT = 'Already answered at the Mac first.'
 /** The Mac pressed something other than what was answered, or did not report. Nothing is claimed. */
 export const DIALOG_MISMATCH_TEXT = 'Your Mac reported pressing something different. Check the session in Terminals.'
+/** The Mac sent the key and has not seen it take (a timeout, or the prompt is still on screen). Not an answer that stood: the prompt comes back as a new card. */
+export const DIALOG_SENT_UNCONFIRMED_TEXT =
+  "Sent, but your Mac hasn't seen it take yet. If the prompt comes back, answer it again."
 export const DIALOG_UNCONFIRMED_TEXT =
   "Your Mac didn't confirm that it pressed the key. Check the session in Terminals."
 
@@ -55,6 +59,8 @@ export const DIALOG_WORDING = {
     login: '{thread} needs you to sign in',
     dev_channels: "Allow Talos's development channel?",
     bypass: 'Run with permission checks off?',
+    tool_permission: 'Allow this tool request?',
+    agent_question: "A question from {thread}'s session",
   },
   /** The heading when the server is known: `Use github?`. `{server}` is the name as read (hidden characters shown, cut at 60). */
   titleNamed: { mcp_consent: 'Use {server}?' },
@@ -66,6 +72,9 @@ export const DIALOG_WORDING = {
     dev_channels: "Main session's start needs this to talk to the Talos app.",
     bypass:
       "{thread}'s session was started with permission checks off. It will run commands and change files without asking you first. Accept only if you meant that.",
+    tool_permission:
+      "{thread}'s session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac.",
+    agent_question: "{thread}'s session is asking you to choose. Your answer goes straight into the session.",
   },
   /** The sentence for a thread session's development-channels question (Main's is `sentence.dev_channels`). */
   sentenceThreadDevChannels:
@@ -99,6 +108,8 @@ const DIALOG_PROMPT: Record<DialogKindT, string> = {
   login: 'sign in',
   dev_channels: 'allow the development channel',
   bypass: 'run with permission checks off',
+  tool_permission: 'allow a tool request',
+  agent_question: 'answer a question',
 }
 
 /** What a dialog card binds: the dialog, nothing else. */
@@ -109,11 +120,17 @@ export const DialogCardPayload = z
     dialog_kind: DialogKind,
     ...DialogFacts,
     launch_changed: LaunchChanged.optional(),
+    /** A question's free-text option (its index in `options`): the card draws a text field for it. */
+    free_text: FreeText.optional(),
     expires_at: IsoTs,
   })
   .refine((d) => (d.dialog_kind === 'login' ? d.options.length === 0 : d.options.length >= 1), {
     path: ['options'],
     message: 'a login dialog has no options; the others have at least one',
+  })
+  .refine((d) => d.free_text === undefined || (d.dialog_kind === 'agent_question' && d.free_text < d.options.length), {
+    path: ['free_text'],
+    message: 'only a question has a free-text option, and it is one of its options',
   })
 export type DialogCardPayloadT = z.infer<typeof DialogCardPayload>
 
@@ -208,7 +225,13 @@ export function dialogFallbackLine(kind: DialogKindT, where: DialogWhere): strin
       : `Sign in to Claude again: ${what}. Talos started the sign-in on ${where.machine}; its link is in this thread.`
   // the converted questions (a card with buttons): nothing here sends the owner to a terminal. The card is the way to answer; once it has
   // expired nothing is pressed, and the line says so
-  if (kind === 'mcp_consent' || kind === 'dev_channels' || kind === 'bypass')
+  if (
+    kind === 'mcp_consent' ||
+    kind === 'dev_channels' ||
+    kind === 'bypass' ||
+    kind === 'tool_permission' ||
+    kind === 'agent_question'
+  )
     return `${what}. Its card expired without an answer, so nothing was pressed.`
   return where.kind === 'mac'
     ? `${what}; open this thread in Terminals on the Mac to answer.`
@@ -225,7 +248,25 @@ export function dialogAnswerText(kind: DialogKindT, subject: string | null, labe
     return /^yes\b/i.test(label.trim())
       ? 'Accepted: running with permission checks off'
       : 'Exited: the session was stopped'
+  if (kind === 'tool_permission') return label === 'Allow once' ? 'Allowed once' : 'Denied'
   return dialogVisibleText(label)
+}
+
+/** The longest free-text answer: what one row of the pane can show back, so the Mac can confirm the words before it presses Enter. */
+export const DIALOG_TEXT_MAX = 120
+
+/**
+ * The owner's words for a question's free-text option, as the Mac will type them: one line of 1 to 120 characters with no control, invisible
+ * or direction-changing character. Refused, never cleaned up: what is typed into the session is what the owner wrote (the Mac's
+ * `PaneSelect.cleanAnswerText` is this rule). Null when it is not that.
+ */
+export function cleanDialogText(text: string): string | null {
+  const t = text.trim()
+  const n = [...t].length
+  if (n < 1 || n > DIALOG_TEXT_MAX) return null
+  // INVISIBLE_OR_BIDI takes every C0 and C1 control (a newline, a tab, an escape) as well as the hidden and direction-changing characters
+  if (new RegExp(INVISIBLE_OR_BIDI.source, 'u').test(t)) return null
+  return t
 }
 
 /** The option the owner chose, if the index is one of the card's. */
@@ -261,6 +302,7 @@ export function composeDialogCard(input: ComposeDialogCardInput): CardT | null {
     subject: d.subject,
     options: d.options,
     ...(d.launch_changed === undefined ? {} : { launch_changed: d.launch_changed }),
+    ...(d.free_text === undefined ? {} : { free_text: d.free_text }),
     expires_at: new Date(expiresMs).toISOString(),
   }
   if (!DialogCardPayload.safeParse(payload).success) return null

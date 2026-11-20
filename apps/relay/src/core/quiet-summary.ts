@@ -62,7 +62,7 @@ function writeQuietHeld(store: Store, h: QuietHeld): void {
  */
 export function holdForSummary(store: Store, intent: PushIntent, cfg: AgentConfigT): void {
   const needsYou = isNeedsYouTemplate(intent.template)
-  const reply = intent.template === 'reply' || intent.template === 'answer_ready'
+  const reply = intent.template === 'reply'
   if (!needsYou && !reply) return
   const thread = intent.thread_id ? cfg.threads.find((t) => t.id === intent.thread_id) : undefined
   if (thread?.notify === 'off') return

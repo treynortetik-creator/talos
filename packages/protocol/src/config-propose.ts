@@ -206,7 +206,6 @@ function newThread(id: string, value: unknown, current: AgentConfigT, now: strin
     kind: 'agent',
     order: Math.max(0, ...current.threads.map((t) => t.order)) + 1 + index,
     notify: 'all',
-    voice_context: 'recent',
     archived: false,
     created_at: now,
   }

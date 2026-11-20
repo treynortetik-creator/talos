@@ -1,5 +1,5 @@
 // Journey: switches the owner can flip, and whether the product behaves differently afterwards.
-//   - voice-note replies: flipped in the app (Settings, Voice); config.json and the next reply both change.
+//   - spoken replies: flipped in the app (Settings, Voice); config.json and the next reply both change.
 //   - Chat notifications and Quiet hours: flipped in the app (Settings, Notifications); config.json changes and the relay
 //     stops (and later resumes) pushing the next reply, for the reason that switch names.
 //   - permission_relay: has no switch in the app (the Health screen says so); it is a line in config.json. Turning it off
@@ -23,13 +23,13 @@ const writeConfig = (stack: Stack, change: (c: Record<string, unknown>) => void)
   writeFileSync(join(stack.home, 'config.json'), `${JSON.stringify(c, null, 2)}\n`)
 }
 
-test('settings-switches: voice-note replies set in the app change the config and the next reply', async ({
+test('settings-switches: spoken replies set in the app change the config and the next reply', async ({
   stack,
   page,
   context,
 }) => {
   await signedIn(stack, page, context)
-  const select = page.getByLabel('Voice-note replies')
+  const select = page.getByLabel('Spoken replies')
 
   await test.step('Always: a plain reply comes with audio', async () => {
     await page.goto(`${stack.origin}/settings/voice`)
@@ -43,13 +43,13 @@ test('settings-switches: voice-note replies set in the app change the config and
     await expect(msg.getByTestId('audio')).toHaveCount(1)
   })
 
-  await test.step('Never: even a reply that asks for voice comes as text only', async () => {
+  await test.step('Never: a reply comes as text only', async () => {
     await page.goto(`${stack.origin}/settings/voice`)
     await select.selectOption('never')
     await waitUntil(() => readConfig(stack).voice_notes.reply_with_voice === 'never', 'config.json to say never')
     await openThread(page, 'General')
-    await stack.claude.callTool('reply', { thread_id: 'general', text: 'asked for voice, voice never', voice: true })
-    const msg = page.getByTestId('msg-agent').filter({ hasText: 'asked for voice, voice never' })
+    await stack.claude.callTool('reply', { thread_id: 'general', text: 'voice never' })
+    const msg = page.getByTestId('msg-agent').filter({ hasText: 'voice never' })
     await expect(msg).toBeVisible()
     await page.waitForTimeout(1000)
     await expect(msg.getByTestId('audio')).toHaveCount(0)

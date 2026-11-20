@@ -27,7 +27,7 @@ describe('StorageRecovery', () => {
     render(<StorageRecovery kind="storage" where="browser" onRetry={vi.fn()} />)
     const text = document.body.textContent ?? ''
     expect(text).toMatch(/unsent messages/i)
-    expect(text).toMatch(/voice notes/i)
+    expect(text).not.toMatch(/voice notes/i) // voice input is archived (docs/archived/voice.md): none can be waiting
     expect(text).toMatch(/chats saved on this device/i)
     expect(text).toMatch(/this device's key/i)
     expect(text).toMatch(/pair this device again/i)
@@ -67,7 +67,7 @@ describe('StorageRecovery', () => {
     expect(text).toMatch(/install it again/i)
     expect(text).not.toMatch(/browser/i)
     expect(text).not.toMatch(/other tab/i)
-    expect(text).toMatch(/unsent messages, voice notes, chats saved on this device and this device's key/i)
+    expect(text).toMatch(/unsent messages, chats saved on this device and this device's key/i)
     expect(text).toMatch(/pair this device again/i)
   })
 
@@ -77,7 +77,7 @@ describe('StorageRecovery', () => {
     expect(text).toMatch(/Forget this Mac/)
     expect(text).toMatch(/revokes this Mac/i)
     expect(text).toMatch(/new setup code/i)
-    expect(text).toMatch(/unsent messages, voice notes, chats saved on this device and this device's key/i)
+    expect(text).toMatch(/unsent messages, chats saved on this device and this device's key/i)
     expect(text).not.toMatch(/browser/i)
   })
 
@@ -98,7 +98,7 @@ describe('StorageRecovery', () => {
   it('a pending wipe that kept the queue (session only expired) does not claim the owner signed out', () => {
     render(<StorageRecovery kind="wipe" wipeMode="keep" where="browser" onRetry={vi.fn()} />)
     expect(screen.queryByText(/you signed out here/i)).toBeNull()
-    expect(screen.getByText(/session ended/i)).toBeTruthy()
+    expect(screen.getByText(/you were signed out/i)).toBeTruthy()
     expect(screen.getByText(/unsent messages are kept/i)).toBeTruthy()
   })
 

@@ -11,17 +11,16 @@ import { useGlobalKeys } from '../../src/lib/useKeyboard.ts'
 
 afterEach(cleanup)
 
-function Keys({ onCall }: { onCall?: () => void }) {
-  // the table has the Call chord; a handler that does not run it answers false, so the browser keeps the key
-  useGlobalKeys({ onAction: (e) => (e.id === 'call' && onCall ? onCall() : false) })
+function Keys() {
+  // a handler that does not run a chord answers false, so the browser keeps the key
+  useGlobalKeys({ onAction: () => false })
   return null
 }
 
-describe('call shortcut', () => {
+describe('paste chords', () => {
   const chord = (init: KeyboardEventInit) => new KeyboardEvent('keydown', { cancelable: true, ...init })
-  it('never takes a paste chord, even when a call handler exists', () => {
-    const onCall = vi.fn()
-    render(<Keys onCall={onCall} />)
+  it('are never taken by a shortcut', () => {
+    render(<Keys />)
     for (const init of [
       { code: 'KeyV', key: 'v', metaKey: true, shiftKey: true },
       { code: 'KeyV', key: 'v', metaKey: true },
@@ -31,20 +30,6 @@ describe('call shortcut', () => {
       window.dispatchEvent(e)
       expect(e.defaultPrevented).toBe(false)
     }
-    expect(onCall).not.toHaveBeenCalled()
-  })
-  it('is taken only when a call handler exists', () => {
-    render(<Keys />)
-    const none = chord({ code: 'KeyK', key: 'k', metaKey: true, shiftKey: true })
-    window.dispatchEvent(none)
-    expect(none.defaultPrevented).toBe(false)
-    cleanup()
-    const onCall = vi.fn()
-    render(<Keys onCall={onCall} />)
-    const e = chord({ code: 'KeyK', key: 'k', metaKey: true, shiftKey: true })
-    window.dispatchEvent(e)
-    expect(e.defaultPrevented).toBe(true)
-    expect(onCall).toHaveBeenCalledTimes(1)
   })
 })
 

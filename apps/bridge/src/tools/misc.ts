@@ -1,6 +1,6 @@
-// `set_status`, `voice_progress`, `inbox_triage`, `inbox_raw` (spec 4.4).
+// `set_status`, `inbox_triage`, `inbox_raw` (spec 4.4).
 import { EventId, wrapExternal } from '@talos-app/protocol'
-import { inboxUpdateFrame, statusFrame, voiceProgressFrame } from '../frames-out.ts'
+import { inboxUpdateFrame, statusFrame } from '../frames-out.ts'
 import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
 import { NOT_FOR_WORKERS, OWN_THREAD, type ToolRecord } from './define.ts'
 
@@ -35,36 +35,6 @@ export const setStatus: ToolRecord = {
       if (!ctx.transport.sendEphemeral(statusFrame(ctx.clock.now(), id, state, label)))
         return ok(`status ${state} not sent: the app connection is down. Set it again once it is back.`)
       return ok(`status ${state}`)
-    } catch (e) {
-      return fail((e as Error).message)
-    }
-  },
-}
-
-export const voiceProgress: ToolRecord = {
-  name: 'voice_progress',
-  group: 'core',
-  headless: false,
-  ...NOT_FOR_WORKERS,
-  instructions: null,
-  told: [],
-  description: 'Progress on a live-call question: a quiet fact (say=false) or a spoken update (say=true).',
-  liveOnly: true,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      voice_delegation_id: { type: 'string' },
-      text: { type: 'string', description: 'Up to 2000 characters.' },
-      say: { type: 'boolean' },
-    },
-    required: ['voice_delegation_id', 'text'],
-  },
-  async handler(ctx, args) {
-    try {
-      const id = needStr(args, 'voice_delegation_id')
-      const text = needStr(args, 'text', 2000)
-      ctx.transport.sendEphemeral(voiceProgressFrame(ctx.clock.now(), id, text, args.say === true))
-      return ok('sent')
     } catch (e) {
       return fail((e as Error).message)
     }

@@ -108,6 +108,8 @@ public enum PopupNothing: Equatable, Sendable {
   case typing
   /// The tmux clients could not be read, so a key is never sent on a guess.
   case couldNotCheck
+  /// A key was sent and Talos has not seen it take: not an answer that stood, and the prompt is offered again if it is still there.
+  case unconfirmed
 }
 
 /// What the popup controller needs of the worker manager (the live one is `WorkerManager`; tests bring their own).
@@ -201,6 +203,12 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     case .login:
       title = "\(name) needs you to sign in"
       sentence = "\(name)'s session needs you to sign in to Claude on the Mac."
+    case .toolPermission:
+      title = "Allow this tool request?"
+      sentence = "\(name)'s session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac."
+    case .agentQuestion:
+      title = "A question from \(Self.cut60(name))'s session"
+      sentence = "\(name)'s session is asking you to choose. Your answer goes straight into the session."
     case .apiKey:
       title = ApiKeyCard.title
       sentence = "\(name)'s session found an API key in your environment. If you use it, Claude Code bills that key instead of your Claude account. Claude Code's own default is not to use it."
@@ -214,7 +222,8 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     let buttons =
       d.kind == .login
       ? [NeedsYouPopupButton(text: openLabel, action: .open)]
-      : d.options.enumerated().map { NeedsYouPopupButton(text: DialogVisibleText.show($1), action: .choose($0, label: $1)) }
+      // the free-text option needs a text field, which only the phone card has: the popup keeps every other option
+      : d.options.enumerated().filter { $0.offset != d.free_text }.map { NeedsYouPopupButton(text: DialogVisibleText.show($1), action: .choose($0, label: $1)) }
     return NeedsYouPopupContent(
       header: "Talos · \(name) needs you", title: title, subject: d.subject.map(DialogVisibleText.show), sentence: sentence, buttons: buttons,
       footer: !isMain ? footer : item.phoneTold ? footerMain : footerMainHere)
@@ -242,6 +251,7 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     case .alreadyAnswered(let by): return "Already answered on \(by.map(DialogVisibleText.show) ?? "another device")"
     case .noWindow: return "Nothing opened: Talos could not open the sign-in window. Choose Sign in to Claude again in the Talos menu."
     case .typing: return "You were typing in \(name)'s session, so Talos left it alone."
+    case .unconfirmed: return "Sent, but Talos has not seen it take yet. If \(name)'s prompt comes back, answer it again."
     case .couldNotCheck: return "Talos could not check whether you were typing in \(name)'s session, so it left it alone."
     }
   }

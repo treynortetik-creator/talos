@@ -52,11 +52,14 @@ const isFolder = (p: string) => {
 // ---- the Talos-home fence ---------------------------------------------------------------------------------------------------
 
 /**
- * The Talos-home deny on every worker (docs/OPTION-C.md "Leads and the fence"): Read, Grep, Glob, Edit, Write and NotebookEdit
- * denied on the whole home, in the spelling the bridge's lead fence uses (`Tool(//abs/**)` and `Tool(//abs)`), as given and
- * where it really is. No `!` rule of any kind.
+ * The Talos-home deny on every worker (docs/OPTION-C.md "Leads and the fence"): Read and Edit denied on the whole home, in the
+ * spelling the bridge's lead fence uses (`Tool(//abs/**)` and `Tool(//abs)`), as given and where it really is. No `!` rule of any
+ * kind. Claude Code matches a file path in a rule with Read( ) for every reading tool (Grep, Glob too) and Edit( ) for every
+ * writing one (Write, NotebookEdit too), and with no other tool name: Write( ), NotebookEdit( ), Grep( ) and Glob( ) path rules
+ * never match and MultiEdit is no tool (2.1.39 and 2.1.322 alike; 2.1.322 warns about each at every start, Dante's ~820 lines).
+ * The guard hook (guards/install.ts HOOK_MATCHER) still runs on every writing tool's name: it is the real guard.
  */
-export const FENCE_TOOLS = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'NotebookEdit'] as const
+export const FENCE_TOOLS = ['Read', 'Edit'] as const
 
 /**
  * A home a deny rule can name exactly: absolute, no glob characters (`* ? [ ] { }`), no `(` `)` (they end the pattern), no `\`
@@ -117,8 +120,8 @@ export function spellings(talosHome: string): string[] {
   return [...new Set([given, ...(real ? [trimSlash(real)] : [])])]
 }
 
-/** The file tools a session could change a settings file with. */
-const SETTINGS_EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const
+/** The rule that covers every file tool a session could change a settings file with (Write, NotebookEdit and MultiEdit too: FENCE_TOOLS). */
+const SETTINGS_EDIT_TOOLS = ['Edit'] as const
 
 /** In a config folder (`~/.claude`, a CLAUDE_CONFIG_DIR) no session may edit these, fence on or off: they change a session's own permissions. */
 export const CONFIG_ALWAYS_DENIED = ['settings.json', 'settings.local.json', 'plugins/**', 'hooks/**'] as const
@@ -319,15 +322,15 @@ export function fenceDenyRules(talosHome: string): string[] {
  * session that could edit them could make its own hook answer "allow", which Main itself cannot do (its hook is the guarded kit
  * release). Only the supervisor and the bridge write there, never a session's tools.
  */
-export const WORKER_WRITERS = ['Edit', 'Write', 'NotebookEdit'] as const
+export const WORKER_WRITERS = ['Edit'] as const
 export function workerFilesDenyRules(talosHome: string): string[] {
   const forms = spellings(talosHome)
   return WORKER_WRITERS.flatMap((tool) => forms.flatMap((f) => [`${tool}(/${f}/workers/**)`, `${tool}(/${f}/workers)`]))
 }
 
 /**
- * The two rules that let a thread's session edit its own live state file (`<agentDir>/threads/<id>.state.md`) without a prompt:
- * that exact path, as given and as it really is, for Edit and Write. No glob, no folder: a sibling (another thread's file, a
+ * The rules that let a thread's session edit its own live state file (`<agentDir>/threads/<id>.state.md`) without a prompt:
+ * that exact path, as given and as it really is, as Edit( ) (which covers the Write tool too: FENCE_TOOLS). No glob, no folder: a sibling (another thread's file, a
  * `.bak`, a `..` path) is not covered. A folder name that holds a rule metacharacter, a quote or a control character gets none
  * (the session then asks, the safe side), as `fenceSafe` refuses such a home.
  */
@@ -350,7 +353,7 @@ function stateFileRules(agentDir: string, threadId: string, tail: string): strin
     // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is refused
     .filter((f) => f.startsWith('/') && !/[*?[\]{}()!\\"'`\0-\x1f\x7f]/.test(f))
     .map((f) => `${f}/threads/${threadId}.state.md${tail}`)
-  return (['Edit', 'Write'] as const).flatMap((tool) => forms.map((f) => `${tool}(/${f})`))
+  return forms.map((f) => `Edit(/${f})`)
 }
 
 /** `settings` with `rules` added to `permissions.deny` (a union, nothing repeats); null when either is a shape it can't add to. */

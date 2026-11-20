@@ -29,7 +29,6 @@ const thread = (id: string, kind: 'fixed' | 'agent' | 'system', extra: Record<st
   kind,
   order: 5,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   ...extra,
@@ -102,8 +101,6 @@ describe('every settings row has a risk', () => {
   it('the agent rows are the ones the owner listed (2026-11-14: all but who he is and what is connected), and these are high', () => {
     expect([...AGENT_SETTING_PATHS]).toEqual([
       'agent.name',
-      'agent.voice',
-      'agent.voice_persona',
       'owner.display_name',
       'threads',
       'default_thread',
@@ -127,7 +124,6 @@ describe('every settings row has a risk', () => {
     ])
     const high = rows.filter(([, r]) => r.agent && r.risk === 'high').map(([p]) => p)
     expect(high).toEqual([
-      'agent.voice_persona',
       'default_thread',
       'timezone',
       'notifications.master',

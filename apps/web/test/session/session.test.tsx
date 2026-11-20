@@ -123,7 +123,7 @@ describe('usage rows and the header chip', () => {
     mount()
     expect(await screen.findByTestId('meter-week')).toHaveTextContent('60% used')
     expect(screen.getByTestId('meter-context')).toHaveTextContent('31% used · 69% left')
-    expect(screen.getByTestId('meter-context')).toHaveTextContent('310k of 1M tokens')
+    expect(screen.getByTestId('meter-context')).toHaveTextContent("310k of 1M used (this conversation's memory)")
     expect(screen.getByTestId('meter-week')).toHaveTextContent(/resets/)
     expect(screen.queryByTestId('meter-five')).toBeNull()
     expect(screen.getByTestId('session-usage').textContent).not.toMatch(/5-hour|28%/)
@@ -152,27 +152,29 @@ describe('usage rows and the header chip', () => {
     expect(screen.queryByTestId('session-offline-dot')).toBeNull()
     client.session.setMod('offline')
     await waitFor(() => expect(screen.getByTestId('session-offline-dot')).toBeInTheDocument())
-    expect(screen.getByTestId('session-chip')).not.toHaveTextContent('mod offline')
+    expect(screen.getByTestId('session-chip')).not.toHaveTextContent('not connected')
     expect(screen.getByTestId('session-chip').className).toMatch(/italic/)
   })
   it('the trigger button is named "Session: " plus the words on screen', async () => {
     mount({}, () => <SessionTrigger threadId="general" />)
     // voice control says "click Session": the name must start with it AND keep the visible words
-    const button = await screen.findByRole('button', { name: /^Session:.*wk\s*60\s*%\s*used.*ctx\s*31\s*%/ })
+    const button = await screen.findByRole('button', { name: /^Your agent:.*wk\s*60\s*%\s*used.*ctx\s*31\s*%/ })
     expect(button.hasAttribute('aria-label')).toBe(false)
-    expect(within(button).getByText(/^Session:/).className).toMatch(/sr-only/)
+    expect(within(button).getByText(/^Your agent:/).className).toMatch(/sr-only/)
   })
-  it('the trigger says "mod offline" in its name and tooltip once the mod lapses, and only then', async () => {
+  it('the trigger says "not connected" in its name and tooltip once the mod lapses, and only then', async () => {
     const client = mount({}, () => <SessionTrigger threadId="general" />)
     const button = await screen.findByTestId('session-trigger')
     expect(button.hasAttribute('aria-label')).toBe(false)
     expect(button.hasAttribute('title')).toBe(false)
     client.session.setMod('offline')
-    await waitFor(() => expect(screen.getByTestId('session-trigger').getAttribute('aria-label')).toMatch(/mod offline/))
-    expect(screen.getByTestId('session-trigger').getAttribute('title')).toMatch(/mod offline/)
+    await waitFor(() =>
+      expect(screen.getByTestId('session-trigger').getAttribute('aria-label')).toMatch(/not connected/),
+    )
+    expect(screen.getByTestId('session-trigger').getAttribute('title')).toMatch(/not connected/)
     // the visible words stay in the name
     expect(screen.getByTestId('session-trigger').getAttribute('aria-label')).toMatch(
-      /^Session: wk 60% used ctx 31% used/,
+      /^Your agent: wk 60% used ctx 31% used/,
     )
   })
   it('usedPct is percent USED (not left), clamped, and the warning starts at 85% used', () => {
@@ -200,7 +202,7 @@ describe('usage rows and the header chip', () => {
   })
 })
 
-describe('mod offline and absent', () => {
+describe('not connected and absent', () => {
   it('offline: known data read-only, no controls, one hint, "Mod offline"', async () => {
     mount({ mod: 'offline' })
     await screen.findByTestId('mod-offline')
@@ -395,7 +397,7 @@ describe('tabs (Settings > Session, where the lists live)', () => {
   it('lists commands by group with route badges and the Mac-only mark', async () => {
     mount({}, () => <SessionPanel threadId="general" inline />)
     const panel = await screen.findByTestId('session-panel')
-    for (const g of ['Built-in', 'Skills', 'Plugins', 'MCP prompts'])
+    for (const g of ['Built-in', 'Skills', 'Plugins', 'Tool commands'])
       expect(within(panel).getByRole('region', { name: g })).toBeInTheDocument()
     const skills = within(panel).getByRole('region', { name: 'Skills' })
     expect(within(skills).getByText('/deploy').closest('li')).toHaveTextContent('At the Mac only')
@@ -408,7 +410,7 @@ describe('tabs (Settings > Session, where the lists live)', () => {
   })
   it('lists MCP servers and plugins', async () => {
     mount({}, () => <SessionPanel threadId="general" inline />)
-    await userEvent.click(await screen.findByRole('tab', { name: 'MCP servers' }))
+    await userEvent.click(await screen.findByRole('tab', { name: 'Tools' }))
     expect(await screen.findByText('github')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Plugins' }))
     expect(await screen.findByText('old-linter')).toBeInTheDocument()

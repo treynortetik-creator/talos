@@ -87,7 +87,7 @@ describe('integrations list and work gate', () => {
     renderWith(<IntegrationsScreen />, client)
     await userEvent.click(await screen.findByRole('button', { name: /Slack/ }))
     const dialog = await screen.findByRole('dialog')
-    expect(dialog.textContent).toMatch(/pass through your relay/)
+    expect(dialog.textContent).toMatch(/pass through Talos online/)
     expect(dialog.textContent).toMatch(/Passthrough/)
     expect(client.sent).toHaveLength(0)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }))

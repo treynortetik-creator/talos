@@ -83,7 +83,9 @@ struct OnboardingShotsGuiTests {
     try await shot("main", flow([]))
     try await shot("ready", flow([.getStarted, .downloadProgress(pct: 62)]), .init(downloadElapsed: 100))
     try await shot("apple-tools-asking", flow([.getStarted, .toolsAsked]))
+    try await shot("ready-after-apple-tools", flow([.getStarted, .toolsAsked, .toolsInstalling(pct: nil), .downloadDone(signedIn: false)]), .init(downloadElapsed: 400))
     try await shot("apple-tools-installing", flow([.getStarted, .toolsAsked, .toolsInstalling(pct: 40)]))
+    try await shot("apple-tools-need-space", flow([.getStarted, .toolsNeedSpace(have: 19_160_000_000)]))
     try await shot("sign-in", flow([.getStarted, .downloadDone(signedIn: false)]))
     try await shot("sign-in-waiting", flow([.getStarted, .downloadDone(signedIn: false), .signInPressed]), .init(signInLink: "https://claude.ai/x"))
     try await shot("phone", flow([.getStarted, .downloadDone(signedIn: true)]))
@@ -96,7 +98,7 @@ struct OnboardingShotsGuiTests {
     try await render(HelloPreview(phoneConnected: true), size: OB.helloSize, to: dir + "/hello.png")
     try await render(HelloPreview(phoneConnected: false), size: OB.helloSize, to: dir + "/hello-no-phone.png")
 
-    for n in ["main", "ready", "apple-tools-asking", "apple-tools-installing", "sign-in", "sign-in-waiting", "phone", "pair", "offline", "hello", "hello-no-phone", "pair-failed"] {
+    for n in ["main", "ready", "ready-after-apple-tools", "apple-tools-asking", "apple-tools-installing", "apple-tools-need-space", "sign-in", "sign-in-waiting", "phone", "pair", "offline", "hello", "hello-no-phone", "pair-failed"] {
       #expect(FileManager.default.fileExists(atPath: dir + "/\(n).png"))
     }
   }

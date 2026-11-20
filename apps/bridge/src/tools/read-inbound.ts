@@ -28,9 +28,8 @@ export function workerStoreOf(ctx: BridgeContext): WorkerStore {
 export type InboundMessage = Notification & { notes?: NotePointer[] }
 export type ReadInboundResult = { messages: InboundMessage[]; already_handled_by_main: string[] }
 
-/** Only what the owner himself wrote (a typed or spoken message) is searched for names: never an external sender, a hand-off, a wake, a schedule run or a card tap. */
-const ownerWords = (meta: Notification['meta']) =>
-  (meta.trust === 'owner' || meta.trust === 'owner_voice') && (meta.kind === 'text' || meta.kind === 'voice_note')
+/** Only what the owner himself wrote (a typed message) is searched for names: never an external sender, a hand-off, a wake, a schedule run or a card tap. */
+const ownerWords = (meta: Notification['meta']) => meta.trust === 'owner' && meta.kind === 'text'
 
 export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResult {
   // A session that is being stopped (parked) may not read: the claims below are made at once, the answer reaches an agent that

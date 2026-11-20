@@ -174,7 +174,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -185,7 +185,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -196,7 +196,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -207,7 +207,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -218,7 +218,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -229,7 +229,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -240,7 +240,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -251,7 +251,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -262,7 +262,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -273,7 +273,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -287,7 +287,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -471,7 +471,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -482,7 +482,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -493,7 +493,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -504,7 +504,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -515,7 +515,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -526,7 +526,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -537,7 +537,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -548,7 +548,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -559,7 +559,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -570,7 +570,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -584,7 +584,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<515 chars>"
+          "error": "<481 chars>"
         },
         "card": {
           "ok": false,
@@ -926,646 +926,6 @@
         "card": {
           "ok": false,
           "error": "agent.name is no longer a valid value."
-        }
-      }
-    ]
-  },
-  "agent.voice": {
-    "default": "meridian",
-    "phone": [
-      {
-        "v": "marin",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "r": {
-          "ok": true
-        }
-      }
-    ],
-    "load_missing": {
-      "loads": true,
-      "value": "meridian"
-    },
-    "load_values": [
-      {
-        "v": "marin",
-        "r": {
-          "loads": true,
-          "value": "marin"
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "loads": true,
-          "value": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "loads": true,
-          "value": "Not/AZone"
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "r": {
-          "loads": false,
-          "at": "agent.voice"
-        }
-      }
-    ],
-    "agent": [
-      {
-        "v": "marin",
-        "propose": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice",
-              "old": "meridian",
-              "new": "marin"
-            }
-          ]
-        },
-        "card": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice",
-              "old": "meridian",
-              "new": "marin"
-            }
-          ],
-          "patch": {
-            "agent": {
-              "voice": "marin"
-            }
-          }
-        }
-      },
-      {
-        "v": 5,
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": "x",
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": true,
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": false,
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": null,
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": [],
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": {},
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "propose": {
-          "ok": false,
-          "error": "<236 chars>"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice is no longer a valid value."
-        }
-      }
-    ]
-  },
-  "agent.voice_persona": {
-    "default": "",
-    "phone": [
-      {
-        "v": "calm",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "ok": true
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "r": {
-          "ok": true
-        }
-      }
-    ],
-    "load_missing": {
-      "loads": true,
-      "value": ""
-    },
-    "load_values": [
-      {
-        "v": "calm",
-        "r": {
-          "loads": true,
-          "value": "calm"
-        }
-      },
-      {
-        "v": 5,
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": "x",
-        "r": {
-          "loads": true,
-          "value": "x"
-        }
-      },
-      {
-        "v": true,
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": false,
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": null,
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": [],
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": {},
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "r": {
-          "loads": true,
-          "value": "Not/AZone"
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "r": {
-          "loads": false,
-          "at": "agent.voice_persona"
-        }
-      }
-    ],
-    "agent": [
-      {
-        "v": "calm",
-        "propose": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "calm"
-            }
-          ]
-        },
-        "card": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "calm"
-            }
-          ],
-          "patch": {
-            "agent": {
-              "voice_persona": "calm"
-            }
-          }
-        }
-      },
-      {
-        "v": 5,
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received number"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": "x",
-        "propose": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "x"
-            }
-          ]
-        },
-        "card": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "x"
-            }
-          ],
-          "patch": {
-            "agent": {
-              "voice_persona": "x"
-            }
-          }
-        }
-      },
-      {
-        "v": true,
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received boolean"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": false,
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received boolean"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": null,
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received null"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": [],
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received array"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": {},
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received object"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": "<5000 chars>",
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Too big: expected string to have <=4000 characters"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
-        }
-      },
-      {
-        "v": "Not/AZone",
-        "propose": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "Not/AZone"
-            }
-          ]
-        },
-        "card": {
-          "ok": true,
-          "changes": [
-            {
-              "path": "agent.voice_persona",
-              "old": "",
-              "new": "Not/AZone"
-            }
-          ],
-          "patch": {
-            "agent": {
-              "voice_persona": "Not/AZone"
-            }
-          }
-        }
-      },
-      {
-        "v": {
-          "start": "25:00",
-          "end": "07:00"
-        },
-        "propose": {
-          "ok": false,
-          "error": "agent.voice_persona: Invalid input: expected string, received object"
-        },
-        "card": {
-          "ok": false,
-          "error": "agent.voice_persona is no longer a valid value."
         }
       }
     ]
@@ -1916,7 +1276,6 @@
         "kind": "fixed",
         "order": 0,
         "notify": "all",
-        "voice_context": "recent",
         "archived": false,
         "created_at": "2026-10-28T00:00:00.000Z"
       },
@@ -1927,7 +1286,6 @@
         "kind": "system",
         "order": 1,
         "notify": "all",
-        "voice_context": "none",
         "archived": false,
         "created_at": "2026-10-28T00:00:00.000Z"
       }
@@ -1942,7 +1300,6 @@
             "kind": "fixed",
             "order": 0,
             "notify": "all",
-            "voice_context": "recent",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           },
@@ -1953,7 +1310,6 @@
             "kind": "system",
             "order": 1,
             "notify": "all",
-            "voice_context": "none",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           }
@@ -2040,7 +1396,6 @@
             "kind": "fixed",
             "order": 0,
             "notify": "all",
-            "voice_context": "recent",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           },
@@ -2051,7 +1406,6 @@
             "kind": "system",
             "order": 1,
             "notify": "all",
-            "voice_context": "none",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           }
@@ -2066,7 +1420,6 @@
               "kind": "fixed",
               "order": 0,
               "notify": "all",
-              "voice_context": "recent",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             },
@@ -2077,7 +1430,6 @@
               "kind": "system",
               "order": 1,
               "notify": "all",
-              "voice_context": "none",
               "archived": false,
               "created_at": "2026-10-28T00:00:00.000Z"
             }
@@ -2168,7 +1520,6 @@
             "kind": "fixed",
             "order": 0,
             "notify": "all",
-            "voice_context": "recent",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           },
@@ -2179,14 +1530,13 @@
             "kind": "system",
             "order": 1,
             "notify": "all",
-            "voice_context": "none",
             "archived": false,
             "created_at": "2026-10-28T00:00:00.000Z"
           }
         ],
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2197,7 +1547,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2208,7 +1558,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2219,7 +1569,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2230,7 +1580,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2241,7 +1591,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2252,7 +1602,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2263,7 +1613,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2274,7 +1624,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2285,7 +1635,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -2299,7 +1649,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<519 chars>"
+          "error": "<485 chars>"
         },
         "card": {
           "ok": false,
@@ -3870,7 +3220,7 @@
     ]
   },
   "voice_notes.reply_with_voice": {
-    "default": "when_voice",
+    "default": "never",
     "phone": [
       {
         "v": "always",
@@ -3944,7 +3294,7 @@
     ],
     "load_missing": {
       "loads": true,
-      "value": "when_voice"
+      "value": "never"
     },
     "load_values": [
       {
@@ -4036,7 +3386,7 @@
           "changes": [
             {
               "path": "voice_notes.reply_with_voice",
-              "old": "when_voice",
+              "old": "never",
               "new": "always"
             }
           ]
@@ -4046,7 +3396,7 @@
           "changes": [
             {
               "path": "voice_notes.reply_with_voice",
-              "old": "when_voice",
+              "old": "never",
               "new": "always"
             }
           ],
@@ -4061,7 +3411,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4072,7 +3422,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4083,7 +3433,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4094,7 +3444,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4105,7 +3455,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4116,7 +3466,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4127,7 +3477,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4138,7 +3488,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4149,7 +3499,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4163,7 +3513,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"when_voice\"|\"always\"|\"never\""
+          "error": "voice_notes.reply_with_voice: Invalid option: expected one of \"always\"|\"never\""
         },
         "card": {
           "ok": false,
@@ -4658,7 +4008,7 @@
         "v": ["gmail"],
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4669,7 +4019,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4680,7 +4030,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4691,7 +4041,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4702,7 +4052,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4713,7 +4063,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4724,7 +4074,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4735,7 +4085,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4746,7 +4096,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4757,7 +4107,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4771,7 +4121,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<478 chars>"
+          "error": "<444 chars>"
         },
         "card": {
           "ok": false,
@@ -4944,7 +4294,7 @@
         "v": "general",
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -4955,7 +4305,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -4966,7 +4316,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -4977,7 +4327,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -4988,7 +4338,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -4999,7 +4349,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5010,7 +4360,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5021,7 +4371,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5032,7 +4382,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5043,7 +4393,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5057,7 +4407,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<477 chars>"
+          "error": "<443 chars>"
         },
         "card": {
           "ok": false,
@@ -5904,7 +5254,7 @@
         "v": "buffer",
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5915,7 +5265,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5926,7 +5276,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5937,7 +5287,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5948,7 +5298,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5959,7 +5309,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5970,7 +5320,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5981,7 +5331,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -5992,7 +5342,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -6003,7 +5353,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -6017,7 +5367,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<480 chars>"
+          "error": "<446 chars>"
         },
         "card": {
           "ok": false,
@@ -6190,7 +5540,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6201,7 +5551,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6212,7 +5562,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6223,7 +5573,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6234,7 +5584,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6245,7 +5595,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6256,7 +5606,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6267,7 +5617,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6278,7 +5628,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6289,7 +5639,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -6303,7 +5653,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<482 chars>"
+          "error": "<448 chars>"
         },
         "card": {
           "ok": false,
@@ -7745,7 +7095,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7756,7 +7106,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7767,7 +7117,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7778,7 +7128,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7789,7 +7139,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7800,7 +7150,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7811,7 +7161,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7822,7 +7172,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7833,7 +7183,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7844,7 +7194,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7858,7 +7208,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<476 chars>"
+          "error": "<442 chars>"
         },
         "card": {
           "ok": false,
@@ -7894,7 +7244,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<518 chars>"
+        "error": "<484 chars>"
       }
     ]
   },
@@ -7925,7 +7275,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<520 chars>"
+        "error": "<486 chars>"
       }
     ]
   },
@@ -7953,7 +7303,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<528 chars>"
+        "error": "<494 chars>"
       }
     ]
   },
@@ -7984,7 +7334,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<525 chars>"
+        "error": "<491 chars>"
       }
     ]
   },
@@ -8012,7 +7362,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<532 chars>"
+        "error": "<498 chars>"
       }
     ]
   },
@@ -8043,7 +7393,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<525 chars>"
+        "error": "<491 chars>"
       }
     ]
   },
@@ -8193,8 +7543,6 @@
   "lists": {
     "agent_allowlist": [
       "agent.name",
-      "agent.voice",
-      "agent.voice_persona",
       "owner.display_name",
       "threads",
       "default_thread",
@@ -8228,8 +7576,6 @@
     ],
     "card_lines": [
       "Agent name: Talos → Atlas",
-      "Live-call voice: meridian → marin",
-      "Live-call persona: none → calm",
       "Your name: You → Alex Example",
       "threads: undefined → [object Object],[object Object]",
       "Default thread: general → general",
@@ -8237,7 +7583,7 @@
       "Quiet hours: off → 22:00 to 07:00",
       "Notifications: on → off",
       "Thread names in notifications: fixed threads only → all threads",
-      "Voice-note replies: when I send a voice note → always",
+      "Spoken replies: never → always",
       "Driving mode until: off → 2026-11-06T10:00:00.000Z",
       "Work section name: Work systems → Work",
       "Work note: Ask your IT team before connecting these. → Ask first.",
@@ -8253,8 +7599,6 @@
     ],
     "read_default": [
       "Talos",
-      "meridian",
-      "",
       "You",
       "__undefined__",
       "general",
@@ -8262,7 +7606,7 @@
       null,
       true,
       "fixed_only",
-      "when_voice",
+      "never",
       null,
       "Work systems",
       "Ask your IT team before connecting these.",
@@ -8278,9 +7622,7 @@
     ],
     "patch_for_all": {
       "agent": {
-        "name": "Atlas",
-        "voice": "marin",
-        "voice_persona": "calm"
+        "name": "Atlas"
       },
       "owner": {
         "display_name": "Alex Example"

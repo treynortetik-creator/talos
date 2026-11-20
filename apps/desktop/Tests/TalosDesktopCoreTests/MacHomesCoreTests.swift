@@ -26,7 +26,7 @@ private func configured() -> DesktopConfig {
 struct LaunchEditTests {
   @Test func theBoxShowsProgramAndArgumentsOnly() {
     let line = LaunchEdit.line(for: configured())
-    #expect(line == "claude --dangerously-skip-permissions --channels plugin:telegram")
+    #expect(line == "claude --dangerously-skip-permissions --channels plugin:telegram \(MainChannelFlag.flag) \(AutoConfirmGuard.talosChannel)")
     #expect(!line.contains("cd ") && !line.contains("--resume") && !line.contains("TALOS_APP_HOME"))
   }
 
@@ -48,9 +48,9 @@ struct LaunchEditTests {
   @Test func aChangedLineIsAccepted() {
     let c = configured()
     let o = LaunchEdit.evaluate("claude --model opus --channels plugin:telegram", against: c, home: home)
-    #expect(o == .updated(claudePath: "auto", args: ["--model", "opus", "--channels", "plugin:telegram"]))
+    #expect(o == .updated(claudePath: "auto", args: MainChannelFlag.ensured(["--model", "opus", "--channels", "plugin:telegram"])))
     let o2 = LaunchEdit.evaluate("/opt/bin/claude -x", against: c, home: home)
-    #expect(o2 == .updated(claudePath: "/opt/bin/claude", args: ["-x"]))
+    #expect(o2 == .updated(claudePath: "/opt/bin/claude", args: MainChannelFlag.ensured(["-x"])))
   }
 
   @Test func aLineWithEnvAssignmentsIsRefusedAndPointsAtImport() {
@@ -88,7 +88,7 @@ struct LaunchEditTests {
       let spec = try LaunchSpec.parse(line, home: home)
       let o = LaunchEdit.evaluate(line, against: c, home: home)
       guard case .updated(let path, let args) = o else { Issue.record("\(line) should be accepted"); continue }
-      #expect(args == spec.args)
+      #expect(args == MainChannelFlag.ensured(spec.args), "the Talos channel is kept")
       #expect(path == (spec.program == "claude" ? "auto" : spec.program))
     }
   }

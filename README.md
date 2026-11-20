@@ -20,7 +20,7 @@
 
 - **An agent that works between conversations.** Talos wraps the Claude Code CLI in a folder on your Mac. Scheduled jobs run
   while you are away and report to the app, and the agent keeps its context across restarts.
-- **An app to talk to it from anywhere.** A phone, web and Mac app with one thread per project, voice notes, live voice and
+- **An app to talk to it from anywhere.** A phone, web and Mac app with one thread per project, spoken replies and
   inbound webhooks. A thread can optionally get an agent session of its own.
 - **Approval cards for anything with side effects.** Sending, posting, deploying, paying and deleting wait for your tap.
   Memory (a linked wiki, handoff notes) is one feature of the agent, not the point of it.
@@ -102,7 +102,7 @@ tuned is never overwritten); `--yes` skips the prompt.
 | Set it up for myself (Railway, Mac, phone)   | [`SETUP.md`](SETUP.md) (the ordered path), then [`docs/SETUP.md`](docs/SETUP.md) for detail |
 | Know what is protected, and what is not      | [`docs/SECURITY.md`](docs/SECURITY.md)                                                      |
 | Understand the bridge on the Mac             | [`docs/bridge.md`](docs/bridge.md)                                                          |
-| See how live voice works                     | [`docs/voice.md`](docs/voice.md)                                                            |
+| Bring back voice input (archived)            | [`docs/archived/voice.md`](docs/archived/voice.md)                                          |
 | Set up webhooks (Gmail, GitHub, Slack, more) | [`docs/integrations/`](docs/integrations)                                                   |
 | Use connector apps in a thread (opt-in)      | [`docs/APPS.md`](docs/APPS.md)                                                              |
 | Build the iPhone app (optional)              | [`docs/ios.md`](docs/ios.md)                                                                |

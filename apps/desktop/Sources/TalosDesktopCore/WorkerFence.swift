@@ -1,16 +1,19 @@
 import Foundation
 
 /// The Talos-home deny on every dedicated worker (docs/OPTION-C.md "Leads and the fence"). A thread session works for one thread; the
-/// Talos home holds every thread's messages, keys and databases. Read, Grep, Glob, Edit, Write and NotebookEdit are denied on the whole
-/// home, and Claude Code also applies those rules to Bash `cat`, `head`, `tail`, `sed`, `tee` and redirections. They do not stop a program
+/// Talos home holds every thread's messages, keys and databases. Read( ) and Edit( ) are denied on the whole home (they cover Grep, Glob,
+/// Write and NotebookEdit: `tools`), and Claude Code also applies those rules to Bash `cat`, `head`, `tail`, `sed`, `tee` and redirections. They do not stop a program
 /// that opens the file itself (`sqlite3`, `python`, `grep -r`): only a sandbox does, and a worker has none.
 ///
 /// The spelling is the one the bridge's lead fence uses (apps/bridge/src/lead/settings.ts): `Tool(//abs/**)` and `Tool(//abs)`, in the
 /// spelling given and in lower case (macOS compares names without case). There is no `!` rule of any kind: a `!` pattern is read against
 /// the current folder and cannot reopen a folder a rule blocks whole. The per-thread inbox lives outside the home for that reason.
 public enum WorkerFence {
-  /// Readers, then writers: the bridge's order.
-  public static let tools = ["Read", "Grep", "Glob", "Edit", "Write", "NotebookEdit"]
+  /// Readers, then writers: the bridge's order (worker-policy.ts FENCE_TOOLS). Claude Code matches a file path in a rule with Read( ) for
+  /// every reading tool (Grep, Glob too) and Edit( ) for every writing one (Write, NotebookEdit too), and with no other tool name:
+  /// Write( ), NotebookEdit( ), Grep( ) and Glob( ) path rules never match and MultiEdit is no tool (2.1.39 and 2.1.322 alike; 2.1.322
+  /// warns about each at every start, ~820 lines on Dante's Mac, 2026-11-19). The guard hook still runs on every writing tool's name.
+  public static let tools = ["Read", "Edit"]
 
   /// Claude Code reads `* ? [ ] { }` in a rule as a glob, and `(` `)` end the pattern, so a home with one of them cannot be named by a rule.
   public static func isSafe(talosHome: String) -> Bool {
@@ -43,8 +46,8 @@ public enum WorkerFence {
 
   /// The Talos home's `workers` folder, whole: what every thread session runs under and the supervisor writes for it (the permission
   /// hook's copy in `workers/_hook`, a hook that answered "allow" would keep every prompt off the phone; and each session's
-  /// settings.json, MCP config, nonce, launch file and project-check.json). Denied to the file-tool writers (Edit, Write, NotebookEdit,
-  /// as the Linux twin worker-spec.ts has it, and MultiEdit beside them as the settings-file deny spells it) on every session,
+  /// settings.json, MCP config, nonce, launch file and project-check.json). Denied to every file-tool writer through Edit( ) (`writers`, as the
+  /// Linux twin worker-policy.ts has it) on every session,
   /// whatever the developer thread fence says: with the fence off a session has main's access, and main's own hook and settings are
   /// not in the Talos home, so this is what keeps it from being wider. `validate` asks for every rule, fence on or off.
   public static func workerFilesDeny(talosHome: String) -> [String] {
@@ -77,8 +80,8 @@ public enum WorkerFence {
   /// isolation" (a worker with no key). Not part of the checked Talos-home fence (`missing`), so a spec without them still validates.
   public static let extraDeny = ["Bash(talos-app post:*)", "Bash(*talos-app post*)", "Bash(*cli.ts post*)"]
 
-  /// The tools that write a file, for the settings-file deny.
-  public static let writers = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+  /// The rule that covers every tool that writes a file (Write, NotebookEdit and MultiEdit too: `tools`), for the settings-file deny.
+  public static let writers = ["Edit"]
 
   /// Tools no thread session may call: a worktree it enters is a checkout whose settings this start never read (Hestia's third
   /// review, F6).

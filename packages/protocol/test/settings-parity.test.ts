@@ -5,6 +5,8 @@
 // unknown fields included), and what loading the file does with a missing, garbled or unknown field.
 // Changed on purpose (2026-11-19, thread sessions allowed by default): the agent reads `dedicated` as the owner sees it, on until
 // written off (threadSessionsAllowed), so its default reads true and turning it off, not on, is the change it can propose.
+// Changed on purpose (2026-11-19, voice input archived: docs/archived/voice.md): agent.voice and agent.voice_persona have no row any more
+// (the config still accepts and ignores them), and voice_notes.reply_with_voice is 'always' or 'never' for the agent, default 'never'.
 // Refresh the file only on purpose: WRITE_GOLDEN=1 vitest run packages/protocol/test/settings-parity.test.ts
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -31,8 +33,6 @@ const VALID: Record<string, unknown> = {
   version: 1,
   rev: 1,
   'agent.name': 'Atlas',
-  'agent.voice': 'marin',
-  'agent.voice_persona': 'calm',
   'owner.display_name': 'Alex Example',
   threads: defaultConfig.threads,
   default_thread: 'general',

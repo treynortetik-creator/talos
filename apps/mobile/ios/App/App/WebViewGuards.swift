@@ -352,7 +352,8 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
             initiatedByFrame: frame, completionHandler: completionHandler) ?? completionHandler(nil)
     }
 
-    // MARK: Camera, microphone, motion: trusted frame only (Capacitor's own handler grants everything)
+    // MARK: Camera and microphone always refused (voice input archived, docs/archived/voice.md); motion: trusted frame only
+    // (Capacitor's own handler grants everything, so the method must exist and must never reach it)
 
     func webView(
         _ webView: WKWebView,
@@ -361,7 +362,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        decisionHandler(devicePermission(frame, webView) == .grant ? .grant : .deny)
+        decisionHandler(.deny)
     }
 
     func webView(

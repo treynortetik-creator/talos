@@ -110,7 +110,7 @@ routes.use('*', async (c, next) => {
   set('Strict-Transport-Security', 'max-age=63072000')
   set('X-Content-Type-Options', 'nosniff')
   set('Referrer-Policy', 'no-referrer')
-  set('Permissions-Policy', 'microphone=(self), camera=(), geolocation=(), payment=()')
+  set('Permissions-Policy', 'microphone=(), camera=(), geolocation=(), payment=()')
   set('Cross-Origin-Opener-Policy', 'same-origin')
   set('Cross-Origin-Resource-Policy', 'same-origin')
   if ((h.get('content-type') ?? '').includes('text/html'))

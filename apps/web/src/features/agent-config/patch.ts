@@ -83,7 +83,6 @@ export function newThread(name: string, existing: ThreadT[], nowIso: string): Th
     kind: 'fixed',
     order: existing.length,
     notify: 'all',
-    voice_context: 'recent',
     archived: false,
     created_at: nowIso,
   }

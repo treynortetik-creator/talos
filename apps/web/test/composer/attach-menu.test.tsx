@@ -8,11 +8,6 @@ import { createMemoryStorage } from '../../src/lib/storage.ts'
 import { StorageProvider } from '../../src/lib/storageContext.tsx'
 import { setup } from '../cards/helpers.tsx'
 
-vi.mock('../../src/features/composer/recorder.ts', async (orig) => ({
-  ...(await orig<typeof import('../../src/features/composer/recorder.ts')>()),
-  startRecorder: () => Promise.resolve({ cancel() {}, elapsedMs: () => 0 }),
-}))
-
 // chips are kept per thread outside the component now, so one test's attachments must not leak into the next
 afterEach(() => {
   cleanup()
@@ -180,18 +175,5 @@ describe('+ menu per platform', () => {
     mount()
     openMenu()
     expect(screen.getAllByTestId(/^attach-/)).toHaveLength(3)
-  })
-})
-
-describe('+ menu and voice notes', () => {
-  it('a menu left open when recording starts does not come back open afterwards', async () => {
-    mount()
-    openMenu()
-    expect(menuIsOpen()).toBe(true)
-    fireEvent.click(screen.getByTestId('mic')) // a tap locks recording directly
-    await screen.findByTestId('recorder-locked')
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel recording' }))
-    await screen.findByTestId('pick-files')
-    expect(menuIsOpen()).toBe(false)
   })
 })

@@ -140,7 +140,7 @@ describe('Enter in the palette', () => {
     fireEvent.keyDown(input(), { key: 'Enter', keyCode: 229 })
     expect(where()).toBe('/t/general')
   })
-  it('a held Enter after running "Session panel" never reaches the message box (no send)', async () => {
+  it('a held Enter after running "Agent panel" never reaches the message box (no send)', async () => {
     const toggle = vi.fn(() => true)
     const sent = vi.fn()
     await mount({
@@ -149,7 +149,7 @@ describe('Enter in the palette', () => {
       extra: <textarea aria-label="Message" onKeyDown={(e) => e.key === 'Enter' && sent()} />,
     })
     open()
-    type('Session panel')
+    type('Agent panel')
     fireEvent.keyDown(input(), { key: 'Enter' })
     expect(toggle).toHaveBeenCalledTimes(1)
     const box = screen.getByLabelText('Message')

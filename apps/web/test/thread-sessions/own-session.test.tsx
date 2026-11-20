@@ -30,7 +30,6 @@ const trip: ThreadT = {
   kind: 'fixed',
   order: 2,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
 }
@@ -250,7 +249,7 @@ describe('Settings → Thread sessions', () => {
     withConfig(client, ({ dedicated: _d, ...c }) => ({ ...c, dedicated: undefined }))
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status() }))
-    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own session' })
+    const sw = screen.getByRole('switch', { name: 'Allow threads to have their own agent' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     await act(async () => {
       fireEvent.click(sw)
@@ -267,7 +266,7 @@ describe('Settings → Thread sessions', () => {
     mount(client, <ThreadSessionsSection readOnly={false} />)
     await act(async () => client.emit('workers.status', { status: status({ supported: false }) }))
     expect(
-      screen.getByRole('switch', { name: 'Allow threads to have their own session' }).getAttribute('aria-checked'),
+      screen.getByRole('switch', { name: 'Allow threads to have their own agent' }).getAttribute('aria-checked'),
     ).toBe('false')
   })
 
@@ -308,7 +307,7 @@ describe('Settings → Thread sessions', () => {
     expect(warn).toContain('Limits are close')
     expect(warn).not.toMatch(/paused/i)
     await send('park_all')
-    expect(screen.getByTestId('thread-sessions-paused').textContent).toContain('Saving limits: thread sessions paused')
+    expect(screen.getByTestId('thread-sessions-paused').textContent).toContain('Saving limits: thread agents paused')
   })
 
   it('an old Mac (no workers.status) says it needs a newer Talos', () => {

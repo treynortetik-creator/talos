@@ -32,6 +32,11 @@ struct TalosApp: App {
   @NSApplicationDelegateAdaptor(TalosAppDelegate.self) private var appDelegate
 
   init() {
+    // First of all, before the supervisor, the web server or any window: a temporary or out-of-place copy cannot update itself or
+    // start at login, so it asks to move into ~/Applications (a yes, or another Talos already running, quits this copy here).
+    AppMovePrompt.runIfNeeded()
+    // The first launch after a move: a few seconds in, once the windows are up, offer to Trash the copy left in Downloads.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { MainActor.assumeIsolated { DownloadTidyPrompt.runIfNeeded() } }
     // A fresh install (no desktop.json yet) starts with the companion and the Dock icon on; checked before anything makes the file.
     AutoSetup.seedFreshInstall(.standard, isFresh: !FileManager.default.fileExists(atPath: SupervisorController.configPath))
     // Without desktop.json, settings changed before setup come back (U8): the same start the controller makes.
@@ -44,16 +49,6 @@ struct TalosApp: App {
     SupervisorController.launchTrust = KeychainLaunchTrust()  // the app seals the confirmed launch with its Keychain key; tests keep the in-memory store
     // Made now, not when the menu is first opened: the Terminal screen in the Talos window reads it from the first launch.
     _model = StateObject(wrappedValue: SupervisorController())
-  }
-
-  /// The standard About panel with the app's version (audit D62: the menu used to show none).
-  static func showAbout() {
-    NSApp.activate(ignoringOtherApps: true)
-    NSApp.orderFrontStandardAboutPanel(options: [
-      .applicationName: "Talos",
-      .applicationVersion: WebController.version,
-      .version: "",
-    ])
   }
 
   /// Reveals the bridge's log in Finder. With no log yet, says so in the menu instead of doing nothing.
@@ -162,7 +157,10 @@ struct TalosApp: App {
       }
       Button("Permissions…") { SettingsRouter.open(.permissions) { openWindow(id: $0) } }
       Divider()
-      Button("About Talos") { TalosApp.showAbout() }
+      Button("About Talos") {
+        openWindow(id: "about")
+        NSApp.activate(ignoringOtherApps: true)
+      }
       Button(updates.menuDot ? "\u{25CF} " + updates.menuTitle : "Check for Updates\u{2026}") {
         updates.menuChoice()
       }
@@ -264,6 +262,8 @@ struct TalosApp: App {
       .windowResizability(.contentSize)
     // The Advanced route for an existing agent folder: reached from the menu, never from setup.
     Window(OnboardingCopy.advancedTitle, id: "advanced-setup") { AdvancedSetupView(model: model) }
+    Window("About Talos", id: "about") { AboutView(controller: UpdateController.shared) }
+      .windowResizability(.contentSize)
     Window("Talos updates", id: "updates") { UpdateWindow(controller: UpdateController.shared) }
       .windowResizability(.contentSize)
   }

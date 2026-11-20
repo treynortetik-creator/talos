@@ -1,4 +1,0 @@
-/* The app's own stylesheet (Tailwind, the token colours as utilities, the base rules), so the harness draws End, Mute and the
-   rest as the app does; plus a scan of the app source for the classes the components use. */
-@import "../../../src/theme/app.css";
-@source "../../../src";

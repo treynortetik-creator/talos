@@ -357,7 +357,7 @@ describe('the folders a session loads project settings from: its own, and its re
 describe('no file-tool edit of a settings file a session loads', () => {
   it('each folder’s whole .claude, .mcp.json and .env files, each config folder’s settings, skills, commands, agents', () => {
     const rules = settingsFileDenyRules(['/w/trip', '/w/agent'], ['/h/.claude'], ['/h/.claude.json'])
-    for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
+    for (const tool of ['Edit']) {
       for (const f of ['/w/trip', '/w/agent'])
         for (const p of ['.claude', '.claude/**', '.mcp.json', '.env*']) expect(rules).toContain(`${tool}(/${f}/${p})`)
       for (const p of [
@@ -377,11 +377,11 @@ describe('no file-tool edit of a settings file a session loads', () => {
         expect(rules).toContain(`${tool}(//h/.claude/${p})`)
       expect(rules).toContain(`${tool}(//h/.claude.json)`)
     }
-    expect(rules).toHaveLength(4 * (2 * 4 + 12 + 1))
+    expect(rules).toHaveLength(2 * 4 + 12 + 1)
   })
   it('with the fence on the output is the pinned list, in order', () => {
     const rules = settingsFileDenyRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'])
-    const tools = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+    const tools = ['Edit']
     const paths = [
       '/w/trip/.claude',
       '/w/trip/.claude/**',
@@ -413,7 +413,7 @@ describe('no file-tool edit of a settings file a session loads', () => {
     const on = settingsFileRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'])
     const off = settingsFileRules(['/w/trip'], ['/h/.claude'], ['/h/.claude.json'], { fenceOff: true })
     expect([...off.deny, ...off.ask].sort()).toEqual([...on.deny].sort())
-    expect(off.ask).toHaveLength(4 * CONFIG_ASK_WHEN_FENCE_OFF.length)
+    expect(off.ask).toHaveLength(CONFIG_ASK_WHEN_FENCE_OFF.length)
     for (const f of CONFIG_ALWAYS_DENIED) expect(off.deny).toContain(`Edit(//h/.claude/${f})`)
     for (const f of CONFIG_ASK_WHEN_FENCE_OFF) expect(off.ask).toContain(`Edit(//h/.claude/${f})`)
     expect(off.deny).toContain('Edit(//h/.claude.json)')
@@ -429,7 +429,7 @@ describe('no file-tool edit of a settings file a session loads', () => {
       }),
     )
     const none = tmp()
-    const tools = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+    const tools = ['Edit']
     const script = tools.map((t) => `${t}(/${c}/skills/h/run.sh)`)
     const base = settingsFileDenyRules([], [none], [], '/home/nobody')
     // a config folder with no hooks: exactly the rules as before (no script rules)

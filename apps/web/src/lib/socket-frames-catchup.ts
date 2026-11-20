@@ -57,7 +57,7 @@ export function onCatchupBatch(ctx: FrameContext, frame: FrameOf<'catchup.batch'
   for (const raw of frame.frames) {
     const p = parseFrame(raw, { direction: 'relay_to_app' })
     if (p.ok) dispatch(p.frame, true)
-    else if (isRecord(raw) && (raw.type === 'message' || raw.type === 'voice_note')) applyStoredOwnerFrame(raw)
+    else if (isRecord(raw) && raw.type === 'message') applyStoredOwnerFrame(raw)
     else noteUnknown(unknownOfFrame(raw))
   }
   // The page itself is contiguous with what came before it, so it always counts. Anything else waits for the last page.

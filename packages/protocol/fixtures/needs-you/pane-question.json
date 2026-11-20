@@ -1,0 +1,13 @@
+{
+  "thread": "trip",
+  "dialog_id": "Ph8Zq3LmWt5RcXvNa2KdBe",
+  "dialog_kind": "agent_question",
+  "subject": "Which color do you prefer?",
+  "options": [
+    "Red",
+    "Blue",
+    "Other…",
+    "Chat about this"
+  ],
+  "free_text": 2
+}

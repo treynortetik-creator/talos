@@ -27,13 +27,39 @@ final class FakePairing: PhonePairing {
   func cancel() { cancels += 1 }
 }
 
+/// Apple's installer helper as the system's running-app list would answer: "running" only from the moment a test says so, and it
+/// records every raise. It refuses (false) to activate an app that is not running, as the real list does.
+final class FakeApps: AppActivating, @unchecked Sendable {
+  private let lock = NSLock()
+  private var _running = false
+  private var _activations = 0
+  private var _asked: [String] = []
+  var running: Bool {
+    get { lock.withLock { _running } }
+    set { lock.withLock { _running = newValue } }
+  }
+  var activations: Int { lock.withLock { _activations } }
+  var asked: [String] { lock.withLock { _asked } }
+  func isRunning(bundleID: String) -> Bool { lock.withLock { _running && bundleID == AppleInstallerFront.bundleID } }
+  func activate(bundleID: String) -> Bool {
+    lock.withLock {
+      _asked.append(bundleID)
+      guard _running, bundleID == AppleInstallerFront.bundleID else { return false }
+      _activations += 1
+      return true
+    }
+  }
+}
+
 @MainActor
 final class Counts {
+  var reinstalls = 0
   var provisions = 0
   var agentStarts = 0
   var shown = 0
   var closed = 0
   var markerDuringProvision: [Bool] = []
+  var ignoredSpace: [Bool] = []
   var hellos: [Bool] = []
 }
 
@@ -48,7 +74,7 @@ struct OnboardingCoordinatorGuiTests {
   func make(
     provisions: [ProvisionOutcome], signedIn: Bool? = true, online: @escaping () -> Bool = { true }, signIn: ClaudeSignInCoordinator = .init(),
     claude: String? = nil, tools: [OnboardingCoordinator.ToolsSignal] = [], toolsInstalling: @escaping () -> Bool = { false },
-    gate: (@MainActor () async -> Void)? = nil, relay: Bool = true
+    gate: (@MainActor () async -> Void)? = nil, relay: Bool = true, apps: FakeApps = FakeApps()
   ) -> (OnboardingCoordinator, FakePairing, Counts, String) {
     let c = Counts()
     let h = home()
@@ -56,10 +82,12 @@ struct OnboardingCoordinatorGuiTests {
     var d = OnboardingCoordinator.Deps(pairing: pairing)
     d.home = h
     var queue = provisions
-    d.provision = { progress, toolsSignal in
+    d.provision = { progress, toolsSignal, ignoreSpace in
       c.provisions += 1
+      c.ignoredSpace.append(ignoreSpace)
       c.markerDuringProvision.append(OnboardingMarker.isPending(home: h))
-      progress(40)
+      // the live run reports no progress before it stops for want of space (OnboardingLive.provision checks first)
+      if case .needSpace? = queue.first {} else { progress(40) }
       for t in tools where c.provisions == 1 { toolsSignal(t) }
       if let gate { await gate() }
       if !tools.isEmpty { toolsSignal(.done) }
@@ -79,6 +107,10 @@ struct OnboardingCoordinatorGuiTests {
     d.offlinePoll = 0.05
     d.toolsPoll = 0.05
     d.toolsInstalling = toolsInstalling
+    d.appleApps = apps
+    d.askAppleAgain = { c.reinstalls += 1 }
+    d.readyHold = 0.15
+    d.frontInterval = 0.02
     return (OnboardingCoordinator(deps: d), pairing, c, h)
   }
 
@@ -138,6 +170,40 @@ struct OnboardingCoordinatorGuiTests {
     #expect(c.provisions == 2)
   }
 
+  /// Short of room: the Apple step says so and Apple's installer is not asked (no tools signal at all) until Try again finds room.
+  @Test func notEnoughSpaceHoldsBackAppleAndTryAgainChecksAgain() async throws {
+    let (co, _, c, h) = make(provisions: [.needSpace(have: 19_160_000_000), .needSpace(have: 19_160_000_000), .ok], signedIn: true)
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    var opened: [URL] = []
+    co.setOpenURL { opened.append($0) }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.tools == .needSpace(have: 19_160_000_000) })
+    #expect(co.flow.step == .appleTools)
+    #expect(c.provisions == 1 && c.reinstalls == 0)
+    co.actions.recheckSpace()  // still short: the same screen, a second look
+    #expect(await pumpUntil(3) { c.provisions == 2 })
+    #expect(co.flow.tools == .needSpace(have: 19_160_000_000))
+    co.actions.openStorage()
+    #expect(opened.map(\.absoluteString) == ["x-apple.systempreferences:com.apple.settings.Storage"])
+    #expect(c.ignoredSpace == [false, false])  // Try again keeps the check
+    co.actions.recheckSpace()  // room now: the run goes on
+    #expect(await pumpUntil(5) { co.flow.step == .phone })
+    #expect(c.provisions == 3)
+  }
+
+  /// The 20 GB gate is soft: Try anyway runs the install without the check, so Apple's own installer decides.
+  @Test func tryAnywayRunsAppleWithoutTheSpaceCheck() async throws {
+    let (co, _, c, h) = make(provisions: [.needSpace(have: 19_160_000_000), .ok], signedIn: true)
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.tools == .needSpace(have: 19_160_000_000) })
+    co.actions.tryAnyway()
+    #expect(await pumpUntil(5) { co.flow.step == .phone })
+    #expect(c.ignoredSpace == [false, true], "the first run checked, the second skipped the check")
+    co.actions.tryAnyway()  // not on that screen any more: nothing happens
+    #expect(c.provisions == 2)
+  }
+
   @Test func appleToolsAskThenInstallThenTheDownloadCarriesOn() async throws {
     var installing = false
     var release = false
@@ -153,6 +219,75 @@ struct OnboardingCoordinatorGuiTests {
     #expect(await pumpUntil(3) { co.flow.tools == .installing(pct: nil) })
     release = true  // Apple's install finished: the stub reports it done
     #expect(await pumpUntil(5) { co.flow.step == .phone })  // carried on by itself, nothing pressed
+  }
+
+  @Test func appleToolsAskBringsAppleInstallerForwardOnceItAppearsAndWeStayBehindIt() async throws {
+    let apps = FakeApps()
+    var release = false
+    let (co, _, _, h) = make(provisions: [.ok], signedIn: true, tools: [.asking], gate: { while !release { try? await Task.sleep(nanoseconds: 20_000_000) } }, apps: apps)
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.step == .appleTools })
+    #expect(apps.activations == 0, "Apple's helper is not up yet: nothing to raise, and it keeps looking")
+    #expect(await pumpUntil(1) { apps.asked.count >= 3 })
+    apps.running = true  // Apple's window opened behind ours
+    #expect(await pumpUntil(3) { apps.activations >= 1 }, "it is raised without the owner pressing anything")
+    #expect(apps.asked.allSatisfy { $0 == "com.apple.dt.CommandLineTools.installondemand" })
+    release = true
+    #expect(await pumpUntil(5) { co.flow.step == .phone })
+  }
+
+  @Test func iDontSeeAppleWindowRaisesAppleWhenItRunsAndOnlyAsksAgainWhenItDoesNot() async throws {
+    let apps = FakeApps()
+    var release = false
+    let (co, _, c, h) = make(provisions: [.ok], signedIn: true, tools: [.asking], gate: { while !release { try? await Task.sleep(nanoseconds: 20_000_000) } }, apps: apps)
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.step == .appleTools })
+    apps.running = true
+    #expect(await pumpUntil(3) { apps.activations >= 1 })
+    let before = apps.activations
+    co.actions.showAppleWindow()
+    #expect(await pumpUntil(3) { apps.activations > before }, "the link raises Apple's window again")
+    #expect(c.reinstalls == 0, "Apple's installer is running: macOS is not asked to start another")
+    apps.running = false  // the installer is gone (closed)
+    co.actions.showAppleWindow()
+    #expect(c.reinstalls == 1, "not running: only then is the install asked for again")
+    release = true
+    #expect(await pumpUntil(5) { co.flow.step == .phone })
+  }
+
+  @Test func afterAppleToolsTheFinishedGettingReadyScreenShowsBeforeSignIn() async throws {
+    var release = false
+    let (co, _, _, h) = make(provisions: [.ok], signedIn: false, tools: [.asking], gate: { while !release { try? await Task.sleep(nanoseconds: 20_000_000) } })
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    var seen: [OnboardingFlow.Step] = []
+    let watch = Task { @MainActor in
+      while !Task.isCancelled { if seen.last != co.flow.step { seen.append(co.flow.step) }; try? await Task.sleep(nanoseconds: 5_000_000) }
+    }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.step == .appleTools })
+    release = true
+    #expect(await pumpUntil(5) { co.flow.step == .signIn })
+    await pump(0.05)  // the watcher takes its turn
+    watch.cancel()
+    #expect(Array(seen.suffix(3)) == [.appleTools, .ready, .signIn], "\(seen): the ready screen sits between Apple's step and sign-in")
+  }
+
+  @Test func theFinishedScreensHoldEndsWhenTheOwnerPressesContinueOrBackSoItNeverFiresOnALaterScreen() async throws {
+    var release = false
+    let (co, _, _, h) = make(provisions: [.ok], signedIn: false, tools: [.asking], gate: { while !release { try? await Task.sleep(nanoseconds: 20_000_000) } })
+    defer { try? FileManager.default.removeItem(atPath: h) }
+    co.send(.getStarted)
+    #expect(await pumpUntil(3) { co.flow.step == .appleTools })
+    release = true
+    #expect(await pumpUntil(5) { co.flow.step == .ready && co.flow.continueLit })  // held on the finished screen
+    co.actions.continuePressed()  // the owner goes on before the hold is up
+    #expect(co.flow.step == .signIn)
+    co.actions.back()  // and straight back: the finished screen again, Continue lit
+    #expect(co.flow.step == .ready && co.flow.continueLit)
+    await pump(0.5)  // well past the 0.15 s hold the first time round
+    #expect(co.flow.step == .ready, "the old hold did not carry the owner on a second time")
   }
 
   @Test func signedOutAsksForSignInAndAMissingClaudeSaysSoPlainly() async throws {

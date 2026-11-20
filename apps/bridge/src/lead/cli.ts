@@ -168,7 +168,7 @@ export function cmdLead(
     return 2
   }
   const file = new ConfigFile(paths(env.home).configJson, {
-    roots: { home, talosHome },
+    roots: { home, talosHome, agentDir },
     log: { warn: (m, f) => io.err(`talos-app: ${m}${f?.error ? `: ${String(f.error)}` : ''}`) },
   })
   try {
@@ -198,7 +198,7 @@ export function cmdLead(
       ...(deps.templates ? { templates: deps.templates } : {}),
     })
     // the folder exists now: the same on-disk check the app makes before it starts a session there
-    const why = checkWorkerFolder(res.folder, { home, talosHome })
+    const why = checkWorkerFolder(res.folder, { home, talosHome, agentDir })
     if (why) throw new LeadError(`the folder ${res.folder} cannot be a thread folder: ${why}`)
     if (
       thread.session_opts?.cwd !== res.folder ||

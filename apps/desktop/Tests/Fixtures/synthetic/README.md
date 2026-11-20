@@ -43,3 +43,13 @@ SYNTHETIC screens, not captures: each is a real capture from `../real-2.1.318` w
   the card and popup answer paths can be driven with arrow keys on a real tmux pane.
 - `bypass-disclaimer-partial.txt`: the real bypass disclaimer with its `Yes, I accept` row removed (written by hand, 2026-11-19): a disclaimer the reader
   must refuse, so the thread gets the no-card line and no card.
+
+- `askuser-cursor-on-text.txt`, `askuser-typed.txt`, `askuser-cursor-on-chat.txt`, `askuser-multi.txt`, `bash-permission-two-rows.txt`,
+  `edit-permission.txt`: written by hand with `sed` (2026-11-20) from `../real-2.1.318/askuser-select.txt`, `bash-permission.txt` and
+  `write-permission.txt`; not captures. The first three move the `❯` to row 3 (`Type something.`), put typed text in that row (the way the
+  row is ASSUMED to look once the owner types into it: no capture of it exists), and put the cursor on `4. Chat about this`. `-multi` makes the
+  tab header the several-questions one (`← ☐ Color  ☐ Size  ✔ Submit →`). `-two-rows` splits the command box into two rows. `edit-permission.txt` is
+  the file permission with `Edit file` and `Do you want to make this edit to notes.txt?` (no Edit capture exists). Replace each with a capture
+  when one is made.
+- `bash-permission-garbled.txt`: `bash-permission.txt` with its footer row (`Esc to cancel · Tab to amend`) removed, as a frame caught half drawn: the prompt shape without
+  its footer. No card is made for it and no key is sent (`PaneSelect` reads nothing).

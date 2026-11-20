@@ -308,7 +308,7 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
     }
     for (const f of [undefined, () => false]) {
       const w = planWith(f, false, setup)
-      const rule = `Write(/${join(w.userHome, '.claude', 'skills', 'h', 'run.sh')})`
+      const rule = `Edit(/${join(w.userHome, '.claude', 'skills', 'h', 'run.sh')})`
       expect(w.deny).toContain(rule)
       expect(w.ask).not.toContain(rule)
     }
@@ -317,7 +317,7 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
     const w = planWith()
     const c = `/${join(w.userHome, '.claude')}`
     expect(w.deny).toContain(`Edit(${c}/agents/**)`)
-    expect(w.deny).toContain(`Write(${c}/skills/**)`)
+    expect(w.deny).toContain(`Edit(${c}/skills/**)`)
     expect(w.ask.some((r) => r.includes('/.claude/agents/'))).toBe(false)
     expect(w.ask.some((r) => r.includes('/.claude/skills/'))).toBe(false)
   })
@@ -328,7 +328,7 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
       const c = `/${join(w.userHome, '.claude')}`
       for (const r of [
         `Edit(${c}/agents/**)`,
-        `Write(${c}/skills/**)`,
+        `Edit(${c}/skills/**)`,
         `Edit(${c}/commands/**)`,
         `Edit(${c}/CLAUDE.md)`,
       ]) {
@@ -337,8 +337,8 @@ describe('the developer thread fence (owner ruling 2026-11-15)', () => {
       }
       for (const r of [
         `Edit(${c}/settings.json)`,
-        `Write(${c}/settings.local.json)`,
-        `Write(${c}/hooks/**)`,
+        `Edit(${c}/settings.local.json)`,
+        `Edit(${c}/hooks/**)`,
         `Edit(${c}/plugins/**)`,
         `Edit(/${join(w.userHome, '.claude.json')})`,
       ]) {
@@ -1296,8 +1296,7 @@ describe('a start whose permission hook cannot run (refused and told, never a si
       if (!('launch' in w.plan)) throw new Error(JSON.stringify(w.plan))
       const deny: string[] = JSON.parse(w.plan.settingsJSON).permissions.deny
       for (const rel of ['scripts/guard.py', 'bin/status.sh', 'hooks/**', 'kit/hooks/**'])
-        for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
-          expect(deny).toContain(`${tool}(/${agentDir}/${rel})`)
+        for (const tool of ['Edit']) expect(deny).toContain(`${tool}(/${agentDir}/${rel})`)
     },
   )
   onCaseExactTmp(
@@ -1323,10 +1322,10 @@ describe('a start whose permission hook cannot run (refused and told, never a si
       const home = join(w.root, 'home')
       for (const r of [
         `Edit(/${w.agentDir}/.claude/**)`,
-        `Write(/${w.agentDir}/.mcp.json)`,
-        `Write(/${w.agentDir}/.env*)`,
-        `Write(/${home}/.claude/settings.json)`,
-        `Write(/${home}/.claude/skills/**)`,
+        `Edit(/${w.agentDir}/.mcp.json)`,
+        `Edit(/${w.agentDir}/.env*)`,
+        `Edit(/${home}/.claude/settings.json)`,
+        `Edit(/${home}/.claude/skills/**)`,
         `Edit(/${home}/.claude.json)`,
       ])
         expect(deny).toContain(r)

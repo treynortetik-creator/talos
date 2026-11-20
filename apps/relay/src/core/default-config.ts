@@ -4,7 +4,7 @@ import type { AgentConfigT } from '@talos-app/protocol'
 export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   version: 1,
   rev: 0,
-  agent: { name: 'Talos', voice: 'meridian', voice_persona: '' },
+  agent: { name: 'Talos' },
   owner: { display_name: 'You' },
   threads: [
     {
@@ -14,7 +14,6 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
       kind: 'fixed',
       order: 0,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
     },
@@ -25,7 +24,6 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
       kind: 'system',
       order: 1,
       notify: 'all',
-      voice_context: 'none',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
     },
@@ -40,7 +38,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
     enabled: [],
     retention: 'passthrough',
   },
-  voice_notes: { reply_with_voice: 'when_voice', driving_until: null },
+  voice_notes: { reply_with_voice: 'never', driving_until: null },
   permission_relay: false,
   session_models: ['default', 'opus', 'sonnet', 'haiku'],
   memory_browser: true,

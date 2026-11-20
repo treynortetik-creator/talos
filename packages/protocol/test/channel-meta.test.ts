@@ -38,8 +38,8 @@ describe('ChannelMeta', () => {
     for (const trust of CHANNEL_TRUSTS) expect(ChannelMeta.safeParse({ ...ok, trust }).success, trust).toBe(true)
     expect(ChannelMeta.safeParse({ ...ok, kind: 'telepathy' }).success).toBe(false)
     expect(ChannelMeta.safeParse({ ...ok, trust: 'admin' }).success).toBe(false)
-    // 10 of spec 4.3 + schedule_run, schedule_held, spawn_request, share (V2 V1.3), handoff, wake (wake_me), peer_message
-    expect(CHANNEL_KINDS).toHaveLength(18)
+    // 7 of spec 4.3 (voice notes and live calls are archived) + schedule_run, schedule_held, spawn_request, share (V2 V1.3), handoff, wake (wake_me), peer_message, onboarding
+    expect(CHANNEL_KINDS).toHaveLength(15)
   })
   it('the setup hello is trust system and nothing else', () => {
     expect(ChannelMeta.safeParse({ ...ok, kind: 'onboarding', trust: 'system' }).success).toBe(true)

@@ -326,8 +326,8 @@ describe('driving mode', () => {
   }, 20_000)
 
   test('outside driving mode the voice still rides on the reply itself (today), spoken as plain text', async () => {
-    h = await startHarness({ env: FAST_TTS })
-    await h.bridge.callTool('reply', { thread_id: 'general', text: '**bold** answer', voice: true })
+    h = await startHarness({ env: FAST_TTS, config: driving('always', -60_000) as never })
+    await h.bridge.callTool('reply', { thread_id: 'general', text: '**bold** answer' })
     const f = await h.relay.expectFrame('reply', (r) => r.message.attachments.some((a) => a.role === 'voice_reply'), {
       direction: 'from_bridge',
     })
@@ -373,7 +373,7 @@ describe('config.patch rules', () => {
     )
     expect(r.ok).toBe(true)
     expect(Date.parse(c.config.voice_notes.driving_until as string)).toBe(now + 12 * 3600_000)
-    expect(c.config.voice_notes.reply_with_voice).toBe('when_voice') // the rest of voice_notes is untouched
+    expect(c.config.voice_notes.reply_with_voice).toBe('never') // the rest of voice_notes is untouched
     const off = c.applyPatch(c.config.rev, { voice_notes: { driving_until: null } }, now)
     expect(off.ok).toBe(true)
     expect(c.config.voice_notes.driving_until).toBeNull()

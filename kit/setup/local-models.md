@@ -26,7 +26,7 @@ Apple Silicon (M1 or newer) is called out where a model needs it.
 
 - **Voice out:** `bash scripts/tts.sh play "text"` and `file out.m4a "text"` use macOS `say`. Not pretty, fully working.
 - **Voice in:** `bash scripts/stt.sh note.ogg` prints a message listing your two options and exits; nothing else breaks.
-  Voice notes can still be listened to by you.
+  Audio files can still be listened to by you.
 - **Memory search:** `scripts/recall.py` uses plain text search (grep style). Fast, exact words only.
 - **Speaker labels:** `scripts/stt-diarize/diarize_transcribe.sh` says which pieces are missing and how to add them.
 
@@ -44,7 +44,7 @@ Order tried by `scripts/stt.sh`: Parakeet if installed, then whisper.cpp. Force 
   faster on Apple Silicon and more accurate on English in a single comparison (checked 2026-10-02 against NVIDIA's
   model card and the Hugging Face Open ASR leaderboard; on one 10.7-minute phone-quality call it did not invent filler
   words and its word timestamps were correct). That is one test, not a benchmark.
-- **For:** voice notes, meeting recordings, anything you want transcribed accurately. It also gives word timings, which
+- **For:** audio recordings, meeting recordings, anything you want transcribed accurately. It also gives word timings, which
   the speaker-labelling extra needs.
 - **Needs:** Apple Silicon, `ffmpeg`, Python 3.10+ (uv manages one for you). Model cache about 2.3 GB (author's
   measurement). RAM: not measured.

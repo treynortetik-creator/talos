@@ -42,7 +42,7 @@ describe('BugReporter on a phone', () => {
     mount({}, (c) => vi.spyOn(c.bugs, 'destination').mockResolvedValue({ to: 'team' }))
     await waitFor(() =>
       expect(within(dialog()).getByTestId('bug-goes-to').textContent).toBe(
-        'Goes to: your relay and your Mac, then the Talos team, with the screenshot.',
+        'Goes to: Talos online and your Mac, then the Talos team, with the screenshot.',
       ),
     )
   })
@@ -59,7 +59,7 @@ describe('BugReporter on a phone', () => {
     expect(d.queryByRole('radiogroup')).toBeNull()
     expect(d.queryByLabelText('What did you expect? (optional)')).toBeNull()
     expect(d.getByText('Versions, recent errors, cleaned logs')).toBeTruthy()
-    expect(d.getByText('Keys and tokens are removed. Nothing is sent until you tap Send.')).toBeTruthy()
+    expect(d.getByText('Keys and sign-in codes are removed. Nothing is sent until you tap Send.')).toBeTruthy()
   })
 
   it('the header leaves room for the status bar', () => {

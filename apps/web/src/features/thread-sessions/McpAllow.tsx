@@ -33,11 +33,11 @@ export function McpAllow({
       return
     }
     if (list.length >= MCP_ALLOW_MAX) {
-      setProblem(`The list holds up to ${MCP_ALLOW_MAX} servers.`)
+      setProblem(`The list holds up to ${MCP_ALLOW_MAX} tools.`)
       return
     }
     if (!McpAllowList.safeParse([name]).success) {
-      setProblem('A server name is up to 80 characters, with no commas, control characters or spaces at the ends.')
+      setProblem('A tool name is up to 80 characters, with no commas, control characters or spaces at the ends.')
       return
     }
     setProblem(null)
@@ -49,7 +49,7 @@ export function McpAllow({
     <div className="flex flex-col gap-1 text-xs text-text-2" data-testid="mcp-allow">
       <div className="flex min-h-11 items-center justify-between gap-2">
         <label htmlFor={ids.sw} className="text-sm font-medium text-text">
-          Limit MCP servers
+          Limit tools
         </label>
         <Switch
           id={ids.sw}
@@ -59,11 +59,11 @@ export function McpAllow({
           data-testid="mcp-allow-switch"
         />
       </div>
-      {!on && <span>Off: the session gets whatever servers Claude Code gives it.</span>}
+      {!on && <span>Off: your agent gets the tools it normally has.</span>}
       {on && (
         <>
           <span>Only talos-app and these. Use the names Claude Code shows, like github or claude.ai Gmail.</span>
-          <ul className="m-0 flex list-none flex-col gap-1 p-0" aria-label="Allowed MCP servers">
+          <ul className="m-0 flex list-none flex-col gap-1 p-0" aria-label="Allowed tools">
             {list.map((name) => (
               <li key={name} className="flex min-h-11 items-center justify-between gap-2 text-sm text-text">
                 <span className="break-all">{name}</span>
@@ -77,9 +77,9 @@ export function McpAllow({
                 </Button>
               </li>
             ))}
-            {list.length === 0 && <li>No other servers.</li>}
+            {list.length === 0 && <li>No other tools.</li>}
           </ul>
-          <label htmlFor={ids.add}>Add a server</label>
+          <label htmlFor={ids.add}>Add a tool</label>
           <div className="flex gap-2">
             <Input
               id={ids.add}

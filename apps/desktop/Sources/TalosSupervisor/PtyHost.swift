@@ -68,6 +68,12 @@ public protocol PtyHost: AnyObject, Sendable {
   /// One of the three keys a tap on a dialog may send (`DialogKey`), by name, so the pane gets the bytes its own cursor-key mode wants.
   @discardableResult
   func sendDialogKey(_ key: DialogKey) -> SendOutcome
+  /// The number key of a numbered Select row (a tool permission or the agent's question: `PaneSelect`), and the owner's typed words for a question's
+  /// free-text row. Only the gate sends them (`Supervisor.sendKey` and `WorkerManager.sendKey`, with `.pane`). A host that cannot says `.failed`.
+  @discardableResult
+  func sendSelectNumber(_ n: SelectNumber) -> SendOutcome
+  @discardableResult
+  func sendAnswerText(_ t: AnswerText) -> SendOutcome
   /// Escape, for the computer-use permission dialog only (`ComputerUseDismiss`).
   @discardableResult
   func sendEscape() -> SendOutcome
@@ -106,6 +112,9 @@ extension PtyHost {
     case .enter: return send(keys: [0x0d])
     }
   }
+  /// An app-owned pty: the digit itself, and the typed words as UTF-8 bytes.
+  public func sendSelectNumber(_ n: SelectNumber) -> SendOutcome { send(keys: [UInt8(0x30 + n.value)]) }
+  public func sendAnswerText(_ t: AnswerText) -> SendOutcome { send(keys: Array(t.text.utf8)) }
   /// An app-owned pty: the one byte. Claude reads a lone ESC as the Escape key once nothing follows it.
   public func sendEscape() -> SendOutcome { send(keys: [0x1b]) }
   public func clientActivity() -> Double? { nil }

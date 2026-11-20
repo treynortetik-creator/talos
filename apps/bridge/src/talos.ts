@@ -144,8 +144,8 @@ export const COMMANDS: readonly CommandInfo[] = [
   { name: 'search reindex', summary: 'Rebuild the search index' },
   {
     name: 'schedules',
-    args: '[adopt | notify <message>]',
-    summary: 'Show schedules; adopting one is a separate, owner-only subcommand',
+    args: '[adopt [--yes] | notify <message>]',
+    summary: 'Show schedules; `schedules adopt` approves the ones found on disk',
   },
   {
     name: 'schedules adopt',

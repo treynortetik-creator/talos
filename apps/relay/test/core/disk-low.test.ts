@@ -29,7 +29,6 @@ const beatOf = (free: number | undefined): HealthBeatT => ({
   bridge: { version: '0.4.1', started_at: START },
   mod: { state: 'alive', last_seen: START, expected: true },
   tts: true,
-  stt: true,
   sqlite: { fts5: true },
   ...(free !== undefined ? { disk_free_bytes: free } : {}),
 })

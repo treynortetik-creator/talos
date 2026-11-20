@@ -15,7 +15,7 @@
 //   - Act before the message has waited `STALL_MIN_MS`, or deliver anything but the owner messages told to Main since its last tool
 //     call (`SeenTracker.unseenIds`): never one Main already took in.
 //   - Act twice for one message: `unseen_oldest_at` stays the same while the message waits, so a second request for it is ignored.
-//   - Act on anything it did not hold itself: only owner text, voice and file notices of this process are kept (a bounded list), so
+//   - Act on anything it did not hold itself: only owner text and file notices of this process are kept (a bounded list), so
 //     a request cannot make the bridge deliver anything but what the owner sent.
 //   - Hide a failure: a request it cannot read, a message it no longer holds, and a delivery that fails each leave a log line.
 import { readFileSync, unlinkSync } from 'node:fs'
@@ -36,7 +36,7 @@ export const STALL_MIN_MS = MAIN_RESTART.model_stall_s * 1000
  * (`missed: true`: Main idle at its prompt after an empty thinking block, nothing pressed) the shorter wait.
  */
 export const STALL_BLANK_MIN_MS = MAIN_RESTART.model_stall_blank_s * 1000
-const KINDS = new Set(['text', 'voice_note', 'file'])
+const KINDS = new Set(['text', 'file'])
 
 export type ResendRequest = { unseenAt: number; blank: boolean; missed: boolean }
 
@@ -64,7 +64,7 @@ export function holdOwnerNotice(m: ResendMemory, n: Notification): void {
   if (n.meta.redelivered) return // a copy we made ourselves is never the original that a later resend would be built from
   const id = n.meta.message_id
   const trust = n.meta.trust
-  if (!id || (trust !== 'owner' && trust !== 'owner_voice') || !KINDS.has(n.meta.kind ?? '')) return
+  if (!id || trust !== 'owner' || !KINDS.has(n.meta.kind ?? '')) return
   m.held.set(id, n)
   if (m.held.size > HELD_MAX) {
     const oldest = m.held.keys().next().value

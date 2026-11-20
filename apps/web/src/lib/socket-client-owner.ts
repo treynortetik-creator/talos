@@ -60,6 +60,7 @@ export function createClientOwner(
         ...(input.editedHash ? { edited_hash: input.editedHash } : {}),
         ...(input.note ? { note: input.note } : {}),
         ...(input.choice !== undefined ? { choice: input.choice } : {}),
+        ...(input.text !== undefined ? { text: input.text } : {}),
         // signed with the rest: only the owner's own tap can always-allow a kind
         ...(input.always ? { always: true } : {}),
       })

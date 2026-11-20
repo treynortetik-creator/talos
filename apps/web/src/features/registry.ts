@@ -4,8 +4,6 @@ import { type ComponentType, lazy } from 'react'
 import type {
   AppEchoRowProps,
   AppViewCardProps,
-  CallBarProps,
-  CallScreenProps,
   CardViewProps,
   ContextViewProps,
   DriveScreenProps,
@@ -14,7 +12,6 @@ import type {
   HomeScreenProps,
   InboxScreenProps,
   IntegrationsScreenProps,
-  LiveCallButtonProps,
   MemoryScreenProps,
   SearchScreenProps,
   SettingsSectionDef,
@@ -49,20 +46,6 @@ export const EventRow = lazyNamed<EventRowProps, typeof import('./inbox/index.ts
 export const IntegrationsScreen = lazyNamed<IntegrationsScreenProps, typeof import('./integrations/index.tsx')>(
   () => import('./integrations/index.tsx'),
   'IntegrationsScreen',
-)
-
-// WP4
-export const LiveCallButton = lazyNamed<LiveCallButtonProps, typeof import('./voice/index.tsx')>(
-  () => import('./voice/index.tsx'),
-  'LiveCallButton',
-)
-export const CallBar = lazyNamed<CallBarProps, typeof import('./voice/index.tsx')>(
-  () => import('./voice/index.tsx'),
-  'CallBar',
-)
-export const CallScreen = lazyNamed<CallScreenProps, typeof import('./voice/index.tsx')>(
-  () => import('./voice/index.tsx'),
-  'CallScreen',
 )
 
 // v2 features (WP-V0 placeholders; WP-V3/V4/V5/V6 replace the screens)
@@ -105,7 +88,7 @@ export const settingsSections: SettingsSectionDef[] = [
   {
     // CC-C3: Claude Code session (model, effort, usage, commands). Order 3.5 = right after Agent.
     id: 'session',
-    title: 'Session',
+    title: 'Your agent',
     order: 3.5,
     Component: lazyNamed<SettingsSectionProps, typeof import('./session/index.tsx')>(
       () => import('./session/index.tsx'),
@@ -115,7 +98,7 @@ export const settingsSections: SettingsSectionDef[] = [
   {
     // Option C (docs/OPTION-C.md): the master switch for a thread's own session, and the thread-session rows
     id: 'thread-sessions',
-    title: 'Thread sessions',
+    title: 'Thread agents',
     order: 3.6,
     Component: lazyNamed<SettingsSectionProps, typeof import('./thread-sessions/index.tsx')>(
       () => import('./thread-sessions/index.tsx'),
@@ -126,8 +109,8 @@ export const settingsSections: SettingsSectionDef[] = [
     id: 'voice',
     title: 'Voice',
     order: 4,
-    Component: lazyNamed<SettingsSectionProps, typeof import('./voice/index.tsx')>(
-      () => import('./voice/index.tsx'),
+    Component: lazyNamed<SettingsSectionProps, typeof import('./spoken-replies/index.tsx')>(
+      () => import('./spoken-replies/index.tsx'),
       'VoiceSettingsSection',
     ),
   },

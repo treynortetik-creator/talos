@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   checkPeerInboxUrl,
+  cleanPastedLinkCode,
   formatPeerLinkCode,
   isPeerSecret,
   PeerLinkRedeem,
@@ -93,5 +94,30 @@ describe('secret and redeem body', () => {
     expect(PeerLinkRedeem.safeParse({ ...ok, extra: 1 }).success).toBe(false)
     expect(PeerLinkRedeem.safeParse({ ...ok, back: { ...ok.back, url: 'http://b.example.com/x' } }).success).toBe(false)
     expect(PeerLinkRedeem.safeParse({ ...ok, back: { ...ok.back, secret: 'nope' } }).success).toBe(false)
+  })
+})
+
+describe('cleanPastedLinkCode', () => {
+  const code = `talos-link:a.example.com/cn_abcdefghijklmnopqrstuv/${'A'.repeat(43)}`
+  it.each([
+    [`<${code}>`],
+    [`"${code}"`],
+    [`'${code}'`],
+    [`\`${code}\``],
+    [`${code},`],
+    [`${code}.`],
+    [`  <${code}>.  `],
+    [`"${code}".`],
+  ])('a wrapped code parses (%#)', (wrapped) => {
+    expect(parsePeerLinkCode(cleanPastedLinkCode(wrapped)).ok).toBe(true)
+  })
+  it('only one pair comes off, and the host rules stay', () => {
+    expect(parsePeerLinkCode(cleanPastedLinkCode(`<<${code}>>`)).ok).toBe(false)
+    expect(parsePeerLinkCode(cleanPastedLinkCode(`<${code.replace('a.example.com', '127.0.0.1')}>`)).ok).toBe(false)
+    expect(parsePeerLinkCode(cleanPastedLinkCode(`<${code.replace('a.example.com', 'a.example.com:8443')}>`)).ok).toBe(
+      false,
+    )
+    expect(parsePeerLinkCode(cleanPastedLinkCode(`<${code}`)).ok).toBe(false)
+    expect(parsePeerLinkCode(cleanPastedLinkCode(`http://a.example.com/x/${'A'.repeat(43)}`)).ok).toBe(false)
   })
 })

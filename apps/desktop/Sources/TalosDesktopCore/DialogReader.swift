@@ -18,6 +18,10 @@ public enum DialogReader {
   public enum Kind: String, Codable, Equatable, Sendable { case trust, mcpConsent = "mcp_consent", login, devChannels = "dev_channels", bypass
     /// Main's own API-key question (`ApiKeyCard`): a Mac popup answered by a real click; never read off a worker's pane and not on the phone yet.
     case apiKey = "api_key"
+    /// A tool permission (Bash command, file create or edit) and the agent's own question, read off a pane by `PaneSelect` (never by `read`
+    /// below: a card for either needs the exact screen the offer is tied to, so each key is checked against it, `KeyGuard.Intent.pane`).
+    case toolPermission = "tool_permission"
+    case agentQuestion = "agent_question"
   }
 
   public struct Dialog: Equatable, Sendable {
@@ -155,7 +159,7 @@ public enum DialogReader {
       } else {
         return nil
       }
-    case .login, .devChannels, .apiKey: return nil  // login has no select; the channel question has its own reader
+    case .login, .devChannels, .apiKey, .toolPermission, .agentQuestion: return nil  // login has no select; the channel question and the two pane Selects have their own readers
     }
     if let escaped, !intensityOK(escaped, top: top, options: first...last, cursor: c) { return nil }
     return Dialog(kind: kind, subject: subject, options: options, cursor: c - first)

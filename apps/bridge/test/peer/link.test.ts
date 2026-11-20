@@ -7,7 +7,7 @@ import { parsePeerLinkCode, peerInboxUrl } from '@talos-app/protocol'
 import { waitFor } from '@talos-app/testkit'
 import { runCli } from '../../src/cli.ts'
 import { ConfigFile } from '../../src/config-file.ts'
-import { PEER_SECRET_SERVICE, peerSecretAccount, readInboundPeers } from '../../src/peer/records.ts'
+import { addInboundPeer, PEER_SECRET_SERVICE, peerSecretAccount, readInboundPeers } from '../../src/peer/records.ts'
 import type { Harness } from '../helpers.ts'
 import { type Install, install, ownerSays, rowsOf, text } from './helpers.ts'
 
@@ -196,11 +196,9 @@ describe('a link that does not finish on A', () => {
     await pollUntil(a, () => rowsOf(a).includes(DIDNT('work')), 'the row')
   })
 
-  test('a taken or failed link cannot be re-linked; an open one that was never used can', async () => {
+  test('a taken or failed link cannot be re-linked', async () => {
     await pair()
-    const first = codeOf((await cli(a, ['peer', 'link', 'work'])).out)
-    const code = codeOf((await cli(a, ['peer', 'link', 'work'])).out) // open, never redeemed: re-mint works
-    expect(code).not.toBe(first)
+    const code = codeOf((await cli(a, ['peer', 'link', 'work'])).out)
     expect((await cli(b, ['peer', 'accept', code, '--name', 'home'])).code).toBe(0)
     a.secrets.set = async () => {
       throw new Error('store locked')
@@ -215,8 +213,25 @@ describe('a link that does not finish on A', () => {
     await pair()
     await cli(a, ['peer', 'link', 'work'])
     a.clock.set(a.clock.now() + 16 * 60_000)
-    await pollUntil(a, () => readInboundPeers(a.home)[0]?.link?.state === 'closed' || true, 'poll')
+    await pollUntil(a, () => readInboundPeers(a.home)[0]?.link?.state === 'closed', 'the poll closes it')
     expect((await cli(a, ['peer', 'link', 'work'])).code).toBe(0)
+  })
+
+  test("A's clock running ahead never marks a code the relay still accepts as expired: no re-link on that inbox", async () => {
+    await pair()
+    await cli(a, ['peer', 'link', 'work'])
+    // A's clock ran ahead: by A's reckoning the code's window (plus slack) is over, while A's relay still holds it open
+    const rec = readInboundPeers(a.home)[0] as NonNullable<ReturnType<typeof readInboundPeers>[0]>
+    addInboundPeer(a.home, {
+      ...rec,
+      link: { ...(rec.link as NonNullable<typeof rec.link>), until: Date.now() - 5 * 60_000 },
+    })
+    expect([...a.relay.peers.links.values()][0]?.state).toBe('open')
+    await pollUntil(a, () => readInboundPeers(a.home)[0]?.link?.state === 'closed', 'the poll closes it')
+    expect(readInboundPeers(a.home)[0]?.link?.expired).toBeFalsy()
+    const r = await cli(a, ['peer', 'link', 'work'])
+    expect(r.code).toBe(1)
+    expect(r.err).toContain(WAS_USED('work'))
   })
 
   test("A re-checks what the relay hands over: an http url or a bad secret is refused, nothing stored, the row says it didn't finish", async () => {
@@ -358,15 +373,52 @@ describe('a code that cannot be used', () => {
 })
 
 describe('peer link', () => {
-  test('run again it reuses its inbox and mints a new code; the old code stops working', async () => {
+  test('a second link while a code is waiting is refused, touches nothing, and the pending link still completes', async () => {
     await pair()
     const first = codeOf((await cli(a, ['peer', 'link', 'work'])).out)
-    const second = codeOf((await cli(a, ['peer', 'link', 'work'])).out)
-    expect(second).not.toBe(first)
-    expect(a.relay.peers.rows).toHaveLength(1)
-    const old = await cli(b, ['peer', 'accept', first, '--name', 'home'])
-    expect(old.code).toBe(1)
-    expect((await cli(b, ['peer', 'accept', second, '--name', 'home'])).code).toBe(0)
+    const calls = a.relay.http.length
+    const again = await cli(a, ['peer', 'link', 'work'])
+    expect(again.code).toBe(1)
+    expect(again.err).toContain(
+      'a link code is already waiting for work; use it or cancel it with talos-app peer remove work.',
+    )
+    expect(a.relay.http).toHaveLength(calls) // no relay call at all, so no collect either
+    expect((await cli(b, ['peer', 'accept', first, '--name', 'home'])).code).toBe(0)
+    await pollUntil(a, () => cfg(a).peers.length === 1, 'A collects')
+    await waitFor(() => rowsOf(a).includes('Linked with work'), 6000, 'the row')
+  })
+
+  test('a code that was redeemed but not yet collected is still waiting: refused, and nothing is consumed', async () => {
+    await pair()
+    const first = codeOf((await cli(a, ['peer', 'link', 'work'])).out)
+    expect((await cli(b, ['peer', 'accept', first, '--name', 'home'])).code).toBe(0)
+    const calls = a.relay.http.length
+    const again = await cli(a, ['peer', 'link', 'work'])
+    expect(again.err).toContain('a link code is already waiting for work')
+    expect(a.relay.http).toHaveLength(calls)
+    await pollUntil(a, () => cfg(a).peers.length === 1, 'A collects')
+  })
+
+  test('peer remove, then link, works', async () => {
+    await pair()
+    await cli(a, ['peer', 'link', 'work'])
+    expect((await cli(a, ['peer', 'remove', 'work'])).code).toBe(0)
+    expect((await cli(a, ['peer', 'link', 'work'])).code).toBe(0)
+  })
+
+  test('an open record past its time that the poll has not closed yet fails closed, with no relay call', async () => {
+    await pair()
+    await cli(a, ['peer', 'link', 'work'])
+    const rec = readInboundPeers(a.home)[0]
+    addInboundPeer(a.home, {
+      ...(rec as NonNullable<typeof rec>),
+      link: { by: 'link', state: 'open', until: Date.now() - 1000 },
+    })
+    const calls = a.relay.http.length
+    const r = await cli(a, ['peer', 'link', 'work'])
+    expect(r.code).toBe(1)
+    expect(r.err).toContain(WAS_USED('work'))
+    expect(a.relay.http).toHaveLength(calls)
   })
 
   test('refuses a name that is already a normal inbox', async () => {

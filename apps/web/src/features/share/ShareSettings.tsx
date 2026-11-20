@@ -160,7 +160,7 @@ export function ShareTokensPanel({
           ? 'Open Talos on a device your Mac has confirmed to use the share sheet.'
           : on
             ? "Couldn't turn on the iPhone share sheet. Try again."
-            : 'The share sheet is off on this phone, but the link could not be revoked on the relay. Revoke it below.',
+            : 'The share sheet is off on this phone, but the link could not be revoked on the Talos server. Revoke it below.',
       )
     } finally {
       await load()
@@ -322,7 +322,7 @@ export function ShareSettingsSection(_props: { readOnly: boolean }) {
     return (
       <section className="flex flex-col gap-2">
         <h2 className="m-0 font-display text-xl font-semibold">Share from other apps</h2>
-        <p className="m-0 text-text-2">This relay doesn't have sharing turned on.</p>
+        <p className="m-0 text-text-2">Sharing isn't turned on for your Talos server.</p>
       </section>
     )
   return <ShareTokensPanel currentDeviceId={deviceId} />

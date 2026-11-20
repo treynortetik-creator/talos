@@ -206,12 +206,6 @@ export class FakeApp {
     return f
   }
 
-  async sendVoiceNote(thread_id: string, attachment: Record<string, unknown>) {
-    const f = await this.sign({ ...mkFrame('voice_note'), thread_id, client_msg_id: newId('m'), attachment })
-    this.send(f)
-    return f
-  }
-
   /** `payloadHash` must be the hash the app recomputed from what it rendered. */
   async resolveCard(
     card: Pick<CardT, 'id'>,
@@ -323,23 +317,5 @@ export class FakeApp {
       window_h: opts.windowH ?? 24,
       with_agent: opts.withAgent ?? false,
     })
-  }
-
-  async sendVoiceAsk(
-    thread_id: string,
-    question: string,
-    transcript_tail: Array<{ who: 'owner' | 'agent'; text: string }> = [],
-    voiceSessionId: string = newId('v'),
-  ) {
-    const f = await this.sign({
-      ...mkFrame('voice.ask'),
-      voice_session_id: voiceSessionId,
-      delegation_id: newUlid(),
-      thread_id,
-      question,
-      transcript_tail,
-    })
-    this.send(f)
-    return f
   }
 }

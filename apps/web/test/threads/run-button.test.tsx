@@ -590,7 +590,7 @@ describe('one message per tap, and the sent state', () => {
     })
     mount(msg(fence('echo hi'), { thread_id: 'trip' }), client)
     expect(runButton()).toBeNull()
-    expect(screen.getByTestId('run-blocked').textContent).toMatch(/has its own session/)
+    expect(screen.getByTestId('run-blocked').textContent).toMatch(/has its own agent/)
     cleanup()
     mount(msg(fence('echo hi')), client) // the same Mac, a shared thread: a button
     expect(runButton()).toBeTruthy()
@@ -651,6 +651,143 @@ describe('one message per tap, and the sent state', () => {
 })
 
 describe('offline and failed', () => {
+  /** The client's ack: the relay took it, and the row gets its receipt. */
+  const stamp = (client: Fake, id: string, receipt: 'sent' | 'delivered') =>
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: {
+          ...s.messages,
+          general: (s.messages.general ?? []).map((m) => (m.id === id ? { ...m, receipt } : m)),
+        },
+      })),
+    )
+
+  it('a Run that was queued and then went out (the relay acked it: its row has a receipt) says Sent, and offers Run again', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'offline' }))
+    mount(msg(fence('echo hi')), client)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() =>
+      expect(screen.getByTestId('run-status').textContent).toBe("Queued · sends when you're back online"),
+    )
+    const id = await sentRunId(client)
+    stamp(client, id, 'sent')
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    await waitFor(() => expect(label()).toBe('Run again'))
+  })
+
+  it('a Run held for device approval that then went out says Sent, not Queued', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, devicePinned: false }))
+    mount(msg(fence('echo hi')), client)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() =>
+      expect(screen.getByTestId('run-status').textContent).toBe('Queued · sends once your Mac approves this device'),
+    )
+    stamp(client, await sentRunId(client), 'delivered')
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+  })
+
+  it('a queued Run that failed and was deleted never says Sent: leaving the queue is not delivery', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'offline' }))
+    const meta = createMetaStore()
+    mount(msg(fence('echo hi')), client, meta)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued ·/))
+    const id = await sentRunId(client)
+    act(() => meta.setState({ queuedIds: [id] }))
+    act(() => meta.setState({ queuedIds: [id], failed: { [id]: 'final' } }))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/Didn't send/))
+    // Delete on the failed row: out of the queue, the failure cleared, the row gone (socket-client-send discardMessage)
+    act(() => meta.setState({ queuedIds: [], failed: {} }))
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: { ...s.messages, general: (s.messages.general ?? []).filter((m) => m.id !== id) },
+      })),
+    )
+    await act(async () => {})
+    expect(screen.getByTestId('run-status').textContent).not.toMatch(SENT)
+  })
+
+  it('a queued Run whose failed row was deleted says it was removed and not sent, once back online too, and offers Run again', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'offline' }))
+    const meta = createMetaStore()
+    mount(msg(fence('echo hi')), client, meta)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued ·/))
+    const id = await sentRunId(client)
+    act(() => meta.setState({ queuedIds: [id], failed: { [id]: 'final' } }))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/Didn't send/))
+    // Delete on the failed row: out of the queue, the failure cleared, the row gone; then the page is back online
+    act(() => meta.setState({ queuedIds: [], failed: {} }))
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: { ...s.messages, general: (s.messages.general ?? []).filter((m) => m.id !== id) },
+      })),
+    )
+    act(() => client.store.setState((s) => ({ ...s, connection: 'online' })))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toBe('Removed. Nothing was sent.'))
+    await waitFor(() => expect(label()).toBe('Run again'))
+  })
+
+  it('a queued Run that went out (acked) and whose row is then deleted still says Sent, never "Removed"', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'offline' }))
+    mount(msg(fence('echo hi')), client)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued ·/))
+    const id = await sentRunId(client)
+    act(() => client.store.setState((s) => ({ ...s, connection: 'online' })))
+    // the relay acked it: the row has its receipt
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: {
+          ...s.messages,
+          general: (s.messages.general ?? []).map((m) => (m.id === id ? { ...m, receipt: 'sent' as const } : m)),
+        },
+      })),
+    )
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    // then the row goes (deleted, or a catch-up reset): it was sent, and the line keeps saying so
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: { ...s.messages, general: (s.messages.general ?? []).filter((m) => m.id !== id) },
+      })),
+    )
+    await act(async () => {})
+    expect(screen.getByTestId('run-status').textContent).toMatch(SENT)
+  })
+
+  it('a queued Run whose row is lost before its ack is stamped (a catch-up reset) never reads as removed', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'offline' }))
+    const meta = createMetaStore()
+    mount(msg(fence('echo hi')), client, meta)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued ·/))
+    const id = await sentRunId(client)
+    act(() => meta.setState({ queuedIds: [id] }))
+    act(() => client.store.setState((s) => ({ ...s, connection: 'online' })))
+    // the flush wrote it; the row goes before the ack could stamp it; then the ack takes it out of the queue
+    act(() =>
+      client.store.setState((s) => ({
+        ...s,
+        messages: { ...s.messages, general: (s.messages.general ?? []).filter((m) => m.id !== id) },
+      })),
+    )
+    act(() => meta.setState({ queuedIds: [] }))
+    await act(async () => {})
+    // it may have gone out: the line must not tell the owner nothing was sent
+    expect(screen.getByTestId('run-status').textContent).not.toBe('Removed. Nothing was sent.')
+  })
+
   it('a Run that is queued says it is queued', async () => {
     const client = setup({ macOffline: true })
     client.store.setState((s) => ({ ...s, connection: 'offline' }))
@@ -661,13 +798,29 @@ describe('offline and failed', () => {
     )
   })
 
-  it('a Run still waiting in the send queue offers no second Run', async () => {
+  it('a Run written to a live socket says Sending while its ack is on the way, never "back online", then Sent', async () => {
+    const client = setup({ macOffline: true })
+    client.store.setState((s) => ({ ...s, connection: 'online' }))
+    const meta = createMetaStore()
+    mount(msg(fence('echo hi')), client, meta)
+    fireEvent.click(runButton() as HTMLElement)
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+    const id = await sentRunId(client)
+    // in the outbox until the relay's ack is handled: on its way, not delivered, and never "when you're back online"
+    act(() => meta.setState({ queuedIds: [id] }))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toBe('Sending…'))
+    act(() => meta.setState({ queuedIds: [] }))
+    await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
+  })
+
+  it('a Run still waiting in the send queue while offline (the socket dropped before the ack) offers no second Run', async () => {
     const client = setup({ macOffline: true })
     const meta = createMetaStore()
     mount(msg(fence('echo hi')), client, meta)
     fireEvent.click(runButton() as HTMLElement)
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(SENT))
     const id = await sentRunId(client)
+    act(() => client.store.setState((s) => ({ ...s, connection: 'offline' })))
     act(() => meta.setState({ queuedIds: [id] }))
     await waitFor(() => expect(screen.getByTestId('run-status').textContent).toMatch(/^Queued ·/))
     expect(runButton()).toBeNull()

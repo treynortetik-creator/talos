@@ -539,13 +539,11 @@ export function Timeline({
                 <p data-testid="thread-empty-explainer" className="m-0 max-w-[30ch] text-text-2">
                   {inbox.length > 0
                     ? `Ask ${agent} about anything above: what came in, what matters and what to do next.`
-                    : `Nothing has come in. Ask ${agent} what it is watching, or hold the mic to send a voice note.`}
+                    : `Nothing has come in. Ask ${agent} what it is watching.`}
                 </p>
               ) : (
                 <>
-                  <p className="m-0 max-w-[30ch] text-text-2">
-                    No messages yet. Say hi, or hold the mic to send a voice note.
-                  </p>
+                  <p className="m-0 max-w-[30ch] text-text-2">No messages yet. Say hi.</p>
                   <p data-testid="thread-empty-explainer" className="m-0 max-w-[40ch] text-sm text-text-2">
                     A thread is one topic. Messages here stay here, so {agent} can answer and file updates by subject.
                     To rename it, give it an icon and color, set notifications or archive it, open its settings: the ⋯

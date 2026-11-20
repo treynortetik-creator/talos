@@ -61,7 +61,7 @@ struct WorkerPromptRelayTests {
   static let named = """
     {"default_thread":"general","dedicated":{"enabled":true,"max_live":3},"threads":[{"id":"general","kind":"fixed"},{"id":"trip","name":"OC Test","kind":"fixed","session":"dedicated"}]}
     """
-  static let bashLine = "This thread's session is waiting on a 'Bash command' prompt; open this thread in Terminals on the Mac to answer."
+  static let bashLine = "This thread's session is waiting on a 'Bash command' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer."
 
   private func rig(_ extra: [String: String]) throws -> (WorkerRig, NoticeLog) {
     let r = try WorkerRig(scenario: "worker-real.sh", extraEnv: extra)
@@ -112,7 +112,7 @@ struct WorkerPromptRelayTests {
     usleep(3_500_000)  // past the ready timeout
     #expect(r.state("trip") == "starting", "\(r.why("trip"))")
     #expect(log.all.count == 1)
-    #expect(log.all.first?.text == "This thread's session is waiting on a 'question' prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a 'question' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
   }
 
@@ -242,14 +242,13 @@ struct MainPromptRelayTests {
     return r
   }
 
-  @Test func aToolPermissionPromptInMainPostsOnceToTheDefaultThread() throws {
-    let r = try running("bash-permission")
+  /// A prompt the Mac cannot read whole (here the first-run theme Select: no card for it) gets the line, once, on the default thread.
+  @Test func aPromptTheMacCannotCardPostsOnceToTheDefaultThread() throws {
+    let r = try running("onboarding-theme")
     defer { r.teardown() }
     r.humanEnter()  // the fake session now shows the prompt
     #expect(r.wait(15) { r.sup.tickNow(); return r.phonePosts.count == 1 }, "posts \(r.phonePosts) audit \(r.audit)")
-    #expect(
-      r.phonePosts.first
-        == "post general Testagent is waiting on a 'Bash command' prompt; open Terminal on the Mac to answer.")
+    #expect(r.phonePosts.first == "post general Testagent is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     for _ in 0..<15 {
       usleep(200_000)
       r.sup.tickNow()
@@ -261,17 +260,25 @@ struct MainPromptRelayTests {
     #expect(r.phonePosts.count == 1)
   }
 
-  @Test func theAgentsOwnQuestionIsNamedAQuestion() throws {
-    let r = try running("askuser-select")
+  /// A tool permission or the agent's question the Mac reads whole is a popup and a card (SupervisorPanePrompt.swift): the card is its notice, so no line.
+  @Test(arguments: [("bash-permission", "tool_permission"), ("askuser-select", "agent_question"), ("write-permission", "tool_permission")])
+  func aToolPermissionOrQuestionInMainIsAPopupAndNoLine(screen: String, kind: String) throws {
+    let r = try running(screen)
     defer { r.teardown() }
     r.humanEnter()
-    #expect(r.wait(15) { r.sup.tickNow(); return r.phonePosts.count == 1 }, "posts \(r.phonePosts) audit \(r.audit)")
-    #expect(r.phonePosts.first?.contains("waiting on a 'question' prompt; open") == true)
+    #expect(r.wait(15) { r.sup.tickNow(); return r.sup.panePopupItem() != nil }, "audit \(r.audit)")
+    #expect(r.sup.panePopupItem()?.dialog.kind.rawValue == kind)
+    for _ in 0..<15 {
+      usleep(200_000)
+      r.sup.tickNow()
+    }
+    #expect(r.phonePosts.isEmpty, "\(r.phonePosts)")
+    #expect(r.audit.contains("prompt_notified"), "the prompt is still seen: audit \(r.audit)")
   }
 
   /// The app relaunched with the prompt still open: one notice, not two.
   @Test func aRelaunchKeepsOneNoticeForAnOpenPrompt() throws {
-    let r = try running("write-permission")
+    let r = try running("onboarding-theme")
     defer { r.teardown() }
     r.humanEnter()
     #expect(r.wait(15) { r.sup.tickNow(); return r.phonePosts.count == 1 }, "posts \(r.phonePosts) audit \(r.audit)")

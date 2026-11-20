@@ -24,13 +24,13 @@ test('chip reads percent used for week and context; the chip is the tap target',
   if (phone) {
     // the slim phone header: a ring and one number; the full reading is the label and the panel
     await expect(chip).toContainText('31%')
-    await expect(chip).toHaveAttribute('aria-label', `Session: ${label}`)
+    await expect(chip).toHaveAttribute('aria-label', `Your agent: ${label}`)
   } else {
     await expect(chip).not.toContainText('5h')
     await expect(chip).toContainText('ctx 31% used')
     // No label of its own: the button is named by the words on screen (see label-content-name-mismatch).
     await expect(chip).not.toHaveAttribute('aria-label', /.*/)
-    await expect(page.getByTestId('session-trigger')).toHaveAccessibleName(/^Session: wk 60% used\s+ctx 31% used/)
+    await expect(page.getByTestId('session-trigger')).toHaveAccessibleName(/^Your agent: wk 60% used\s+ctx 31% used/)
     await expect(chip).toContainText('wk 60% used')
     await expect(chip).not.toContainText('left')
   }
@@ -59,7 +59,7 @@ test('mascot: gone from the header on phones (the slim row has none) and on desk
   await expect(trigger.locator('.mascot')).toBeHidden()
   await expect(page.getByTestId('thread-screen').locator('.mascot:visible')).toHaveCount(0)
   // Both start with "Session" so voice control's "click Session" finds the button; on desktop the usage text it shows follows.
-  await expect(trigger).toHaveAccessibleName(isPhone(page) ? /^Session: / : /^Session: wk 60% used/)
+  await expect(trigger).toHaveAccessibleName(isPhone(page) ? /^Your agent: / : /^Your agent: wk 60% used/)
 })
 
 test('desktop: dropping files adds chips through the attach flow, with an overlay', async ({ page }, info) => {

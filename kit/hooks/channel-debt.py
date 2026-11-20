@@ -62,7 +62,7 @@ def prompt_text(data):
 
 # What the owner themselves sent through the app. A missing kind is an older app and counts as text; an unknown
 # kind (a newer app) counts as machinery, so a session is never blocked on a reply nobody asked for.
-OWNER_KINDS = ("text", "voice_note", "file", "voice_delegation")
+OWNER_KINDS = ("text", "file")
 _TAG = re.compile(r"<channel\s((?:[^>\"]|\"[^\"]*\")*)>")
 _ATTR = re.compile(r"([A-Za-z_][\w-]*)=\"([^\"]*)\"")
 

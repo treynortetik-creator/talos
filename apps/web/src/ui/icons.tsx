@@ -31,10 +31,6 @@ export const IconPlus = (p: P) => <Icon d={'M12 5v14M5 12h14'} {...p} />
 export const IconMic = (p: P) => (
   <Icon d={'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3'} {...p} />
 )
-/** A text cursor with sound lines coming off it: speak and the words appear in the box. Not the voice note mic, not the call's bars. */
-export const IconDictate = (p: P) => (
-  <Icon d={'M7 5h4M9 5v14M7 19h4M14 9.5a3.5 3.5 0 0 1 0 5M17.5 7a7 7 0 0 1 0 10'} {...p} />
-)
 export const IconStop = (p: P) => <Icon d={'M7 7h10v10H7z'} {...p} />
 export const IconSend = (p: P) => <Icon d={'M5 12l14-7-5 14-2-6-7-1z'} {...p} />
 export const IconMore = (p: P) => <Icon d={'M5 12h.01M12 12h.01M19 12h.01'} {...p} />

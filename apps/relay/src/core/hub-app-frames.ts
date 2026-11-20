@@ -55,7 +55,6 @@ export const appFrames = {
         a.activeAt = this.d.clock.now()
         return
       case 'message':
-      case 'voice_note':
         return chatFrames.onOwnerMessage.call(this.chatCtx, a, frame, raw)
       case 'card.resolve':
         return cardsFrames.onCardResolve.call(this.cardsCtx, a, frame, raw)
@@ -65,16 +64,6 @@ export const appFrames = {
         return configFrames.onAgentRecover.call(this.configCtx, a, frame, raw)
       case 'undo.request':
         return configFrames.onUndoRequest.call(this.configCtx, a, frame, raw)
-      case 'voice.ask': {
-        // The core NEVER queues this for the bridge. Only the voice module may emit it, and only after it has matched
-        // the frame to a live call, a delegation it created and the call's own thread (spec 6.3). Without the voice
-        // module (no OPENAI_API_KEY) there is no such call, so the frame is refused rather than forwarded.
-        if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
-        a.activeAt = this.d.clock.now()
-        if (!this.appHandlers.has('voice.ask'))
-          return this.appError(a, 'bad_frame', 'live voice is not available', frame.id)
-        return
-      }
       case 'inbox.update': {
         // The inbox row itself is written by the hooks module's handler. That write runs first and the ack follows it, so an
         // app is never told "done" for a change that was not saved; a failed write leaves no seen id and the retry is a

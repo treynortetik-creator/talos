@@ -154,7 +154,13 @@
     "real-first-start-2.1.322/security-notes.txt": ["security_notes"],
     "real-first-start-2.1.322/theme.txt": ["theme"],
     "real-first-start-2.1.322/token-refused-401.txt": ["box-empty"],
-    "real-first-start-2.1.322/trust.txt": ["trust"]
+    "real-first-start-2.1.322/trust.txt": ["trust"],
+    "real-2.1.329/after-esc-working.txt": [],
+    "real-2.1.329/after-question-answered.txt": [],
+    "real-2.1.329/askuser-field-focused.txt": [],
+    "real-2.1.329/askuser-select.txt": [],
+    "real-2.1.329/bash-permission.txt": [],
+    "real-2.1.329/bash-permission-2.txt": []
   },
   "usage_limit": {
     "usage-limit": {

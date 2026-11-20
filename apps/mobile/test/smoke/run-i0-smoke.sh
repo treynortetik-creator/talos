@@ -2,7 +2,8 @@
 # I0 reviewer simulator smoke (PR #51). Builds the shell against a fake relay at http://localhost:8787, runs the probe
 # page in i0_smoke_server.py and prints which probes got native code to set their cookie.
 #   usage: run-i0-smoke.sh <simulator-udid> [prod]   ("prod" = allowNavigation without the port, as a real https relay)
-#   then:  run again with MIC=1 to probe the media-capture grant + backgrounding.
+#   then:  run again with MIC=1 to probe the media-capture grant + backgrounding. Since voice input was archived the grant is
+#   always denied (NavigationGate answers .deny), so a mic_denied line is the expected result.
 # A probe "got through" iff its cookie name is in the final_cookie line. Expected-and-OK: t1_main_positive_control,
 # t8b_after_pushback, t2b_sameorigin_iframe_parent_handle (same-origin script reaching the top window's handler).
 # Anything named t*p_*prompt* proves Capacitor's prompt() cookie channel bypasses the bridge wrapper.

@@ -109,7 +109,7 @@ export function LoginPage() {
         )}
         {wipeFailed && (
           <p role="alert" className="m-0 text-danger">
-            Some saved chats or unsent messages from your last session could not be removed from this device. Talos will
+            Some saved chats or unsent messages from your last sign-in could not be removed from this device. Talos will
             not send them. It will try again each time you open it.
           </p>
         )}

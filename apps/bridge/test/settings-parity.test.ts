@@ -6,6 +6,8 @@
 // disk_agent_key are true); in memory it is still not read.
 // Another changed on purpose (2026-11-19, thread sessions allowed by default): `dedicated: {}` on a config that never wrote the
 // switch now writes it ON (`enabled: true`), the switch as the owner was shown it (writeSwitchOnFirstUse); an explicit value is kept.
+// Another changed on purpose (2026-11-19, voice input archived: docs/archived/voice.md): agent.voice and agent.voice_persona are not settings
+// any more (the config still accepts and ignores them), so their entries are gone, and the example config's thread rows lost voice_context.
 // Refresh only on purpose: WRITE_GOLDEN=1 bun test apps/bridge/test/settings-parity.test.ts
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -18,8 +20,6 @@ const defaults = JSON.parse(readFileSync(join(import.meta.dir, '../../../example
 
 const VALID: Record<string, unknown> = {
   'agent.name': 'Atlas',
-  'agent.voice': 'marin',
-  'agent.voice_persona': 'calm',
   'owner.display_name': 'Alex Example',
   threads: defaults.threads,
   default_thread: 'general',

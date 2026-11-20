@@ -186,14 +186,14 @@ final class WorkerFolderFilesTests {
     let deny = WorkerFence.settingsDeny(
       projectFolders: [thread] + WorkerHook.configFolders(thread).folders, configDirs: ["/home/alex/.claude"])
     for f in [thread, mid, repo] {
-      for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+      for tool in ["Edit"] {
         for file in ["/.claude", "/.claude/**", "/.mcp.json", "/.env", "/.env*"] {
           #expect(deny.contains("\(tool)(/\(f)\(file))"), "\(tool) \(f)\(file)")
         }
       }
     }
     for file in ["/skills/**", "/commands/**", "/agents/**", "/settings.json"] {
-      #expect(deny.contains("Write(//home/alex/.claude\(file))"), "\(file)")
+      #expect(deny.contains("Edit(//home/alex/.claude\(file))"), "\(file)")
     }
   }
 }
@@ -258,7 +258,7 @@ extension WorkerSpecTests {
     let deny = ((jsonObject(s.settingsJSON)?["permissions"] as? [String: Any])?["deny"] as? [String]) ?? []
     for f in ["/home/example/.claude.json", "/home/example/.claude/skills/**", "/home/example/.claude/agents/**", "/home/example/.claude/commands/**",
       "/home/example/trip/.claude/**", "/home/example/trip/.env*", "/home/example/trip/.mcp.json"] {
-      #expect(deny.contains("Write(/\(f))"), "\(f)")
+      #expect(deny.contains("Edit(/\(f))"), "\(f)")
     }
   }
 }
@@ -436,7 +436,7 @@ extension WorkerSpecTests {
     for f in [agent + "/hooks/pre-tool-guard.py", "/opt/tools/start.sh", "/home/example/bin/line.sh", agent + "/hooks/**", agent + "/kit/hooks/**",
       "/home/example/.claude/hooks/**", "/home/example/.claude/plugins/**", "/home/example/.claude/CLAUDE.md", "/home/example/.claude/output-styles/**",
       agent + "/**/.claude/**", agent + "/**/.claude"] {
-      for tool in ["Edit", "Write"] { #expect(deny.contains("\(tool)(/\(f))"), "\(tool) \(f)") }
+      #expect(deny.contains("Edit(/\(f))"), "Edit \(f)")
     }
     // and what loads a library or wraps every command never reaches the session
     for k in ["LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "GCONV_PATH", "CLAUDE_CODE_SHELL_PREFIX"] {

@@ -1,7 +1,8 @@
 // Ownership passes to WP6. Shared by WP4, WP6 and WP7: every `*.spec.ts` under `apps/web/test/**` runs here, so nobody has
 // to edit this file to get CI to pick up a spec. Vitest files are `*.test.ts(x)`, so the two never mix.
-//   iphone / pixel / desktop   everything except test/voice
-//   chromium-media             only test/voice (WP4): Chromium with a fake microphone
+//   iphone / pixel / desktop   everything
+// (The chromium-media project, Chromium with a fake microphone for test/voice, went with voice input: archived 2026-11-19,
+// tag archive/voice-2026-11-19, docs/archived/voice.md.)
 // The app is served in fake mode (`VITE_FAKE=1`, the in-memory client) from a production build, so specs need no relay.
 import { fileURLToPath } from 'node:url'
 import { defineConfig, devices } from '@playwright/test'
@@ -11,7 +12,6 @@ import { WEB_PREVIEW_HOST, webPreviewPort } from './test/helpers/pw-port'
 // refused outside a slot run (test/helpers/pw-port.ts).
 const PORT = webPreviewPort()
 const ORIGIN = `http://${WEB_PREVIEW_HOST}:${PORT}` // IPv4 on purpose: see WEB_PREVIEW_HOST
-const voice = '**/voice/**'
 // Under ci-local (it sets CI_FLAKE_FILE) Chromium goes straight to localhost: a proxy put in front of it on the CI Mac once failed
 // page.goto with ERR_UNEXPECTED_PROXY_AUTH. WebKit takes no Chromium flags; ci-local.sh clears the proxy environment for it.
 const ciChromiumArgs = process.env.CI_FLAKE_FILE ? ['--no-proxy-server'] : []
@@ -41,34 +41,20 @@ export default defineConfig({
     },
   ],
   projects: [
-    { name: 'iphone', testIgnore: voice, use: { ...devices['iPhone 15'] } }, // WebKit
+    { name: 'iphone', use: { ...devices['iPhone 15'] } }, // WebKit
     // The narrowest phone the app supports (an iPhone SE, 320 pt): the approval sheet's spec runs here (and in the others)
     {
       name: 'iphone-se',
       testMatch: '**/cards/permission-sheet.spec.ts',
       use: { ...devices['iPhone SE'], viewport: { width: 320, height: 568 } },
     },
-    { name: 'pixel', testIgnore: voice, use: { ...devices['Pixel 8'], launchOptions: { args: ciChromiumArgs } } }, // Chromium
+    { name: 'pixel', use: { ...devices['Pixel 8'], launchOptions: { args: ciChromiumArgs } } }, // Chromium
     {
       name: 'desktop',
-      testIgnore: voice,
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1440, height: 900 },
         launchOptions: { args: ciChromiumArgs },
-      },
-    },
-    {
-      name: 'chromium-media',
-      testMatch: '**/voice/**/*.spec.ts',
-      // a stuck mic times out the same way twice; a retry only doubles the wait (the browser job's mic check names it instead)
-      retries: 0,
-      use: {
-        ...devices['Desktop Chrome'],
-        permissions: ['microphone'],
-        launchOptions: {
-          args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', ...ciChromiumArgs],
-        },
       },
     },
   ],

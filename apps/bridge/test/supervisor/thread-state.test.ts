@@ -91,10 +91,8 @@ function start(
   return { p, settings, agentDir, talosHome, events }
 }
 
-const stateRules = (agentDir: string) => [
-  `Edit(/${agentDir}/threads/trip.state.md)`,
-  `Write(/${agentDir}/threads/trip.state.md)`,
-]
+// Edit( ) alone covers Write too (path-rules-read-edit.test.ts)
+const stateRules = (agentDir: string) => [`Edit(/${agentDir}/threads/trip.state.md)`]
 
 describe('what the generated settings register', () => {
   for (const own of [false, true]) {
@@ -143,7 +141,7 @@ describe('what the generated settings register', () => {
     expect((none.p as { launch: { env: Record<string, string> } }).launch.env.TALOS_APP_THREAD_STATE).toBeUndefined()
   })
   onCaseExactTmp(
-    'the allow rules are exactly the state file, Edit and Write, nothing wider; what is under it is denied',
+    'the allow rules are exactly the state file’s Edit( ), nothing wider; what is under it is denied',
     () => {
       for (const own of [false, true]) {
         const w = start({ own })
@@ -191,24 +189,26 @@ const names = (pattern: string, path: string) => {
   return p.endsWith('/**') ? x.startsWith(`${base}/`) : x === base || x.startsWith(`${base}/`)
 }
 const rulePath = (r: string) => r.slice(r.indexOf('(') + 1, -1)
-/** Allowed by the rules: some allow rule of that tool names it and no deny rule does (deny wins). */
+/** The rule name Claude Code matches a file tool's path with: Edit( ) for every writing tool, Read( ) for every reading one. */
+const ruleTool = (tool: string) =>
+  ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)
+    ? 'Edit'
+    : ['Read', 'Grep', 'Glob'].includes(tool)
+      ? 'Read'
+      : tool
+/** Allowed by the rules: some allow rule for that tool names it and no deny rule does (deny wins). */
 const allowed = (allow: string[], deny: string[], tool: string, path: string) =>
-  allow.some((r) => r.startsWith(`${tool}(`) && names(rulePath(r), path)) &&
-  !deny.some((r) => r.startsWith(`${tool}(`) && names(rulePath(r), path))
+  allow.some((r) => r.startsWith(`${ruleTool(tool)}(`) && names(rulePath(r), path)) &&
+  !deny.some((r) => r.startsWith(`${ruleTool(tool)}(`) && names(rulePath(r), path))
 
 describe('the allow rules do not cover a sibling', () => {
   const agent = '/home/user/agent'
   const allow = stateFileAllowRules(agent, 'trip')
   const deny = stateFileDenyRules(agent, 'trip')
-  it('exactly Edit and Write of the one absolute path, as the deny rules spell absolute paths', () => {
-    expect(allow).toEqual([
-      'Edit(//home/user/agent/threads/trip.state.md)',
-      'Write(//home/user/agent/threads/trip.state.md)',
-    ])
-    expect(deny).toEqual([
-      'Edit(//home/user/agent/threads/trip.state.md/**)',
-      'Write(//home/user/agent/threads/trip.state.md/**)',
-    ])
+  // Edit( ) alone: Claude Code matches Write's path with Edit( ) rules too (path-rules-read-edit.test.ts)
+  it('exactly Edit of the one absolute path, as the deny rules spell absolute paths', () => {
+    expect(allow).toEqual(['Edit(//home/user/agent/threads/trip.state.md)'])
+    expect(deny).toEqual(['Edit(//home/user/agent/threads/trip.state.md/**)'])
   })
   it('both spellings, in allow and in deny, when the folder is reached through a link', () => {
     const root = tmp()
@@ -221,8 +221,6 @@ describe('the allow rules do not cover a sibling', () => {
       expect(rules).toEqual([
         `Edit(/${join(root, 'link')}/threads/trip.state.md${tail})`,
         `Edit(/${join(root, 'real')}/threads/trip.state.md${tail})`,
-        `Write(/${join(root, 'link')}/threads/trip.state.md${tail})`,
-        `Write(/${join(root, 'real')}/threads/trip.state.md${tail})`,
       ])
   })
   it('no glob in an allow rule: one literal path', () => {

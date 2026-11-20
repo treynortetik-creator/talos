@@ -51,7 +51,7 @@ async function shot(page: Page, name: string, info: { project: { name: string } 
 
 const ROUTES: Array<[string, RegExp]> = [
   ['/settings/notifications', /Quiet hours/],
-  ['/settings/voice', /Voice-note replies/],
+  ['/settings/voice', /Spoken replies/],
   ['/settings/session', /Models offered/],
   ['/settings/agent', /Manage threads/],
   ['/settings/health', /Connection/],
@@ -103,22 +103,16 @@ test('removed deep links do not 404 into a blank page: they go home', async ({ p
   }
 })
 
-test('Thread settings: the moved switch, no default-thread checkbox, archive-only note', async ({ page }, info) => {
+test('Thread settings: no live-call switch, no default-thread checkbox, archive-only note', async ({ page }, info) => {
   await page.goto('/t/general?settings=1')
   const sheet = page.getByTestId('thread-settings')
   await expect(sheet).toBeVisible()
-  await expect(sheet.getByRole('switch', { name: /Live-call context/ })).toBeVisible()
+  await expect(sheet.getByRole('switch', { name: /Live-call context/ })).toHaveCount(0)
   await expect(sheet.getByText('Default thread', { exact: true })).toHaveCount(0)
   await expect(sheet.getByTestId('archive-only-note')).toBeVisible()
   await settle(page)
   await noSidewaysScroll(page, 'thread settings')
   await shot(page, 'thread-settings', info)
-})
-
-test('Inbox thread settings hide Live-call context', async ({ page }) => {
-  await page.goto('/t/inbox?settings=1')
-  const sheet = page.getByTestId('thread-settings')
-  await expect(sheet.getByRole('switch', { name: /Live-call context/ })).toHaveCount(0)
 })
 
 test('phone menu has a Driving screen entry that opens it (U12)', async ({ page }) => {

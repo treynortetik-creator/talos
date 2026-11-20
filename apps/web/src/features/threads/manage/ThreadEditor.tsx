@@ -2,20 +2,11 @@
 // topic the agent routes by), notifications, default thread, archive. One owner-signed config.patch per Save.
 
 import { THREAD_COLORS, THREAD_TOPIC_MAX, type ThreadT } from '@talos-app/protocol'
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { cn } from '../../../ui/cn.ts'
 import { IconCheck, IconSearch } from '../../../ui/icons.tsx'
-import {
-  Button,
-  Input,
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-  Switch,
-  Textarea,
-} from '../../../ui/index.ts'
+import { Button, Input, Sheet, SheetContent, SheetDescription, SheetTitle, Textarea } from '../../../ui/index.ts'
 import { ThreadIcon } from '../../../ui/ThreadIcon.tsx'
 import { ART_ICONS, ART_LABEL, INK, searchIcons, THREAD_COLOR } from '../../../ui/threadIcons.ts'
 import { newThread } from '../../agent-config/patch.ts'
@@ -153,12 +144,6 @@ function EditorBody({
       setNotifyErr('Not changed. Your Mac did not take it.')
     }
   }
-  // Rows that save at once, from the latest list. They read the live thread, so a refusal leaves the saved value on screen.
-  const setRow = (change: Partial<ThreadT>) =>
-    thread
-      ? apply((latest) => latest.map((t) => (t.id === thread.id ? { ...t, ...change } : t)))
-      : Promise.resolve(false)
-
   const toggleArchive = async () => {
     if (!live) return
     await apply((latest) => latest.map((t) => (t.id === live.id ? { ...t, archived: !t.archived } : t)))
@@ -364,10 +349,6 @@ function EditorBody({
         )}
       </fieldset>
 
-      {!creating && live && live.id !== 'inbox' && (
-        <ThreadSwitches thread={live} locked={!macOnline || busy} setRow={setRow} />
-      )}
-
       {/* Sub-threads: hidden unless this Mac takes them (subthreads/1); the Mac judges the rules again and its refusal shows */}
       {!creating && live && (
         <UnderPicker
@@ -447,38 +428,6 @@ function SearchThisThread({ id, close }: { id: string; close: () => void }) {
       <IconSearch width={18} height={18} aria-hidden="true" />
       Search this thread
     </Button>
-  )
-}
-
-/**
- * Live-call context: one thread's own switch (it used to sit in Settings -> Agent). It saves
- * at once through the thread patch. The editor does not render this block on the Inbox, where it has no effect.
- */
-function ThreadSwitches({
-  thread,
-  locked,
-  setRow,
-}: {
-  thread: ThreadT
-  locked: boolean
-  setRow: (change: Partial<ThreadT>) => Promise<boolean>
-}) {
-  const ctxId = useId()
-  return (
-    <div className="flex flex-col gap-1" data-testid="thread-switches">
-      <div className="flex min-h-11 items-center justify-between gap-3">
-        <label htmlFor={ctxId} className="text-sm">
-          Live-call context
-          <span className="block text-xs text-text-2">Lets a live call see this thread's recent messages.</span>
-        </label>
-        <Switch
-          id={ctxId}
-          checked={thread.voice_context === 'recent'}
-          disabled={locked}
-          onCheckedChange={(on) => void setRow({ voice_context: on ? 'recent' : 'none' })}
-        />
-      </div>
-    </div>
   )
 }
 

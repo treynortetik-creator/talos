@@ -23,3 +23,5 @@ Rules (spec section 9, WP0 seam; frozen):
 - Migrations only move forward and are additive (Railway rollback redeploys the previous build against the newer
   schema). Never edit a file that has shipped; add a new one.
 - Each module owns its directory: WP1 `core/`, WP2 `auth/`, WP3 `hooks/`, WP4 `voice/`.
+- `voice/` is archived (2026-11-19, docs/archived/voice.md): the module's code is gone, but its migration files stay and still
+  run, so the tables (`voice_usage`, `voice_dictation_usage`) exist on every relay and a restored module finds them.

@@ -140,7 +140,7 @@ describe('S2+S3 merged: the web client, the real relay, the captured bridge', ()
         tz,
         macOnline: true,
       }).word
-    expect(word('daily-digest')).toBe("Waiting: agent session isn't running")
+    expect(word('daily-digest')).toBe("Waiting: your agent isn't running")
     expect(word('missed-job')).toBe('Missed')
     expect(pickBanner(snap)?.code).toBe('no_session')
   })

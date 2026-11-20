@@ -1,5 +1,15 @@
 # Changelog
 
+## The Mac app says version 0.1.8
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.8. This release brings a readable Allow updates window and a Talos About window with Check for Updates, plain words in place of engineer terms, Allow once / Deny and question cards answered from your phone, links kept per Talos home with a plain "needs re-linking" line in peer list and doctor, a Talos settings skill for your agent, a Downloads tidy-up that waits for setup to finish, and first-run fixes (moving the app into Applications, a disk-space check before the Apple tools download, the Apple dialog no longer hidden behind Talos).
+
+## The agent's launch command always carries the Talos channel
+
+- The Session launch box, the Copy Terminal command and the rollback command now include `--dangerously-load-development-channels server:talos-app`, the flag that lets your phone's messages reach the agent. Talos adds it when you import or edit a command, when you pick a permission mode, and at a start that finds it missing. If your command already names that flag with a channel of your own, your channel stays and Talos adds its own beside it, so a custom channel can no longer leave the agent unable to hear you.
+- Your agent can now set up thread agents: their own session, folder, model and instructions, and thread agents can do the same for their own sub-threads.
+- Linking works from any Talos home on a computer, and the peer name is no longer case-sensitive.
+
 ## The Mac app says version 0.1.7
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.7, the release with Check for Updates in the Talos menu (it shows what the update is doing, and Update now waits for your agent to finish its turn), signing in to Claude again in a Talos window, a check for new releases about every hour, and Main following your folder rules exactly.

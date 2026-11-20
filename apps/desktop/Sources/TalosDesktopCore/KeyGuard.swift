@@ -54,6 +54,10 @@ public enum KeyGuard {
     /// The development-channels warning with the cursor on exactly `highlighted` (one of its two rows) and exactly `channels` on its
     /// `Channels:` line: the key lands on the row the sender read, for the launch the sender checked (Main's auto-accept and its card).
     case devWarning(highlighted: String, channels: [String])
+    /// A key for the tool permission or the agent's question (`PaneSelect`) that is exactly the screen the offer was made for: the live read must
+    /// have the same `bound` (kind, tool, subject, every numbered row; not the cursor). `freeText` is the question's free-text row, whose label
+    /// the owner's typing replaces.
+    case pane(PaneBinding)
     /// Escape for a stalled model request on Main (the box empty, the working line up, no dialog or select anywhere).
     case interrupt
     /// Escape for a frozen request with no working line on the pane: the idle prompt, box empty, no dialog (the sender checks the transcript and the wait).
@@ -65,9 +69,22 @@ public enum KeyGuard {
       case .box(let h): return "box-\(h.rawValue)"
       case .dialog(let k): return k.rawValue
       case .devWarning: return DialogKind.devChannels.rawValue
+      case .pane(let b): return b.kind.rawValue
       case .interrupt: return "interrupt"
       case .interruptBlank: return "interrupt-blank"
       }
+    }
+  }
+
+  /// What a pane Select key is tied to (see `Intent.pane`).
+  public struct PaneBinding: Equatable, Sendable {
+    public var kind: PaneSelect.Kind
+    public var bound: String
+    public var freeText: Int?
+    public init(kind: PaneSelect.Kind, bound: String, freeText: Int? = nil) {
+      self.kind = kind
+      self.bound = bound
+      self.freeText = freeText
     }
   }
 
@@ -89,6 +106,8 @@ public enum KeyGuard {
     case .mcpConsent: return .dialog(.mcpConsent)
     case .devChannels: return .dialog(.devChannels)
     case .login: return nil
+    // the two pane Selects state `.pane` with the offer's own binding (`PaneSelect`), never an intent by kind alone
+    case .toolPermission, .agentQuestion: return nil
     case .apiKey: return .dialog(.apiKey)
     case .bypass: return .dialog(.bypass)
     }
@@ -115,6 +134,12 @@ public enum KeyGuard {
       if let r = boxRefusal(escaped: all, rows: rows, holds: .empty) { return r }
       if selectUp(rows) { return Refusal("prompt_on_pane") }
       return MainStall.hasWorkingLine(rows: rows) ? Refusal("working_line") : nil
+    case .pane(let b):
+      // the live screen read whole, and the same one the offer was made for
+      guard let s = PaneSelect.read(rows: rows, freeTextAt: b.freeText), s.kind == b.kind,
+        ExactText.equal(s.bound, b.bound)
+      else { return Refusal("not_\(b.kind.rawValue)") }
+      return nil
     case .devWarning(let highlighted, let channels):
       guard let d = devWarning(rows), ExactText.equal(d.highlighted ?? "", highlighted), d.channels == channels else {
         return Refusal("not_\(DialogKind.devChannels.rawValue)")

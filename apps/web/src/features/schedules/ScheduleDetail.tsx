@@ -37,7 +37,7 @@ const RUN_WORD: Record<string, string> = {
   failed: 'Failed',
   timed_out: 'Timed out',
   launch_stalled: 'Stuck at launch',
-  session_ended: 'Session ended',
+  session_ended: 'Agent stopped',
   skipped: 'Skipped',
 }
 
@@ -62,7 +62,7 @@ function RunRow({
   const word = RUN_WORD[r.status] ?? r.status
   const bits = [
     r.started_at ? time(r.started_at) : runKeyLabel(r.ds),
-    r.runner ? (r.runner === 'session' ? 'Session' : 'Background') : null,
+    r.runner ? (r.runner === 'session' ? 'Agent' : 'Background') : null,
     word,
     r.duration_s !== undefined ? `${r.duration_s} s` : null,
     r.cost_usd !== undefined ? `$${r.cost_usd.toFixed(2)}` : null,
@@ -458,7 +458,7 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
             </Button>
             {ask?.offerSession ? (
               <Button variant="outline" disabled={busy || !canWrite} onClick={() => run('session')}>
-                Run in your session instead
+                Run with your agent instead
               </Button>
             ) : null}
             <Button variant="ghost" onClick={() => setRunAsk(false)}>

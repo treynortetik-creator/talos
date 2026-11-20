@@ -133,14 +133,14 @@ describe('learning the host', () => {
 })
 
 describe('the schedule form off a Mac', () => {
-  const BACKGROUND = /in the background \(no session needed\)|runs without your session/i
+  const BACKGROUND = /in the background \(no agent needed\)|runs without your agent/i
   it('a Mac keeps both runners, as before; elsewhere only a Talos thread, and the line says why', () => {
     for (const host of HOSTS) {
       const t = on(host)(<ScheduleForm mode="create" />)
       cleanup()
       if (host === 'mac') {
-        expect(t).toContain('In my live session')
-        expect(t).toContain('In the background (no session needed)')
+        expect(t).toContain('With my live agent')
+        expect(t).toContain('In the background (no agent needed)')
         expect(t).toContain('Only the tools I list')
         continue
       }

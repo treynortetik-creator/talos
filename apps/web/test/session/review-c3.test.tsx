@@ -55,7 +55,7 @@ describe('R1: the session sheet survives a relay that echoes the bridge features
     )
     // Rendered before any session state arrives: there is no chip, so only the fallback label can name it.
     expect(screen.queryByTestId('session-chip')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Session' })).toBe(screen.getByTestId('session-trigger'))
+    expect(screen.getByRole('button', { name: 'Your agent' })).toBe(screen.getByTestId('session-trigger'))
   })
 })
 

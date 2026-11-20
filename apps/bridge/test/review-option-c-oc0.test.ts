@@ -144,7 +144,6 @@ describe('review OC0: folder check (ConfigFile seam)', () => {
       kind: 'agent',
       order: 9,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
     } as (typeof base.threads)[number])

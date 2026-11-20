@@ -14,7 +14,6 @@
       "expected": true
     },
     "tts": true,
-    "stt": true,
     "sqlite": {
       "fts5": true
     },

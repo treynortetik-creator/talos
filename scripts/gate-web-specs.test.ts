@@ -62,8 +62,6 @@ function repo() {
   put('apps/web/playwright.config.ts', 'export default {}\n')
   put('apps/web/test/threads/threads.spec.ts') // the smoke set
   put('apps/web/test/threads/old.spec.ts')
-  put('apps/web/test/voice/mic.spec.ts')
-  put('apps/web/test/voice-setup/setup.spec.ts')
   put('apps/web/test/cards/permission-sheet.spec.ts')
   put('apps/web/src/a.ts')
   put('apps/web/src/features/threads/Thread.tsx')
@@ -107,29 +105,6 @@ describe('the fast gate runs the change’s own browser specs on every project t
       '\ttest/threads/x.spec.ts',
     ])
     expect(p.projects).toEqual(['test/threads/x.spec.ts -> desktop iphone pixel'])
-  })
-
-  it('a voice spec runs on chromium-media only', () => {
-    const r = repo()
-    r.commit({ 'apps/web/test/voice/mic.spec.ts': 'y\n' })
-    const p = r.plan('--fast')
-    expect(p.lines).toContain('web-specs')
-    expect(p.lines).not.toContain('web-specs-webkit')
-    expect(p.projects).toEqual(['test/voice/mic.spec.ts -> chromium-media'])
-  })
-
-  it('a voice folder at any depth is voice (the config\u2019s **/voice/**), in the fast and the planned gate', () => {
-    const r = repo()
-    r.commit({ 'apps/web/test/threads/voice/nested.spec.ts': 'y\n' })
-    expect(r.plan('--fast').projects).toEqual(['test/threads/voice/nested.spec.ts -> chromium-media'])
-    expect(r.plan().projects).toEqual(['test/threads/voice/nested.spec.ts -> chromium-media'])
-    expect(r.plan().lines).not.toContain('web-specs-webkit')
-  })
-
-  it('voice-setup is not the voice folder: its specs run on desktop, iphone and pixel', () => {
-    const r = repo()
-    r.commit({ 'apps/web/test/voice-setup/setup.spec.ts': 'y\n' })
-    expect(r.plan('--fast').projects).toEqual(['test/voice-setup/setup.spec.ts -> desktop iphone pixel'])
   })
 
   it('the permission sheet spec also runs on iphone-se, the one project whose testMatch names it', () => {
@@ -212,52 +187,9 @@ describe('the planned gate runs the change’s own specs on pixel too', () => {
     s.commit({ 'apps/web/src/a.ts': 'y\n' }) // shared code: the smoke set
     expect(s.plan().projects).toEqual(['test/threads/threads.spec.ts -> desktop'])
   })
-
-  it('a voice spec and the permission sheet in the planned gate', () => {
-    const r = repo()
-    r.commit({
-      'apps/web/test/voice/mic.spec.ts': 'y\n',
-      'apps/web/test/cards/permission-sheet.spec.ts': 'y\n',
-    })
-    expect(r.plan().projects).toEqual([
-      'test/cards/permission-sheet.spec.ts -> desktop iphone iphone-se pixel',
-      'test/voice/mic.spec.ts -> chromium-media',
-    ])
-  })
 })
 
-describe('the planned gate: voice sources, support files in a nested voice folder, names Playwright would read as patterns', () => {
-  it('a change to the voice feature source: the voice specs on chromium-media, the voice-setup specs on every project', () => {
-    const r = repo()
-    r.commit({ 'apps/web/src/features/voice/x.ts': 'y\n' })
-    const p = r.plan()
-    expect(p.projects).toEqual([
-      'test/voice-setup/setup.spec.ts -> desktop iphone pixel', // the config's **/voice/** does not leave voice-setup out
-      'test/voice/mic.spec.ts -> chromium-media',
-    ])
-    expect(p.lines).toContain('web-specs-webkit')
-    expect(p.lines.slice(p.lines.indexOf('web-specs-webkit'))).toEqual([
-      'web-specs-webkit',
-      '\ttest/voice-setup/setup.spec.ts',
-    ])
-  })
-
-  it('a support file in a nested voice folder plans its top folder\u2019s specs on iphone and pixel; a nested voice spec stays on chromium-media', () => {
-    const r = repo()
-    r.commit({ 'apps/web/test/cards/voice/helper.ts': 'y\n' })
-    expect(r.plan().projects).toEqual([
-      'test/cards/permission-sheet.spec.ts -> desktop iphone iphone-se pixel',
-      'test/threads/threads.spec.ts -> desktop', // the smoke set
-    ])
-    const s = repo()
-    s.commit({ 'apps/web/test/threads/voice/z.spec.ts': 'y\n' })
-    expect(s.plan().projects).toEqual(['test/threads/voice/z.spec.ts -> chromium-media'])
-    // a support file in the top voice folder is still the voice folder's: no WebKit run of its specs
-    const v = repo()
-    v.commit({ 'apps/web/test/voice/fakes.ts': 'y\n' })
-    expect(v.plan().lines).not.toContain('web-specs-webkit')
-  })
-
+describe('the planned gate: names Playwright would read as patterns', () => {
   it('a spec whose path holds a regular-expression character is refused by name, in the fast and the planned gate', () => {
     for (const name of ['a+b', 'x(1)', 'a[1]', 'a$b', 'a{2}', 'a|b', 'a^b', 'a?b', 'a*b', 'a\\b']) {
       const r = repo()
@@ -349,10 +281,6 @@ describe('gate.sh run: the browser step, its checks and the heavy lock', () => {
     const b = noWebkit.gate()
     expect(b.status).toBe(1)
     expect(b.stderr).toContain('WebKit is not installed')
-    // a voice spec runs on Chromium alone: no WebKit needed
-    const voice = runnable({ chromium: true, webkit: false })
-    voice.commit({ 'apps/web/test/voice/mic.spec.ts': 'y\n' })
-    expect(voice.gate().stderr).not.toContain('WebKit is not installed')
   })
 
   /** The `playwright test` command lines the gate ran, as the stand-in pnpm logged them. */
@@ -361,12 +289,11 @@ describe('gate.sh run: the browser step, its checks and the heavy lock', () => {
       .split('\n')
       .filter((l) => l.startsWith('pnpm exec playwright test'))
 
-  it('the real run (a lock that passes through): desktop and chromium-media for every spec, iphone, iphone-se and pixel for the rest', () => {
+  it('the real run (a lock that passes through): desktop for every spec, iphone, iphone-se and pixel for the rest', () => {
     const r = runnable({ chromium: true, webkit: true }, { passThrough: true })
     r.commit({
       'apps/web/src/a.ts': 'y\n', // shared code: the planned gate would add the smoke set; the fast gate inside the lock must not
       [SPEC]: 'y\n',
-      'apps/web/test/voice/mic.spec.ts': 'y\n',
       'apps/web/test/cards/permission-sheet.spec.ts': 'y\n',
     })
     const p = r.gate()
@@ -376,7 +303,7 @@ describe('gate.sh run: the browser step, its checks and the heavy lock', () => {
     expect(p.stderr).toContain('tests (web browser specs, Chromium)')
     const files = 'test/cards/permission-sheet.spec.ts test/threads/x.spec.ts'
     expect(playwrightCalls(r.pnpmLog)).toEqual([
-      `pnpm exec playwright test --project=desktop --project=chromium-media --forbid-only --workers=2 ${files} test/voice/mic.spec.ts`,
+      `pnpm exec playwright test --project=desktop --forbid-only --workers=2 ${files}`,
       `pnpm exec playwright test --project=iphone --project=iphone-se --project=pixel --forbid-only --workers=2 ${files}`,
     ])
     // the plan said the same projects the run used (the same change, in a repo without the stand-in tools)
@@ -384,29 +311,21 @@ describe('gate.sh run: the browser step, its checks and the heavy lock', () => {
     same.commit({
       'apps/web/src/a.ts': 'y\n',
       [SPEC]: 'y\n',
-      'apps/web/test/voice/mic.spec.ts': 'y\n',
       'apps/web/test/cards/permission-sheet.spec.ts': 'y\n',
     })
     expect(same.plan('--fast').projects).toEqual([
       'test/cards/permission-sheet.spec.ts -> desktop iphone iphone-se pixel',
       'test/threads/x.spec.ts -> desktop iphone pixel',
-      'test/voice/mic.spec.ts -> chromium-media',
     ])
   })
 
-  it('without the permission sheet there is no iphone-se; a voice spec alone has no WebKit step', () => {
+  it('without the permission sheet there is no iphone-se', () => {
     const r = runnable({ chromium: true, webkit: true }, { passThrough: true })
     r.commit({ [SPEC]: 'y\n' })
     expect(r.gate().status).toBe(0)
     expect(playwrightCalls(r.pnpmLog)).toEqual([
-      'pnpm exec playwright test --project=desktop --project=chromium-media --forbid-only --workers=2 test/threads/x.spec.ts',
+      'pnpm exec playwright test --project=desktop --forbid-only --workers=2 test/threads/x.spec.ts',
       'pnpm exec playwright test --project=iphone --project=pixel --forbid-only --workers=2 test/threads/x.spec.ts',
-    ])
-    const v = runnable({ chromium: true, webkit: true }, { passThrough: true })
-    v.commit({ 'apps/web/test/voice/mic.spec.ts': 'y\n' })
-    expect(v.gate().status).toBe(0)
-    expect(playwrightCalls(v.pnpmLog)).toEqual([
-      'pnpm exec playwright test --project=desktop --project=chromium-media --forbid-only --workers=2 test/voice/mic.spec.ts',
     ])
   })
 
@@ -421,20 +340,16 @@ describe('gate.sh run: the browser step, its checks and the heavy lock', () => {
     expect(playwrightCalls(r.pnpmLog)).toHaveLength(2) // the pixel run was reached, and failed
   })
 
-  it('the run steps name the projects: Chromium step desktop and chromium-media, the own specs iphone, pixel and iphone-se', () => {
+  it('the run steps name the projects: Chromium step desktop, the own specs iphone, pixel and iphone-se', () => {
     const src = readFileSync(join(here, 'gate.sh'), 'utf8')
-    expect(src).toContain('web_specs_run "$WEB_LIMIT" desktop chromium-media --')
+    expect(src).toContain('web_specs_run "$WEB_LIMIT" desktop --')
     expect(src).toContain('web_specs_run "$WEB_LIMIT" "${WK_PROJECTS[@]}" -- "${WEBKIT[@]}"')
     expect(readFileSync(join(here, 'gate/plan.sh'), 'utf8')).toContain('p="iphone iphone-se pixel"')
   })
 
-  it("the project names and match rules the gate uses are the playwright config's: voice only on chromium-media, iphone-se's one spec", () => {
+  it("the project names and match rules the gate uses are the playwright config's: iphone-se's one spec", () => {
     const cfg = readFileSync(join(here, '../apps/web/playwright.config.ts'), 'utf8')
-    for (const name of ['iphone', 'iphone-se', 'pixel', 'desktop', 'chromium-media'])
-      expect(cfg).toContain(`name: '${name}'`)
-    expect(cfg).toContain("const voice = '**/voice/**'")
-    expect(cfg.match(/testIgnore: voice/g)).toHaveLength(3) // iphone, pixel, desktop leave voice out
-    expect(cfg).toContain("testMatch: '**/voice/**/*.spec.ts'") // chromium-media takes only voice
+    for (const name of ['iphone', 'iphone-se', 'pixel', 'desktop']) expect(cfg).toContain(`name: '${name}'`)
     expect(cfg).toContain("testMatch: '**/cards/permission-sheet.spec.ts'") // iphone-se takes only this one
   })
 })

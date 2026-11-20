@@ -12,6 +12,7 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import {
   buildDialogProof,
+  cleanDialogText,
   clipUnits,
   composeDialogCard,
   DIALOG_ALREADY_ANSWERED_TEXT,
@@ -24,6 +25,7 @@ import {
   DIALOG_OPEN_LABEL,
   DIALOG_OPENED_TEXT,
   DIALOG_RESULT_WAIT_MS,
+  DIALOG_SENT_UNCONFIRMED_TEXT,
   DIALOG_UNCONFIRMED_TEXT,
   DIALOG_UNVERIFIED_TEXT,
   DialogAnswer,
@@ -115,6 +117,9 @@ const dialogWhere = (thread: string): DialogWhere =>
 /** Main's own dialog has an answer file of its own; a thread session's development-channels question (or any other) uses the thread's. */
 const answerFile = (main: boolean | undefined): string =>
   main ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
+
+/** The dialogs Main publishes as `supervisor.main_dialog`: its development-channels warning, and a tool permission or question on its pane. */
+const MAIN_DIALOG_KINDS: ReadonlySet<DialogKindT> = new Set(['dev_channels', 'tool_permission', 'agent_question'])
 
 export class DialogCards {
   private relayOk = false
@@ -284,8 +289,8 @@ export class DialogCards {
   /**
    * A dialog on a thread's pane in this workers.json, by id: the worker's own, or, on the default thread, Main's (`supervisor.main_dialog`:
    * Main has no entry of its own, and its card goes to the default thread). Looked up side by side, so a worker's dialog on the default
-   * thread never hides Main's. Main publishes only `dev_channels` (the source decides which answer file a tap goes to, never the kind:
-   * a thread session can ask the same question).
+   * thread never hides Main's. Main publishes only `dev_channels`, `tool_permission` and `agent_question` (the source decides which answer file a
+   * tap goes to, never the kind: a thread session can ask the same question).
    */
   private liveDialog(file: WorkersFileT | null, thread: string, id: string): Dialog | undefined {
     return this.liveSource(file, thread, id)?.dialog
@@ -299,7 +304,7 @@ export class DialogCards {
     const own = file?.threads[thread]?.dialog
     if (own?.id === id) return { dialog: own, main: false }
     const main = file?.supervisor.main_dialog
-    if (main?.id === id && main.kind === 'dev_channels' && thread === this.ctx.config.config.default_thread)
+    if (main?.id === id && MAIN_DIALOG_KINDS.has(main.kind) && thread === this.ctx.config.config.default_thread)
       return { dialog: main, main: true }
     return undefined
   }
@@ -309,7 +314,7 @@ export class DialogCards {
     for (const [thread, entry] of Object.entries(file.threads))
       if (entry.dialog) found.push([thread, entry.dialog, false])
     const main = file.supervisor.main_dialog
-    if (main?.kind === 'dev_channels') found.push([this.ctx.config.config.default_thread, main, true])
+    if (main && MAIN_DIALOG_KINDS.has(main.kind)) found.push([this.ctx.config.config.default_thread, main, true])
     for (const [thread, d, isMain] of found) {
       if (this.rec(d.id) || !this.ctx.config.thread(thread)) continue
       this.mint(thread, d, isMain).catch((e) =>
@@ -325,7 +330,8 @@ export class DialogCards {
       card_id: newId('c'),
       dialog: d,
       thread_id: thread,
-      thread_name: threadRef(ctx, thread).name,
+      // Main has no thread of its own: its card is in the default thread, and speaks of Main
+      thread_name: isMain ? 'Main' : threadRef(ctx, thread).name,
       now,
       main: isMain,
     })
@@ -399,7 +405,13 @@ export class DialogCards {
    * longer pending is left to the ledger, which answers card_not_pending (first answer wins) or card_expired.
    */
   precheck(
-    f: { card_id: string; action: 'primary' | 'kill' | 'revise'; choice?: number | undefined; edited?: unknown },
+    f: {
+      card_id: string
+      action: 'primary' | 'kill' | 'revise'
+      choice?: number | undefined
+      text?: string | undefined
+      edited?: unknown
+    },
     deviceId: string,
   ): DialogPrecheck {
     const row = this.ctx.ledger.get(f.card_id)
@@ -412,6 +424,10 @@ export class DialogCards {
     if (f.action !== 'primary' || f.edited !== undefined) return bad('This card is answered with a button.')
     if (d.dialog_kind === 'login' ? f.choice !== undefined : f.choice === undefined || f.choice >= d.options.length)
       return bad('That is not one of the buttons on this card.')
+    // a question's free-text option takes the owner's words, and no other option takes any (the Mac types exactly what was signed)
+    if (f.choice !== undefined && f.choice === d.free_text) {
+      if (f.text === undefined || cleanDialogText(f.text) !== f.text) return bad('Type your answer in the box.')
+    } else if (f.text !== undefined) return bad('That button takes no text.')
     const found = this.rec(d.dialog_id)
     const file = this.reader.read()
     const gone =
@@ -481,6 +497,7 @@ export class DialogCards {
               subject: live.subject,
               options: live.options,
               launch_changed: live.launch_changed,
+              free_text: live.free_text,
             }
           : {
               dialog_id: d.dialog_id,
@@ -488,6 +505,7 @@ export class DialogCards {
               subject: d.subject,
               options: d.options,
               launch_changed: d.launch_changed,
+              free_text: d.free_text,
             },
       })
       if (!verdict.ok) throw new Error(`proof check: ${verdict.why}`)
@@ -620,6 +638,9 @@ export class DialogCards {
     let text: string
     if (!result) {
       text = DIALOG_UNCONFIRMED_TEXT
+      ran = 'unknown'
+    } else if (result.outcome === 'nothing_pressed' && result.reason === 'unconfirmed') {
+      text = DIALOG_SENT_UNCONFIRMED_TEXT
       ran = 'unknown'
     } else if (result.outcome === 'nothing_pressed') {
       text =

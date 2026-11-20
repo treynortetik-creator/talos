@@ -239,7 +239,7 @@ struct WorkerDialogTests {
     #expect(r.wait(5) { log.all.count == 1 })
     usleep(2_500_000)
     #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(r.typedLines.isEmpty, "nothing is typed into the menu")
   }
 

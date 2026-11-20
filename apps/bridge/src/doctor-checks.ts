@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { bunDoctorRow } from './bun-floor.ts'
+import { CHANNEL_OFF_TEXT } from './claude-env.ts'
 import { type CliDeps, type CliIO, describeBridge, probeRelayAuth } from './cli-main.ts'
 import { checkCodex } from './codex.ts'
 import type { BridgeEnv } from './config.ts'
@@ -18,6 +19,7 @@ import { loadKeyFile } from './keys.ts'
 import { hasTalosKit, isPlainFolder, noKitMessage, plainFolderWarning } from './kit-marker.ts'
 import { readMcpEntry } from './mcp-config.ts'
 import { say } from './owner-words.ts'
+import { linkedAgentsCheck } from './peer/relink.ts'
 import { askRuleFiles, askRulesIn, DEFAULT_ASK_RULES, normalizeRule, settingsPath } from './permission/ask-rules.ts'
 import { findOtherChannels } from './permission/doctor.ts'
 import { RelayHttp } from './relay-http.ts'
@@ -193,6 +195,8 @@ export async function runDoctorChecks(
           linux: "This computer's SQLite has no FTS5; search and the memory browser are off",
         }),
   )
+  const linked = await linkedAgentsCheck(env, deps.peer?.secrets ? { secrets: deps.peer.secrets } : {})
+  if (linked) add(linked.level, linked.name, linked.detail)
   const cx = await checkCodex()
   add('ok', 'codex (optional)', cx.ok ? cx.version : `off: ${cx.message}`)
   permissionChecks(parsed?.ok ? parsed.config.permission_relay : false, agentDir, opts.claudeDir, deps, add)
@@ -242,6 +246,12 @@ export async function runDoctorChecks(
   const liveness = bridgeLiveness(p.status, io.now(), deps.alive)
   const bridge = describeBridge(liveness)
   add(bridge.level, 'live bridge (status.json)', bridge.text)
+  // Started without the Talos channel: outbound tools work and nothing the owner sends is pushed in (Dante's setup, 2026-11-19).
+  if (liveness.state === 'live' || liveness.state === 'stale') {
+    if (liveness.status.talos_channel === 'off') add('FAIL', 'Talos channel', CHANNEL_OFF_TEXT)
+    else if (liveness.status.talos_channel === 'on')
+      add('ok', 'Talos channel', "on: the owner's messages are pushed in")
+  }
   // Claude Code stops saving the transcript of a session that inherited CLAUDE_CODE_CHILD_SESSION (seen 2026-11-03).
   const marker =
     liveness.state === 'live' || liveness.state === 'stale' ? liveness.status.claude_session_marker_inherited : false

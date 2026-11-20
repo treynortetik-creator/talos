@@ -3,10 +3,10 @@
 // on. Everything that acts on the same session must keep its place behind such a message: a stop sent after a message
 // must stop that message's turn, not run first and let the message start a fresh one.
 //
-// - message, voice note: always on their session's lane.
-// - session and thread-session controls, voice asks and call ends, card answers: on their session's lane while it has
-//   work queued, inline on the serial queue as before when it has none. A session control, a voice ask and a call's end
-//   act on main's session, so they also wait on main's lane.
+// - message: always on its session's lane.
+// - session and thread-session controls, card answers: on their session's lane while it has
+//   work queued, inline on the serial queue as before when it has none. A session control
+//   acts on main's session, so it also waits on main's lane.
 // - frames that can touch any session (a config patch or a settings card's answer, a notification action whose thread
 //   is only known after its check, an agent restart): wait until every lane is idle, then run inline. That holds the
 //   serial queue while a lane finishes: up to the 5 s undo hold plus the delivery. A notification Reply, once checked,
@@ -34,7 +34,6 @@ export function lanePlan(ctx: BridgeContext, it: Item): LanePlan {
   const f = it.frame
   switch (f.type) {
     case 'message':
-    case 'voice_note':
       return { keys: [sessionLane(ctx, f.thread_id)], always: true }
     case 'session.control': {
       // the app's session controls act on main's session whatever thread they were typed in
@@ -43,12 +42,6 @@ export function lanePlan(ctx: BridgeContext, it: Item): LanePlan {
     }
     case 'thread.session.control':
       return { keys: [sessionLane(ctx, f.thread_id)], always: false }
-    case 'voice.ask':
-    case 'voice.ended': {
-      // a voice call is main's: its question and its end reach main's session, about that thread
-      const keys = [...new Set([MAIN_LANE, sessionLane(ctx, f.thread_id)])]
-      return { keys, always: false }
-    }
     case 'undo.request':
       // reads the thread's folder to make the card: behind that session's queued turn, never ahead of it, and always on
       // the lane, so the git calls of a large folder never hold up the other threads' messages

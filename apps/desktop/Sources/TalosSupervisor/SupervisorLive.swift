@@ -16,6 +16,7 @@ extension Supervisor {
     if case .devChannels(let d) = screen { l.devDialogSeen = d }
     if !unread { mainFirstStart(rows, launch: &l) }
     if !unread { mainSafetyQuestions(rows, launch: &l) }
+    if !unread { mainPaneSelect(rows, launch: &l, now: now) }
     if !unread { watchPrompt(rows, launch: &l, now: now) }
     if !unread { mainComputerUse(rows, launch: &l) }
     if !unread { mainUsageLimit(rows, launch: &l) }
@@ -88,6 +89,7 @@ extension Supervisor {
     }
 
     takeDevAnswer(launch: &l)  // the owner's tap on the card, if one came (it presses; it never seals)
+    takePaneAnswer(launch: &l)  // the same for a tool permission or the agent's question (SupervisorPanePrompt.swift)
 
     // A dialog that has gone from the screen, or been replaced by another, is dealt with: its stall warning is over, and the
     // same kind of dialog appearing again later (a second login expiry) must raise a new one. Only the key of the dialog
@@ -124,7 +126,9 @@ extension Supervisor {
       l.outputSeen = output
       l.outputChangedAt = now
     }
-    if screen.isDialog, !(dialogOnScreen && (needsYouNamesTheDialog || (l.confirmSentAt != nil && phase == .starting))), l.outputSeen != nil, now - l.outputChangedAt >= timings.dialogStall {
+    // (a tool permission or question the Mac offered as a popup and a card is answered there: no stall alarm, no terminal beside it, until the offer has
+    // stood unanswered for `paneStallAfter`)
+    if screen.isDialog, l.paneOffer == nil || now - l.paneOfferedAt >= timings.paneStallAfter, !(dialogOnScreen && (needsYouNamesTheDialog || (l.confirmSentAt != nil && phase == .starting))), l.outputSeen != nil, now - l.outputChangedAt >= timings.dialogStall {
       raiseNeedsYou(.dialog(screen.label), key: "stall:\(screen.label)", launch: &l)
     }
 

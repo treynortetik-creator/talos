@@ -99,8 +99,6 @@ The earlier audit (`docs/CI-AUDIT-2026-10-31.md`) declined to skip beyond deskto
 can turn a real failure green. This is the owner's call to take it; the red-base rule, the exact-words rule and the full-run
 trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
 
-**Microphone preflight.** The browser job first runs `scripts/mic-preflight.mjs` (Chromium with the fake-microphone flags, `getUserMedia({audio:true})`, 8 s limit). If the Mac's audio is stuck, every test still runs, then the job fails with one plain line in the status: check the Mac's microphone permission (on 2026-11-03 that was the cause), then a stuck sound device; then rerun.
-
 ## Inside a run
 
 `docs/CI-AUDIT-2026-10-31.md` has the measurements behind this. A run used to be its jobs one after another: half of a
@@ -284,7 +282,7 @@ rule and the keep-out list are for the code a test checks, not the test, so a `s
 longer forces the full gate. A test helper that is not a test file (`scripts/root-install-harness.ts`,
 `apps/bridge/test/helpers.ts`, a fixture) still counts as code; the protected paths and the 60-file limit apply as before. Every
 fall back to the full gate adds one line to `~/.cache/talos-ci/logs/fast-fallbacks.tsv` (`TALOS_CI_CACHE`): UTC time, machine,
-sha, the printed reason and the changed files that tripped it, so the keep-out list can be cut by evidence. It runs no e2e or old-client step, and of the browser specs only the **changed spec files** (`apps/web/test/**/*.spec.ts`, still there; never a feature's folder of specs or the smoke set, which CI runs), each on every Playwright project that takes it: desktop, iphone and pixel; `chromium-media` alone for `test/voice/`; `iphone-se` as well for `cards/permission-sheet.spec.ts` (`--plan` prints them on stderr as `web projects: <spec> -> <projects>`). A change to more than `WEB_SPECS_MAX` (40) specs is the full gate; a deleted spec runs nothing. A fast gate with such a spec **takes the heavy lock** (the light checks run first, outside it; the suites it chose run inside it) and refuses when Chromium or WebKit is not installed; one with none **takes no heavy lock**: the bridge files run through `test-parallel.ts
+sha, the printed reason and the changed files that tripped it, so the keep-out list can be cut by evidence. It runs no e2e or old-client step, and of the browser specs only the **changed spec files** (`apps/web/test/**/*.spec.ts`, still there; never a feature's folder of specs or the smoke set, which CI runs), each on every Playwright project that takes it: desktop, iphone and pixel; `iphone-se` as well for `cards/permission-sheet.spec.ts` (`--plan` prints them on stderr as `web projects: <spec> -> <projects>`). A change to more than `WEB_SPECS_MAX` (40) specs is the full gate; a deleted spec runs nothing. A fast gate with such a spec **takes the heavy lock** (the light checks run first, outside it; the suites it chose run inside it) and refuses when Chromium or WebKit is not installed; one with none **takes no heavy lock**: the bridge files run through `test-parallel.ts
 --files`, 2 at a time (`GATE_FAST_JOBS`). Why direct only: `src/bridge.ts` reaches 317 of the 321 bridge source files, and 283
 of the 371 bridge test files reach `bridge.ts` (through `test/helpers.ts` and four harnesses). Following imports further picks
 about 283 test files for almost any source change (measured 2026-11-14), which is most of the suite.
@@ -717,7 +715,7 @@ in `~/.cache/talos-ci/logs/flakes.tsv`: date, sha, job, test, file. A test that 
 | Vitest (`check`)                                  | `--retry=1`; `scripts/ci-flake-vitest.ts` reports a test whose retry passed                                                                                                                                                                                        |
 | bun (`check`, the bridge)                         | `test-parallel.ts --retry-failed` runs a failed file once more; a file killed at the file limit is not rerun                                                                                                                                                       |
 | Swift (`desktop`'s main run, `mobile`'s packages) | `scripts/ci-swift-retry.sh` reruns only the failed tests (`--filter`), and passes only if each printed a pass line; not rerun: a crash, a run with no end-of-run summary, an issue no failed test accounts for, a test known only by a display name, a build error |
-| Playwright (`browser`)                            | `retries: 1` in every config when `CI_FLAKE_FILE` is set, except the web voice specs (`chromium-media`: a stuck mic times out the same way twice); `scripts/ci-flake-playwright.ts` reports the flaky ones                                                         |
+| Playwright (`browser`)                            | `retries: 1` in every config when `CI_FLAKE_FILE` is set; `scripts/ci-flake-playwright.ts` reports the flaky ones                                                                                                                                                  |
 
 Not retried: the desktop job's other scripts (starvation, the packed app, the install tests), the iPhone app's own tests
 (`xcodebuild test`) and the mobile package's Vitest. By hand (no `CI_FLAKE_FILE`) nothing retries.

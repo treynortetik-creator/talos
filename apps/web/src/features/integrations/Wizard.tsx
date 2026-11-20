@@ -693,7 +693,7 @@ function TestScreen({
       ) : waited >= TEST_WAIT_MS ? (
         <div className="space-y-2" role="status">
           <p className="text-text">Nothing yet. Here's what to check:</p>
-          <p className="text-sm text-text-2">{lastError ?? 'No deliveries have reached the relay.'}</p>
+          <p className="text-sm text-text-2">{lastError ?? 'Nothing has reached Talos yet.'}</p>
           <p className="text-sm text-text-2">{spec.test_hint}</p>
         </div>
       ) : (

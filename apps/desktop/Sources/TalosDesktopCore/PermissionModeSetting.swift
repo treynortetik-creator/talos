@@ -131,9 +131,12 @@ public enum PermissionModeSetting {
     case updated(args: [String])
   }
 
-  public static func evaluate(_ mode: PermissionMode, against cfg: DesktopConfig) -> Outcome {
+  /// `addsChannelsFlag`: the saved command is Main's, so it carries the Talos channel (`MainChannelFlag`); false for a supervisor that is
+  /// not Main's (or a test that turns it off).
+  public static func evaluate(_ mode: PermissionMode, against cfg: DesktopConfig, addsChannelsFlag: Bool = false) -> Outcome {
     if read(cfg.args) == .mode(mode) { return .unchanged }
-    return .updated(args: applying(mode, to: cfg.args))
+    let args = applying(mode, to: cfg.args)
+    return .updated(args: addsChannelsFlag ? MainChannelFlag.ensured(args) : args)
   }
 
   /// The config after the change: only `args` differs.

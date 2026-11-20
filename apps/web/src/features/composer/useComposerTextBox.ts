@@ -16,10 +16,8 @@ export function useComposerTextBox(o: {
   taRef: RefObject<HTMLTextAreaElement | null>
   text: string
   setText: Dispatch<SetStateAction<string>>
-  /** The box is not on screen while recording; it is drawn again from `text` when the recording ends. */
-  recording: boolean
 }) {
-  const { taRef, text, setText, recording } = o
+  const { taRef, text, setText } = o
   // Auto-grow to 6 lines, and keep the caret in sight: text added with the caret at the end (dictation, a paste, a tool
   // writing the value) scrolls to the end. An edit anywhere else leaves the view exactly where it was. The cap is read
   // from the box's own line height and padding, so it stays 6 lines when the owner picks a larger text size (a fixed
@@ -44,7 +42,7 @@ export function useComposerTextBox(o: {
     if (followsInsert(ta, shownText.current, text)) ta.scrollTop = ta.scrollHeight
     shownText.current = text
     drawnValue.current = ta.value
-  }, [text, recording])
+  }, [text])
 
   // Dictation and accessibility tools can change the box without a React event. The element is the truth: read it.
   // Only a value React did not draw counts as a change from outside. An element still holding what React last drew

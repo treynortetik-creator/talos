@@ -337,15 +337,12 @@ export class HealthWatch {
       limits: {
         buffer_days: this.d.env.BUFFER_DAYS,
         upload_max_mb: this.d.env.MEDIA_MAX_MB,
-        voice_daily_max_min: this.d.env.VOICE_DAILY_MAX_MIN,
-        voice_session_max_min: this.d.env.VOICE_SESSION_MAX_MIN,
       },
       ...(beat
         ? {
             beat: {
               mod: beat.mod,
               tts: beat.tts,
-              stt: beat.stt,
               sqlite: beat.sqlite,
               ...(beat.disk_free_bytes !== undefined ? { disk_free_bytes: beat.disk_free_bytes } : {}),
               // only from a beat on this bridge connection: the previous process's answer says nothing about the running session

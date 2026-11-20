@@ -301,7 +301,6 @@ describe('frame additions', () => {
       bridge: { version: '0.4.1', started_at: new Date().toISOString() },
       mod: { state: 'alive', last_seen: null, expected: false },
       tts: false,
-      stt: false,
       sqlite: { fts5: true },
     }
     bridge?.send({ type: 'health.beat', beat })

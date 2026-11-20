@@ -7,6 +7,7 @@
 import { checkPeerInboxUrl, isPeerSecret, PEER_DAILY_CAP_DEFAULT, PEER_MAX, PeerName } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice } from '../context.ts'
 import { RelayHttpError } from '../relay-http.ts'
+import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PeerLedger } from './ledger.ts'
 import {
@@ -94,7 +95,15 @@ async function one(ctx: BridgeContext, rec: InboundPeer, now: number): Promise<v
     ((state === 'open' && (st.state === 'expired' || now > link.until + WATCH_SLACK_MS)) ||
       (state === 'done' && now >= link.until + WATCH_SLACK_MS))
   )
-    setLink(ctx, rec, state === 'done' ? { until: 0 } : { state: 'closed', until: 0, expired: true })
+    // `expired` (which lets `peer link` mint again on this inbox) only on the relay's own word: our clock running ahead must
+    // never mark a code the relay still accepts, or a later re-link could hand out a secret its redeemer holds
+    setLink(
+      ctx,
+      rec,
+      state === 'done'
+        ? { until: 0 }
+        : { state: 'closed', until: 0, ...(st.state === 'expired' ? { expired: true } : {}) },
+    )
 }
 
 /** The link ended without a stored peer on this side: closed (never silently), and the owner gets one fixed row. */
@@ -113,7 +122,11 @@ async function accept(
   const checked = checkPeerInboxUrl(url)
   if (checked === null || typeof secret !== 'string' || !isPeerSecret(secret)) return 'invalid'
   const name = rec.name
-  const store = ctx.peers?.opts.secrets ?? (await openSecretStore({ home: ctx.env.home }))
+  const store = homeScopedStore(
+    ctx.peers?.opts.secrets ?? (await openSecretStore({ home: ctx.env.home })),
+    ctx.env.home,
+    { kind: 'peer', log: (m) => ctx.log.info(m) },
+  )
   const file = ctx.config
   file.refresh()
   const had = file.config.peers.find((p) => p.name === name)

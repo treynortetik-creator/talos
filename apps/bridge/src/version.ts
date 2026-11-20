@@ -22,7 +22,7 @@ const realRun: VersionRun = (cmd, args, cwd) => {
 }
 
 export type ResolvedVersion = {
-  /** What a person reads: APP_VERSION, else `git describe --tags --always --dirty` (a short sha with no tags), else package.json. */
+  /** What a person reads: APP_VERSION, else `git describe --tags --always --dirty` (a short sha with no tags; archive/* tags, which mark removed features, are never a version), else package.json. */
   version: string
   /** The 7-character commit this checkout is on; undefined when there is no git or this is not the talos-app repo. */
   commit: string | undefined
@@ -44,7 +44,9 @@ export function resolveVersion(
   const commit = ours ? run('git', ['rev-parse', '--short=7', 'HEAD'], repoDir) : undefined
   const fromEnv = (opts.env ?? process.env).APP_VERSION?.trim()
   if (fromEnv) return { version: fromEnv, commit }
-  const described = ours ? run('git', ['describe', '--tags', '--always', '--dirty'], repoDir) : undefined
+  const described = ours
+    ? run('git', ['describe', '--tags', '--exclude=archive/*', '--always', '--dirty'], repoDir)
+    : undefined
   return { version: described ?? pkg.version, commit }
 }
 

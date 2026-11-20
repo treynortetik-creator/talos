@@ -544,7 +544,7 @@ describe('the developer thread fence, at the spec and its last check', () => {
       // the sessions' own files (hook copy, settings, mcp.json, nonce) stay closed to the file tools (Delphi's review)
       const own = workerFilesDenyRules(i.talosHome)
       for (const r of own) expect(deny).toContain(r)
-      expect(own).toContain(`Write(/${i.talosHome}/workers/**)`)
+      expect(own).toContain(`Edit(/${i.talosHome}/workers/**)`)
       const trusted = {
         talosHome: i.talosHome,
         threadFence: false,

@@ -161,7 +161,7 @@ describe('AGENTS.md', () => {
 
   it('does not tell a newcomer to start in the original build spec, and points at the docs that matter', () => {
     expect(text).toContain('The original build spec is not part of this repository')
-    for (const doc of ['SECURITY.md', 'PROTOCOL.md', 'voice.md']) expect(text).toContain(`docs/${doc}`)
+    for (const doc of ['SECURITY.md', 'PROTOCOL.md']) expect(text).toContain(`docs/${doc}`)
   })
 })
 

@@ -155,31 +155,7 @@ describe('fake client is as strict as the spec (WP7 tests must not pass vacuousl
   })
 })
 
-describe('fake client seam: voice, frames, API', () => {
-  it('sendVoiceAsk signs a voice.ask and emits voice.state and a reply carrying voice_delegation_id', async () => {
-    const c = createFakeClient()
-    const states: string[] = []
-    const replies: Array<{ voice_delegation_id?: string; speak?: string }> = []
-    c.onFrame('voice.state', (f) => states.push(f.state))
-    c.onFrame('reply', (f) =>
-      replies.push({
-        ...(f.voice_delegation_id ? { voice_delegation_id: f.voice_delegation_id } : {}),
-        ...(f.speak ? { speak: f.speak } : {}),
-      }),
-    )
-    await c.sendVoiceAsk({
-      voiceSessionId: 'v_01JBF3V7Q8K2M4N6P8R0S2T4V6',
-      delegationId: 'vd_1',
-      threadId: 'general',
-      question: 'What is on today?',
-      transcriptTail: [{ who: 'owner', text: 'hi' }],
-    })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(states).toEqual(['delegating', 'live'])
-    expect(replies[0]?.voice_delegation_id).toBe('vd_1')
-    expect((c.sent[0] as { type: string; question: string }).type).toBe('voice.ask')
-  })
-
+describe('fake client seam: frames, API', () => {
   it('onFrame returns an unsubscribe', async () => {
     const c = createFakeClient()
     let n = 0

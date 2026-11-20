@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FakeApp } from '@talos-app/testkit'
 import { describeThreadChanges } from '../src/thread-changes.ts'
+import { createThread } from '../src/tools/threads.ts'
 import { approveLatestConfigCard, CARD_RELAY, type Harness, startHarness } from './helpers.ts'
 
 let h: Harness
@@ -38,7 +39,6 @@ function edited() {
         kind: 'fixed',
         order: 0,
         notify: 'all',
-        voice_context: 'recent',
         archived: false,
         created_at: '2026-10-30T00:00:00.000Z',
       },
@@ -216,7 +216,6 @@ describe('describeThreadChanges', () => {
       kind: 'fixed',
       order: 0,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-30T00:00:00.000Z',
       ...extra,
@@ -245,5 +244,26 @@ describe('create_thread and reserved ids', () => {
     expect(r.isError).toBe(true)
     expect((r.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')).toContain('talos__')
     expect(onDisk().threads.map((t: { id: string }) => t.id)).not.toContain('talos__setup')
+  })
+
+  // Dante's setup: "dashboards-arr" and the like failed 8 calls in a row with only the regex to go on.
+  test('a hyphenated id is refused with the rule in words and the underscore form to try; the description says it up front', async () => {
+    h = await startHarness()
+    const r = await h.bridge.callTool('create_thread', { name: 'Dashboards', id: 'dashboards-arr' })
+    expect(r.isError).toBe(true)
+    const text = (r.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
+    expect(text).toContain('no hyphens')
+    expect(text).toContain('Try "dashboards_arr"')
+    expect(onDisk().threads.map((t: { id: string }) => t.id)).not.toContain('dashboards-arr')
+    expect(createThread.description.slice(0, 200)).toContain('no hyphens')
+    expect(JSON.stringify(createThread.inputSchema)).toContain('never hyphens')
+  })
+
+  test('the suggestion is never a taken id', async () => {
+    h = await startHarness()
+    const taken = onDisk().threads[0].id as string
+    const r = await h.bridge.callTool('create_thread', { name: 'X', id: `${taken}-` })
+    const text = (r.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
+    expect(text).toContain(`Try "${taken}_2"`)
   })
 })

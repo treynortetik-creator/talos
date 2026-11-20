@@ -32,6 +32,11 @@ export const CardResolveFrame = ownerFrame('card.resolve', {
     .max(DIALOG_MAX_OPTIONS - 1)
     .optional(),
   /**
+   * The owner's own words for a dialog card's free-text option (the agent's question, `Other…`): one line, signed with the rest of the frame, so the
+   * Mac types exactly what the owner wrote and nothing a program edited in. Only with a `choice` that is that card's `free_text` index.
+   */
+  text: z.string().min(1).max(120).optional(),
+  /**
    * "Always allow <kind>": with action 'primary' on a card of a SEND_KINDS kind, the owner also allows that kind from now on
    * (owner ruling 2026-11-14). Signed with the rest of the frame, so only the owner's own tap carries it; the bridge adds the
    * kind to `always_allow` only after it verifies that signature for this card. Ignored on any other action or kind.

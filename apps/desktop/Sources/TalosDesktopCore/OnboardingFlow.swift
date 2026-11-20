@@ -26,6 +26,8 @@ public struct OnboardingFlow: Equatable, Sendable {
     case asking
     /// macOS is installing. `pct` is nil when the system gives no progress (the bar then just moves).
     case installing(pct: Int?)
+    /// There is not enough free space for Apple's installer, so it was not asked yet. `have` is the free bytes; Try again looks again.
+    case needSpace(have: Int64)
   }
 
   public enum SignIn: Equatable, Sendable {
@@ -51,6 +53,7 @@ public struct OnboardingFlow: Equatable, Sendable {
     case getStarted
     case toolsAsked
     case toolsInstalling(pct: Int?)
+    case toolsNeedSpace(have: Int64)
     case toolsDone
     case downloadProgress(pct: Int)
     case downloadOffline
@@ -80,6 +83,9 @@ public struct OnboardingFlow: Equatable, Sendable {
   /// What the app must do now. The coordinator is the only place that does any of it.
   public enum Effect: Equatable, Sendable {
     case startDownload
+    /// The setup finished while the owner was on Apple's step: "Getting Talos ready" shows with its ticks done and Continue lit, and
+    /// goes on by itself after a short hold (the owner can press Continue sooner). It never skips straight to sign-in.
+    case holdReady
     case startSignIn
     case cancelSignIn
     case startPairing
@@ -96,6 +102,8 @@ public struct OnboardingFlow: Equatable, Sendable {
   public private(set) var download: Download = .running(pct: 0)
   public private(set) var tools: Tools = .asking
   public private(set) var signIn: SignIn = .idle
+  /// Apple's step was shown in this run (the download then finished behind it, and the owner has not yet seen the finished screen).
+  public private(set) var toolsShown = false
   public private(set) var pair: Pair = .starting
   /// Claude is signed in on this Mac (set when the download finishes).
   public private(set) var signedIn = false
@@ -158,6 +166,14 @@ public struct OnboardingFlow: Equatable, Sendable {
       guard step == .ready || step == .appleTools, case .running = download else { return [] }
       step = .appleTools
       tools = .asking
+      toolsShown = true
+      return []
+
+    case .toolsNeedSpace(let have):
+      guard step == .ready || step == .appleTools, case .running = download else { return [] }
+      step = .appleTools
+      tools = .needSpace(have: have)
+      toolsShown = true
       return []
 
     case .toolsInstalling(let pct):
@@ -201,6 +217,12 @@ public struct OnboardingFlow: Equatable, Sendable {
       guard step == .ready || step == .appleTools else { return [] }
       signedIn = signed == true
       download = .done
+      if toolsShown {
+        // Apple's step took the owner's attention while the download ran: show "Getting Talos ready" finished, never skip past it
+        toolsShown = false
+        step = .ready
+        return [.holdReady]
+      }
       return advanceFromReady()
 
     case .continuePressed:

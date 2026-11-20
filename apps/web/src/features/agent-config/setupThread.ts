@@ -36,7 +36,6 @@ async function ensureThread(client: TalosClient): Promise<boolean> {
             kind: 'fixed',
             order: latest.length,
             notify: 'all',
-            voice_context: 'recent',
             archived: false,
             created_at: new Date().toISOString(),
           },

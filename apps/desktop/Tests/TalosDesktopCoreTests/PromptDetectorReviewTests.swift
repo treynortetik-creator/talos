@@ -115,7 +115,7 @@ struct PromptDetectorReviewTests {
     for chrome in ["\u{273B} Worked for 2s", "\u{23FA} Ran 1 command", "\u{23BF}  Interrupted"] {
       let p = try #require(PromptDetector.detect([rule, " " + chrome, " \u{276F} 1. A", "   2. B"]), "\(chrome)")
       #expect(p.question == nil, "\(chrome)")
-      #expect(SupervisorNotice.workerPromptLine(prompt: p) == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
+      #expect(SupervisorNotice.workerPromptLine(prompt: p) == "This thread's session is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     }
   }
 
@@ -275,9 +275,9 @@ struct PermissionFixtureTests {
 
   @Test func theNoticeSaysItBlocksItselfAndWhenFromTheFrameItWasAnnouncedOn() throws {
     let line = SupervisorNotice.workerPromptLine(prompt: try prompt("perm-dangerous-rm-t0"))
-    #expect(line == "This thread's session is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); open this thread in Terminals on the Mac to answer.")
+    #expect(line == "This thread's session is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(SupervisorNotice.mainPromptLine(agentName: "Testagent", prompt: try prompt("perm-dangerous-rm-t3"))
-      == "Testagent is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); open Terminal on the Mac to answer.")
+      == "Testagent is waiting on a 'Bash command' prompt (Claude Code blocks it automatically in about 2 min); Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     // a prompt with no countdown says nothing of the kind
     #expect(!SupervisorNotice.workerPromptLine(prompt: try prompt("perm-ask-rule-bypass")).contains("automatically"))
   }

@@ -73,7 +73,7 @@ describe('config.patch and config.json', () => {
     const d = onDisk()
     expect(d.rev).toBe(1)
     expect(d.agent.name).toBe('Atlas')
-    expect(d.agent.voice).toBe('meridian') // untouched siblings survive the merge
+    expect(d.owner.display_name).toBe('You') // untouched siblings survive the merge
     expect(h.bridge.ctx.config.config.agent.name).toBe('Atlas')
   })
 
@@ -114,7 +114,6 @@ describe('config.patch and config.json', () => {
         kind: 'fixed',
         order: 5,
         notify: 'all',
-        voice_context: 'recent',
         archived: false,
         created_at: cfg.threads[0].created_at,
       },

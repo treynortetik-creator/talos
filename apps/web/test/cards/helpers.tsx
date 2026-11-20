@@ -1,6 +1,6 @@
 // Shared test helpers for WP7's unit tests (jsdom). Everything runs against the in-memory fake client.
 import { bindingFrom, Card, type CardT, InboxItem, type InboxItemT, payloadHash } from '@talos-app/protocol'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach } from 'vitest'
@@ -115,3 +115,11 @@ export function LiveCard({
   const card = useTalos((s) => s.cards.find((c) => c.id === id))
   return card ? <CardView card={card} threadName={threadName} {...(highlighted ? { highlighted } : {})} /> : null
 }
+
+/** The card's own Send button. The composer's Send has the same name and is always on screen (since 2026-11-20). */
+export const cardSend = (opts?: { timeout?: number }) =>
+  waitFor(() => {
+    const b = screen.getAllByRole('button', { name: /Send/ }).find((x) => !x.closest('[data-testid="composer"]'))
+    if (!b) throw new Error('no card Send yet')
+    return b
+  }, opts)

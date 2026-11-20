@@ -99,6 +99,7 @@ describe('kit/ instructions are not loaded in this repo', () => {
       'skills/talos-interview/SKILL.md',
       'skills/talos-meeting-prep/SKILL.md',
       'skills/talos-memory-recall/SKILL.md',
+      'skills/talos-settings/SKILL.md',
       'skills/talos-theme/SKILL.md',
       'skills/talos-transcript-ingest/SKILL.md',
     ]

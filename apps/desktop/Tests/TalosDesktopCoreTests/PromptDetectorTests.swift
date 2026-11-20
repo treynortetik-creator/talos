@@ -238,7 +238,7 @@ struct PromptNoticeTests {
     ] {
       #expect(!line.contains("approved") && !line.contains("notes.txt") && !line.contains("\""), "\(line)")
     }
-    #expect(SupervisorNotice.workerPromptLine(prompt: p) == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(SupervisorNotice.workerPromptLine(prompt: p) == "This thread's session is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     for name in ["bash-permission", "write-permission", "askuser-select", "onboarding-theme"] {
       let real = try prompt(name)
       let q = try #require(real.question)
@@ -247,31 +247,31 @@ struct PromptNoticeTests {
     }
   }
 
-  @Test func aWorkerNoticeNamesTheKindAndWhereToAnswer() throws {
+  @Test func aWorkerNoticeNamesTheKindAndSaysThereIsNoCard() throws {
     #expect(
       SupervisorNotice.workerPromptLine(prompt: try prompt("bash-permission"))
-        == "This thread's session is waiting on a 'Bash command' prompt; open this thread in Terminals on the Mac to answer.")
+        == "This thread's session is waiting on a 'Bash command' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(
       SupervisorNotice.workerPromptLine(prompt: try prompt("write-permission"))
-        == "This thread's session is waiting on a 'file create' prompt; open this thread in Terminals on the Mac to answer.")
+        == "This thread's session is waiting on a 'file create' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(
       SupervisorNotice.workerPromptLine(prompt: try prompt("askuser-select"))
-        == "This thread's session is waiting on a 'question' prompt; open this thread in Terminals on the Mac to answer.")
+        == "This thread's session is waiting on a 'question' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
   }
 
   @Test func aKindWeCannotNameIsJustAPrompt() throws {
     #expect(
       SupervisorNotice.workerPromptLine(prompt: try prompt("onboarding-theme"))
-        == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
+        == "This thread's session is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     var bare = try prompt("onboarding-theme")
     bare.question = nil
-    #expect(SupervisorNotice.workerPromptLine(prompt: bare) == "This thread's session is waiting on a prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(SupervisorNotice.workerPromptLine(prompt: bare) == "This thread's session is waiting on a prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
   }
 
-  @Test func mainsNoticeNamesTheAgentAndTheTerminal() throws {
+  @Test func mainsNoticeNamesTheAgentAndSaysThereIsNoCard() throws {
     #expect(
       SupervisorNotice.mainPromptLine(agentName: "Testagent", prompt: try prompt("bash-permission"))
-        == "Testagent is waiting on a 'Bash command' prompt; open Terminal on the Mac to answer.")
+        == "Testagent is waiting on a 'Bash command' prompt; Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(SupervisorNotice.mainPromptLine(agentName: nil, prompt: try prompt("askuser-select")).hasPrefix("The agent is waiting on a 'question' prompt"))
   }
 }

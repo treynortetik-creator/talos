@@ -35,7 +35,7 @@ export interface Platform {
   installState(): InstallState
   /** Driving mode (docs/V2-FEATURES.md V4.1-V4.2). Each adapter is a no-op where the API is missing. */
   audioSession: {
-    /** `navigator.audioSession.type`: 'playback' while listening, 'play-and-record' while recording a voice note. */
+    /** `navigator.audioSession.type`: 'playback' while listening. */
     set(type: AudioSessionType): void
   }
   wakeLock: {
@@ -62,7 +62,7 @@ export interface Platform {
 }
 
 /** `paused`: a clip is loaded and stopped. The route stays held, not mixing, so iOS keeps Talos as the Now Playing app (a mixing session is not eligible) and the lock screen's Play still reaches it. */
-export type AudioSessionType = 'playback' | 'paused' | 'play-and-record' | 'auto'
+export type AudioSessionType = 'playback' | 'paused' | 'auto'
 export type MediaHandlers = Partial<
   Record<'play' | 'pause' | 'nexttrack' | 'previoustrack' | 'seekbackward' | 'seekforward', () => void>
 > & {

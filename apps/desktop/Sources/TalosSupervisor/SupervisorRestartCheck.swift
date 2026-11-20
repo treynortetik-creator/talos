@@ -235,17 +235,29 @@ extension Supervisor {
   /// An install whose launch was confirmed before the channels flag was added to every launch (so over its saved flags) is sealed once more
   /// over the flags it now launches with, with an audit row. Only when the old seal verifies; nothing is ever sealed that was not confirmed.
   func migrateChannelsFlagSeal(claude: String) {
-    guard withChannelsFlag(config.args) != config.args else { return }
+    let launched = withChannelsFlag(config.args)
+    guard launched != config.args else { return }
     let now = launchFingerprint(config, claude)
-    guard !LaunchSeal.isConfirmed(config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust),
+    let confirmedNow = LaunchSeal.isConfirmed(config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust)
+    // a seal over the saved flags that exists now (an install confirmed before the flag was added to every launch)
+    let oldSealed = config.confirmedLaunch == config.launchFingerprint(resolvedClaude: claude)
+    var resealed = false
+    if !confirmedNow,
       LaunchSeal.isConfirmed(
         config, fingerprint: config.launchFingerprint(resolvedClaude: claude), parts: config.launchParts(resolvedClaude: claude),
-        trust: options.launchTrust)
-    else { return }
-    if LaunchSeal.confirm(&config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust) {
+        trust: options.launchTrust),
+      LaunchSeal.confirm(&config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust)
+    {
       saveConfig()
       audit("channels_flag_reseal", [:])
+      resealed = true
     }
+    // The saved command carries the flag too (the fingerprint is over the launched flags either way, so nothing is asked again), unless
+    // that would lose an old seal that could not be carried over now (the Keychain unreadable at this start): the next start tries again.
+    guard confirmedNow || resealed || !oldSealed else { return }
+    config.args = launched
+    saveConfig()
+    audit("channels_flag_saved", [:])
   }
 
   /// The arguments Main is launched with: its saved ones, plus the channels flag when the app asks for it (`Options.addsChannelsFlag`).

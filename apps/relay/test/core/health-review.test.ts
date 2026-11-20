@@ -97,7 +97,6 @@ const beat = (mod: HealthBeatT['mod']): HealthBeatT => ({
   bridge: { version: '0.4.1', started_at: '2026-10-30T00:00:00.000Z' },
   mod,
   tts: true,
-  stt: true,
   sqlite: { fts5: true },
 })
 

@@ -982,7 +982,7 @@ public final class Supervisor: @unchecked Sendable {
       phase: phase, host: host.kind, childPid: launch?.childPid, sessionId: config.session.id,
       startKind: launch?.kind, needsYou: needsYou, lastExit: lastExit,
       restartsInWindow: loop.restartsInWindow(now: clock.now()), cliVersion: launch?.cliVersion,
-      ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer,
+      ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer, paneDialog: launch?.paneOffer,
       apiKeyDialog: launch?.apiKeyOffer, safetyDialog: launch?.safetyOffer, safetyPhoneTold: launch?.safetyPhoneTold ?? false,
       devPhoneTold: launch?.devCard.phoneTold ?? false, bridgeLive: launch?.bridgeSeenLive ?? false,
       configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed, launchPending: launchPendingNow, runningArgs: recovery.confirmedArgs, devStartMode: launchStartMode)

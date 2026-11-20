@@ -32,7 +32,6 @@ const thread = (id: string, name: string, extra: Record<string, unknown> = {}) =
   kind: 'fixed',
   order: 5,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   ...extra,
@@ -150,7 +149,9 @@ describe('OC1: worker mode is fail-closed', () => {
     const hh = await hub()
     const w = await startWorker(hh.home, hh.relay.httpUrl, false)
     expect(w.tools.map((t) => t.name).sort()).toEqual([...WORKER_BRIDGE_TOOLS].sort())
-    expect(w.tools.some((t) => t.name === 'create_thread')).toBe(false)
+    // a thread session sets up its own sub-threads (create_thread); archiving them goes through config_propose, so it has no archive_thread
+    expect(w.tools.some((t) => t.name === 'create_thread')).toBe(true)
+    expect(w.tools.some((t) => t.name === 'archive_thread')).toBe(false)
     const r = await w.callTool('reply', { thread_id: 'general', text: 'hi' })
     expect(r.isError).toBe(true)
     const msg = r.content[0]?.text ?? ''
@@ -492,7 +493,6 @@ describe('OC1: routing and read_inbound', () => {
         ...extra,
       },
     })
-    expect(r?.decide(meta('voice_delegation'))).toEqual({ to: 'main' })
     expect(r?.decide(meta('hook_event'))).toEqual({ to: 'main' })
     expect(r?.decide(meta('backlog'))).toEqual({ to: 'main' })
     expect(r?.decide(meta('text', { trust: 'external' }))).toEqual({ to: 'main' })

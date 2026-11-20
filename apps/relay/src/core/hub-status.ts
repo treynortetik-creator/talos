@@ -21,7 +21,7 @@ export class StatusTimers {
   ) {}
 
   startQueuedTimer(seq: number, type: string): void {
-    if (type !== 'message' && type !== 'voice_note') return
+    if (type !== 'message') return
     const ev = this.d.store.getEventBySeq(seq)
     if (!ev) return
     const msgId = String(ev.client_msg_id)

@@ -1,6 +1,6 @@
 
  ▐▛███▛█   Claude Code v2.1.322
-▝▜██████▀  Sonnet 5.5 · Claude Ultra
+▝▜██████▀  Sonnet 5.5
  ▝▝   ▝▝   /private/tmp/tcap-cu/proj
 
 

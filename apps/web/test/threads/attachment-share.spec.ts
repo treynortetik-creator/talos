@@ -134,7 +134,7 @@ test('phone: a file the relay no longer has says so once and is not fetched agai
   const share = page.getByRole('link', { name: 'Share quarterly-notes.html' })
   await expect(share).toBeVisible()
   await expect.poll(() => gets.length).toBe(1) // the prepare before the tap
-  await expect(page.getByRole('alert')).toContainText('expired from the relay; ask the agent to resend')
+  await expect(page.getByRole('alert')).toContainText('This file has expired; ask your agent to send it again')
   await page.waitForTimeout(500)
   expect(gets.length).toBe(1)
   expect(await sharedOf(page)).toEqual([])

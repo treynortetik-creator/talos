@@ -342,7 +342,6 @@ describe("the browser job's environment has no proxy, and localhost is never sen
     const job = fn('job_browser')
     expect(job.indexOf('browser_ready')).toBeGreaterThan(-1)
     expect(job.indexOf('browser_ready')).toBeLessThan(job.indexOf('test:browser'))
-    expect(job.indexOf('browser_ready')).toBeLessThan(job.indexOf('mic_preflight'))
   })
 })
 

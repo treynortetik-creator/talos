@@ -14,7 +14,7 @@ export const PAGES_TEXT = {
   refreshFailed: "Couldn't refresh this thread's pages. The list below is from the last time they loaded.",
   retry: 'Try again',
   recent: 'From recent messages',
-  recentNote: 'These go when the relay lets the messages go (about a week). A published page stays.',
+  recentNote: 'These go when Talos clears the old messages (about a week). A published page stays.',
   missing: 'This page was deleted.',
   kind: { page: 'Page', report: 'Report', widget: 'Widget' },
   share: {

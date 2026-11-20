@@ -190,8 +190,9 @@ struct UpdateCheckCoreTests {
   @Test func aCommandThatAlreadyNamesTheFlagIsLeftAlone() {
     let a = ["--dangerously-load-development-channels", "server:talos-app", "--model", "opus"]
     #expect(MainChannelFlag.ensured(a) == a)
+    // the owner's own channel stays; ours is added beside it (see MainChannelFlagSavedTests)
     let b = ["--dangerously-load-development-channels=server:other"]
-    #expect(MainChannelFlag.ensured(b) == b, "the owner's own channel is theirs")
+    #expect(MainChannelFlag.ensured(b).first == b[0], "the owner's own channel is kept")
     #expect(MainChannelFlag.passes(MainChannelFlag.ensured(["--model", "opus"])))
     #expect(!MainChannelFlag.passes(["--", flag2]), "the flag after -- is the prompt")
     #expect(AutoConfirmGuard.channels(inArgv: MainChannelFlag.ensured(["--model", "opus"])) == ["server:talos-app"])

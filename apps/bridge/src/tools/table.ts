@@ -10,7 +10,7 @@ import { configPropose, settingsRead } from './config.ts'
 import { type AgentToolGroup, READ_THREAD_TOOLS, type ToolRecord } from './define.ts'
 import { handoffTool } from './handoff.ts'
 import { memoryNoteReadTool } from './memory-note-read.ts'
-import { inboxRaw, inboxTriage, setStatus, voiceProgress } from './misc.ts'
+import { inboxRaw, inboxTriage, setStatus } from './misc.ts'
 import { talosModHello, talosModSync } from './mod.ts'
 import { publishPage } from './pages.ts'
 import { peerSendTool } from './peer.ts'
@@ -21,6 +21,7 @@ import { schedulePropose, scheduleRunDone, scheduleRunStart, schedulesList } fro
 import { SCREEN_TOOL_RECORDS } from './screen.ts'
 import { attach, reply } from './send.ts'
 import { threadSession } from './sessions.ts'
+import { setThreadInstructions } from './thread-instructions.ts'
 import { archiveThread, createThread, listThreads, readThread } from './threads.ts'
 import { wakeMe } from './wake-me.ts'
 
@@ -31,7 +32,6 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   card,
   cardResult,
   setStatus,
-  voiceProgress,
   listThreads,
   createThread,
   archiveThread,
@@ -47,6 +47,7 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   wakeMe,
   configPropose,
   settingsRead,
+  setThreadInstructions,
   retryAttachmentTool,
   publishPage,
   ...APP_TOOL_RECORDS,

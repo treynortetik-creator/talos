@@ -1,6 +1,6 @@
 
 [38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.325[39m
-[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2 · Claude Max  [39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mFable 5.2  [39m
 [38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/home/alex/proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[39m
 
 

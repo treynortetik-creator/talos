@@ -45,7 +45,6 @@ async function setUp(page: Page, o: { item?: Record<string, unknown>; main?: unk
           kind: 'fixed',
           order: 2,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-10-28T00:00:00.000Z',
           session: 'dedicated',
@@ -116,7 +115,7 @@ for (const theme of ['light', 'dark'] as const) {
     await setUp(page, { item: { wakes: WAKES, wakes_total: 3 } })
     const panel = await openPanel(page, 'work')
     const list = panel.getByTestId('pending-wakes')
-    await expect(list).toContainText('Wake-ups for this session')
+    await expect(list).toContainText('Wake-ups for this thread’s agent')
     await expect(list.getByTestId('pending-wake')).toHaveCount(2)
     await expect(list).toContainText('Check the build and post the result in this thread.')
     await expect(list).toContainText('And 1 more later.')
@@ -131,7 +130,7 @@ for (const theme of ['light', 'dark'] as const) {
     await answerCancel(page, true, 'Cancelled wake talos-wake-aaaaaaaaaaaa.')
     await expect(list.getByTestId('pending-wake')).toHaveCount(1)
     await expect(list).not.toContainText('Check the build')
-    await expect(list.getByRole('heading', { name: 'Wake-ups for this session' })).toBeFocused()
+    await expect(list.getByRole('heading', { name: 'Wake-ups for this thread’s agent' })).toBeFocused()
   })
 }
 
@@ -150,7 +149,7 @@ test('a refused cancel keeps the row and says why', async ({ page }) => {
 test("a thread main answers lists main's wakes; none pending shows nothing", async ({ page }) => {
   await setUp(page, { main: [WAKES[1]] })
   const panel = await openPanel(page, 'general')
-  await expect(panel.getByTestId('pending-wakes')).toContainText('Wake-ups for the main session')
+  await expect(panel.getByTestId('pending-wakes')).toContainText('Wake-ups for the main agent')
   await expect(panel.getByTestId('pending-wake')).toHaveCount(1)
   // the dedicated thread with none of its own: no section, not an empty list
   if (await page.getByTestId('session-sheet').isVisible()) await page.keyboard.press('Escape')

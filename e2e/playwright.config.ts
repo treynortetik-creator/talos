@@ -1,5 +1,5 @@
 // End-to-end suite (spec 10.3): the built relay + the built web app + the real bridge behind FakeClaude. Chromium only:
-// the virtual authenticator and the fake microphone are Chromium features. Each test starts its own stack on its own port
+// the virtual authenticator is a Chromium feature. Each test starts its own stack on its own port
 // and temp folders. By default the tests run one after another. E2E_WORKERS=n (scripts/ci-local.sh) spreads them over n
 // worker processes: the relay runs inside the worker and its auth state is per process, so workers never share it.
 import { fileURLToPath } from 'node:url'
@@ -23,10 +23,7 @@ export default defineConfig({
   reporter: [['list'], ...(process.env.CI_FLAKE_FILE ? [['../scripts/ci-flake-playwright.ts'] as const] : [])],
   use: {
     ...devices['Desktop Chrome'],
-    permissions: ['microphone'],
-    launchOptions: {
-      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', ...ciChromiumArgs],
-    },
+    launchOptions: { args: ciChromiumArgs },
     trace: 'retain-on-failure',
   },
 })

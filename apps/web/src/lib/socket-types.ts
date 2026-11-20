@@ -1,11 +1,11 @@
 // The public types of the socket client: its options, the client itself, and what the queue keeps.
 import type { DeviceKey } from '@talos-app/protocol'
-import type { SendResult, TalosClient } from './client.ts'
+import type { TalosClient } from './client.ts'
 import type { createMetaStore } from './connectionMeta.ts'
 import type { FetchLike } from './http.ts'
 import type { Storage } from './storage.ts'
 
-export type OutboxKind = 'message' | 'voice_note' | 'voice.ask'
+export type OutboxKind = 'message'
 export type OutboxEntry = {
   /** Frame id (also the storage key). */
   id: string
@@ -21,21 +21,6 @@ export type OutboxEntry = {
    */
   writtenAt?: number | null
 }
-export type PendingVoice = {
-  clientMsgId: string
-  threadId: string
-  mime: string
-  name: string
-  durationMs?: number
-  waveform?: string
-  blob: Blob
-  order: number
-  /** The device key that was signed in when it was queued; a note from another identity is never sent by this one. */
-  deviceId?: string
-  /** When it was recorded, so the row it gets back after a restart sits where it belongs. */
-  createdAt?: string
-}
-
 export type SocketClientOptions = {
   storage: Storage
   /** `wss://host/ws`; default derives from `location`. */
@@ -46,8 +31,8 @@ export type SocketClientOptions = {
   /** Backoff: base ms, max ms, jitter 0..1 (random source injectable for tests). */
   backoff?: { baseMs?: number; maxMs?: number; random?: () => number }
   isVisible?: () => boolean
-  /** How long a queued voice note waits before its upload is tried again (default 10 s). */
-  voiceRetryMs?: number
+  /** How long a queued frame waits before the flush is tried again after a send that could not be saved (default 10 s). */
+  flushRetryMs?: number
   /** How long a socket let go of may still deliver an inbox answer before its changes go out again (default 2 s). */
   inboxAnswerGraceMs?: number
   isOnline?: () => boolean
@@ -70,14 +55,6 @@ export interface SocketClient extends TalosClient {
    * memory for the same session must go too. Returns the way to stop listening. */
   onQueueWiped(fn: () => void): () => void
   setPinned(pinned: boolean): void
-  /** Stores an offline voice note (blob kept in IndexedDB); it is uploaded and signed when the connection is back. */
-  queueVoiceNote(args: {
-    threadId: string
-    blob: Blob
-    durationMs?: number
-    waveform?: string
-    name: string
-  }): Promise<SendResult>
   /** Number of signed owner frames waiting for a connection or a pin. */
   outboxSize(): number
   /** Resends a failed owner message with the identical signed bytes. */

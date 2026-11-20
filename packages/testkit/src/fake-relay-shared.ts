@@ -70,14 +70,7 @@ export const CONSUMABLE = new Set<string>([
   'undo.request',
 ])
 export const BRIDGE_DURABLE = new Set([...CONSUMABLE, 'config.patch', 'device.enrolled', 'device.revoked'])
-export const OWNER_FRAMES = new Set([
-  'message',
-  'voice_note',
-  'card.resolve',
-  'config.patch',
-  'voice.ask',
-  'session.control',
-])
+export const OWNER_FRAMES = new Set(['message', 'card.resolve', 'config.patch', 'session.control'])
 // docs/SCHEDULES.md S4: never stored or buffered, seq-less dedup, request/response by request_id, mac_offline at once.
 export const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 export const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)

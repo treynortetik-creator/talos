@@ -1,0 +1,10 @@
+{
+  "thread": "trip",
+  "dialog_id": "Qd6Lm9ZtRx4Cw8PkNa3HfB",
+  "dialog_kind": "tool_permission",
+  "subject": "Bash command · touch hello.txt && ls -l hello.txt",
+  "options": [
+    "Allow once",
+    "Deny"
+  ]
+}

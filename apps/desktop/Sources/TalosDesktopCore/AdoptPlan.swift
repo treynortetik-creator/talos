@@ -46,7 +46,7 @@ public struct AdoptPlan: Equatable, Sendable {
     var n = c
     n.agentDir = agentDir.hasPrefix(home + "/") ? "~" + agentDir.dropFirst(home.count) : agentDir
     n.claudePath = claudePath
-    n.args = args
+    n.args = MainChannelFlag.ensured(args)
     // Unreadable: keep what desktop.json already has. Either way the bridge variables stay, or a cold start would run an
     // agent the bridge reports as not live (audit D45).
     n.env = BridgeEnv.merged(envReadable ? env : c.env)

@@ -95,7 +95,13 @@ public enum DialogProofCheck {
     /// Main's development-channels dialog: which pieces of the start command changed, as the Mac itself recorded them. The signed card must say the
     /// same (a `main_dialog` rewritten in workers.json to hide a change does not match what the Mac knows). nil for every other dialog.
     public var launchChanged: [String]?
-    public init(thread: String, dialogId: String, kind: DialogReader.Kind, subject: String?, options: [String], launchChanged: [String]? = nil) {
+    /// A question's free-text option, as the Mac itself recorded it. The signed card must say the same, and only an answer that chose this
+    /// option carries a text (`DialogProofCheck.signedText`).
+    public var freeText: Int?
+    public init(
+      thread: String, dialogId: String, kind: DialogReader.Kind, subject: String?, options: [String], launchChanged: [String]? = nil, freeText: Int? = nil
+    ) {
+      self.freeText = freeText
       self.launchChanged = launchChanged
       self.thread = thread
       self.dialogId = dialogId
@@ -151,6 +157,13 @@ public enum DialogProofCheck {
       guard let i = JSONValue.int(c), (0...5).contains(i) else { return no(3) }
       choice = i
     }
+    // the text of a free-text answer is IN the signed frame (`text`): only the option the Mac recorded as free text takes one, and it must
+    // be there. A frame with a text for any other option, or none for this one, is nothing.
+    if let t = signed["text"] {
+      guard let c = choice, c == env.pane.freeText, let text = t as? String, PaneSelect.cleanAnswerText(text) == text else { return no(3) }
+    } else if let c = choice, c == env.pane.freeText {
+      return no(3)
+    }
     guard let ts = (signed["ts"] as? String).flatMap(ISOTime.parse).map({ $0 * 1000 }), env.nowMs - ts <= maxAgeMs, ts - env.nowMs <= maxFutureMs
     else { return no(3) }
     // 4: the card that was shown is the dialog on the pane
@@ -160,7 +173,7 @@ public enum DialogProofCheck {
       payload["thread"] as? String == env.pane.thread, ExactText.equal(payload["dialog_id"] as? String, env.pane.dialogId),
       payload["dialog_kind"] as? String == env.pane.kind.rawValue, sameSubject(payload["subject"], env.pane.subject),
       payload["options"] as? [String] != nil, ExactText.equal(payload["options"] as? [String] ?? [], env.pane.options),
-      sameLaunchChanged(payload["launch_changed"], env.pane.launchChanged)
+      sameLaunchChanged(payload["launch_changed"], env.pane.launchChanged), sameFreeText(payload["free_text"], env.pane.freeText)
     else { return no(4) }
     // 5: the option, on the screen now, once
     var label: String?
@@ -173,6 +186,18 @@ public enum DialogProofCheck {
     if env.alreadyPressed { return no(5, .alreadyAnswered) }
     if let c = choice, let label, let screen = env.screenLabel, screen(c) != label { return no(5, .screenChanged) }
     return .ok(choice: choice, label: label, deviceId: proof.deviceId)
+  }
+
+  private static func sameFreeText(_ v: Any?, _ mine: Int?) -> Bool {
+    guard let mine else { return v == nil || v is NSNull }
+    return JSONValue.int(v) == mine
+  }
+
+  /// The text a verified answer carries (the owner's own signed words); nil when it carries none. Call it only after `verify` said ok: the
+  /// signature has then covered these bytes.
+  public static func signedText(_ a: DialogAnswerRequest) -> String? {
+    guard let d = a.proof.signed.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
+    return o["text"] as? String
   }
 
   private static func sameLaunchChanged(_ v: Any?, _ mine: [String]?) -> Bool {

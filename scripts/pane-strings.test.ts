@@ -2,7 +2,7 @@
 // (scripts/pane-strings.ts has the rule and its reasons). The allowlist below is the whole list of exceptions: developer text, screen text that is only
 // matched and never shown, and strings not yet converted, each naming the row of the pane-prompts plan that removes it (round 2 converted
 // rows 5 and 6, the sign-in ones; round 3 rows 2, 3 and 4: the MCP server approval, the development-channels question and the bypass
-// disclaimer). An entry that matches nothing fails the test, so a converted string must leave the list.
+// disclaimer; round 4 rows 8 and 9 on the Mac: the tool permission and the agent's own question). An entry that matches nothing fails the test, so a converted string must leave the list.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -77,14 +77,12 @@ const ALLOWED: Allowed[] = [
     why: 'the setup screen line for the folder-trust question',
     row: '1',
   },
-  { file: SWIFT_NOTICE, line: 'open Terminal on the Mac to answer', why: 'Main prompt line', row: '8, 9' },
   {
     file: SWIFT_NOTICE,
-    line: 'open this thread in Terminals on the Mac to answer',
-    why: 'thread prompt line',
-    row: '8, 9',
+    line: 'Open Terminals…"',
+    why: 'waiting line in the menu, for the prompts not converted',
+    row: '1, 11',
   },
-  { file: SWIFT_NOTICE, line: 'Open Terminals…"', why: 'waiting line in the menu', row: '1, 8, 9' },
   { file: SWIFT_NOTICE, line: 'Open Terminals… to answer it.', why: 'could not tell the thread', row: '12' },
   { file: SWIFT_NOTICE, line: 'Open Terminals… for the reason.', why: 'failed session', row: '12' },
   { file: SESSION_SWITCHER, line: 'Open this thread in Terminals to clear it', why: 'left-over line', row: '12' },
@@ -110,19 +108,19 @@ const ALLOWED: Allowed[] = [
     file: SESSION_SWITCHER,
     line: 'open this thread in Terminals on the Mac to answer',
     why: 'the default dialog line',
-    row: '1, 8, 9',
+    row: '1, 11',
   },
   {
     file: WORKER_NOTICES,
     line: 'attach on ${w.machine}',
-    why: 'Linux thread lines name the tmux session',
-    row: '1, 8, 9, 11, 12',
+    why: 'Linux thread lines name the tmux session (the Mac side of rows 8 and 9 is converted; Linux is not)',
+    row: '1, 8 and 9 on Linux, 11, 12',
   },
   {
     file: WORKER_NOTICES,
     line: 'Attach on ${w.machine}',
     why: 'Linux thread lines name the tmux session',
-    row: '8, 9, 11, 12',
+    row: '8 and 9 on Linux, 11, 12',
   },
 ]
 
@@ -163,6 +161,15 @@ describe('no owner-facing text sends the owner to a terminal', () => {
     // and none of those prompts' words is on the list: a new "open Terminals" about them would fail the scan above
     for (const a of ALLOWED)
       expect(`${a.line} ${a.why}`, a.file).not.toMatch(/MCP|bypass|development.channel|dev.channel/i)
+  })
+
+  it('rows 8 and 9 (tool permission, the agent question) are converted on the Mac: no Mac entry waits on them', () => {
+    for (const a of ALLOWED.filter((x) => x.file.startsWith('apps/desktop/')))
+      expect(a.row, `${a.file}: ${a.line}`).not.toMatch(/(?:^|[^\d])[89](?:[^\d]|$)/)
+    for (const a of ALLOWED.filter((x) => x.file.startsWith('apps/desktop/')))
+      expect(`${a.line} ${a.why}`, a.file).not.toMatch(
+        /tool permission|Bash command|AskUserQuestion|agent.s own question/i,
+      )
   })
 
   it('a planted string fails the scan, in each of the three trees', () => {

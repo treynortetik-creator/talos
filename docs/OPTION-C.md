@@ -100,7 +100,7 @@ Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants
 | Tools            | `src/tools/index.ts`, `src/tools/read-inbound.ts` | `WORKER_BRIDGE_TOOLS` only; `reply`, `attach`, `card`, `set_status` refuse any other thread and name only the worker's own; `card_result` only for its own cards                                                                                                                                                                                                                                                                                    |
 | Worker transport | `src/worker/transport.ts`, `src/hub/client.ts`    | hub up: every frame goes to the hub and waits for its ack; hub down: `reply`/`card.create` over `POST /bridge/post`, nothing else                                                                                                                                                                                                                                                                                                                   |
 | Hub socket       | `src/hub/server.ts`                               | live bridge only; `hello` needs a fresh `workers.json` entry, the nonce, and a pid in the recorded pane's process group (`ps -o pgid=`); `out` frames are re-parsed, size-checked and thread-checked (`reply`, `card.create`, `card.update`, `status`, `receipt` only, no permission cards), then sent and mirrored by the hub                                                                                                                      |
-| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file`/`voice_note` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. A `schedule_run` for a job of that thread is held the same way (see "Thread schedules"); voice calls, hooks, digests, heartbeat wakes, shares and `backlog` stay with main                                                 |
+| Router           | `src/router/router.ts`                            | wraps the live bridge's notification emit. Owner `text`/`file` in a dedicated thread, and `card_action` on a card that thread's worker raised, are held as `worker_routes` rows and named in the wake file. A `schedule_run` for a job of that thread is held the same way (see "Thread schedules"); voice calls, hooks, digests, heartbeat wakes, shares and `backlog` stay with main                                                              |
 | Claims           | `src/worker/store.ts`                             | `inbound_claims` (`INSERT OR IGNORE`): the worker's `read_inbound` or the hub's deadline, whoever is first. Deadlines are re-armed after a bridge restart                                                                                                                                                                                                                                                                                           |
 | Governor         | `src/router/governor.ts`                          | from the newest reading per limit kind of any session on the Mac (main's mod, each worker's status line via `workers/<id>/usage.json`; `src/router/usage-pool.ts`), a window past its reset dropped; a reading older than 30 min, or none, = `unknown`, never blocks. Paused: parked threads fall back with `usage_governor`, live workers keep their pointers. Park-all: a `park` wake for every live worker, again 30 s later while it stays live |
 | Controls         | `src/router/controls.ts`                          | `thread.session.control` → a wake with that action; the result is a `session.control.result`, stored and replayed like `session.control`                                                                                                                                                                                                                                                                                                            |
@@ -119,12 +119,12 @@ Rules the reviews added:
 
 Routing table (as built):
 
-| Notification                       | Thread shared | Dedicated, reachable                                         | Dedicated, not reachable                    |
-| ---------------------------------- | ------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| owner `text`, `file`, `voice_note` | main          | worker (wake + `read_inbound`), main after 90 s / 120 s cold | main at once, `routed=fallback`, system row |
-| `card_action`                      | main          | the worker that raised the card                              | main + system row                           |
-| `backlog`                          | main          | main (not split yet; main can pass it on)                    | main                                        |
-| everything else                    | main          | main                                                         | main                                        |
+| Notification         | Thread shared | Dedicated, reachable                                         | Dedicated, not reachable                    |
+| -------------------- | ------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| owner `text`, `file` | main          | worker (wake + `read_inbound`), main after 90 s / 120 s cold | main at once, `routed=fallback`, system row |
+| `card_action`        | main          | the worker that raised the card                              | main + system row                           |
+| `backlog`            | main          | main (not split yet; main can pass it on)                    | main                                        |
+| everything else      | main          | main                                                         | main                                        |
 
 "Not reachable" = supervisor heartbeat stale or `workers.json` unreadable, `workers_supported` false, the worker
 `failed` or `stopping`, or the governor paused and the worker not live.
@@ -867,9 +867,36 @@ Asked for by the owner on 2026-11-15; the rules below are the build lead's.
 
 A thread session's Claude Code pane can stop on a dialog only the owner may answer. For three known dialogs the owner now
 answers with a tap, on the iPhone, the web app or the Mac app, instead of in Terminals. **In scope:** folder trust (`trust`), MCP
-server consent (`mcp_consent`) and login (`login`). **Not in scope:** the bypass-permissions disclaimer and any dialog Talos does not
-recognise; they keep the thread line "This thread's session is waiting on a '<prompt>' prompt; open this thread in Terminals on the Mac to answer." (on Linux: "…; attach on <machine> to answer: talos-app supervise attach <id>") There is no
+server consent (`mcp_consent`) and login (`login`). **Not in scope:** any dialog Talos does not
+recognise; it keeps the thread line "This thread's session is waiting on a '<prompt>' prompt; open this thread in Terminals on the Mac to answer." (on Linux: "…; attach on <machine> to answer: talos-app supervise attach <id>") There is no
 Face ID or step-up: the tap is the approval. The first answer wins; every other face shows "Answered on <device>".
+
+**The tool permission and the agent's own question (Mac, pane-prompts rows 8 and 9).** When Claude Code asks its own permission question in
+the pane (`Bash command` / `Create file` / `Edit file`, `Do you want to proceed?`, footer `Esc to cancel · Tab to amend`) or the agent asks
+a question (AskUserQuestion: `☐ Color`, footer `Enter to select · ↑/↓ to navigate · Esc to cancel`), the Mac reads the screen exactly
+(`PaneSelect`; a partial or garbled screen gets no card) and offers it as a card on the phone and a popup on the Mac, for a thread session and
+for Main (`supervisor.main_dialog`). Kinds `tool_permission` and `agent_question`.
+
+- A tool permission is a SAFETY question: only the owner's own tap answers it (a signed paired-device answer on the phone, a real click
+  on the Mac popup). It offers `Allow once` (the `Yes` row) and `Deny` (the `No` row) and nothing else: "always allow", "switch to auto
+  mode" and "accept edits" are standing grants and stay at the Mac. The card shows the tool and the command or file as read.
+- The agent's question is the owner's own: no agent or worker may answer it. The card lists the rows as read; the free-text row
+  (`Type something.`) is `Other…`, with a text box on the phone card (the Mac popup has no text field and does not list it). `Chat about this` is not an answer and is not offered.
+- An answer is ONE number key (the digit drawn on the row). `Other…`: the row's number, the owner's words typed literally, then Enter,
+  each step on a fresh read; the words are in the signed `card.resolve` frame (`text`, one line of 1 to 120 characters (what one row of the pane can show back), no control or
+  invisible character), so the Mac types exactly what the owner wrote. Every key goes through the key gate with `Intent.pane`, which
+  reads the live pane and refuses unless it is the exact screen the offer was made for (`PaneSelect.Screen.bound`: kind, tool, subject,
+  every numbered row; not the cursor or the countdown). A screen that changed between the offer and the answer gets no key.
+- The reader anchors from the question row up and needs exactly one frame rule above it with the header right under it, so a command, diff or
+  question that prints its own rule, header or box rows gets no card. A digit selects and submits (measured, Claude Code 2.1.329: Tests/Fixtures/real-2.1.329);
+  on the free-text row it only moves the cursor, and the footer then gains `ctrl+g to edit in VS Code`.
+- A key sent and not seen to take (a timeout, or the prompt still on screen) is reported as "Sent, but your Mac hasn't seen it take yet", never as
+  Allowed. A Main card the phone does not acknowledge in 15 s gets the plain line; Main's stall alarm waits 10 minutes behind an offer.
+- A timed-out key is never sent again for that card; the unchanged screen is offered again, new id, after a short memory (the same
+  rule as the safety popups).
+- A question with several tabs (`← ☐ A  ☐ B  ✔ Submit →`) is NOT put on a card question by question: the thread gets one line, "asking
+  several questions at once, which Talos cannot put on a card. Answer them at the Mac."
+- Not yet: Linux supervisors do not read these two prompts (their threads keep the old line), what a typed word looks like in the free-text row is assumed (not captured).
 
 **The computer-use permission dialog** (`Computer Use needs macOS permissions`, from a computer-use tool's `request_access` while macOS
 has not allowed the program) is neither: it is never offered as a card, because Enter on its first row opens System Settings on the

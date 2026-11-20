@@ -65,7 +65,6 @@ import {
   type TalosApi,
   type TalosClient,
   TalosClientError,
-  type VoiceAskArgs,
 } from './client.ts'
 import { createFakeAgentsMd, type FakeAgentsMd, type FakeAgentsMdSeed } from './fakeAgentsMd.ts'
 import { checkFields, missingRequired } from './fakeConnectionFields.ts'
@@ -216,14 +215,6 @@ export const DEMO_FOLDERS: FakeFolderTree = {
 }
 
 export type FakeClient = TalosClient & {
-  /** The real client's way to hand over a recording (it saves it on the device first); the fake sends it straight away. */
-  queueVoiceNote(args: {
-    threadId: string
-    blob: Blob
-    durationMs?: number
-    waveform?: string
-    name: string
-  }): Promise<SendResult>
   /** Every owner frame the client signed, in order (raw objects, as they would go on the wire). */
   readonly sent: Array<Record<string, unknown>>
   /** Public half of the fake device key, for verifying `sent` in tests. */
@@ -596,6 +587,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
       if (requireLive && (store.getState().connection !== 'online' || !store.getState().devicePinned))
         throw new NotSentError('mac_offline', "You're offline.")
       const clientMsgId = newId('m')
+      // the real client stamps the row's receipt when the relay acks it: a queued or held send has none yet
+      const state = sendState()
       await owner({
         type: 'message',
         thread_id: threadId,
@@ -618,7 +611,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         attachments,
         via: 'app',
         created_at: iso(),
-        receipt: 'sent',
+        ...(state === 'sent' ? { receipt: 'sent' as const } : {}),
       })
       if (store.getState().presence.bridge_online) {
         setTimeout(() => {
@@ -639,62 +632,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
           emit('reply', { message: reply })
         }, opts.replyDelayMs ?? 0)
       }
-      return { clientMsgId, state: sendState() }
-    },
-    // No device storage here: the fake saves nothing, it uploads and sends straight away.
-    async queueVoiceNote({ threadId, blob, durationMs, waveform, name }) {
-      const att = await client.uploadMedia(blob, {
-        name,
-        ...(durationMs ? { durationMs } : {}),
-        ...(waveform ? { waveform } : {}),
-      })
-      return client.sendVoiceNote({ threadId, attachment: { ...att, kind: 'voice_note' } })
-    },
-    async sendVoiceNote({ threadId, attachment }): Promise<SendResult> {
-      const clientMsgId = newId('m')
-      await owner({ type: 'voice_note', thread_id: threadId, client_msg_id: clientMsgId, attachment })
-      append({
-        id: clientMsgId,
-        thread_id: threadId,
-        seq: ++seq,
-        author: 'owner',
-        kind: 'voice_note',
-        format: 'plain',
-        attachments: [attachment],
-        transcript: { text: '', engine: 'fake', status: 'pending' },
-        via: 'app',
-        created_at: iso(),
-      })
-      return { clientMsgId, state: 'sent' }
-    },
-    async sendVoiceAsk(args: VoiceAskArgs): Promise<SendResult> {
-      await owner({
-        type: 'voice.ask',
-        voice_session_id: args.voiceSessionId,
-        delegation_id: args.delegationId,
-        thread_id: args.threadId,
-        question: args.question,
-        transcript_tail: args.transcriptTail,
-      })
-      emit('voice.state', { voice_session_id: args.voiceSessionId, state: 'delegating' })
-      setTimeout(() => {
-        const reply: MessageT = {
-          id: newId('m'),
-          thread_id: args.threadId,
-          seq: ++seq,
-          author: 'agent',
-          kind: 'text',
-          text: `echo: ${args.question}`,
-          format: 'plain',
-          attachments: [],
-          via: 'voice',
-          created_at: iso(),
-        }
-        append(reply)
-        emit('reply', { message: reply, speak: `echo: ${args.question}`, voice_delegation_id: args.delegationId })
-        emit('voice.state', { voice_session_id: args.voiceSessionId, state: 'live' })
-      }, opts.replyDelayMs ?? 0)
-      return { clientMsgId: args.delegationId, state: sendState() }
+      return { clientMsgId, state }
     },
     async resolveCard(cardId: string, input: CardResolveInput) {
       // The real client's sendAndWait refuses before anything else when the socket is down or the device is not pinned.
@@ -723,6 +661,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(input.editedHash ? { edited_hash: input.editedHash } : {}),
         ...(input.note ? { note: input.note } : {}),
         ...(input.choice !== undefined ? { choice: input.choice } : {}),
+        ...(input.text !== undefined ? { text: input.text } : {}),
         ...(input.always ? { always: true } : {}),
       })
       const at = iso()

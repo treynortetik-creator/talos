@@ -14,6 +14,7 @@
     "talos-interview": "off",
     "talos-meeting-prep": "off",
     "talos-memory-recall": "off",
+    "talos-settings": "off",
     "talos-theme": "off",
     "talos-transcript-ingest": "off"
   }

@@ -64,7 +64,8 @@ JSON v1 (additive; today's keys stay):
 | `bug.reported`         | `apps/relay/src/core/bug-reports.ts` (the relay)  | `report_id`, `device_id`, `webhook` (`off` or `queued`), `bridge` (`queued` or `failed`; never the words, logs or picture) |
 
 `source` is `owner` (a signed `config.patch`), `agent_card` (an agent proposal the owner approved) or `agent_trust` (applied
-directly in trust mode).
+directly in trust mode), `agent_asked` (applied because the owner asked) or `agent_quiet` (a thread's session set-up applied because the
+settings lock is off and nothing outside reached the agent since his words).
 
 - Mechanism: `emitEvent(log, name, fields)` writes one `log.info('event', …)` line. Nothing subscribes yet.
 - The Mac app's `devCardOffered` / `devCardAnswered` are in-process Swift events, not bridge events.

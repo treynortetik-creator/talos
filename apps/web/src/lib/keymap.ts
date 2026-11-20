@@ -34,7 +34,6 @@ export type ActionSpec =
         | 'findInThread'
         | 'sessionPanel'
         | 'sidebar'
-        | 'call'
         | 'bugReport'
         | 'close'
     }
@@ -103,10 +102,9 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   ),
   e('newThread', 'New thread', 'Threads', null, { kind: 'ui', name: 'newThread' }),
   e('findInThread', 'Search this thread', 'Threads', { code: 'KeyF' }, { kind: 'ui', name: 'findInThread' }),
-  e('sessionPanel', 'Session panel', 'Panels', { code: 'Period' }, { kind: 'ui', name: 'sessionPanel' }),
+  e('sessionPanel', 'Agent panel', 'Panels', { code: 'Period' }, { kind: 'ui', name: 'sessionPanel' }),
   e('sidebar', 'Fold or unfold the sidebar', 'Panels', { code: 'Backslash' }, { kind: 'ui', name: 'sidebar' }),
   e('reportBug', 'Report a bug', 'App', null, { kind: 'ui', name: 'bugReport' }),
-  e('call', 'Start a call', 'App', { code: 'KeyK', shift: true, metaOnly: true }, { kind: 'ui', name: 'call' }),
   e('close', 'Close', 'App', { code: 'Escape', mod: false }, { kind: 'ui', name: 'close' }, { repeat: true }),
 ]
 

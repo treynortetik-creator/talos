@@ -403,7 +403,6 @@ export const ACTIONS: Record<string, Action> = {
                 kind: 'fixed',
                 order,
                 notify: 'all',
-                voice_context: 'recent',
                 archived: false,
                 created_at: new Date().toISOString(),
                 ...(p.topic !== undefined ? { topic: str(p, 'topic') } : {}),

@@ -1,19 +1,11 @@
 // `list_threads`, `create_thread`, `archive_thread`, `read_thread` (spec 4.4).
-import {
-  canBeDedicated,
-  isInheritedName,
-  neutralizeControlTags,
-  subThreadsOf,
-  THREAD_TOPIC_MAX,
-  ThreadId,
-  undoText,
-  wrapExternal,
-} from '@talos-app/protocol'
+import { canBeDedicated, isInheritedName, neutralizeControlTags, subThreadsOf, wrapExternal } from '@talos-app/protocol'
 import { wrapShared } from '../notify.ts'
 import { say } from '../owner-words.ts'
-import { lastOwnerThread } from '../trust.ts'
-import { fail, needStr, ok, str, type Tool, ToolError, threadArg, threadProps } from './common.ts'
-import { NOT_FOR_WORKERS, type ToolRecord, WORKER_NO_THREAD, WORKER_READS_OWN_THREAD } from './define.ts'
+import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { NOT_FOR_WORKERS, OWN_THREAD, type ToolRecord, WORKER_NO_THREAD, WORKER_READS_OWN_THREAD } from './define.ts'
+import { viaMain } from './schedules.ts'
+import { createThreadAs, proposeThreadChange, SETUP_PROPS, slugId } from './thread-setup.ts'
 
 export function slugify(name: string): string {
   const s = name
@@ -59,105 +51,57 @@ export const listThreads: ToolRecord = {
   },
 }
 
+/** What `create_thread` does for Main (no scope) and for a thread session (scope = its own thread, proven by the hub). */
+export async function runCreateThread(
+  ctx: Parameters<ToolRecord['handler']>[0],
+  args: Record<string, unknown>,
+  scope?: string,
+) {
+  try {
+    const name = needStr(args, 'name', 40).trim()
+    if (!name) throw new ToolError('name is required')
+    const id = slugId(ctx, name, str(args.id), slugify)
+    return await createThreadAs(ctx, args, name, id, scope)
+  } catch (e) {
+    return fail((e as Error).message)
+  }
+}
+
 export const createThread: ToolRecord = {
   name: 'create_thread',
   group: 'core',
   headless: false,
-  ...NOT_FOR_WORKERS,
-  instructions: `If a project or recurring topic has no thread and will produce more than one message this week, \`create_thread\` with a short noun name, then post there once the owner has approved the card; don't create a thread for a one-off answer.`,
+  ...OWN_THREAD,
+  instructions: `If a project or recurring topic has no thread and will produce more than one message this week, \`create_thread\` with a short noun name, then post there once the owner has approved the card; don't create a thread for a one-off answer. To set a thread agent up, say so in the same call (\`session\`, \`folder\`, \`model\`, \`mcp\`, \`instructions\`, and \`parent_id\` for a sub-thread); you may do that, and change it later, without asking him when nothing from outside has reached you since he last spoke.`,
   told: ['main'],
   description:
-    'Create a thread for a topic (past 20 agent threads it still goes ahead, with a warning to check with the owner). The id is slugged from the name when absent. A thin wrapper over `config_propose` (threads.<new_id>): the owner approves a card first (in trust mode, after they asked in their own message, it is created at once); the result says which. The card shows in the default thread.',
+    'Create a thread for a topic. A thread id is a lowercase letter, then up to 31 lowercase letters, digits or underscores (^[a-z][a-z0-9_]{0,31}$): no hyphens, no capitals, not "all". Leave id out and it is made from the name. Set it up in the same call: its own session, folder, model, MCP list, instructions, and a parent (a sub-thread). Past 20 agent threads it still goes ahead, with a warning to check with the owner. A thin wrapper over `config_propose` (threads.<new_id>): one proposal creates and configures it, and the result says whether it was made (the owner is told what changed and how to undo it) or is a card he approves first. A thread\'s name and topic follow the usual rule (he asked in the last two hours, else a card); its own session, folder, model and MCP list are made at once unless "Lock Talos settings" is on or something from outside reached you since he last spoke (then a card). In a thread\'s own session: `parent_id` must be your own thread (a sub-thread can\'t make threads), and the folder must be inside yours. The card shows in the default thread (yours, in a thread session).',
   liveOnly: true,
   inputSchema: {
     type: 'object',
     properties: {
       name: { type: 'string', description: 'Up to 40 characters.' },
-      id: { type: 'string' },
+      id: {
+        type: 'string',
+        description:
+          'Optional. ^[a-z][a-z0-9_]{0,31}$: underscores, never hyphens (dashboards_arr, not dashboards-arr).',
+      },
       icon: { type: 'string' },
       topic: { type: 'string', description: 'One line on what goes in this thread (up to 200 characters).' },
+      ...SETUP_PROPS,
       reason: { type: 'string', description: 'Why, in one line, shown on the card (up to 280 characters).' },
       thread_id: {
         type: 'string',
         description:
-          'The thread the owner asked in; the card goes there. Without it: the thread the owner spoke in last, else the default thread.',
+          'The thread the owner asked in; the card goes there. Without it: the thread the owner spoke in last, else the default thread. In a thread session: your own thread id (required; the card goes there).',
       },
     },
     required: ['name'],
   },
   async handler(ctx, args) {
-    try {
-      const name = needStr(args, 'name', 40).trim()
-      if (!name) throw new ToolError('name is required')
-      const cfg = ctx.config.config
-      const taken = new Set(cfg.threads.map((t) => t.id))
-      let id = str(args.id)
-      if (id !== undefined) {
-        if (!ThreadId.safeParse(id).success)
-          throw new ToolError('id must match ^[a-z][a-z0-9_]{0,31}$ and not be "all"')
-        if (id.startsWith('talos__'))
-          throw new ToolError('ids starting with "talos__" are reserved for the app; pick another')
-        if (isInheritedName(id)) throw new ToolError(`id "${id}" is a name every object already has; pick another`)
-        if (taken.has(id)) throw new ToolError(`thread id "${id}" is already taken`)
-      } else {
-        const base = slugify(name)
-        id = base
-        for (let n = 2; taken.has(id) || id === 'all'; n++) id = `${base.slice(0, 29)}_${n}`
-      }
-      const icon = str(args.icon)?.trim().slice(0, 16)
-      const topic = str(args.topic)?.trim().slice(0, THREAD_TOPIC_MAX)
-      const asked = str(args.thread_id)
-      if (asked !== undefined && !ctx.config.thread(asked))
-        throw new ToolError(`Unknown thread "${asked}". Valid thread ids: ${ctx.config.threadIds().join(', ')}`)
-      const r = await proposeThreadChange(
-        ctx,
-        asked,
-        args,
-        [
-          {
-            path: `threads.${id}`,
-            value: {
-              name,
-              ...(icon ? { icon } : {}),
-              ...(topic ? { topic } : {}),
-            },
-          },
-        ],
-        `The agent wants a thread "${name}" for this topic.`,
-      )
-      if (!r.ok) return fail(r.text)
-      return ok(
-        r.text.startsWith('Saved.')
-          ? `created thread ${id} (${name}). ${undoText([{ path: `threads.${id}`, old: null, new: null }])}`
-          : `${r.text}. Thread ${id} (${name}) is created when the owner approves the card.`,
-      )
-    } catch (e) {
-      return fail((e as Error).message)
-    }
+    if (ctx.worker) return viaMain(ctx, 'create_thread', args)
+    return runCreateThread(ctx, args)
   },
-}
-
-/**
- * What `create_thread` and `archive_thread` do: a `config_propose` of one change, from the tool's own say-so. The card goes to the
- * thread the owner asked in (`asked`, else the one they spoke in last, else the default thread), and "the owner asked" is judged there.
- */
-async function proposeThreadChange(
-  ctx: Parameters<Tool['handler']>[0],
-  asked: string | undefined,
-  args: Record<string, unknown>,
-  changes: Array<{ path: string; value: unknown }>,
-  defaultReason: string,
-) {
-  if (!ctx.configProposals) throw new ToolError('Settings proposals are not available in this process.')
-  const reason = str(args.reason)?.trim() || defaultReason
-  return ctx.configProposals.propose(
-    {
-      thread_id: asked ?? lastOwnerThread(ctx) ?? ctx.config.config.default_thread,
-      reason,
-      changes,
-    },
-    { tool: true },
-  )
 }
 
 export const archiveThread: ToolRecord = {
@@ -168,7 +112,7 @@ export const archiveThread: ToolRecord = {
   instructions: `When a topic is finished, post a one-line wrap-up and \`archive_thread\` (agent-made threads only); when the owner spoke to you in the last two hours (in the thread he last spoke in, with nothing shared there since) and the settings lock is off, it is archived at once and he is told; otherwise he approves a card, shown in that thread. Its saved file copies are kept.`,
   told: ['main'],
   description:
-    'Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived. A thin wrapper over `config_propose` (threads.<id>.archived): when the owner spoke to you in the last two hours (in the thread he last spoke in, with nothing shared there since) and the settings lock is off, it is archived at once and he is told; otherwise he approves a card, shown in that thread. Either way the saved file copies are kept.',
+    "Archive an agent-created thread. Fixed and system threads, and the default thread, cannot be archived. A thin wrapper over `config_propose` (threads.<id>.archived): when the owner spoke to you in the last two hours (in the thread he last spoke in, with nothing shared there since) and the settings lock is off, it is archived at once and he is told; otherwise he approves a card, shown in that thread. Either way the saved file copies are kept. In a thread's own session: only a sub-thread of yours.",
   liveOnly: true,
   inputSchema: {
     type: 'object',
@@ -179,40 +123,46 @@ export const archiveThread: ToolRecord = {
     required: ['thread_id'],
   },
   async handler(ctx, args) {
-    try {
-      const id = threadArg(ctx, args)
-      const t = ctx.config.thread(id)
-      if (t?.kind !== 'agent') throw new ToolError(`thread ${id} is not an agent thread and cannot be archived`)
-      if (ctx.config.config.default_thread === id)
-        throw new ToolError(`thread ${id} is the owner's default thread and cannot be archived; ask the owner first`)
-      // a parent goes with its sub-threads, in one change (one card, or applied at once when the owner asked)
-      const subs = subThreadsOf(ctx.config.config, id).filter((s) => !s.archived)
-      const notAgent = subs.find((s) => s.kind !== 'agent')
-      if (notAgent)
-        throw new ToolError(
-          `thread ${id} has the sub-thread ${notAgent.id}, which the owner made; only the owner can archive them, so ask the owner`,
-        )
-      const changes = [id, ...subs.map((s) => s.id)].map((x) => ({ path: `threads.${x}.archived`, value: true }))
-      const names = subs.map((s) => `"${s.name}"`).join(', ')
-      const r = await proposeThreadChange(
-        ctx,
-        undefined,
-        args,
-        changes,
-        subs.length
-          ? `The agent wants to archive the thread "${t.name}" and its sub-threads ${names}.`
-          : `The agent wants to archive the thread "${t.name}".`,
-      )
-      if (!r.ok) return fail(r.text)
-      const also = subs.length ? ` with its sub-threads ${subs.map((s) => s.id).join(', ')}` : ''
-      // the direct path (the owner asked, lock off) answers "Saved. ..."; a card answers "card c_... pending"
-      if (r.text.startsWith('Saved'))
-        return ok(`${r.text} Thread ${id}${also} is archived now; its saved file copies are kept.`)
-      return ok(`${r.text}. Thread ${id}${also} is archived when the owner approves the card.`)
-    } catch (e) {
-      return fail((e as Error).message)
-    }
+    if (ctx.worker) return viaMain(ctx, 'archive_thread', args)
+    return runArchiveThread(ctx, args)
   },
+}
+
+/** `archive_thread` (Main only). A thread session archives its own sub-thread with `config_propose` (threads.<id>.archived). */
+export async function runArchiveThread(ctx: Parameters<ToolRecord['handler']>[0], args: Record<string, unknown>) {
+  try {
+    const id = threadArg(ctx, args)
+    const t = ctx.config.thread(id)
+    if (t?.kind !== 'agent') throw new ToolError(`thread ${id} is not an agent thread and cannot be archived`)
+    if (ctx.config.config.default_thread === id)
+      throw new ToolError(`thread ${id} is the owner's default thread and cannot be archived; ask the owner first`)
+    // a parent goes with its sub-threads, in one change (one card, or applied at once when the owner asked)
+    const subs = subThreadsOf(ctx.config.config, id).filter((s) => !s.archived)
+    const notAgent = subs.find((s) => s.kind !== 'agent')
+    if (notAgent)
+      throw new ToolError(
+        `thread ${id} has the sub-thread ${notAgent.id}, which the owner made; only the owner can archive them, so ask the owner`,
+      )
+    const changes = [id, ...subs.map((s) => s.id)].map((x) => ({ path: `threads.${x}.archived`, value: true }))
+    const names = subs.map((s) => `"${s.name}"`).join(', ')
+    const r = await proposeThreadChange(
+      ctx,
+      undefined,
+      args,
+      changes,
+      subs.length
+        ? `The agent wants to archive the thread "${t.name}" and its sub-threads ${names}.`
+        : `The agent wants to archive the thread "${t.name}".`,
+    )
+    if (!r.ok) return fail(r.text)
+    const also = subs.length ? ` with its sub-threads ${subs.map((s) => s.id).join(', ')}` : ''
+    // the direct path (the owner asked, lock off) answers "Saved. ..."; a card answers "card c_... pending"
+    if (r.text.startsWith('Saved'))
+      return ok(`${r.text} Thread ${id}${also} is archived now; its saved file copies are kept.`)
+    return ok(`${r.text}. Thread ${id}${also} is archived when the owner approves the card.`)
+  } catch (e) {
+    return fail((e as Error).message)
+  }
 }
 
 export const readThread: ToolRecord = {

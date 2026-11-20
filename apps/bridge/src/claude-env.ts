@@ -6,6 +6,7 @@
 // Deny by pattern, keep by name: every CLAUDE_CODE_* variable goes unless it is a setting an owner puts in a shell
 // profile on purpose, so a marker a later Claude Code adds goes too.
 import { spawn, spawnSync } from 'node:child_process'
+import { readlinkSync } from 'node:fs'
 
 type Env = Record<string, string | undefined>
 
@@ -79,6 +80,10 @@ export interface ProcReader {
   envText(pid: number): string
   /** Can this OS show another process's environment at all? Absent means yes (a test double that reads a fake tree). */
   canReadEnv?(): boolean
+  /** The command line alone of `pid` (`ps -o command=`), '' when unreadable. Absent: `envText` is read instead. */
+  commandText?(pid: number): string
+  /** The program `pid` runs (Linux: /proc/<pid>/exe; else `ps -o comm=`), '' when unreadable. Absent: unreadable. */
+  executable?(pid: number): string
 }
 
 function ps(args: string[]): string {
@@ -110,6 +115,111 @@ const psReader: ProcReader = {
     return Number.isInteger(n) && n > 0 ? n : undefined
   },
   envText: (pid) => ps(['eww', '-p', String(pid), '-o', 'command=']),
+  commandText: (pid) => ps(['-o', 'command=', '-p', String(pid)]),
+  // Linux: the file the process runs (a title change cannot touch it); elsewhere the kernel's name for it (`ps -o comm=`,
+  // which on a Mac is the executable's, not the title)
+  executable(pid) {
+    try {
+      if (process.platform === 'linux') return readlinkSync(`/proc/${pid}/exe`)
+    } catch {
+      return ''
+    }
+    return ps(['-o', 'comm=', '-p', String(pid)]).trim()
+  },
+}
+
+/** What the claude this bridge runs under was started with: the Talos channel on, off, or not seen. */
+export type TalosChannel = 'on' | 'off' | 'unknown'
+
+/** What the bridge's log, `talos-app status` and `talos-app doctor` say for a session started without the Talos channel. */
+export const CHANNEL_OFF_TEXT =
+  "Talos can't push messages to this agent: it was started without the Talos channel (--dangerously-load-development-channels server:talos-app), so the owner's messages reach it only when it reads them itself. Restart it with talos-app start --agent-dir <your agent folder>, which adds the channel."
+
+/**
+ * The live bridge's check at start, for status.json: started without the Talos channel, the session gets none of the owner's
+ * messages pushed in while every outbound tool still works, so it looks fine (Dante's setup, 2026-11-19). Said loudly in the
+ * log as well.
+ */
+export function startupTalosChannel(log: { error(msg: string): void }): TalosChannel {
+  const state = talosChannelState()
+  if (state === 'off') log.error(CHANNEL_OFF_TEXT)
+  return state
+}
+
+const DEV_CHANNELS = '--dangerously-load-development-channels'
+
+/**
+ * Does this claude command line load Talos as a development channel: `server:talos-app` among the values after
+ * `--dangerously-load-development-channels` (up to the next option), or in its `=` form? A plain `--channels` entry does not
+ * count: Claude Code takes only its approved channels there, so a server of one's own needs the development flag.
+ */
+export function loadsTalosChannel(commandLine: string): boolean {
+  let inList = false
+  for (const t of commandLine.split(/\s+/)) {
+    if (t.startsWith('--')) {
+      inList = t === DEV_CHANNELS
+      if (
+        t.startsWith(`${DEV_CHANNELS}=`) &&
+        t
+          .slice(DEV_CHANNELS.length + 1)
+          .split(',')
+          .includes('server:talos-app')
+      )
+        return true
+      continue
+    }
+    if (inList && t.split(',').includes('server:talos-app')) return true
+  }
+  return false
+}
+
+/** A command line that is the command word alone: what a Node program that set `process.title` shows (its arguments wiped). */
+const BARE_CLAUDE = /^\s*(\S*\/)?claude\s*$/
+/** The program is Node itself (an npm install of Claude Code), not Claude Code's own binary. */
+const NODE_PROGRAM = /(^|\/)(node|nodejs)(\d+)?$/
+
+/**
+ * Was the claude this process runs under started with the Talos channel (`--dangerously-load-development-channels
+ * server:talos-app`)? Without it every outbound tool works and nothing the owner sends is ever pushed in (the session only
+ * sees messages it reads itself: Dante's setup, a whole morning). The bridge is an MCP server Claude Code started, so claude is
+ * an ancestor: walk up (from CLAUDE_PID when set) to the first process whose command word is claude and read its arguments.
+ * 'unknown', never a guess either way, when no claude is found (a test, an odd launcher), and when the line is `claude` alone
+ * from a program that is Node or cannot be told: npm's Claude Code sets process.title to "claude", which wipes its arguments
+ * from ps, so a bare line there says nothing. Claude Code's own binary keeps its arguments, so a bare line from it is 'off'.
+ */
+export function talosChannelState(
+  env: Env = process.env,
+  proc: ProcReader = psReader,
+  startPid: number = process.pid,
+  maxAncestors: number = MAX_ANCESTORS,
+): TalosChannel {
+  // the tests' seam (test/preload.ts), honoured in a test run only: a test run inside a Claude session must not report it
+  const forced = env.TALOS_TEST_SANDBOX ? env.TALOS_TEST_CHANNEL : undefined
+  if (forced === 'on' || forced === 'off' || forced === 'unknown') return forced
+  const read = (pid: number) => (proc.commandText ? proc.commandText(pid) : proc.envText(pid))
+  const judge = (pid: number, text: string): TalosChannel => {
+    if (loadsTalosChannel(text)) return 'on'
+    if (!BARE_CLAUDE.test(text)) return 'off'
+    const program = proc.executable?.(pid).trim() ?? ''
+    return program && !NODE_PROGRAM.test(program) ? 'off' : 'unknown'
+  }
+  const deadline = Date.now() + WALK_BUDGET_MS
+  try {
+    const claudePid = Number.parseInt(env.CLAUDE_PID ?? '', 10)
+    if (Number.isInteger(claudePid) && claudePid > 1) {
+      const text = read(claudePid)
+      return IS_CLAUDE.test(text) ? judge(claudePid, text) : 'unknown'
+    }
+    let pid = proc.parentOf(startPid)
+    for (let depth = 0; pid !== undefined && pid > 1 && depth < maxAncestors && Date.now() < deadline; depth++) {
+      const text = read(pid)
+      if (IS_CLAUDE.test(text)) return judge(pid, text)
+      pid = proc.parentOf(pid)
+    }
+  } catch {
+    return 'unknown'
+  }
+  return 'unknown'
 }
 
 const MARKER_IN_TEXT = /(^|\s)CLAUDE_CODE_CHILD_SESSION=\S/

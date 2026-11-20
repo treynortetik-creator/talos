@@ -37,7 +37,6 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   capture_ack: { type: 'capture_ack', req: 'r12', ok: false, reason: 'not_signed_in' },
   navigate: { type: 'navigate', path: '/t/general' },
   compose: { type: 'compose', thread_id: 'general', text: 'Hello from the shell.' },
-  voice_note: { type: 'voice_note', thread_id: 'general', mime: 'audio/mp4', duration_ms: 1200, bytes_b64: 'AAAA' },
   enroll_code: { type: 'enroll_code', code: '0123456789ABCDEFGHJKMNPQRS' },
   companion_state: {
     type: 'companion_state',

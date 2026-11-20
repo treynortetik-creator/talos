@@ -4,6 +4,7 @@
 // once by `link`, read once by `accept`, and never logged, never echoed back in an error, never part of the audit line.
 import {
   checkPeerInboxUrl,
+  cleanPastedLinkCode,
   PEER_DAILY_CAP_DEFAULT,
   PEER_DAILY_CAP_MAX,
   PEER_LINK_TTL_MS,
@@ -60,27 +61,28 @@ export const UNUSABLE_LINE =
 export async function cmdPeerLink(e: LinkEnv, name: string, cap: number | undefined): Promise<number> {
   const { env, io } = e
   const existing = readInboundPeers(env.home).find((p) => p.name === name)
+  const used = `${name} was already linked or its code was used; run talos-app peer remove ${name} and link again.`
+  // Decided from the local record alone, before any relay call (the collect route consumes what it hands over): a code that is still
+  // waiting (out, or redeemed and not yet picked up) is never replaced; one past its time that the poll has not closed yet fails closed.
+  if (existing?.link?.by === 'link' && existing.link.state === 'open')
+    return fail(
+      io,
+      Date.now() < existing.link.until
+        ? `a link code is already waiting for ${name}; use it or cancel it with talos-app peer remove ${name}.`
+        : used,
+    )
   // an inbox made some other way (peer create, a finished link) is not ours to re-code
   if (existing && existing.link?.by !== 'link')
     return fail(
       io,
       `there is already an inbox named "${name}". Run "talos-app peer remove ${name}" first, or pick another name.`,
     )
-  // only a code that was never used is minted again for the same inbox: a used, taken or failed one must not hand the secret out twice
-  const used = `${name} was already linked or its code was used; run talos-app peer remove ${name} and link again.`
-  if (
-    existing?.link &&
-    (existing.link.state === 'done' ||
-      existing.link.taken ||
-      (existing.link.state === 'closed' && !existing.link.expired))
-  )
+  // only a code that expired unused (the poll saw that on the relay) is minted again for the same inbox: a used, taken or failed one
+  // must not hand the secret out twice
+  if (existing?.link && (existing.link.state === 'done' || existing.link.taken || !existing.link.expired))
     return fail(io, used)
   const http = await e.http()
-  if (e.agent) await e.secrets() // the agent only runs this on a key store it may use (the bridge stores the secret later)
-  if (existing) {
-    const seen = await http.getPeerLink(name).catch(() => undefined)
-    if (seen && (seen.state === 'redeemed' || seen.state === 'collected' || seen.replayed)) return fail(io, used)
-  }
+  await e.secrets() // the key store must be usable now (the bridge stores the secret later)
   let made = false
   let connId = existing?.conn_id
   if (!existing) {
@@ -151,7 +153,7 @@ export async function cmdPeerAccept(
   cap: number | undefined,
 ): Promise<number> {
   const { env, io } = e
-  const parsed = parsePeerLinkCode(codeText)
+  const parsed = parsePeerLinkCode(cleanPastedLinkCode(codeText))
   if (!parsed.ok)
     return fail(
       io,
@@ -304,12 +306,20 @@ export async function runLink(
       e.io.err(usage)
       return 2
     }
-    return badName(only) ?? (await cmdPeerLink(e, only, cap))
+    const n = only.toLowerCase()
+    const bad = badName(n)
+    if (bad !== undefined) return bad
+    if (n !== only) e.io.out(`Using the name "${n}" (names are lower case).`)
+    return cmdPeerLink(e, n, cap)
   }
   if (!values.name)
     return fail(
       e.io,
       'say what you call the other Talos: talos-app peer accept <code> --name <name> (for example --name home).',
     )
-  return badName(values.name) ?? (await cmdPeerAccept(e, only, values.name, cap))
+  const n = values.name.toLowerCase()
+  const bad = badName(n)
+  if (bad !== undefined) return bad
+  if (n !== values.name) e.io.out(`Using the name "${n}" (names are lower case).`)
+  return cmdPeerAccept(e, only, n, cap)
 }

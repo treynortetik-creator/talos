@@ -25,7 +25,6 @@ describe('buildPushPayload', () => {
     const cases: Array<[PushIntent, string]> = [
       [{ template: 'reply', thread_id: 'general' }, 'New reply in General'],
       [{ template: 'needs_you', thread_id: 'general', card_id: CARD }, 'Needs you in General'],
-      [{ template: 'answer_ready', thread_id: 'general' }, 'Answer ready in General'],
       [{ template: 'overnight', count: 7 }, 'Overnight: 7 items'],
       [{ template: 'session_stopped' }, "Talos's Mac session stopped"],
       [{ template: 'device_pinned' }, 'New device pinned'],
@@ -99,7 +98,6 @@ describe('buildPushPayload', () => {
     const templates = [
       'reply',
       'needs_you',
-      'answer_ready',
       'overnight',
       'session_stopped',
       'device_pinned',
@@ -145,7 +143,6 @@ describe('buildApnsBody (WP-I5)', () => {
     const templates = [
       'reply',
       'needs_you',
-      'answer_ready',
       'overnight',
       'session_stopped',
       'device_pinned',

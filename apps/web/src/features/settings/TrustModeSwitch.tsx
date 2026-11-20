@@ -8,7 +8,7 @@ import { connectionRefusal, friendlyPatchError } from '../threads/manage/useThre
 import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 
 const OLDER =
-  'Your relay or your Mac is older than this setting. Update Talos, or turn it on at your Mac with: talos-app trust on'
+  'Your Talos server or your Mac is older than this setting. Update Talos, or turn it on at your Mac with: talos-app trust on'
 
 export const TRUST_HELP_ON =
   'Your own messages run without a card unless they send as you, spend money or delete for good.'

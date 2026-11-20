@@ -30,8 +30,8 @@ Rules that apply to all of them:
 
 ## The beat carries no content
 
-`health.beat` holds: bridge version and start time, whether the mod is `alive`, `quiet` or `absent`, whether a TTS and
-an STT command are configured, whether this Mac's SQLite has FTS5, and how many bytes are free on the disk the bridge
+`health.beat` holds: bridge version and start time, whether the mod is `alive`, `quiet` or `absent`, whether a TTS
+command is configured, whether this Mac's SQLite has FTS5, and how many bytes are free on the disk the bridge
 lives on (a bare number, never a path; an older bridge leaves it out). Nothing else.
 
 ## Optional: a second path with ntfy

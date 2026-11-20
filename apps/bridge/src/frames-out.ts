@@ -22,8 +22,6 @@ export const replyFrame = (
   now: number,
   message: MessageT,
   extra: {
-    speak?: string
-    voice_delegation_id?: string
     silent?: boolean
     settings_changed?: boolean
     sent_always_allowed?: boolean
@@ -32,8 +30,6 @@ export const replyFrame = (
   ...env(now),
   type: 'reply',
   message,
-  ...(extra.speak ? { speak: extra.speak } : {}),
-  ...(extra.voice_delegation_id ? { voice_delegation_id: extra.voice_delegation_id } : {}),
   ...(extra.silent ? { silent: true } : {}),
   ...(extra.settings_changed ? { settings_changed: true as const } : {}),
   ...(extra.sent_always_allowed ? { sent_always_allowed: true as const } : {}),
@@ -117,21 +113,6 @@ export const cardUpdateFrame = (
   ...(a.explain ? { explain: a.explain } : {}),
 })
 
-export const transcriptFrame = (
-  now: number,
-  messageId: string,
-  text: string,
-  engine: string,
-  status: 'pending' | 'done' | 'failed',
-): Of<'transcript'> => ({
-  ...env(now),
-  type: 'transcript',
-  message_id: messageId,
-  text,
-  engine: engine.slice(0, 40),
-  status,
-})
-
 export const threadUpsertFrame = (now: number, thread: ThreadT): Of<'thread.upsert'> => ({
   ...env(now),
   type: 'thread.upsert',
@@ -159,19 +140,6 @@ export const inboxUpdateFrame = (
   now: number,
   a: { event_id: string; state?: 'done'; priority?: 'high' | 'normal' | 'low'; agent_summary?: string },
 ): Of<'inbox.update'> => ({ ...env(now), type: 'inbox.update', ...a })
-
-export const voiceProgressFrame = (
-  now: number,
-  delegationId: string,
-  text: string,
-  say: boolean,
-): Of<'voice.progress'> => ({
-  ...env(now),
-  type: 'voice.progress',
-  voice_delegation_id: delegationId,
-  text: text.slice(0, 2000),
-  say,
-})
 
 export const devicePinnedFrame = (
   now: number,

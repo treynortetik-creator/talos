@@ -119,7 +119,9 @@ function Context({ state, threadId, live }: { state: SessionStateT | undefined; 
   // Compact runs on main, so it is offered only where main is what the numbers describe
   const canCompact = kind === 'main' && live && state?.capabilities.includes('compact') === true
   const tokens =
-    ctx?.tokens !== undefined && ctx.window ? `${compactTokens(ctx.tokens)} of ${compactTokens(ctx.window)} tokens` : ''
+    ctx?.tokens !== undefined && ctx.window
+      ? `${compactTokens(ctx.tokens)} of ${compactTokens(ctx.window)} used (this conversation's memory)`
+      : ''
   const detail = [tokens, kind === 'last' ? CTX_LAST_KNOWN_TEXT : ''].filter(Boolean).join(' · ')
   return (
     <section aria-labelledby="session-context-h" className="flex flex-col gap-3" data-testid="session-context">
@@ -159,7 +161,7 @@ function Context({ state, threadId, live }: { state: SessionStateT | undefined; 
 function Usage({ state, now }: { state: SessionStateT | undefined; now: number }) {
   // Option C: the plan limits are one pool for main and every thread session, so say so when those can exist
   const pooled = useTalos((s) => (s.config ? dedicatedSettings(s.config).enabled : false))
-  const all = pooled ? ' · all sessions' : ''
+  const all = pooled ? ' · all agents' : ''
   const week = usedPct(state, 'seven_day')
   const high = (n: number | undefined) => n !== undefined && n >= WARN_USED_PCT
   // `as_of` is the Mac's time: measured on the relay's clock (as card expiry is), not this device's, which may be minutes off
@@ -411,7 +413,7 @@ function ThreadSessionRows() {
   if (!status || status.threads.length === 0) return null
   return (
     <div className="flex flex-col gap-1" data-testid="session-thread-sessions">
-      <GroupTitle>Thread sessions</GroupTitle>
+      <GroupTitle>Thread agents</GroupTitle>
       <ul className="m-0 flex list-none flex-col p-0">
         {status.threads.map((w) => (
           <li key={w.thread_id} className="flex min-h-11 items-center justify-between gap-3 text-sm">
@@ -444,7 +446,7 @@ function AgentsSection({ threadId }: { threadId: string }) {
         </span>
       </div>
       <div className="flex flex-col gap-1">
-        <GroupTitle>This session</GroupTitle>
+        <GroupTitle>This agent</GroupTitle>
         {view.snap ? (
           <AgentsList threadId={threadId} view={view} />
         ) : (
@@ -498,14 +500,14 @@ function CommandsTab({ inventory }: { inventory: SessionInventoryT | undefined }
 
 function McpTab({ inventory }: { inventory: SessionInventoryT | undefined }) {
   if (!inventory || inventory.mcp_servers.length === 0)
-    return <p className="m-0 py-3 text-sm text-text-2">No MCP servers listed.</p>
+    return <p className="m-0 py-3 text-sm text-text-2">No tools listed.</p>
   return (
     <ul className="m-0 list-none divide-y divide-line p-0 py-1">
       {inventory.mcp_servers.map((s) => (
         <li key={s.name} className="flex min-h-11 items-center justify-between gap-3 py-2">
           <span className="min-w-0 truncate text-sm font-medium">{s.name}</span>
           <span className="flex items-center gap-2 text-xs text-text-2">
-            {s.tools} tools
+            {s.tools} {s.tools === 1 ? 'action' : 'actions'}
             <Badge tone={s.status === 'connected' ? 'ok' : 'neutral'}>
               {s.status === 'connected' ? 'Connected' : 'Unknown'}
             </Badge>
@@ -620,7 +622,7 @@ export function SessionPanel({ threadId, inline }: { threadId: string; inline?: 
         <Tabs defaultValue="commands">
           <TabsList className="flex w-full flex-wrap">
             <TabsTrigger value="commands">Commands</TabsTrigger>
-            <TabsTrigger value="mcp">MCP servers</TabsTrigger>
+            <TabsTrigger value="mcp">Tools</TabsTrigger>
             <TabsTrigger value="plugins">Plugins</TabsTrigger>
           </TabsList>
           <TabsContent value="commands">
@@ -639,7 +641,7 @@ export function SessionPanel({ threadId, inline }: { threadId: string; inline?: 
           className="min-h-11 text-sm text-accent-text underline"
           data-testid="session-settings-link"
         >
-          Commands, MCP servers and plugins: Settings › Session
+          Commands, tools and plugins: Settings › Your agent
         </Link>
       )}
     </div>

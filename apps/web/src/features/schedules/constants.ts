@@ -44,7 +44,7 @@ export const COPY = {
   title: 'Schedules',
   empty: 'No scheduled jobs yet. Tell {agent} what to do and when.',
   noScheduler: 'No scheduler on your Mac yet. {agent} uses Chronos to run jobs on a schedule.',
-  afterInstall: 'Then run `talos-app schedules adopt` and restart your session.',
+  afterInstall: 'Then run `talos-app schedules adopt` and restart your agent.',
   oldChronos: 'Schedules need 0.3 or newer.',
   bridgeOld: 'Update Talos on your Mac to use Schedules.',
   updateApp: 'Update the app to use Schedules.',

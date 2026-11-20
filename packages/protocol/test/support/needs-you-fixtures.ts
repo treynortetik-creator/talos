@@ -41,6 +41,27 @@ export const dialogOn = (
   seen_at: new Date(FIXED_NOW).toISOString(),
   expires_at: new Date(FIXED_NOW + 900_000).toISOString(),
 })
+export const QUESTION_ID = 'Ph8Zq3LmWt5RcXvNa2KdBe'
+export const TOOL_ID = 'Qd6Lm9ZtRx4Cw8PkNa3HfB'
+/** The agent's own question: its rows as the card shows them, `Other…` standing for the free-text row (the third). */
+export const QUESTION: WorkerDialogT = {
+  ...dialogOn(QUESTION_ID, 'agent_question', 'Which color do you prefer?', [
+    'Red',
+    'Blue',
+    'Other\u2026',
+    'Chat about this',
+  ]),
+  cursor: null,
+  free_text: 2,
+}
+/** A tool permission: the tool and the command, and only Allow once and Deny. */
+export const TOOL: WorkerDialogT = {
+  ...dialogOn(TOOL_ID, 'tool_permission', 'Bash command \u00B7 touch hello.txt && ls -l hello.txt', [
+    'Allow once',
+    'Deny',
+  ]),
+  cursor: null,
+}
 export const TRIP = dialogOn(TRIP_ID, 'trust', '/home/alex/trip', ['No, exit', 'Yes, I trust this folder'])
 export const LOGIN = dialogOn(LOGIN_ID, 'login', null, [])
 
@@ -218,6 +239,30 @@ export async function buildAnswerFixtures() {
   // step 3: a kill, and an edit: not an answer
   files['dialog-answer-kill.json'] = await signedAnswer({ ...base, action: 'kill' })
   files['dialog-answer-edited.json'] = await signedAnswer({ ...base, extra: { edited: { fields: [] } } })
+  // the agent's question and a tool permission (pane-prompts rows 8 and 9): a free-text answer carries its words IN the signed frame
+  const questionCard = card('c_01JBF3V7Q8K2M4N6P8R0S2T408', 'trip', 'Trip', QUESTION)
+  const qBase = { c: questionCard, deviceId: a.deviceId, key: keyA }
+  files['dialog-answer-text.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: 'purple' } })
+  files['dialog-answer-question-pick.json'] = await signedAnswer({ ...qBase, choice: 1 })
+  files['dialog-answer-text-wrong-option.json'] = await signedAnswer({ ...qBase, choice: 0, extra: { text: 'purple' } })
+  files['dialog-answer-text-missing.json'] = await signedAnswer({ ...qBase, choice: 2 })
+  files['dialog-answer-text-newline.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: 'pur\nple' } })
+  files['dialog-answer-text-padded.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: ' purple' } })
+  files['dialog-answer-text-long.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: 'p'.repeat(501) } })
+  files['dialog-answer-text-121.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: 'p'.repeat(121) } })
+  files['dialog-answer-text-120.json'] = await signedAnswer({ ...qBase, choice: 2, extra: { text: 'p'.repeat(120) } })
+  const swapped = structuredClone(files['dialog-answer-text.json']) as { proof: { signed: string } }
+  swapped.proof.signed = swapped.proof.signed.replace('purple', 'orange')
+  files['dialog-answer-text-changed.json'] = swapped
+  const toolCard = card('c_01JBF3V7Q8K2M4N6P8R0S2T409', 'trip', 'Trip', TOOL)
+  files['dialog-answer-tool.json'] = await signedAnswer({ c: toolCard, choice: 0, deviceId: a.deviceId, key: keyA })
+  files['dialog-answer-tool-text.json'] = await signedAnswer({
+    c: toolCard,
+    choice: 0,
+    deviceId: a.deviceId,
+    key: keyA,
+    extra: { text: 'rm -rf /' },
+  })
   // step 0: no proof at all (an answer as the first version wrote it)
   const { proof: _p, ...noProof } = good as Record<string, unknown>
   files['dialog-answer-missing-proof.json'] = noProof

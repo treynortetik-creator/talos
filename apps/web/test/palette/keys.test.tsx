@@ -36,7 +36,6 @@ describe('chords', () => {
   it.each([
     [{ code: 'KeyK', key: 'k', metaKey: true }, 'palette'],
     [{ code: 'KeyK', key: 'k', ctrlKey: true }, 'palette'],
-    [{ code: 'KeyK', key: 'K', metaKey: true, shiftKey: true }, 'call'],
     [{ code: 'Digit1', key: '1', metaKey: true }, 'thread1'],
     [{ code: 'Digit9', key: '9', ctrlKey: true }, 'thread9'],
     [{ code: 'KeyF', key: 'f', metaKey: true }, 'findInThread'],
@@ -53,11 +52,12 @@ describe('chords', () => {
     expect(e.defaultPrevented).toBe(id !== 'close')
   })
 
-  it('Cmd+Shift+K calls and does not open the palette; Alt variants are other people’s chords', () => {
+  it('Cmd+Shift+K (the old call chord) is nothing now, and Alt variants are other people’s chords', () => {
     const fn = vi.fn()
     render(<Probe onAction={fn} />)
     down(window, { code: 'KeyK', key: 'k', metaKey: true, altKey: true })
-    down(window, { code: 'KeyK', key: 'K', ctrlKey: true, shiftKey: true }) // Ctrl+Shift+K is not the call chord
+    down(window, { code: 'KeyK', key: 'K', ctrlKey: true, shiftKey: true })
+    down(window, { code: 'KeyK', key: 'K', metaKey: true, shiftKey: true })
     expect(fn).not.toHaveBeenCalled()
   })
 

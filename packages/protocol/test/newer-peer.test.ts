@@ -101,15 +101,7 @@ describe('classifyUnparsed', () => {
 
 describe('signed frames', () => {
   it('are read from the schemas: every owner-signed, native and signed-read type is in, plain frames are out', () => {
-    for (const t of [
-      'message',
-      'voice_note',
-      'card.resolve',
-      'native.act',
-      'history.request',
-      'media.fetch',
-      'app.request',
-    ])
+    for (const t of ['message', 'card.resolve', 'native.act', 'history.request', 'media.fetch', 'app.request'])
       expect(SIGNED_FRAME_TYPES.has(t), t).toBe(true)
     for (const t of ['reply', 'ready', 'ping', 'error']) expect(SIGNED_FRAME_TYPES.has(t), t).toBe(false)
   })

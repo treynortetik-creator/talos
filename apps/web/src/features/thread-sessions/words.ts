@@ -178,7 +178,7 @@ function live(i: SessionWordsInput, item: WorkerStatusItemT): SessionWords {
       return {
         tone: 'parked',
         short: 'Parked · made room for another thread',
-        long: `Parked${parked ? ` at ${parked}` : ''} to make room: only so many sessions run at once.${wakes}`,
+        long: `Parked${parked ? ` at ${parked}` : ''} to make room: only so many agents run at once.${wakes}`,
       }
     case 'governor': {
       // a resume time already past says nothing true
@@ -220,7 +220,7 @@ export function sessionWords(i: SessionWordsInput): SessionWords {
 
 function macSessionWords(i: SessionWordsInput): SessionWords {
   const item = i.item
-  if (!item) return { tone: 'none', short: 'No session yet', long: 'Starts with the next message.' }
+  if (!item) return { tone: 'none', short: 'No agent yet', long: 'Starts with the next message.' }
   const w = live(i, item)
   if (i.supervisorOnline && !i.pageOffline) return w
   // the Mac is not reporting, or this page is not connected: the last known picture, said as such, never as live

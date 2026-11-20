@@ -4,14 +4,11 @@ import userEvent from '@testing-library/user-event'
 import { Suspense } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  CallBar,
-  CallScreen,
   CardView,
   EventRow,
   HomeScreen,
   InboxScreen,
   IntegrationsScreen,
-  LiveCallButton,
   settingsSections,
 } from '../src/features/registry.ts'
 import { ClientProvider, useTalos, useTalosClient } from '../src/lib/client.ts'
@@ -82,7 +79,6 @@ describe('fakeClient', () => {
     const cfg = c.store.getState().config
     expect(cfg?.rev).toBe(1)
     expect(cfg?.agent.name).toBe('Atlas')
-    expect(cfg?.agent.voice).toBe('meridian')
     expect(cfg?.quiet_window).toEqual({ start: '22:00', end: '06:00' })
     expect((c.sent.at(-1) as { base_rev: number }).base_rev).toBe(0)
   })
@@ -120,9 +116,6 @@ describe('React wiring', () => {
           <InboxScreen />
           <EventRow item={item} />
           <IntegrationsScreen />
-          <LiveCallButton threadId="general" />
-          <CallBar threadId="general" onEnd={() => {}} />
-          <CallScreen threadId="general" onEnd={() => {}} />
         </Suspense>
       </ClientProvider>,
     )

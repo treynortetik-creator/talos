@@ -471,6 +471,12 @@ const READ_SIDE_FILES: Record<string, string[]> = {
     'if (realpathSync(realDir) !== realDir) return',
     'real = realpathSync(full)',
   ],
+  'secrets/home-scope.ts': [
+    "import { realpathSync } from 'node:fs'",
+    'return realpathSync(home)',
+    "return realpathSync(join(account, '.config', 'talos', 'app')) === real",
+    'real = realpathSync(home)',
+  ],
   'search/files.ts': [
     "import { closeSync, constants, existsSync, fstatSync, readSync, realpathSync } from 'node:fs'",
     'const real = realpathSync(path)',

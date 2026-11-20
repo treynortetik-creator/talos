@@ -35,12 +35,6 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   git(src, 'init', '-q', '-b', 'main')
   writeFileSync(join(src, 'a.txt'), 'a\n')
   writeFileSync(join(src, 'apps/bridge/scripts/test-parallel.ts'), '// stand-in\n')
-  // A stand-in for scripts/mic-preflight.mjs: prints $MIC_FAKE (ok by default) and exits like the real one (ok 0, stuck 3, else 2).
-  mkdirSync(join(src, 'scripts'))
-  writeFileSync(
-    join(src, 'scripts/mic-preflight.mjs'),
-    "const w = process.env.MIC_FAKE || 'ok'\nif (process.env.MIC_NOISE) console.error('(node) ExperimentalWarning: noise')\nconsole.log(w)\nprocess.exit(w === 'ok' ? 0 : w === 'stuck' ? 3 : 2)\n",
-  )
   git(src, 'add', '-A')
   git(src, 'commit', '-qm', 'a')
   const origin = join(T, 'origin.git')

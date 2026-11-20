@@ -81,6 +81,8 @@ public final class WorkerManager: @unchecked Sendable {
     /// A known dialog offered to the bridge for a tap: how long the Mac waits for its card (`dialog-card.json`) before it posts its own line, and how long the card lives.
     public var cardAckWait: Double = 15
     public var cardLifetime: Double = 900
+    /// How long an unchanged dialog is not offered again after an answer's Enter of unknown delivery (a tmux timeout); awake clock.
+    public var unsentEnterMemory: Double = 5
     /// A change to a running session's folder, model, effort or MCP list is acted on once it has stood this long (awake clock).
     public var launchChangeSettle: Double = 30
     /// Tests: park after this many seconds instead of the thread's `idle_park_min`.

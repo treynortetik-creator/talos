@@ -156,7 +156,7 @@ for (const size of sizes) {
           await open(page)
           await macGone(page, { superseded: true })
           const row = page.getByTestId('mac-banner')
-          await expect(row).toContainText('Bridge superseded')
+          await expect(row).toContainText(/took your (Mac|PC|computer)'s place/)
           expect((await box(row)).height).toBeLessThanOrEqual(LINE_MAX)
           const c = cause(page)
           const cut = await c.evaluate((el) => ({
@@ -164,14 +164,17 @@ for (const size of sizes) {
             ellipsis: getComputedStyle(el).textOverflow,
             nowrap: getComputedStyle(el).whiteSpace,
           }))
-          expect(cut).toEqual({ truncated: true, ellipsis: 'ellipsis', nowrap: 'nowrap' })
+          // always one line with an ellipsis ready; on a phone-width screen this cause is longer than the line and is cut
+          // (a wide desktop window can show it whole: the superseded cause got shorter on 2026-11-20)
+          expect({ ellipsis: cut.ellipsis, nowrap: cut.nowrap }).toEqual({ ellipsis: 'ellipsis', nowrap: 'nowrap' })
+          if ((page.viewportSize()?.width ?? 0) < 600) expect(cut.truncated).toBe(true)
           const cb = await box(c)
           const mb = await box(page.getByRole('button', { name: 'More', exact: true }))
           expect(cb.x + cb.width).toBeLessThanOrEqual(mb.x + 0.5)
           expect(await overflowX(page)).toBeLessThanOrEqual(0)
           // nothing is lost: the whole cause is one tap away
           await page.getByRole('button', { name: 'More', exact: true }).click()
-          await expect(page.getByText(/that one has gone too\./)).toBeVisible()
+          await expect(page.getByText(/that computer has gone too\./)).toBeVisible()
         })
       })
     }

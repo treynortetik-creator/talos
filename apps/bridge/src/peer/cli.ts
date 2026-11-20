@@ -12,12 +12,12 @@ import {
   PeerName,
   type SecretStore,
 } from '@talos-app/protocol'
-import { agentKeyStoreRefusal } from '../agent-cli.ts'
 import type { CliIO } from '../cli-main.ts'
 import { type BridgeEnv, paths } from '../config.ts'
 import { ConfigFile } from '../config-file.ts'
 import { openHistory } from '../history-store.ts'
 import { type RelayHttp, RelayHttpError } from '../relay-http.ts'
+import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PeerLedger } from './ledger.ts'
 import { type LinkCliDeps, type LinkEnv, runLink } from './link-cli.ts'
@@ -28,6 +28,7 @@ import {
   readInboundPeers,
   removeInboundPeer,
 } from './records.ts'
+import { relinkLine } from './relink.ts'
 import {
   checkPeerSecretPath,
   deleteIfSame,
@@ -59,8 +60,6 @@ const OPTIONS = {
   name: { type: 'string' },
 } as const
 
-class AgentRefusal extends Error {}
-
 export type PeerCliDeps = {
   /** `peer accept`: the redeem call and the name lookup behind it (tests). */
   link?: LinkCliDeps
@@ -90,12 +89,7 @@ export async function cmdPeer(
   http: () => Promise<RelayHttp>,
   deps: PeerCliDeps = {},
 ): Promise<number> {
-  try {
-    return await runPeer(env, args, io, http, deps)
-  } catch (e) {
-    if (e instanceof AgentRefusal) return fail(io, e.message.replace(/^talos-app: /, ''))
-    throw e
-  }
+  return runPeer(env, args, io, http, deps)
 }
 
 async function runPeer(
@@ -121,7 +115,8 @@ async function runPeer(
     return 2
   }
   const { positionals, values } = parsed
-  const name = positionals[0]
+  const given = positionals[0]
+  const name = sub === 'link' || sub === 'accept' ? given : given?.toLowerCase()
   const needName = (): string | number => {
     if (positionals.length !== 1 || !name) {
       io.err(PEER_USAGE)
@@ -132,13 +127,13 @@ async function runPeer(
         io,
         `"${name}" is not a name a linked agent can have: lower case letters, digits and hyphens, starting with a letter, and not a reserved word such as owner or agent.`,
       )
+    if (given !== name) io.out(`Using the name "${name}" (names are lower case).`)
     return name
   }
   const secrets = async (): Promise<SecretStore> => {
     const store = deps.secrets ?? (await openSecretStore({ home: env.home }))
-    const no = deps.agent ? agentKeyStoreRefusal(env.home, store.backend) : undefined
-    if (no) throw new AgentRefusal(no)
-    return store
+    // a keychain-wide store keeps this home's items under its own name (secrets/home-scope.ts), so any home may use it
+    return homeScopedStore(store, env.home, { kind: 'peer', log: (m) => io.err(`talos-app: ${m}`) })
   }
   const config = () => new ConfigFile(paths(env.home).configJson, { log: { warn: (m) => io.err(`talos-app: ${m}`) } })
 
@@ -448,9 +443,9 @@ async function listPeers(
         }
       }
       const sent = out ? (ledger?.sentSince(nm, utcDayStart(Date.now())) ?? 0) : 0
-      io.out(
-        `${nm}  sends to: ${out ? `${new URL(out.url).host}, cap ${out.daily_cap}/day, sent today ${sent}, secret ${has}` : 'not set up (peer add)'}  |  inbox: ${inb ? `cap ${inb.daily_cap}/day, received today ${inb.received_today}` : 'none (peer create)'}`,
-      )
+      const row = `${nm}  sends to: ${out ? `${new URL(out.url).host}, cap ${out.daily_cap}/day, sent today ${sent}, secret ${has}` : 'not set up (peer add)'}  |  inbox: ${inb ? `cap ${inb.daily_cap}/day, received today ${inb.received_today}` : 'none (peer create)'}`
+      io.out(row)
+      if (out && has === 'no') io.out(`  ${relinkLine(nm)}`)
     }
   } finally {
     history?.close()

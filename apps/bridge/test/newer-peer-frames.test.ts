@@ -47,16 +47,14 @@ describe('a relay frame this bridge cannot read because it is newer', () => {
     expect(h.relay.bridgeConnected).toBe(true)
   })
 
-  test('a known type with an enum value this build lacks counts as newer too (a speaker a newer phone knows)', async () => {
+  test('a known type with an enum value this build lacks counts as newer too (a priority a newer relay knows)', async () => {
     // A frame that does not parse for one unlisted enum value (an unlisted error code parses since O5: the next test).
     const lines = await start()
-    const f = structuredClone(fixtures['voice.ended']) as Record<string, unknown> & {
-      transcript: Array<{ who: string }>
-    }
-    ;(f.transcript[0] as { who: string }).who = 'brand_new_speaker'
+    const f = structuredClone(fixtures['hook.event']) as Record<string, unknown> & { event: Record<string, unknown> }
+    f.event.priority = 'brand_new_priority'
     h.relay.sendToBridge({ ...f, id: newUlid() }, { durable: false })
     await eventually(() => expect(systemRows()).toHaveLength(1))
-    expect(warnsFor(lines, 'voice.ended')).toHaveLength(1)
+    expect(warnsFor(lines, 'hook.event')).toHaveLength(1)
   })
 
   test('an error with a code this build lacks is delivered as internal and still counts as newer', async () => {

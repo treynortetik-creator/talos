@@ -56,8 +56,8 @@ test.describe('the message box follows big inserts', () => {
     }, long(60))
     await expect.poll(async () => (await atEnd(box)).gap, { timeout: 3000 }).toBeLessThanOrEqual(1)
     expect((await atEnd(box)).over).toBe(true)
-    // and the app now holds it: Send appears
-    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible()
+    // and the app now holds it: Send (always shown) turns on
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
   })
 
   test('select all and paste something SHORTER still ends at the caret', async ({ page }) => {

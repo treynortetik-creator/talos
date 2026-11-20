@@ -31,6 +31,7 @@ test('Developer page: a row, then Developer mode', async ({ page }, info) => {
   await expect(mode).toHaveAttribute('aria-busy', 'false')
   // the switches slide to their new place: let them settle so the picture matches the state
   await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
-  await page.waitForTimeout(300)
+  // a frame is drawn after the animations ended, so the picture shows the final state
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(null)))))
   await page.screenshot({ path: info.outputPath(`developer-${info.project.name}.png`), fullPage: true })
 })

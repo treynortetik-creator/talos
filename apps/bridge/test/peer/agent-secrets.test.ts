@@ -345,21 +345,18 @@ describe('secret files: leftovers, odd names, a swapped file', () => {
   })
 })
 
-describe('a fake TALOS_APP_HOME cannot reach a keychain-wide secret', () => {
-  test('an agent run on a keychain-wide store is refused unless the home is the account default; a terminal is not; a per-home file store is not', async () => {
+describe('a keychain-wide key store is kept per Talos home', () => {
+  test('an agent run on a keychain-wide store at a non-default home runs: the secret is kept under the home-scoped item', async () => {
     await start()
     put(file(), FAKE_SECRET)
     const r = await cli(['peer', 'add', 'work', '--url', URL_ARG, '--secret-file', file()], {
       backend: 'secret_service',
     })
-    expect(r.code).toBe(1)
-    expect(r.err).toMatch(/default.*home|key store/i)
-    expect(existsSync(file())).toBe(true) // kept
-    const t = await cli(['peer', 'add', 'work', '--url', URL_ARG, '--secret-file', file()], {
-      backend: 'secret_service',
-      terminal: true,
-    })
-    expect(t.code, t.err).toBe(0)
+    expect(r.code, r.err).toBe(0)
+    expect(existsSync(file())).toBe(false)
+    const keys = [...(h as NonNullable<typeof h>).secrets.data.keys()]
+    expect(keys).toHaveLength(1)
+    expect(keys[0]).toMatch(new RegExp(`^${PEER_SECRET_SERVICE.replace(/\./g, '\\.')}\\.[0-9a-f]{16}\u0000`))
   })
   test('an agent run on a per-home file store at a non-default home runs (and the file goes)', async () => {
     await start()

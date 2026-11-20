@@ -29,7 +29,6 @@ const trip: ThreadT = {
   kind: 'fixed',
   order: 2,
   notify: 'all',
-  voice_context: 'recent',
   archived: false,
   created_at: '2026-10-28T00:00:00.000Z',
   session: 'dedicated',
@@ -226,7 +225,7 @@ describe('the panel', () => {
     const { client } = boot(panel('trip'))
     await feed(client, WORKER(), 'live')
     expect(ctxText()).toContain('63% used')
-    expect(ctxText()).toContain('126k of 200k tokens')
+    expect(ctxText()).toContain("126k of 200k used (this conversation's memory)")
     expect(ctxText()).not.toContain('31%')
     expect(weekText()).toContain('60% used')
   })

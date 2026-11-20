@@ -410,7 +410,6 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             removeBanner()
             showBlock(title: TrustWords.blockTitle, text: TrustWords.blockBody(lastVerified: lastVerified, host: host, now: now), retry: true)
         }
-        if !state.allowsNativeFeatures { stopMediaCapture() }
         let blocked = !state.loadsPage
         if blocked, !trustBlockedBefore { clearPage() }
         if !blocked, trustBlockedBefore { loadRelay() }
@@ -435,8 +434,6 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     var trustBlockIsFail: Bool { trustBlock?.accessibilityIdentifier == "trust.fail" }
     var isRepinPromptShowing: Bool { repinPrompt.isShowing }
     var repinPromptForTests: RepinPrompt { repinPrompt }
-    /// For tests: how many times the page's camera and microphone were ended because the relay was not verified.
-    private(set) var mediaCaptureStops = 0
     /// For tests: the launch watchdog is counting.
     var isLaunchWatchdogRunning: Bool { launchWatchdog?.isValid == true }
 
@@ -499,14 +496,6 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     private func removeBlock() {
         trustBlock?.removeFromSuperview()
         trustBlock = nil
-    }
-
-    /// WebKit keeps a camera or microphone grant that the delegate gave while the relay was verified, and does not ask the delegate again for
-    /// the same page, so leaving `.pass` must end what the page holds (found in the simulator run, BYOR-phase4-frame.md risk 9).
-    private func stopMediaCapture() {
-        mediaCaptureStops += 1
-        webView?.setCameraCaptureState(.none, completionHandler: nil)
-        webView?.setMicrophoneCaptureState(.none, completionHandler: nil)
     }
 
     /// The page goes: nothing of the relay stays in the web view under a block screen.

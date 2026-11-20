@@ -10,6 +10,7 @@ import {
   CardResolveFrame,
   type CardT,
   cardNotice,
+  cleanDialogText,
   composeDialogCard,
   DIALOG_ALREADY_ANSWERED_TEXT,
   DIALOG_ANSWER_MAX_BYTES,
@@ -759,5 +760,141 @@ describe("a thread's development-channels card", () => {
     expect(card.body).not.toMatch(/Main/)
     // Main's own card is as it was
     expect(compose(devDialog()).body).toBe(DIALOG_WORDING.sentence.dev_channels)
+  })
+})
+
+// ---- the tool permission and the agent's question (pane-prompts rows 8 and 9) ----
+const tool = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+  trust({
+    id: 'Tq5Qm8ZtRx3Cw9PkNa2HdB',
+    kind: 'tool_permission',
+    subject: 'Bash command \u00B7 touch hello.txt && ls -l hello.txt',
+    options: ['Allow once', 'Deny'],
+    cursor: null,
+    ...over,
+  })
+const question = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+  trust({
+    id: 'Qq5Qm8ZtRx3Cw9PkNa2HdB',
+    kind: 'agent_question',
+    subject: 'Which color do you prefer?',
+    options: ['Red', 'Blue', 'Other\u2026', 'Chat about this'],
+    cursor: null,
+    free_text: 2,
+    ...over,
+  })
+
+describe('the tool permission card', () => {
+  it('shows the tool and the command, offers Allow once and Deny and nothing else', () => {
+    const card = compose(tool())
+    expect(Card.safeParse(card).success && validateCard(card)).toEqual([])
+    expect(card.title).toBe('Allow this tool request?')
+    expect(card.body).toBe(
+      "Work's session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac.",
+    )
+    const d = dialogOf(card)
+    expect(d).toMatchObject({
+      dialog_kind: 'tool_permission',
+      subject: 'Bash command \u00B7 touch hello.txt && ls -l hello.txt',
+      options: ['Allow once', 'Deny'],
+    })
+    expect(d?.free_text).toBeUndefined()
+    expect(JSON.stringify(card)).not.toMatch(/always|don.t ask/i)
+  })
+  it('is bound: another command is another card', () => {
+    expect(compose(tool()).payload_hash).not.toBe(
+      compose(tool({ subject: 'Bash command \u00B7 rm -rf build' })).payload_hash,
+    )
+  })
+  it('a hostile command is shown with its hidden characters marked, never raw', () => {
+    const card = compose(tool({ subject: 'Bash command \u00B7 echo a\u202eb' }))
+    expect(dialogOf(card)?.subject).toBe('Bash command \u00B7 echo a\u202eb')
+    expect(dialogVisibleText(dialogOf(card)?.subject ?? '')).toContain('\u27e6U+202E\u27e7')
+  })
+  it('says Allowed once or Denied after the answer, and never names a terminal', () => {
+    expect(dialogAnswerText('tool_permission', null, 'Allow once')).toBe('Allowed once')
+    expect(dialogAnswerText('tool_permission', null, 'Deny')).toBe('Denied')
+    for (const k of ['tool_permission', 'agent_question'] as const)
+      for (const where of [{ kind: 'mac' }, { kind: 'linux', machine: 'devbox', attach: 'x' }] as const)
+        expect(dialogFallbackLine(k, where)).toMatch(/card expired without an answer, so nothing was pressed/)
+  })
+})
+
+describe('the agent question card', () => {
+  it('lists the rows as read, with the free-text row as Other… and its index in the bound payload', () => {
+    const card = compose(question())
+    expect(Card.safeParse(card).success && validateCard(card)).toEqual([])
+    expect(card.title).toBe("A question from Work's session")
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'agent_question',
+      options: ['Red', 'Blue', 'Other\u2026', 'Chat about this'],
+      free_text: 2,
+    })
+    // bound: the free-text index is covered by the hash
+    expect(card.payload_hash).not.toBe(compose(question({ free_text: 3 })).payload_hash)
+    expect(card.payload_hash).not.toBe(compose(question({ free_text: undefined })).payload_hash)
+  })
+  it("a free-text index is only a question's, and one of its options", () => {
+    expect(WorkerDialog.safeParse(question()).success).toBe(true)
+    expect(WorkerDialog.safeParse(question({ free_text: 4 })).success).toBe(false)
+    expect(WorkerDialog.safeParse(question({ free_text: 6 })).success).toBe(false)
+    expect(WorkerDialog.safeParse(tool({ free_text: 0 })).success).toBe(false)
+    expect(DialogCardPayload.safeParse({ ...(compose(tool()).payload as object), free_text: 0 }).success).toBe(false)
+  })
+  it('workers.json: a question and a tool permission are read, an unknown kind or a stray free_text degrades that one dialog and keeps the file', () => {
+    const file = (dialog: unknown) =>
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: iso(NOW), workers_supported: true },
+        threads: { work: { state: 'live', tmux: 't-work', cwd: '/home/alex/work', dialog } },
+      })
+    expect(parseWorkersFile(file(question()))?.threads.work?.dialog).toMatchObject({
+      kind: 'agent_question',
+      free_text: 2,
+    })
+    expect(parseWorkersFile(file(tool()))?.threads.work?.dialog).toMatchObject({ kind: 'tool_permission' })
+    // an older Mac writes neither field: a question with none is simply a question with no text box
+    const { free_text: _f, ...old } = question()
+    expect(parseWorkersFile(file(old))?.threads.work?.dialog?.free_text).toBeUndefined()
+    for (const bad of [
+      { ...question(), kind: 'something_new' },
+      { ...tool(), free_text: 0 },
+      { ...question(), free_text: 9 },
+    ]) {
+      const parsed = parseWorkersFile(file(bad))
+      expect(parsed).not.toBeNull()
+      expect(parsed?.threads.work?.dialog).toBeUndefined()
+      expect(parsed?.threads.work?.state).toBe('live')
+    }
+  })
+})
+
+describe('the owner words for the free-text option', () => {
+  it('are one line of 1 to 120 characters with nothing hidden', () => {
+    expect(cleanDialogText('purple')).toBe('purple')
+    expect(cleanDialogText('  purple ')).toBe('purple')
+    for (const bad of ['', '   ', 'a\nb', 'a\tb', 'a\u001b[31mb', 'a\u202eb', 'a\u200bb', 'x'.repeat(121)])
+      expect(cleanDialogText(bad), JSON.stringify(bad)).toBeNull()
+    expect(cleanDialogText('x'.repeat(120))).not.toBeNull()
+  })
+  it('card.resolve takes a text of at most 120 characters and no more than that', () => {
+    const base = {
+      v: 1,
+      id: '01JBF3V7Q8K2M4N6P8R0S2T4AA',
+      ts: '2026-11-07T10:00:09.000Z',
+      type: 'card.resolve',
+      card_id: 'c_01JBF3V7Q8K2M4N6P8R0S2T408',
+      action: 'primary',
+      payload_hash: `sha256:${'0'.repeat(64)}`,
+      choice: 2,
+      device_id: 'd_rjxnk4xufxem5xago5zd',
+      osig: 'A'.repeat(86),
+    }
+    expect(CardResolveFrame.safeParse({ ...base, text: 'purple' }).success).toBe(true)
+    expect(CardResolveFrame.safeParse({ ...base, text: '' }).success).toBe(false)
+    expect(CardResolveFrame.safeParse({ ...base, text: 'x'.repeat(121) }).success).toBe(false)
+    expect(CardResolveFrame.safeParse({ ...base, text: 'x'.repeat(120) }).success).toBe(true)
+    // an older app sends no text at all
+    expect(CardResolveFrame.safeParse(base).success).toBe(true)
   })
 })

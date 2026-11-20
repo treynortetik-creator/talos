@@ -22,11 +22,8 @@ export type UndoSeam = {
   handOvers: import('./busy.ts').HandOvers
 }
 
-/**
- * The owner's own messages that start a turn (text, a file, a voice note, a Run): the kinds a worker can take too. A
- * question asked on a voice call (voice_delegation) is not an owner message row and gets no point.
- */
-const UNDOABLE_KINDS = new Set(['text', 'file', 'voice_note'])
+/** The owner's own messages that start a turn (text, a file, a Run): the kinds a worker can take too. */
+const UNDOABLE_KINDS = new Set(['text', 'file'])
 
 function ownerMessage(n: Notification): { id: string; thread: string } | undefined {
   const { kind, trust, message_id: id, thread_id: thread } = n.meta

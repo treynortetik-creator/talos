@@ -31,15 +31,14 @@ type Family = { file: string; about: string; units: Unit[]; classes?: string[] }
 const FAMILIES: Record<string, Family> = {
   chat: {
     file: 'hub-chat.ts',
-    about: 'Owner messages and voice notes from an app.',
+    about: 'Owner messages from an app.',
     units: [
       {
         kind: 'case',
         name: 'onOwnerMessage',
         inMethod: 'onAppFrameBuiltin',
-        labels: ['message', 'voice_note'],
-        about:
-          'The `message` and `voice_note` frames: the signature-device check, the duplicate check, then stored and queued.',
+        labels: ['message'],
+        about: 'The `message` frame: the signature-device check, the duplicate check, then stored and queued.',
       },
     ],
   },

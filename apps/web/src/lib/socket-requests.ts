@@ -128,7 +128,7 @@ export function createSocketRequests(c: SocketCtx) {
     return await new Promise<number | undefined>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id)
-        reject(new NoAnswerError('internal', 'The relay did not answer.'))
+        reject(new NoAnswerError('internal', 'Talos did not answer. Try again.'))
       }, timeoutMs)
       pending.set(id, { resolve, reject, timer })
       c.ws?.send(JSON.stringify(signed))

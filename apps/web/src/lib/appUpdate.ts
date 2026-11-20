@@ -126,13 +126,11 @@ export function reloadWouldHelp(sw: ServiceWorkerContainer | undefined = globalT
 /**
  * Nothing on screen would be lost by a reload: the page is visible, not Settings (a form may be half changed), no dialog or
  * sheet is open, no text is typed into a field, nothing is held by the composer (`busy`: attachments, a quote, words of a
- * failed send), no voice note or dictation is being taken, and no call is on.
+ * failed send).
  */
-export function safeToReload(o: { onCall: boolean; busy: boolean; path: string }, doc: Document = document): boolean {
-  if (o.onCall || o.busy || doc.visibilityState !== 'visible' || o.path.startsWith('/settings')) return false
+export function safeToReload(o: { busy: boolean; path: string }, doc: Document = document): boolean {
+  if (o.busy || doc.visibilityState !== 'visible' || o.path.startsWith('/settings')) return false
   if (doc.querySelector('[role="dialog"], [role="alertdialog"]')) return false
-  // a voice note being recorded or dictation listening (the composer marks itself): a reload would lose it
-  if (captureInFlight() || doc.querySelector('[data-capturing="true"]')) return false
   for (const el of doc.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>(
     'textarea, input[type="text"], input[type="search"], input:not([type])',
   ))
@@ -176,22 +174,6 @@ export function claimAutoReload(target: string | null): boolean {
   }
 }
 
-// ---- a voice note in flight: from the first sound until its send settles -------------------------------------------
-// The composer's note, dictation's "Send as voice note" and the driving screen's talk each hold it; the audio lives only in
-// memory until it is sent or queued, so no automatic reload happens while any hold is out (safeToReload).
-let captures = 0
-/** Takes a hold; the returned release is safe to call more than once. */
-export function holdCapture(): () => void {
-  captures++
-  let held = true
-  return () => {
-    if (!held) return
-    held = false
-    captures--
-  }
-}
-export const captureInFlight = (): boolean => captures > 0
-
 // ---- idle, for a reload while the owner stays on the page ---------------------------------------------------------------
 /** A reload found by the timer waits for this long with no touch, key or scroll, so it never takes the page from under a
  * reader (a return to the front or a cold start does not wait: nothing is being read then). */
@@ -210,7 +192,6 @@ export function resetAppUpdate(): void {
   pendingAsk = false
   lastVersionCheck = Number.NEGATIVE_INFINITY
   lastActivity = Date.now()
-  captures = 0
   try {
     sessionStorage.removeItem(RELOADED_KEY)
   } catch {

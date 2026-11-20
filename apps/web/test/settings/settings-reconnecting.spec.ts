@@ -179,11 +179,9 @@ test('[agent] not connected: Set up my agent, which stays tappable, says the one
   await expect(page.getByRole('alert').filter({ hasText: NOT_CONNECTED_LINE })).toBeVisible()
 })
 
-test('[voice] a refused voice pick is the one whole sentence, with no "Couldn’t change the voice." in front', async ({
-  page,
-}) => {
+test('[voice] a refused spoken-replies pick is the one whole sentence, with nothing in front', async ({ page }) => {
   await open(page, 'voice')
-  const pick = page.locator('#voice-pick')
+  const pick = page.getByLabel('Spoken replies')
   await expect(pick).toBeEnabled()
   const other = await pick.evaluate(
     (el: HTMLSelectElement) => [...el.options].map((o) => o.value).find((v) => v !== el.value) ?? '',
@@ -191,7 +189,7 @@ test('[voice] a refused voice pick is the one whole sentence, with no "Couldn’
   await talos(page, (t) => t.failNextPatchWith('internal', "You're offline.", 'not_sent'))
   await pick.selectOption(other)
   await expect(body(page).getByText(OFFLINE_NOT_CHANGED, { exact: true })).toBeVisible()
-  await expect(body(page).getByText(/Couldn.t change the voice/)).toHaveCount(0)
+  await expect(body(page).getByText(/Couldn.t change/)).toHaveCount(0)
 })
 
 test('[integrations] not connected: the work controls are greyed and say the one line, not "Mac is offline"', async ({
@@ -234,7 +232,7 @@ test('[thread sessions] a limit’s error is under that limit, not below them al
       },
     }),
   )
-  const box = page.getByLabel('Sessions running at once')
+  const box = page.getByLabel('Agents running at once')
   await expect(box).toBeEnabled()
   await box.fill('9999')
   await box.blur()
@@ -245,7 +243,7 @@ test('[thread sessions] a limit’s error is under that limit, not below them al
   if (!b || !e) throw new Error('no layout')
   expect(e.y).toBeGreaterThan(b.y)
   expect(e.y - (b.y + b.height)).toBeLessThan(64) // under its own box (its hint between), not after the last limit
-  const last = await page.getByLabel('Park every session at (usage, %)').boundingBox()
+  const last = await page.getByLabel('Park every agent at (usage, %)').boundingBox()
   if (!last) throw new Error('no layout')
   expect(e.y).toBeLessThan(last.y)
 })

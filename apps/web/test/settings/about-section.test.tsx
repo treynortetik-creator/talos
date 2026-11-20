@@ -22,7 +22,7 @@ describe('Settings -> About', () => {
       ['Running in', 'Browser'],
       ['Protocol', expect.stringMatching(/^v\d+$/)],
       ['Server build', 'a446f3e'],
-      ['Bridge build', '0.4.1'],
+      ['Talos on your computer (build)', '0.4.1'],
     ])
   })
 
@@ -36,7 +36,7 @@ describe('Settings -> About', () => {
     vi.resetModules() // HelpAbout was loaded above with the real hook
     const { AboutBuild } = await import('../../src/features/help/HelpAbout.tsx')
     render(<AboutBuild />)
-    expect(screen.getByTestId('help-build').textContent).toContain('Bridge build0.4.1')
+    expect(screen.getByTestId('help-build').textContent).toContain('Talos on your computer (build)0.4.1')
     vi.doUnmock('../../src/features/health/useHealthStatus.ts')
   })
 })

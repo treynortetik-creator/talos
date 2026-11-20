@@ -102,11 +102,25 @@ export function newerInParsed(raw: unknown): Unparsed {
   return ErrorCode.safeParse(code).success ? { kind: 'broken' } : { kind: 'newer_shape', type }
 }
 
+/**
+ * Frame types an older peer may still send or a relay may still hold (a catch-up, a queue for an offline Mac) after voice
+ * input was archived (2026-11-19, docs/archived/voice.md). This build no longer reads them, and they are no sign of a newer
+ * peer: they are refused or skipped without an "update Talos" notice.
+ */
+export const ARCHIVED_FRAME_TYPES: ReadonlySet<string> = new Set([
+  'voice_note',
+  'voice.state',
+  'voice.ask',
+  'voice.progress',
+  'voice.ended',
+])
+
 /** Why a raw frame from `direction`'s sender did not parse (call it only after `parseFrame` said no). */
 export function classifyUnparsed(raw: unknown, direction: Direction): Unparsed {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { kind: 'broken' }
   const type = (raw as { type?: unknown }).type
   if (typeof type !== 'string' || !TYPE_NAME.test(type)) return { kind: 'broken' }
+  if (ARCHIVED_FRAME_TYPES.has(type)) return { kind: 'broken' }
   if (!Object.hasOwn(frameSchemas, type)) return { kind: 'unknown_type', type }
   if (!isFrameFor(direction, { type })) return { kind: 'broken' }
   const res = (frameSchemas[type as keyof typeof frameSchemas] as z.ZodType).safeParse(raw)

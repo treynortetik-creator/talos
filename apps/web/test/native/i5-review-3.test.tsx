@@ -2,9 +2,9 @@
 // "control". The real App, routes
 // and Gate. i5-review-2 seeds the card before mount, so it never meets the case that matters most: a push fires because the
 // app is not open, so the card is NOT on the phone yet when the tap lands.
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeCard } from '../cards/helpers.tsx'
+import { cardSend, makeCard } from '../cards/helpers.tsx'
 
 vi.setConfig({ testTimeout: 30_000 })
 
@@ -67,7 +67,7 @@ describe('I5-R14 a tap on a card the phone has not received yet', () => {
     await settle()
     expect(window.location.pathname).toBe(`/card/${fresh.id}`)
     await ready([older, fresh])
-    await screen.findByRole('button', { name: /Send/ }, long)
+    await cardSend(long)
     expect(window.location.pathname).toBe(`/card/${fresh.id}`)
   })
 
@@ -76,7 +76,7 @@ describe('I5-R14 a tap on a card the phone has not received yet', () => {
     const { ready } = await coldStart(`/card/${fresh.id}`, [])
     await settle()
     await ready([fresh])
-    await screen.findByRole('button', { name: /Send/ }, long)
+    await cardSend(long)
     expect(window.location.pathname).toBe(`/card/${fresh.id}`)
   })
 
@@ -86,7 +86,7 @@ describe('I5-R14 a tap on a card the phone has not received yet', () => {
     const { ready, resolve } = await coldStart(`/card/${fresh.id}`, [older], fresh.id)
     await settle()
     await ready([older, fresh])
-    const button = await screen.findByRole('button', { name: /Send/ }, long)
+    const button = await cardSend(long)
     await waitFor(() => expect(document.activeElement).toBe(button), long)
     await settle(600)
     expect(resolve).not.toHaveBeenCalled()

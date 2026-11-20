@@ -24,7 +24,6 @@ import {
 import { Button } from '../../ui/index.ts'
 import { useSession } from '../auth/session.ts'
 import { useComposerStore } from '../composer/composerStore.ts'
-import { useIsOnCall } from '../voice/controller.ts'
 
 const has = (r: Record<string, unknown>) =>
   Object.values(r).some((v) => (Array.isArray(v) ? v.length > 0 : v !== undefined))
@@ -51,13 +50,12 @@ export function UpdateReady({
 }) {
   const { ready, handedOver, target, cold } = useAppUpdate()
   const server = useSession((s) => s.me?.version)
-  const onCall = useIsOnCall()
   const busy = useComposerStore(
     (s) => has(s.chips) || has(s.sendFailure) || has(s.replyTo) || has(s.dropped) || has(s.prefill),
   )
   const path = useLocation().pathname
-  const live = useRef({ onCall, busy, path, reload, running })
-  live.current = { onCall, busy, path, reload, running }
+  const live = useRef({ busy, path, reload, running })
+  live.current = { busy, path, reload, running }
   useEffect(() => noteServerVersion(server), [server])
   useEffect(() => watchServiceWorker(), [])
   // a page kept open looks for a newer build each time it comes to the front, and every minute while it stays there:

@@ -51,8 +51,8 @@ import { WorkerContextFeed } from './worker-context.ts'
 
 export type Emit = (n: Notification) => Promise<void>
 
-/** Owner notification kinds a worker can take. Voice calls, hooks, digests, shares and backlog stay with main. */
-const WORKER_KINDS = new Set(['text', 'file', 'voice_note'])
+/** Owner notification kinds a worker can take. Hooks, digests, shares and backlog stay with main. */
+const WORKER_KINDS = new Set(['text', 'file'])
 
 export type Decision =
   | { to: 'main' }

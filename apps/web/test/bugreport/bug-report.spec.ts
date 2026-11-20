@@ -38,9 +38,9 @@ test('palette: Report a bug opens the form with the tools, the fields and the at
   await expect(d.getByText('Attached automatically')).toBeVisible()
   await expect(d.getByText('Logs, last 200 lines, cleaned')).toBeVisible()
   await expect(d.getByRole('checkbox', { name: 'Last 5 messages in this thread' })).not.toBeChecked() // off by default
-  await expect(d.getByText('Keys, tokens and your home folder are removed.', { exact: false })).toBeVisible()
+  await expect(d.getByText('Keys, sign-in codes and your home folder are removed.', { exact: false })).toBeVisible()
   await expect(
-    d.getByText('Goes to: your relay and your Mac, with the screenshot. It is not sent anywhere else.'),
+    d.getByText('Goes to: Talos online and your Mac, with the screenshot. It is not sent anywhere else.'),
   ).toBeVisible()
 })
 
@@ -194,7 +194,7 @@ test.describe('phone 375 x 812', () => {
     await expect(d.getByLabel('What went wrong?')).toBeVisible()
     await expect(d.getByText('Versions, recent errors, cleaned logs')).toBeVisible()
     await expect(d.getByRole('checkbox')).toHaveCount(0)
-    await expect(d.getByText('Keys and tokens are removed. Nothing is sent until you tap Send.')).toBeVisible()
+    await expect(d.getByText('Keys and sign-in codes are removed. Nothing is sent until you tap Send.')).toBeVisible()
     // the picture and the row of tools both fit in the first screen, the field just under them
     const tools = await d.getByRole('button', { name: 'Undo' }).boundingBox()
     expect(tools && tools.y + tools.height).toBeLessThan(812)

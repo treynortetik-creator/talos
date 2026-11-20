@@ -1,14 +1,18 @@
 // The signed outbox, loaded and kept: reading the saved queue at start, giving waiting messages their rows back,
 // dropping an acked entry, the per-message lock, and the written mark.
 import { type AttachmentRefT, type MessageT, newId } from '@talos-app/protocol'
+import { isArchivedVoice } from './archivedVoice.ts'
 import { TalosClientError } from './client.ts'
 import { ACKED_REFS_MAX, INBOX_QUEUE } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
-import type { InboxPatch, OutboxEntry, OutboxKind, PendingVoice } from './socket-types.ts'
+import type { InboxPatch, OutboxEntry } from './socket-types.ts'
 import { signedFor } from './unsent.ts'
 
+/** The line shown when a voice note that was waiting to be sent is removed on start (voice input is archived). */
+export const VOICE_NOTE_REMOVED_NOTE = 'An unsent voice note was removed (voice notes are off)'
+
 export function createOutboxQueue(c: SocketCtx) {
-  const { entryLocks, meta, now, queueKeptAt, storage, store, writtenOn } = c
+  const { entryLocks, now, queueKeptAt, storage, store, writtenOn } = c
 
   // ---- outbox --------------------------------------------------------------------------------------------------
   /**
@@ -16,13 +20,14 @@ export function createOutboxQueue(c: SocketCtx) {
    * different identity, and its waiting messages are removed rather than sent as this one (the owner is told).
    */
   async function loadOutbox(deviceId?: string) {
-    const stored = await storage.all<OutboxEntry>('outbox')
-    // A voice.ask belongs to one live call and a reload ends the call: never resend one from a previous page load.
-    for (const e of stored) if (e.kind === 'voice.ask') await storage.del('outbox', e.id)
+    const stored = await storage.all<OutboxEntry | { id: string; kind: string }>('outbox')
+    // Voice input is archived (docs/archived/voice.md): a voice note or live-call question that an older build left in the
+    // queue, or a recording it left waiting to upload, is never sent. They are removed, with one line saying so.
+    const removed = await dropArchivedVoice(stored)
     let foreign = 0
     const mine: OutboxEntry[] = []
-    for (const e of stored) {
-      if (e.kind === 'voice.ask') continue
+    for (const e of stored as OutboxEntry[]) {
+      if (isArchivedVoice(e)) continue
       const who = signedFor(e.bytes)
       if (deviceId !== undefined && who !== null && who !== deviceId) {
         foreign++
@@ -36,20 +41,35 @@ export function createOutboxQueue(c: SocketCtx) {
       const q = await storage.get<Array<[string, InboxPatch]>>('cache', INBOX_QUEUE)
       c.inboxQueue = new Map(Array.isArray(q) ? q : [])
     } catch {}
-    const blobs = (await storage.all<PendingVoice>('blobs')).sort((a, b) => a.order - b.order)
-    c.voiceQueue = []
-    for (const v of blobs) {
-      if (deviceId !== undefined && v.deviceId !== undefined && v.deviceId !== deviceId) {
-        foreign++
-        await storage.del('blobs', v.clientMsgId)
-        continue
-      }
-      c.voiceQueue.push(v)
-    }
-    c.outboxOrder = Math.max(0, ...c.outbox.map((e) => e.order), ...c.voiceQueue.map((v) => v.order))
+    c.outboxOrder = Math.max(0, ...c.outbox.map((e) => e.order))
     restoreRows()
     c.refreshQueued()
     if (foreign > 0) noticeRemoved(foreign)
+    if (removed > 0) c.addSystemRow(VOICE_NOTE_REMOVED_NOTE, newId('m'))
+  }
+  /**
+   * Deletes the archived voice entries from the saved queue (and the recordings kept for upload), and takes the rows shown
+   * for the notes out of the timeline. Returns how many voice notes (not live-call questions) there were.
+   */
+  async function dropArchivedVoice(stored: Array<{ id: string; kind: string }>): Promise<number> {
+    const ids = new Set<string>()
+    for (const e of stored) {
+      if (!isArchivedVoice(e)) continue
+      await storage.del('outbox', e.id)
+      const id = (e as Partial<OutboxEntry>).clientMsgId
+      if (e.kind === 'voice_note' && id) ids.add(id)
+    }
+    for (const v of await storage.all<{ clientMsgId: string }>('blobs')) {
+      await storage.del('blobs', v.clientMsgId)
+      ids.add(v.clientMsgId)
+    }
+    if (ids.size > 0)
+      c.set((st) => ({
+        messages: Object.fromEntries(
+          Object.entries(st.messages).map(([t, list]) => [t, list.filter((m) => !ids.has(m.id))]),
+        ),
+      }))
+    return ids.size
   }
   /** Tells the owner that waiting messages were removed instead of sent (a different sign-in, or a revoked key). */
   function noticeRemoved(n: number) {
@@ -61,82 +81,58 @@ export function createOutboxQueue(c: SocketCtx) {
     )
   }
   /**
-   * After a session expired the cached chats were cleared, but the queue was kept: give every waiting message and voice
-   * note its row back, so the owner can see it, and tap to retry one that fails.
+   * After a session expired the cached chats were cleared, but the queue was kept: give every waiting message
+   * its row back, so the owner can see it, and tap to retry one that fails.
    */
   function restoreRows() {
     const have = (threadId: string, id: string) =>
       c.rowsOf(store.getState().messages, threadId).some((m) => m.id === id)
     for (const e of c.outbox) {
-      if (e.kind === 'voice.ask' || have(e.threadId, e.clientMsgId)) continue
+      if (have(e.threadId, e.clientMsgId)) continue
       try {
         const f = JSON.parse(e.bytes) as Record<string, unknown>
-        const created = typeof f.ts === 'string' ? f.ts : new Date(now()).toISOString()
-        const base = {
+        c.upsertMessage({
           id: e.clientMsgId,
           thread_id: e.threadId,
-          author: 'owner' as const,
-          format: 'plain' as const,
-          via: 'app' as const,
-          created_at: created,
-        }
-        if (e.kind === 'message')
-          c.upsertMessage({
-            ...base,
-            kind: 'text',
-            text: typeof f.text === 'string' ? f.text : '',
-            attachments: Array.isArray(f.attachments) ? (f.attachments as AttachmentRefT[]) : [],
-            ...(typeof f.reply_to === 'string' ? { reply_to: f.reply_to } : {}),
-          } as MessageT)
-        else
-          c.upsertMessage({
-            ...base,
-            kind: 'voice_note',
-            attachments: f.attachment ? [f.attachment as AttachmentRefT] : [],
-            transcript: { text: '', engine: '', status: 'pending' },
-          } as MessageT)
+          author: 'owner',
+          format: 'plain',
+          via: 'app',
+          created_at: typeof f.ts === 'string' ? f.ts : new Date(now()).toISOString(),
+          kind: 'text',
+          text: typeof f.text === 'string' ? f.text : '',
+          attachments: Array.isArray(f.attachments) ? (f.attachments as AttachmentRefT[]) : [],
+          ...(typeof f.reply_to === 'string' ? { reply_to: f.reply_to } : {}),
+        } as MessageT)
       } catch {}
-    }
-    for (const v of c.voiceQueue) {
-      if (have(v.threadId, v.clientMsgId)) continue
-      c.upsertMessage({
-        id: v.clientMsgId,
-        thread_id: v.threadId,
-        author: 'owner',
-        kind: 'voice_note',
-        format: 'plain',
-        attachments: [],
-        via: 'app',
-        created_at: v.createdAt ?? new Date(now()).toISOString(),
-      })
     }
   }
   async function dropFromOutbox(frameId: string) {
     const e = c.outbox.find((x) => x.id === frameId)
     if (!e) return
     c.outbox = c.outbox.filter((x) => x.id !== frameId)
-    await storage.del('outbox', frameId)
+    // The screen follows memory at once; the stored copy goes after. Under load an IndexedDB delete took over 10 s, and a
+    // message waiting on it still showed as queued. (A reload before the delete lands sends the stored copy again, and the
+    // relay and the Mac drop a repeat of its client message id.)
     c.refreshQueued()
+    await storage.del('outbox', frameId)
   }
 
-  async function dropVoiceAsks() {
-    for (const e of c.outbox.filter((x) => x.kind === 'voice.ask')) await dropFromOutbox(e.id)
-  }
   async function onAcked(frameId: string) {
     if (c.inboxSettled(frameId)) return
     const e = c.outbox.find((x) => x.id === frameId)
     // Before the storage write below: the Mac's refusal can be the very next frame, and must find the row.
-    if (e && (e.kind === 'message' || e.kind === 'voice_note')) {
-      c.ackedRefs.set(frameId, { clientMsgId: e.clientMsgId, threadId: e.threadId, voiceNote: e.kind === 'voice_note' })
+    if (e) {
+      c.ackedRefs.set(frameId, { clientMsgId: e.clientMsgId, threadId: e.threadId })
       // Oldest out first. Past this, or after a reload, the relay's own stored row is what tells the owner.
       for (const k of c.ackedRefs.keys()) {
         if (c.ackedRefs.size <= ACKED_REFS_MAX) break
         c.ackedRefs.delete(k)
       }
     }
-    await dropFromOutbox(frameId)
+    // the row's receipt first, like the queue: neither waits on the storage delete
     if (e) writtenOn.delete(e.clientMsgId)
-    if (e && e.kind !== 'voice.ask') c.patchMessage(e.clientMsgId, (m) => (m.receipt ? m : { ...m, receipt: 'sent' }))
+    if (e) c.patchMessage(e.clientMsgId, (m) => (m.receipt ? m : { ...m, receipt: 'sent' }))
+    await dropFromOutbox(frameId)
   }
 
   function withEntryLock<T>(clientMsgId: string, fn: () => Promise<T>): Promise<T> {
@@ -167,7 +163,7 @@ export function createOutboxQueue(c: SocketCtx) {
    * the save takes the row back out only if the close was a sign-out.
    */
   async function markWritten(e: OutboxEntry, began: number): Promise<OutboxEntry> {
-    if (e.kind === 'voice.ask' || typeof e.writtenAt === 'number') return e
+    if (typeof e.writtenAt === 'number') return e
     if (c.epoch !== began) throw new TalosClientError('internal', 'Signed out')
     // An older build did not record the write: count from the signing time (the earliest it could have happened), not from now.
     const legacy = e.writtenAt === undefined ? signedAtOf(e.bytes) : Number.NaN
@@ -183,29 +179,7 @@ export function createOutboxQueue(c: SocketCtx) {
     return next
   }
 
-  /**
-   * A text or voice message waits for an earlier voice note in its thread that is not on the wire yet: still to upload, or
-   * uploaded and signed but not written to the current connection (one written to a socket that has since dropped counts as
-   * not written: it is sent again on this one, and what follows it waits for that). One that has failed (shown with Retry and Delete) no longer holds
-   * anything back. A question in a live call is never held: it belongs to a call that is happening now.
-   */
-  const holdsForVoice = (e: { kind: OutboxKind; threadId: string; order: number }) =>
-    e.kind !== 'voice.ask' &&
-    (c.voiceQueue.some(
-      (v) => v.threadId === e.threadId && v.order < e.order && !meta.getState().failed[v.clientMsgId],
-    ) ||
-      c.outbox.some(
-        (o) =>
-          o.kind === 'voice_note' &&
-          o.threadId === e.threadId &&
-          o.order < e.order &&
-          writtenOn.get(o.clientMsgId) !== c.connection &&
-          !meta.getState().failed[o.clientMsgId],
-      ))
-
   c.dropFromOutbox = dropFromOutbox
-  c.dropVoiceAsks = dropVoiceAsks
-  c.holdsForVoice = holdsForVoice
   c.loadOutbox = loadOutbox
   c.markWritten = markWritten
   c.noticeRemoved = noticeRemoved

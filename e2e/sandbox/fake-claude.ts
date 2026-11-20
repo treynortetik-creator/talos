@@ -135,7 +135,7 @@ async function handle(note: ChannelNote): Promise<void> {
     }
     return
   }
-  if (!thread || (kind !== 'text' && kind !== 'voice_note' && kind !== 'file')) return
+  if (!thread || (kind !== 'text' && kind !== 'file')) return
   const body = note.content
   const [word = '', ...rest] = body.trim().split(/\s+/)
   if (word === '!silent') return

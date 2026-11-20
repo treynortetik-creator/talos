@@ -146,9 +146,17 @@ public enum AllowUpdatesCopy {
   public static let notNowButton = "Not now"
   /// The Talos menu bar menu's item; it shows only while an answer is owed.
   public static let menuItem = "Allow updates\u{2026}"
-  public static func body(_ clone: String) -> String {
-    "To update, Talos moves and runs the code in this folder: \(UpdateRestartLine.oneLine(clone)). "
-      + "Talos has not used it before. Allow updates only if it is the Talos folder you installed from."
+  public static func body(_ clone: String, home: String = NSHomeDirectory()) -> String {
+    "Talos keeps itself up to date from this folder: \(shownPath(clone, home: home)). Allow it if this is where you installed Talos."
+  }
+  /// The folder on one line, with the home folder as ~ and the middle cut out when it is long (the ends are what the owner recognises).
+  public static func shownPath(_ clone: String, home: String = NSHomeDirectory(), limit: Int = 56) -> String {
+    var p = UpdateRestartLine.oneLine(clone)
+    if !home.isEmpty && home != "/" && (p == home || p.hasPrefix(home + "/")) { p = "~" + p.dropFirst(home.count) }
+    guard p.count > limit, limit > 8 else { return p }
+    let keep = limit - 1
+    let head = keep / 3
+    return String(p.prefix(head)) + "\u{2026}" + String(p.suffix(keep - head))
   }
   /// The Keychain could not be read, so Talos cannot tell whether updates were allowed (it does not ask a question it cannot check).
   public static func keychainUnreadable(_ status: Int32) -> String {
@@ -157,4 +165,36 @@ public enum AllowUpdatesCopy {
   }
   /// Where the owner finds the question again after Not now.
   public static let whereToAnswer = "Choose \(menuItem) in the Talos menu bar menu, or press \(allowButton) in the update window."
+}
+
+/// The words of the About window: the version, and the update check's answer inline. The update words themselves are `UpdateStatus.words`.
+public enum AboutCopy {
+  public static let checkButton = "Check for Updates"
+  public static func version(_ v: String) -> String { "Version \(UpdateRestartLine.oneLine(v))" }
+  /// The build number, smaller under the version; nil when there is none or it only repeats the version.
+  public static func build(_ b: String?, version: String) -> String? {
+    guard let b, !b.isEmpty, b != version else { return nil }
+    return "Build \(UpdateRestartLine.oneLine(b))"
+  }
+  /// Nothing is said until the owner has checked (or an update is already known).
+  public static func headline(_ s: UpdateStatus) -> String {
+    switch s {
+    case .idle: return ""
+    case .checking: return "Checking\u{2026}"
+    default: return s.words.headline
+    }
+  }
+  public static func detail(_ s: UpdateStatus) -> String? {
+    switch s {
+    case .idle, .checking: return nil
+    default: return s.words.detail
+    }
+  }
+  /// Update now is offered while an update waits for the owner (ready, or waiting for a quiet moment or the relay); not once it is going in.
+  public static func offersUpdateNow(_ s: UpdateStatus) -> Bool {
+    switch s {
+    case .ready, .waitingForQuiet, .relayBehind: return true
+    default: return false
+    }
+  }
 }

@@ -191,18 +191,21 @@ test('/api/me carries the push key, so alerts can be switched on', async ({ stac
   expect(sub.status()).toBe(204)
 })
 
-test('the composer hides the live-call button once there is text, and shows it again when the text is cleared', async ({
+test('the composer has no voice-input buttons (voice input is archived, docs/archived/voice.md), empty or typed', async ({
   stack,
   page,
   context,
 }) => {
   await signedIn(stack, page, context)
-  const call = page.getByRole('button', { name: 'Start a live call' })
-  await expect(call).toBeVisible()
-  await page.getByLabel('Message', { exact: true }).fill('typing')
-  await expect(call).toHaveCount(0)
-  await page.getByLabel('Message', { exact: true }).fill('')
-  await expect(call).toBeVisible()
+  const box = page.getByLabel('Message', { exact: true })
+  await expect(box).toBeVisible()
+  const gone = page.getByRole('button', { name: /^(Dictate|Record a voice note|Start a live call|Stop dictating)$/ })
+  await expect(gone).toHaveCount(0)
+  await box.fill('typing')
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible()
+  await expect(gone).toHaveCount(0)
+  await box.fill('')
+  await expect(gone).toHaveCount(0)
 })
 
 test('agent-made pages and SVGs are sandboxed: no cookies, no /api, never inline', async ({ stack, page, context }) => {
@@ -272,7 +275,7 @@ test('logs hold no message text, tokens, codes or cookies after a full session',
   ).json()
   await sendHook(stack, conn, { title: `${MARK} hook`, summary: `${MARK} body`, priority: 'normal' })
   await stack.claude.waitForNotification((n) => n.meta.kind === 'hook_event')
-  await stack.claude.callTool('reply', { thread_id: 'general', text: `${MARK} reply`, voice: true })
+  await stack.claude.callTool('reply', { thread_id: 'general', text: `${MARK} reply` })
   await page.waitForTimeout(800)
 
   const cookie = (await context.cookies()).find((c) => c.name === '__Host-talos_s')?.value ?? ''

@@ -56,7 +56,7 @@ export function PermissionRelaySwitch({ declared }: { declared?: boolean | undef
           : block === 'mac'
             ? `${capital(words.computer)} is offline, so this can’t change now.`
             : afterRestart
-              ? `The running session started before this was turned on, so prompts still go elsewhere. ${words.restart}`
+              ? `Your agent started before this was turned on, so prompts still go elsewhere. ${words.restart}`
               : 'A change takes effect when the agent restarts.'}
       </p>
       {saved && (

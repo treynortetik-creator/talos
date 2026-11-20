@@ -1,6 +1,7 @@
-// What the owner already sent from this device that nothing has delivered yet: queued messages and voice notes. A session
+// What the owner already sent from this device that nothing has delivered yet: queued messages. A session
 // that merely ran out of time keeps them for the next sign-in; every other end (revoke, sign-out, sign-out everywhere, a
 // reason nobody knows) removes them. These helpers read and discard that queue without needing a running client.
+import { isArchivedVoice } from './archivedVoice.ts'
 import { loadDeviceKey } from './deviceKey.ts'
 import type { Storage } from './storage.ts'
 
@@ -31,7 +32,6 @@ export function signedFor(bytes: string): string | null {
 }
 
 type Queued = { kind?: string; bytes?: string }
-type QueuedVoice = { deviceId?: string }
 
 /**
  * How many waiting items this device's key can actually send (`sendable`), and how many belong to another key and will be
@@ -39,8 +39,8 @@ type QueuedVoice = { deviceId?: string }
  */
 export async function countUnsent(storage: Storage): Promise<{ sendable: number; other: number }> {
   const key = await loadDeviceKey(storage)
-  const rows = (await storage.all<Queued>('outbox')).filter((e) => e.kind !== 'voice.ask')
-  const blobs = await storage.all<QueuedVoice>('blobs')
+  // a voice note an older build left queued is dropped on load, never sent: it is not counted (voice input is archived)
+  const rows = (await storage.all<Queued>('outbox')).filter((e) => !isArchivedVoice(e))
   let sendable = 0
   let other = 0
   for (const e of rows) {
@@ -48,15 +48,11 @@ export async function countUnsent(storage: Storage): Promise<{ sendable: number;
     if (key && (who === null || who === key.deviceId)) sendable++
     else other++
   }
-  for (const v of blobs) {
-    if (key && (v.deviceId === undefined || v.deviceId === key.deviceId)) sendable++
-    else other++
-  }
   return { sendable, other }
 }
 
 /**
- * Removes every queued message and voice note on this device, and the problem reports waiting to be sent (they hold a
+ * Removes every queued message on this device, any recording an older build left waiting, and the problem reports waiting to be sent (they hold a
  * screenshot the owner may not want left on a device that signed out). Throws if a store could not be emptied.
  * Problem reports are not counted by `countUnsent`: they are not something the owner wrote to be delivered.
  */

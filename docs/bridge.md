@@ -91,9 +91,6 @@ shows the same start time and a command containing `apps/bridge/src/server.ts`. 
 | `TALOS_INBOX_ROOT`              | `~/.talos-inbox`            | where files for threads with their own session are copied, one folder per thread (0700); outside the Talos home on purpose (docs/OPTION-C.md)   |
 | `TALOS_APP_RELAY_URL`           | (required)                  | `https://<host>`                                                                                                                                |
 | `TALOS_APP_BRIDGE`              | unset                       | `1` = live mode                                                                                                                                 |
-| `TALOS_APP_STT_CMD`             | unset                       | JSON argv, `{in}` = audio file; transcript on stdout, exit 0                                                                                    |
-| `TALOS_APP_STT_LONG_CMD`        | = STT_CMD                   | used when the note is longer than `TALOS_APP_STT_LONG_AFTER_S` (30)                                                                             |
-| `TALOS_APP_STT_TIMEOUT_S`       | 180                         |                                                                                                                                                 |
 | `TALOS_APP_TTS_CMD`             | unset                       | JSON argv, `{out}` = output file, `{text}` = text (a leading `-` is prefixed with a space, so it never reads as a flag)                         |
 | `TALOS_APP_TTS_EXT`             | `mp3`                       | extension and mime of the TTS output                                                                                                            |
 | `TALOS_APP_TTS_TIMEOUT_S`       | 120                         |                                                                                                                                                 |
@@ -112,18 +109,16 @@ marker file) and never anything else, so the root may be a folder you share with
 made in the default `~/.talos-inbox` are given the marker once (a `.talos-inbox-adopted` file records it); in a root you
 set yourself nothing is ever adopted.
 
-Commands run from an argv array, never through a shell. Example: `TALOS_APP_STT_CMD='["/path/stt.sh","{in}"]'`.
+Commands run from an argv array, never through a shell. Example: `TALOS_APP_TTS_CMD='["/path/tts.sh","file","{out}","{text}"]'`.
 More examples (use your own programs; these paths are placeholders):
 
 ```
-TALOS_APP_STT_CMD=["/path/to/transcribe","{in}"]
 TALOS_APP_TTS_CMD=["/path/to/speak","{out}","{text}"]
 TALOS_APP_TTS_EXT=mp3
 TALOS_APP_FFMPEG=/path/to/ffmpeg
 ```
 
-Without an STT command a voice note arrives as `(voice note; no transcriber configured)` with `audio_path`, so the agent
-can transcribe it itself.
+`TALOS_APP_STT_CMD`, `TALOS_APP_STT_LONG_CMD`, `TALOS_APP_STT_LONG_AFTER_S` and `TALOS_APP_STT_TIMEOUT_S` (the bridge's own transcription of voice notes) are archived with voice input and ignored: see [archived/voice.md](archived/voice.md).
 
 Nothing is ever written to stdout except MCP messages (stdout is the MCP pipe). The log holds ids, frame types and error
 codes, never message text, tokens, codes or cookies.
@@ -428,7 +423,6 @@ Setup of the relay is in [`SETUP.md`](SETUP.md). Three things that matter from t
 - A command-line deploy (`railway up`) may ignore `railway.json`. Set `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile`
   as a service variable and deploy again.
 - Connecting the GitHub repository turns on auto-deploy on every merge to `main`.
-- Live voice needs `OPENAI_API_KEY` in the relay's Railway **Variables** plus a redeploy. The bridge needs nothing.
 
 `talos-app doctor` shows `devices.json: none pinned yet` before the first `talos-app enroll`; that is normal. It fails
 only on loose permissions or a file it cannot read.
@@ -437,19 +431,18 @@ The `transcript saving` row (does the running session carry `CLAUDE_CODE_CHILD_S
 
 ## What the agent sees
 
+> The kinds `voice_note`, `voice_delegation` and `voice_ended`, and the trust `owner_voice`, were removed with voice input (archived 2026-11-19: [archived/voice.md](archived/voice.md)).
+
 Messages arrive as `<channel source="talos-app" chat_id=… thread_id=… message_id=… kind=… trust=…>`. Meta keys use
 underscores (a hyphenated key is silently dropped by Claude Code) and every value is a string, with `<>"\r\n;` replaced by `_`.
 
-| `kind`                      | `trust`       | When                                                                                       |
-| --------------------------- | ------------- | ------------------------------------------------------------------------------------------ |
-| `text`, `file`              | `owner`       | A signed message (with attachments: `file_path`, `file_path_2` … `file_mime`, `file_name`) |
-| `voice_note`                | `owner`       | Transcript as content; `audio_path`, `transcript_engine`, `duration_s`                     |
-| `card_action`               | `owner`       | PRIMARY, KILL, REVISE or EXPIRED, with `card_id`, `card_edited`, `payload_path`            |
-| `voice_delegation`          | `owner_voice` | The owner on a live call; the call tail is wrapped as data                                 |
-| `backlog`                   | `owner`       | Owner messages that waited more than 15 minutes while the Mac was offline, grouped         |
-| `hook_event`, `hook_digest` | `external`    | Integration events, always wrapped                                                         |
-| `voice_ended`               | `external`    | The call record, wrapped                                                                   |
-| `system`                    | `system`      | Dropped-frame notices, pin and revoke notices, "superseded"                                |
+| `kind`                      | `trust`    | When                                                                                       |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------ |
+| `text`, `file`              | `owner`    | A signed message (with attachments: `file_path`, `file_path_2` … `file_mime`, `file_name`) |
+| `card_action`               | `owner`    | PRIMARY, KILL, REVISE or EXPIRED, with `card_id`, `card_edited`, `payload_path`            |
+| `backlog`                   | `owner`    | Owner messages that waited more than 15 minutes while the Mac was offline, grouped         |
+| `hook_event`, `hook_digest` | `external` | Integration events, always wrapped                                                         |
+| `system`                    | `system`   | Dropped-frame notices, pin and revoke notices, "superseded"                                |
 
 Trust is decided on the Mac by frame type and signature result, never by a field the relay sets.
 
@@ -473,7 +466,7 @@ bridge never calls a tool, raises a card or answers because of what external con
 
 ### Owner signatures
 
-Every owner frame (`message`, `voice_note`, `card.resolve`, `config.patch`, `voice.ask`) is verified on the **raw JSON**
+Every owner frame (`message`, `card.resolve`, `config.patch`, and the others) is verified on the **raw JSON**
 before anything else: device pinned and not revoked, ECDSA P-256 signature, `ts` within now+2 min / now-8 days, ids not
 seen (the seen ids live in `history.sqlite` and survive restarts). A frame that fails any of that is dropped: the relay
 gets `error{sig_invalid}`, the frame is acked `consumed` so it does not sit in the buffer, and the agent gets one
@@ -494,8 +487,8 @@ the dying session and acked it, and the restart skipped it.
 
 ## Tools
 
-`reply`, `attach`, `card`, `card_result`, `set_status`, `voice_progress`, `list_threads`, `create_thread`,
-`archive_thread`, `read_thread`, `inbox_triage`, `inbox_raw`, plus the four Schedules tools (below), `config_propose`
+`reply`, `attach`, `card`, `card_result`, `set_status`, `list_threads`, `create_thread`,
+`archive_thread`, `read_thread`, `inbox_triage`, `inbox_raw`, `set_thread_instructions`, plus the four Schedules tools (below), `config_propose`
 (below), `retry_attachment`, and for the main session only `handoff` and `thread_session` ([OPTION-C.md](OPTION-C.md)).
 `restart_main` (below) is for the main session and a thread's lead. The schemas are in `src/tools/`. Notes:
 
@@ -503,8 +496,7 @@ the dying session and acked it, and the restart skipped it.
   the valid ids.
 - Files: absolute paths, up to 10 per message, 50 MB each, uploaded with their sha256. The bridge refuses to upload
   anything inside `$TALOS_APP_HOME` (except `media/` and `approved/`), and `.env` files.
-- `reply` with `voice: true` runs `TALOS_APP_TTS_CMD` and attaches the audio as a `voice_reply`. The owner's
-  `voice_notes.reply_with_voice` setting (`never` / `when_voice` / `always`) overrides the parameter.
+- `reply` runs `TALOS_APP_TTS_CMD` and attaches the audio as a `voice_reply` when the owner's `voice_notes.reply_with_voice` setting is `always` (the optional `voice_text` is the spoken version); `never` does not. A stored `when_voice` ("when I send a voice note", archived) reads as `never`. Driving mode speaks every reply. The `speak`, `voice` and `voice_delegation_id` arguments were removed with voice input.
 - `reply` adds a line to its result (never to the message, and only after a successful send) when the text has a shell command in
   inline code outside a fence, such as `` `git status` ``: the web app draws Run only on a fenced block with no language, `sh`, `bash`, `zsh` or
   `shell`. A lone command word, a path or a span inside a fence does not count; the word list is `INLINE_COMMAND_WORDS` in `apps/bridge/src/inline-commands.ts`.
@@ -660,14 +652,14 @@ get the tools.
 
 The agent never changes config. `config_propose {thread_id, reason, changes:[{path, value}]}` is the one way it can ask, and
 only for a closed list built from the settings table (`packages/protocol/src/settings-table.ts`, a separate list from the
-app's `config.patch` allowlist): the table rows whose agent rule is on (`agent.name`, `agent.voice`, `owner.display_name`,
+app's `config.patch` allowlist): the table rows whose agent rule is on (`agent.name`, `owner.display_name`,
 `default_thread`, `timezone`, `quiet_window`, `notifications.master`, `notifications.show_thread_names`,
 `voice_notes.reply_with_voice`, `voice_notes.driving_until`, `session_models`, `dedicated` (the master switch for thread
 sessions, a boolean), `theme`) and the thread paths: `threads.<new_id>` (create, value `{name, topic?, icon?}`) and
 `threads.<id>.<field>` with the field `name`, `topic`, `icon`, `notify`, `session` (`shared` or `dedicated`) or
 `archived`. Nothing else of a thread (kind, order, colour, folder, session settings) is on the list. A theme needs the relay to
 list `custom-themes/1`. Everything else is refused by name or by the closed list: `permission_relay`, `trust_mode`,
-`memory_browser`, `agent.voice_persona`, `work.*`, and always devices, keys, enrollment and security settings.
+`memory_browser`, `work.*`, and always devices, keys, enrollment and security settings.
 
 - **Risk, from the table.** Every table row has a `risk`, required by the type: `low`, `high` or `mac`. `mac` rows are the
   ones the agent must never set (a `mac` row cannot be `agent: true`). In trust mode a proposal whose every change is `low` is
@@ -693,6 +685,10 @@ list `custom-themes/1`. Everything else is refused by name or by the closed list
   is created at once; an archive is always a card. The card goes to that thread: an optional `thread_id` on `create_thread`,
   else the thread the owner spoke in last, else the default thread. They need no "the owner asked" first (the card is the
   ask), but without it they are never applied directly. `create_thread` takes an optional `reason`.
+  `create_thread` also sets a thread up in the same proposal (`parent_id`, `session`, `folder`, `color`, `model`, `effort`, `mcp`,
+  `idle_park_min`, `instructions`), and a thread's own session has it too (its `parent_id` must be itself; it reaches Main's
+  service over the hub as `rpc` `create_thread`). `set_thread_instructions {id, text}` writes a thread's AGENTS.md. Who may set what,
+  the folder rules on disk and the gate: [THREADS.md](THREADS.md), "Setting up thread agents".
 - **A thread's own session** has `config_propose` too, for its own thread only. It asks main over the hub (`rpc`
   `config_propose`; the thread is the one the connection proved) and may name only `threads.<its id>.<field>`; the card goes
   into that thread. A global setting, another thread or a new thread is refused. "The owner asked" is checked in that thread.
@@ -801,7 +797,7 @@ opens the bridge socket.
 | `enroll [--label phone] [--no-qr] [--confirm]`                | Warns first if no live bridge is running, then prints a one-time link and a QR code of it (`--no-qr` skips the code; its first link line is the plain link, and a second line `For the Talos phone app: <link>&fp=...` carries the key fingerprint, which the terminal link and the QR carry too when the relay answers its descriptor), waits up to 10 minutes, shows the y/N prompt. `--confirm` answers a waiting prompt later |
 | `devices [revoke <id>]`                                       | Lists pinned devices; revoke marks `devices.json` and calls the relay                                                                                                                                                                                                                                                                                                                                                             |
 | `rotate`                                                      | Key rotation (below)                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `status [--json]`                                             | Relay reachable, **whether the relay accepts this Mac's key**, the live bridge's state from `status.json`, key id, last connect, queue depth, STT/TTS. `--json` prints the `status.json` fields plus `liveness`, `relay_reachable` and `relay_accepts_key`                                                                                                                                                                        |
+| `status [--json]`                                             | Relay reachable, **whether the relay accepts this Mac's key**, the live bridge's state from `status.json`, key id, last connect, queue depth, TTS. `--json` prints the `status.json` fields plus `liveness`, `relay_reachable` and `relay_accepts_key`                                                                                                                                                                            |
 | `doctor [--agent-dir <dir>]`                                  | Bun version, MCP SDK 1.x, `.mcp.json` entry, file modes, config, relay `/healthz`, **a signed read-only call that proves the relay accepts this Mac** (on a 401 it prints the fix), the live bridge's state; the `BRIDGE_PUBKEY=` line to paste into the relay; warns about other relaying channels and missing ask rules                                                                                                         |
 | `rollback [--dry-run] [--yes] [--skip-data-check]`            | Puts this checkout one recorded healthy version further back (asks y/N), then reinstalls. Refuses with uncommitted changes, a git operation in progress, or settings the older code would lose; leaves data and branches alone                                                                                                                                                                                                    |
 | `logs [-n 50] [-f]`                                           | Prints the last lines of `bridge.log` in plain words (`-f` keeps following it)                                                                                                                                                                                                                                                                                                                                                    |
@@ -932,7 +928,6 @@ the old key valid for 5 minutes. The live bridge notices the new file, closes it
   `BRIDGE_PUBKEY` the line `init` printed.
 - **`superseded` in the log**: another bridge used the same key. Stop it, or `talos-app rotate`.
 - **A message "failed its signature check"**: the sending device is not pinned (run `talos-app devices`) or was revoked.
-- **No transcripts**: set `TALOS_APP_STT_CMD`; try the command by hand with an audio file.
 
 ## Tests
 

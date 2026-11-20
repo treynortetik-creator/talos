@@ -1,6 +1,6 @@
 // The owner's clock, added to the meta of every note that carries something the owner did: `local_time` (their own zone,
 // with offset) on all of them, and `since_last` (the gap since their previous message in the same thread) only on a typed
-// message, a voice note and a Run tap. `ts` stays the UTC time.
+// message and a Run tap. `ts` stays the UTC time.
 // Plain meta attributes only, so nothing new is added to the prompt and what was cached stays valid.
 import type { BridgeContext } from './context.ts'
 
@@ -65,14 +65,14 @@ export function humanGap(prevIso: string, nowIso: string): string | undefined {
   return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
 }
 
-/** Just `local_time`: for a note that is not a message (a card decision, a spoken question, a config or schedule card). */
+/** Just `local_time`: for a note that is not a message (a card decision, a config or schedule card). */
 export function localClock(ctx: Pick<BridgeContext, 'config'>, ts: string): { local_time?: string } {
   const local = localTime(ts, ctx.config.config.timezone)
   return local ? { local_time: local } : {}
 }
 
 /**
- * The two meta fields for a typed message, a voice note or a Run tap in `threadId` stamped `ts`. `exceptId` is the note's own message, already in the
+ * The two meta fields for a typed message or a Run tap in `threadId` stamped `ts`. `exceptId` is the note's own message, already in the
  * history by the time its notification is built. Spread the result into the notification's meta.
  */
 export function clockMeta(

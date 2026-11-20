@@ -127,23 +127,6 @@ describe('every Playwright config retries once and reports flakes in CI, and onl
   }
 })
 
-describe('the voice and microphone specs are never retried', () => {
-  it("apps/web's chromium-media project (every test/voice spec) keeps retries at 0, so a stuck mic is not waited for twice", async () => {
-    const prev = process.env.CI_FLAKE_FILE
-    process.env.CI_FLAKE_FILE = join(temp(), 'flakes') // as in CI, where every other project retries once
-    try {
-      const { default: config } = await import('../apps/web/playwright.config.ts') // first import in this file, so it reads the variable set above
-      expect(config.retries).toBe(1)
-      const media = config.projects.find((p: { name: string }) => p.name === 'chromium-media')
-      expect(media.testMatch).toBe('**/voice/**/*.spec.ts')
-      expect(media.retries).toBe(0)
-    } finally {
-      if (prev === undefined) delete process.env.CI_FLAKE_FILE
-      else process.env.CI_FLAKE_FILE = prev
-    }
-  })
-})
-
 describe('under ci-local every Chromium goes straight to localhost, past any proxy; outside it nothing changes', () => {
   // A proxy put in front of localhost on the CI Mac (web protection software) once failed page.goto with
   // ERR_UNEXPECTED_PROXY_AUTH. WebKit takes no Chromium flags: it gets the browser job's proxy-free environment only.
@@ -191,11 +174,6 @@ describe('under ci-local every Chromium goes straight to localhost, past any pro
       }
       for (const p of await browsers(path, false))
         expect(p.args, `${p.name}, outside ci-local`).not.toContain('--no-proxy-server')
-      // the fake microphone flags stay where they were
-      if (path.includes('e2e')) expect(ci[0]?.args).toContain('--use-fake-device-for-media-stream')
-      if (path.includes('apps/web')) {
-        expect(ci.find((p) => p.name === 'chromium-media')?.args).toContain('--use-fake-device-for-media-stream')
-      }
     })
   }
 

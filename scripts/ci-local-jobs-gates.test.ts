@@ -33,12 +33,6 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   git(src, 'init', '-q', '-b', 'main')
   writeFileSync(join(src, 'a.txt'), 'a\n')
   writeFileSync(join(src, 'apps/bridge/scripts/test-parallel.ts'), '// stand-in\n')
-  // A stand-in for scripts/mic-preflight.mjs: prints $MIC_FAKE (ok by default) and exits like the real one (ok 0, stuck 3, else 2).
-  mkdirSync(join(src, 'scripts'))
-  writeFileSync(
-    join(src, 'scripts/mic-preflight.mjs'),
-    "const w = process.env.MIC_FAKE || 'ok'\nif (process.env.MIC_NOISE) console.error('(node) ExperimentalWarning: noise')\nconsole.log(w)\nprocess.exit(w === 'ok' ? 0 : w === 'stuck' ? 3 : 2)\n",
-  )
   git(src, 'add', '-A')
   git(src, 'commit', '-qm', 'a')
   const origin = join(T, 'origin.git')
@@ -121,55 +115,8 @@ describe('ci-local.sh gates', () => {
     expect(run.out()).toContain(`✗ ${job}`)
   })
 
-  describe("the browser job's microphone preflight", () => {
-    const line =
-      "the runner's microphone is blocked (getUserMedia never answers): check the Mac's microphone permission, then rerun"
-
-    it('stuck: still runs every test, then fails the job with one plain line in the log and the status, posts no success', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'stuck' })
-      expect(await run.done).toBe(1)
-      expect(run.out()).toContain('✗ browser')
-      expect(r.log('browser')).toContain(line)
-      const posted = readFileSync(r.env.GH_LOG, 'utf8')
-      expect(posted).toMatch(/state=failure .*context=local-ci\/browser/)
-      expect(posted).toContain(line)
-      expect(posted).not.toMatch(/state=success .*context=local-ci\/browser/)
-      const calls = r.calledLines()
-      expect(calls.some((l) => l.includes('test:browser'))).toBe(true)
-      expect(calls.some((l) => l.includes('test:e2e'))).toBe(true)
-    })
-
-    it('ok with a Node warning on stderr is still ok', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_NOISE: '1' })
-      expect(await run.done).toBe(0)
-      expect(r.log('browser')).toContain('ExperimentalWarning')
-    })
-
-    it('stuck plus another failure: the status names both', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'stuck', FAIL_ON: 'test:browser' })
-      expect(await run.done).toBe(1)
-      expect(readFileSync(r.env.GH_LOG, 'utf8')).toContain('other tests failed too')
-    })
-
-    it('stuck: the e2e packages run with --no-bail, so the e2e suite runs after the failing web voice specs', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'stuck' })
-      expect(await run.done).toBe(1)
-      expect(r.calledLines().some((l) => l.includes('--no-bail') && l.includes('test:e2e'))).toBe(true)
-    })
-
-    it('stuck: the e2e suite still runs when the web tests fail, and the job still fails', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'stuck', FAIL_ON: 'test:browser' })
-      expect(await run.done).toBe(1)
-      expect(r.calledLines().some((l) => l.includes('test:e2e'))).toBe(true)
-      expect(readFileSync(r.env.GH_LOG, 'utf8')).not.toMatch(/state=success .*context=local-ci\/browser/)
-    })
-
-    it('ok: a failing browser suite does not hide the e2e suite, which runs with --no-bail, and the job still fails', async () => {
+  describe('the browser job: one failing part never hides the next', () => {
+    it('a failing browser suite does not hide the e2e suite, which runs with --no-bail, and the job still fails', async () => {
       const r = repo()
       const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { FAIL_ON: 'test:browser' })
       expect(await run.done).toBe(1)
@@ -178,33 +125,17 @@ describe('ci-local.sh gates', () => {
       expect(readFileSync(r.env.GH_LOG, 'utf8')).not.toMatch(/state=success .*context=local-ci\/browser/)
     })
 
-    it('ok: a failing e2e suite fails the job, and nothing is named as a microphone problem', async () => {
+    it('a failing e2e suite fails the job', async () => {
       const r = repo()
       const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { FAIL_ON: 'test:e2e' })
       expect(await run.done).toBe(1)
-      expect(readFileSync(r.env.GH_LOG, 'utf8')).not.toContain('microphone')
-    })
-
-    it('stuck: an e2e failure alone (the voice specs) does not claim other tests failed', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'stuck', FAIL_ON: 'test:e2e' })
-      expect(await run.done).toBe(1)
-      expect(readFileSync(r.env.GH_LOG, 'utf8')).not.toContain('other tests failed too')
-    })
-
-    it('a preflight that cannot run fails the job too, never green', async () => {
-      const r = repo()
-      const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'], { MIC_FAKE: 'error: no browser' })
-      expect(await run.done).toBe(1)
-      expect(r.log('browser')).toContain('the microphone preflight could not run')
       expect(readFileSync(r.env.GH_LOG, 'utf8')).not.toMatch(/state=success .*context=local-ci\/browser/)
     })
 
-    it('ok: the tests run as before, in order after the preflight', async () => {
+    it('the tests run, and the job posts success', async () => {
       const r = repo()
       const run = r.start(['--ref', 'HEAD', '--jobs', 'browser'])
       expect(await run.done).toBe(0)
-      expect(r.log('browser')).toContain('+ node scripts/mic-preflight.mjs')
       expect(r.calledLines().some((l) => l.includes('test:browser'))).toBe(true)
       expect(r.calledLines().some((l) => l.includes('test:e2e'))).toBe(true)
       expect(readFileSync(r.env.GH_LOG, 'utf8')).toMatch(/state=success .*context=local-ci\/browser/)

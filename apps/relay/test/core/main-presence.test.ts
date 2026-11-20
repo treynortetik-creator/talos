@@ -20,7 +20,6 @@ const beat = (main?: string): HealthBeatT =>
     ...(main ? { main } : {}),
     mod: { state: 'absent', last_seen: null, expected: false },
     tts: false,
-    stt: false,
     sqlite: { fts5: true },
   }) as HealthBeatT
 

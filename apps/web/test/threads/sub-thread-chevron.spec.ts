@@ -24,7 +24,6 @@ async function seed(page: Page, nested: boolean) {
       kind: 'fixed',
       order,
       notify: 'all',
-      voice_context: 'recent',
       archived: false,
       created_at: '2026-10-28T00:00:00.000Z',
       ...(parent_id ? { parent_id } : {}),

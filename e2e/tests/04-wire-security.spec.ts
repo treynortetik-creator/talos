@@ -1,4 +1,3 @@
-import { loadFrameFixture } from '@talos-app/testkit'
 import { card, cardIdFrom, expect, HIGH_RISK_CARD, rawSocket, sentFrames, signedIn, test } from '../harness/fixtures.ts'
 
 test('5. a replayed card.resolve (same bytes, new socket) changes nothing and reaches the agent once', async ({
@@ -40,24 +39,4 @@ test('5. a replayed card.resolve (same bytes, new socket) changes nothing and re
   await rawSocket(page, [hello.text, resolve.text])
   await page.waitForTimeout(1500)
   expect(stack.claude.notifications.filter((n) => n.meta.kind === 'card_action')).toHaveLength(0)
-})
-
-test('voice.ask from an app is never forwarded to the bridge (only the voice module emits it)', async ({
-  stack,
-  page,
-  context,
-}) => {
-  const dev = await signedIn(stack, page, context)
-  const hello = sentFrames(page, 'hello')[0]
-  if (!hello) throw new Error('no hello captured')
-  const ask: Record<string, unknown> = { ...loadFrameFixture('voice.ask'), device_id: dev.deviceId }
-  const replies = await rawSocket(page, [hello.text, JSON.stringify(ask)])
-  const refused = replies.find((f) => f.ref === ask.id)
-  expect(refused?.type).toBe('error')
-  await page.waitForTimeout(800)
-  expect(stack.claude.notifications.filter((n) => n.meta.kind === 'voice_delegation')).toHaveLength(0)
-  const queued = stack.relay.services.db
-    .prepare("select count(*) as n from core_events where type = 'voice.ask'")
-    .get() as { n: number }
-  expect(queued.n).toBe(0)
 })

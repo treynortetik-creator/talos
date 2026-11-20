@@ -249,7 +249,7 @@ struct ThreadStateSpecTests {
       if String(cString: r) != agent { forms.append(String(cString: r)) }
       free(r)
     }
-    return ["Edit", "Write"].flatMap { t in forms.map { "\(t)(/\($0)/threads/trip.state.md\(tail))" } }
+    return forms.map { "Edit(/\($0)/threads/trip.state.md\(tail))" }
   }
 
   func build(_ t: FenceTree, hook: WorkerHook.Installed?, base: [String: String]? = nil, cwd: String? = nil) throws -> WorkerSpec {
@@ -356,7 +356,7 @@ struct ThreadStateSpecTests {
     }
     #expect(WorkerHook.stateAllowRules(agentDir: "/home/alex/agent", threadId: "../x").isEmpty)
     #expect(WorkerHook.stateAllowRules(agentDir: "/home/alex/agent", threadId: "Trip").isEmpty)
-    #expect(WorkerHook.stateAllowRules(agentDir: "/home/alex/agent/", threadId: "trip") == ["Edit(//home/alex/agent/threads/trip.state.md)", "Write(//home/alex/agent/threads/trip.state.md)"])
+    #expect(WorkerHook.stateAllowRules(agentDir: "/home/alex/agent/", threadId: "trip") == ["Edit(//home/alex/agent/threads/trip.state.md)"])
   }
 
   /// The command the settings run. The Linux twin is the same text with its locale (swift-parity.test.ts holds the two together).

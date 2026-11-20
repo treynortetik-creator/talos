@@ -52,7 +52,7 @@ export const Thread = z.object({
   kind: z.enum(['fixed', 'agent', 'system']), // fixed = owner config; agent = created by the agent; system = inbox
   order: z.number().int().default(0), // sidebar position; a hand-written config without it keeps file order
   notify: z.enum(['all', 'needs_you', 'off']).default('all'),
-  voice_context: z.enum(['none', 'recent']).default('recent'), // may live calls seed recent messages to the voice model (6.2)?
+  // archived: voice input (docs/archived/voice.md). Old files may still carry `voice_context`: dropped on read, so accepted and ignored.
   archived: z.boolean().default(false),
   created_at: IsoTs,
   /** Sub-threads (sub-threads.ts): the thread this one sits under, one level deep. A value this build can't read is none. */

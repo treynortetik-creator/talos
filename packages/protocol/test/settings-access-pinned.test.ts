@@ -36,8 +36,6 @@ describe('phone path: checkConfigPatch result for every field', () => {
     ['rev', 1, refused('rev')],
     ['agent', {}, PLAIN],
     ['agent.name', 'Atlas', PLAIN],
-    ['agent.voice', 'marin', PLAIN],
-    ['agent.voice_persona', 'calm', PLAIN],
     ['agent.unlisted_key', 1, PLAIN], // a whole-section entry lets any key through the walk; the schema judges it later
     ['owner', {}, PLAIN],
     ['owner.display_name', 'Alex Example', PLAIN],
@@ -154,7 +152,7 @@ describe('phone path: the exported lists', () => {
 
 describe('agent path: config_propose result for every field', () => {
   const ALLOWED_LIST =
-    'agent.name, agent.voice, agent.voice_persona, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, settings_lock, dedicated, theme'
+    'agent.name, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, settings_lock, dedicated, theme'
   // owner ruling 2026-11-14: the agent changes the rest when he asks; these stay the owner's
   const NAMED = new Set([
     'permission_relay',
@@ -173,18 +171,16 @@ describe('agent path: config_propose result for every field', () => {
   // the table rows the agent may propose (threads through the per-thread paths below), with a new value that is valid and different from the example config, and what is there now
   const allowed: Array<[string, unknown, unknown]> = [
     ['agent.name', 'Atlas', 'Talos'],
-    ['agent.voice', 'marin', 'meridian'],
     ['owner.display_name', 'Alex Example', 'You'],
     ['timezone', 'Europe/Paris', 'UTC'],
     ['quiet_window', { start: '22:00', end: '07:00' }, null],
     ['notifications.master', false, true],
     ['notifications.show_thread_names', 'all', 'fixed_only'],
-    ['voice_notes.reply_with_voice', 'always', 'when_voice'],
+    ['voice_notes.reply_with_voice', 'always', 'never'],
     ['voice_notes.driving_until', '2026-11-09T18:00:00.000Z', null],
     ['session_models', ['default', 'opus'], ['default', 'opus', 'sonnet', 'haiku']],
     ['dedicated', false, true], // shown on until written off (threadSessionsAllowed)
     ['theme', { ...structuredClone(STOCK_THEMES[1]), name: 'dusk' }, 'talos'],
-    ['agent.voice_persona', 'Speak briefly.', ''],
     ['work.label', 'Office', 'Work systems'],
     ['work.ask_note', 'Ask Sam first.', 'Ask your IT team before connecting these.'],
     ['memory_browser', false, true],
@@ -247,8 +243,6 @@ describe('agent path: config_propose result for every field', () => {
   it('the proposable list is exactly this, in this order', () => {
     expect([...AGENT_CONFIG_ALLOWLIST]).toEqual([
       'agent.name',
-      'agent.voice',
-      'agent.voice_persona',
       'owner.display_name',
       'threads',
       'default_thread',
@@ -282,7 +276,6 @@ describe('agent path: config_propose result for every field', () => {
           kind: 'agent',
           order: 5,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-10-28T00:00:00.000Z',
         },

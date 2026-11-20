@@ -151,7 +151,7 @@ describe('rows', () => {
     expect(row.textContent).toContain('Weekdays at 7:30 AM')
     expect(within(row).getByTestId('row-status').textContent).toMatch(/Pending/)
     expect(within(row).getByRole('switch', { name: 'Daily summary runs on schedule' })).toBeTruthy()
-    expect(within(row).getByTestId('row-runner').textContent).toBe('Run by Main') // read out, shown only when it differs
+    expect(within(row).getByTestId('row-runner').textContent).toBe('Run by your main agent') // read out, shown only when it differs
   })
 
   it('the switch pauses the job through the signed control, as before', async () => {
@@ -364,11 +364,11 @@ describe('headers and rows say the same thing', () => {
     )
     await user.click(screen.getByTestId('group-toggle-trip'))
     const r = within(screen.getByTestId('schedule-row-packing-check')).getByTestId('row-runner')
-    expect(r.textContent).toBe('Runs in the background, no session')
+    expect(r.textContent).toBe('Runs in the background, no agent needed')
     expect(r.className).not.toContain('sr-only')
     await user.click(screen.getByTestId('group-toggle-__main__'))
     const same = within(screen.getByTestId('schedule-row-daily-summary')).getByTestId('row-runner')
-    expect(same.textContent).toBe('Run by Main')
+    expect(same.textContent).toBe('Run by your main agent')
     expect(same.className).toContain('sr-only')
   })
 

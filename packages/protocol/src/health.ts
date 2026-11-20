@@ -33,7 +33,9 @@ export const HealthBeat = z.object({
   main: MainState.optional().catch(undefined),
   mod: ModHealth,
   tts: z.boolean(),
-  stt: z.boolean(),
+  /** False from this bridge: voice input is archived (docs/archived/voice.md). Still sent, since a relay from before the archive requires it;
+   * an older bridge may still say true. Nothing reads it. */
+  stt: z.boolean().optional(),
   sqlite: z.object({ fts5: z.boolean() }), // probe result (V3.1); false = search/memory not advertised
   /** Free bytes on the volume the bridge keeps its data on: a number only, never a path. Absent from an older bridge. */
   disk_free_bytes: z.number().int().nonnegative().optional(),
@@ -73,9 +75,6 @@ export const RelayLimits = z.object({
   buffer_days: z.number().int().positive().optional(),
   /** The biggest upload in MB (MEDIA_MAX_MB). */
   upload_max_mb: z.number().positive().optional(),
-  /** Live-voice minutes per day and per call (VOICE_DAILY_MAX_MIN, VOICE_SESSION_MAX_MIN); 0 daily = no live-voice minutes at all. */
-  voice_daily_max_min: z.number().int().nonnegative().optional(),
-  voice_session_max_min: z.number().int().positive().optional(),
 })
 
 /** GET /api/status (session; Settings -> Health). */

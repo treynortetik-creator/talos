@@ -170,6 +170,9 @@ test('the now-playing pill, a new-reply banner and the toast viewport do not ren
       play: false,
     })
   })
+  // the thread lists draw an unread count as an element labelled "N unread" (the sheet covers them, the page still renders them)
+  const unreadCount = page.locator('[aria-label$=" unread"]')
+  await expect(unreadCount).toHaveCount(0)
   // raise a new-reply banner: an unread reply in a thread that is not on screen
   await page.evaluate((cardId) => {
     const w = window as unknown as { __talos: { store: { getState: () => any; setState: (s: any) => void } } }
@@ -194,7 +197,11 @@ test('the now-playing pill, a new-reply banner and the toast viewport do not ren
       unread: { ...s.unread, [other.id]: (s.unread[other.id] ?? 0) + 1 },
     })
   }, card.id)
-  await page.waitForTimeout(400)
+  // the page took the reply in: the unread count rose (the banner's own trigger), so it has had its chance to show the
+  // banner and the pill, and the sheet kept both back
+  await expect(unreadCount.first()).toBeAttached()
+  // the count is drawn at sync priority; the banner's own render comes in a later task: let two frames pass first
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
   await expect(page.getByTestId('now-playing')).toHaveCount(0)
   await expect(page.getByTestId('thread-banner')).toHaveCount(0)
   const covered = await page.evaluate(() => {

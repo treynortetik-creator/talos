@@ -43,7 +43,7 @@ describe('drop to attach', () => {
     await waitFor(() => expect(up).toHaveBeenCalledTimes(2))
     expect(screen.getByText('a.txt')).toBeTruthy()
     expect(screen.getByText('b.png')).toBeTruthy()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' }).getAttribute('aria-disabled')).toBeNull())
   })
 
   it('ignores drags that carry no files (text, links)', () => {

@@ -304,5 +304,8 @@ for f in permission-relay.py _talos_common.py thread-state.py compaction-guard.p
   fi
 done
 
+# no file but the intended read-only ones that its owner can't write (the move to Applications must be able to clear the download flag)
+bash scripts/bundle-modes-check.sh "$APP" || exit 1
+
 "$APP/Contents/MacOS/Talos" --selftest
 echo "built: $APP"

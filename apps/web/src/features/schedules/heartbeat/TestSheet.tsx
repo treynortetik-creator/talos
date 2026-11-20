@@ -107,7 +107,7 @@ export function Result({ r, config }: { r: HeartbeatTestResultT; config: Heartbe
       {r.est_wakes !== null ? (
         <p className="m-0 text-sm text-text-2">
           Estimated: {r.est_wakes} {r.est_wakes === 1 ? 'wake' : 'wakes'} a day
-          {r.est_tokens ? `, about ${tokens(r.est_tokens)} fresh tokens` : ''}.
+          {r.est_tokens ? `, about ${tokens(r.est_tokens)} of fresh usage` : ''}.
         </p>
       ) : null}
     </div>

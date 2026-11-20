@@ -5,7 +5,7 @@ import { useFeature } from '../../lib/v2Client.ts'
 import { Switch } from '../../ui/index.ts'
 import { useWriteBlock } from '../settings/offline.ts'
 import { useDrivingState, useDrivingToggle } from './driving.ts'
-import { loadPhoneVoiceFallback, loadTapToTalk, savePhoneVoiceFallback, saveTapToTalk } from './prefs.ts'
+import { loadPhoneVoiceFallback, savePhoneVoiceFallback } from './prefs.ts'
 
 const Row = ({ children }: { children: React.ReactNode }) => (
   <div className="flex min-h-11 items-center justify-between gap-3">{children}</div>
@@ -17,7 +17,6 @@ export function DrivingRow({ readOnly }: { readOnly: boolean }) {
   const { set, busy, error } = useDrivingToggle()
   const { active, until } = useDrivingState()
   const [phoneVoice, setPhoneVoice] = useState(loadPhoneVoiceFallback)
-  const [tap, setTap] = useState(loadTapToTalk)
   const inRouter = useInRouterContext()
   const off = feature === 'off'
   const disabled = readOnly || busy || block !== null || off
@@ -58,19 +57,6 @@ export function DrivingRow({ readOnly }: { readOnly: boolean }) {
           onCheckedChange={(v) => {
             setPhoneVoice(v)
             savePhoneVoiceFallback(v)
-          }}
-        />
-      </Row>
-      <Row>
-        <label htmlFor="driving-tap" className="text-sm">
-          Tap to talk instead of holding
-        </label>
-        <Switch
-          id="driving-tap"
-          checked={tap}
-          onCheckedChange={(v) => {
-            setTap(v)
-            saveTapToTalk(v)
           }}
         />
       </Row>

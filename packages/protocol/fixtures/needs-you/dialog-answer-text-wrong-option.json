@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "dialog_id": "Ph8Zq3LmWt5RcXvNa2KdBe",
+  "choice": 0,
+  "label": "Red",
+  "by": "Alex's iPhone",
+  "at": "2026-11-07T10:00:09.000Z",
+  "control_id": "dc_01M6V2TGWJCH4P49F79Q2317CD",
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T408\",\"choice\":0,\"device_id\":\"d_rjxnk4xufxem5xago5zd\",\"id\":\"01JBF3V7Q8K2M4N6P8R0S2T4AA\",\"payload_hash\":\"sha256:510eedf61afbff3d2b9983e0b16d7bab152e3ccae12503d966b67e2f62d78bb4\",\"text\":\"purple\",\"ts\":\"2026-11-07T10:00:09.000Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "iLe7dHd-_lwi0pYlwPqLmZLmo7fo4E-9NM57--UvWiKAtyStCOyFhQ4uqEwhkpZrmYBwmTX6vPboVkAgvNtqfg",
+    "device_id": "d_rjxnk4xufxem5xago5zd",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"Trip's session is asking you to choose. Your answer goes straight into the session.\",\"body_format\":\"plain\",\"destination\":[],\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"fields\":[],\"id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T408\",\"kill_label\":\"\",\"kind\":\"dialog\",\"origin\":\"background\",\"payload\":{\"dialog_id\":\"Ph8Zq3LmWt5RcXvNa2KdBe\",\"dialog_kind\":\"agent_question\",\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"free_text\":2,\"options\":[\"Red\",\"Blue\",\"Other…\",\"Chat about this\"],\"subject\":\"Which color do you prefer?\",\"thread\":\"trip\"},\"primary_label\":\"Answer\",\"risk\":\"low\",\"summary\":\"Trip's session is waiting for you.\",\"thread_id\":\"trip\",\"title\":\"A question from Trip's session\"}"
+  }
+}

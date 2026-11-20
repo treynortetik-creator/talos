@@ -348,8 +348,8 @@ export function ScheduleForm(p: Props) {
                 {(offMac
                   ? ([['session', 'In a Talos thread']] as const)
                   : ([
-                      ['session', 'In my live session'],
-                      ['headless', 'In the background (no session needed)'],
+                      ['session', 'With my live agent'],
+                      ['headless', 'In the background (no agent needed)'],
                     ] as const)
                 ).map(([id, label]) => (
                   <label key={id} className="flex min-h-11 items-center gap-2 text-md">
@@ -366,7 +366,7 @@ export function ScheduleForm(p: Props) {
                 </p>
               ) : f.runner === 'headless' ? (
                 <p className="m-0 text-sm text-text-2" data-testid="background-note">
-                  Runs without your session, with no one watching. macOS can block background runs after Claude Code
+                  Runs without your agent, with no one watching. macOS can block background runs after Claude Code
                   updates.
                 </p>
               ) : null}

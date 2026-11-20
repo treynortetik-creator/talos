@@ -150,7 +150,7 @@ struct MainPromptReviewTests {
   /// S3 for Main: a client typing lately holds the notice; a quiet one does not.
   @Test(arguments: [(60.0, false), (1.0, true)])
   func aPromptWaitsWhileAClientTypedLately(quiet: Double, posts: Bool) throws {
-    let r = try Rig(.tmux, scenario: "prompt-real.sh", env: ["FAKE_PROMPT_SCREEN": "askuser-select"], timings: Self.timings(quiet: quiet))
+    let r = try Rig(.tmux, scenario: "prompt-real.sh", env: ["FAKE_PROMPT_SCREEN": "onboarding-theme"], timings: Self.timings(quiet: quiet))
     defer { r.teardown() }
     try coldStartConfirmed(r)
     let client = try attachClient(socket: r.socket, session: "agent", home: r.home) { t, c in r.wait(t, c) }

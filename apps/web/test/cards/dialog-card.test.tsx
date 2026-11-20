@@ -207,7 +207,7 @@ describe('after the tap', () => {
     expect(screen.queryByTestId('dialog-buttons')).toBeNull()
     expect(screen.getByTestId('dialog-result').textContent).toBe('Trusted ~/Documents/x')
     expect(screen.getByTestId('dialog-meta').textContent).toMatch(
-      /^Answered on Alex's iPhone · \d{2}:\d{2} · the session is starting$/,
+      /^Answered on Alex's iPhone · \d{2}:\d{2} · your agent is starting$/,
     )
   })
 
@@ -372,5 +372,62 @@ describe('the development-channels card', () => {
     fireEvent.click(buttons()[1] as HTMLElement)
     await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
     expect(client.sent.find((x) => x.type === 'card.resolve')).toMatchObject({ choice: 1 })
+  })
+})
+
+describe('the agent question card with a free-text option', () => {
+  const ask = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+    trustDialog({
+      id: 'Qq5Qm8ZtRx3Cw9PkNa2HdB',
+      kind: 'agent_question',
+      subject: 'Which color do you prefer?',
+      options: ['Red', 'Blue', 'Other\u2026', 'Chat about this'],
+      cursor: null,
+      free_text: 2,
+      ...over,
+    })
+
+  it('draws a text box for the free-text option and a button for every other one', () => {
+    show(dialogCard(ask()))
+    expect(screen.getByRole('heading', { name: "A question from General's session" })).toBeTruthy()
+    expect(screen.getByTestId('dialog-subject').textContent).toBe('Which color do you prefer?')
+    expect(buttons().map((x) => x.textContent)).toEqual(['Red', 'Blue', 'Send your answer', 'Chat about this'])
+    expect(screen.getByRole('textbox', { name: 'Other\u2026' })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Send your answer' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('sends the choice and the owner words, trimmed, in one resolve; the text box is not a way to send anything else', async () => {
+    const card = dialogCard(ask())
+    const client = show(card)
+    const box = screen.getByRole('textbox', { name: 'Other\u2026' }) as HTMLInputElement
+    fireEvent.change(box, { target: { value: '  purple ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send your answer' }))
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    expect(client.sent.find((x) => x.type === 'card.resolve')).toMatchObject({
+      card_id: card.id,
+      action: 'primary',
+      choice: 2,
+      text: 'purple',
+      payload_hash: card.payload_hash,
+    })
+  })
+
+  it('text that cannot be sent (hidden characters) disables the button and says why', () => {
+    show(dialogCard(ask()))
+    const box = screen.getByRole('textbox', { name: 'Other\u2026' }) as HTMLInputElement
+    fireEvent.change(box, { target: { value: 'a\u202eb' } })
+    expect((screen.getByRole('button', { name: 'Send your answer' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Use plain text on one line.')).toBeTruthy()
+    expect(box.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('a pick sends its index and no text', async () => {
+    const card = dialogCard(ask())
+    const client = show(card)
+    fireEvent.click(screen.getByRole('button', { name: 'Blue' }))
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    const f = client.sent.find((x) => x.type === 'card.resolve') as Record<string, unknown>
+    expect(f.choice).toBe(1)
+    expect('text' in f).toBe(false)
   })
 })

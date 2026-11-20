@@ -360,7 +360,7 @@ function pushPosition(playing: boolean = state.playing): void {
 /**
  * A pause. With a clip still loaded the route stays held but quiet ('paused': not mixing, so iOS keeps Talos as the Now Playing
  * app and the lock screen's Play and scrubber stay live). `handOver` gives it back instead ('auto': music resumes), for a
- * recording, a call or Drive that is about to own the route itself; so does a pause with nothing loaded.
+ * Drive, which is about to own the route itself; so does a pause with nothing loaded.
  */
 function releaseRoute(handOver = false): void {
   if (routeState === 'none') return
@@ -383,7 +383,7 @@ function releaseSession(): void {
 }
 
 /**
- * Drive and a call take the audio route for themselves and give it back with `mediaSession.clear()` / `'auto'`. If a clip is
+ * Drive takes the audio route for itself and gives it back with `mediaSession.clear()` / `'auto'`. If a clip is
  * still loaded, put its session back so those exits cannot wipe the lock-screen controls of a live dock.
  */
 export function reclaimSession(): void {
@@ -459,13 +459,13 @@ export function resume(): void {
 }
 
 /**
- * Counts every request to pause, even one with nothing loaded. A recording, a call and Drive each ask the dock to step aside
- * as they start, so a caller that began waiting earlier can tell the route was taken from under it (see speak.ts).
+ * Counts every request to pause, even one with nothing loaded. Drive asks the dock to step aside
+ * as it starts, so a caller that began waiting earlier can tell the route was taken from under it (see speak.ts).
  */
 let pauseRequests = 0
 export const pauseRequestCount = (): number => pauseRequests
 
-/** Pauses the clip. `handOver`: the caller (a recording, a call, Drive) takes the audio route next, so it is given back, not held. */
+/** Pauses the clip. `handOver`: the caller (Drive) takes the audio route next, so it is given back, not held. */
 export function pause(opts: { handOver?: boolean } = {}): void {
   pauseRequests++
   const a = el
@@ -477,7 +477,7 @@ export function pause(opts: { handOver?: boolean } = {}): void {
   }
   savePosition()
   pushPosition(false)
-  // The element's own 'pause' event comes later; a recording or call that starts right now must not wait for it.
+  // The element's own 'pause' event comes later; Drive starting right now must not wait for it.
   releaseRoute(opts.handOver === true)
 }
 

@@ -83,10 +83,10 @@ describe('items', () => {
     open()
     expect(screen.getByRole('option', { name: new RegExp(entry('threadNext').label) })).toBeTruthy()
   })
-  it('has no Call item, because the Call chord is not wired anywhere today', () => {
+  it('has no Call item (the live call is archived)', () => {
     mount()
     open()
-    expect(screen.queryByRole('option', { name: new RegExp(entry('call').label) })).toBeNull()
+    expect(screen.queryByRole('option', { name: /call/i })).toBeNull()
   })
 })
 

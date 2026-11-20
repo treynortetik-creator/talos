@@ -21,7 +21,7 @@
 #   --fast        the checks, vitest related, and of the bridge tests only the changed ones, the ones that import a changed
 #                 file directly and the guards that read it (scripts/gate-fast.sh); no e2e or old-client step. Of the browser
 #                 specs only the changed spec files themselves, each on every Playwright project that takes it (desktop, iphone,
-#                 pixel; chromium-media for voice), under the heavy lock; with no changed spec there is no browser step and no
+#                 pixel), under the heavy lock; with no changed spec there is no browser step and no
 #                 heavy lock. CI runs everything else after the push. A change on the keep-out list (scripts/gate-fast-keepout.txt) or
 #                 one the import scan cannot follow runs the full gate instead, and says why. A change to only test files
 #                 (*.test.ts, *.test.tsx, *.spec.ts, Swift Tests/) is fast too, wherever they are. Its personal step scans this change only (its files and commit messages, base..HEAD); the full gate, the whole tree
@@ -195,7 +195,7 @@ GUARDS=""
 # The web app's browser specs (apps/web/test/**/*.spec.ts, Playwright; CI's browser job runs all of them on three browsers):
 # a change under apps/web/src/features/<x>/ runs apps/web/test/<x>/*.spec.ts, a changed spec runs itself, and a change to
 # what every screen is built from (ui, lib, theme, the shell, the entry, the service worker, the build) runs this smoke
-# set, a few specs over the main paths. On Chromium (the desktop project, and chromium-media for voice); the change's own
+# set, a few specs over the main paths. On Chromium (the desktop project); the change's own
 # specs also on WebKit and Pixel (web_own_specs_for; the fast gate runs only the changed spec files, on every project: gate-fast.sh).
 WEB_SMOKE="threads/threads.spec.ts threads/message-row.spec.ts composer/send-leaves-no-text.spec.ts home/home.spec.ts \
 settings/settings-home.spec.ts session/session.spec.ts fake-mode.spec.ts"
@@ -517,7 +517,7 @@ case "$WEB_LIMIT" in '' | *[!0-9]* | 0) WEB_LIMIT=$WEB_DEFAULT ;; esac
 export WEB_LIMIT_NAME
 if [ "$WEB_ALL" = 1 ] || [ "${#WEB[@]}" -gt 0 ]; then
   [ "$WEB_ALL" = 1 ] && WEB=() # every spec: no file arguments
-  tstep "tests (web browser specs, Chromium)" web_specs_run "$WEB_LIMIT" desktop chromium-media -- "${WEB[@]+"${WEB[@]}"}"
+  tstep "tests (web browser specs, Chromium)" web_specs_run "$WEB_LIMIT" desktop -- "${WEB[@]+"${WEB[@]}"}"
 fi
 # the change's own specs on WebKit (the iphone project, and iphone-se for its one spec) and on Pixel too: a spec that only fails
 # there (Tab skips buttons) reached main

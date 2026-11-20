@@ -45,16 +45,7 @@ describe('socketClient against FakeRelay', () => {
     const key = await client.deviceKey()
     if (!key) throw new Error('no key')
     await client.sendMessage({ threadId: 'general', text: 'hello' })
-    const att = {
-      media_id: newId('md'),
-      kind: 'voice_note' as const,
-      role: 'attachment' as const,
-      mime: 'audio/webm',
-      name: 'v.webm',
-      size: 3,
-      sha256: 'a'.repeat(64),
-    }
-    await client.sendVoiceNote({ threadId: 'general', attachment: att })
+    await client.sendMessage({ threadId: 'general', text: 'second' })
     const card: CardT = buildCard({ thread_id: 'general', risk: 'high' })
     relay.sendToApps(mkFrame('card.create', { card }))
     await waitFor(() => client.store.getState().cards.length === 1, 2000, 'card')

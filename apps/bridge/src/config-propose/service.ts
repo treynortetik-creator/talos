@@ -25,6 +25,7 @@ import {
   clipUnits,
   configCardCandidate,
   describeChange,
+  type FolderRoots,
   isSendKind,
   newId,
   payloadHash,
@@ -57,6 +58,9 @@ import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
 import { OWNER_SPOKE_MS, ownerAskedAt, quietSince, SETTINGS_LOCKED } from '../trust.ts'
 import { keptInboxThreadIds, removeGoneInboxes } from '../worker/inbox.ts'
+import { folderIssue } from './folder-check.ts'
+import { isSetupChange, strictlyQuiet, touchesSetup } from './setup-gate.ts'
+import { setupLines } from './setup-lines.ts'
 
 /** How recently the owner must have spoken in the thread for the agent to propose a setting there. */
 export { OWNER_SPOKE_MS, SETTINGS_LOCKED }
@@ -122,6 +126,20 @@ export class ConfigProposals {
     return this.relayFeatures.includes(CONFIG_PROPOSE_FEATURE)
   }
 
+  /**
+   * The folders a thread may never work in, from the config file's own roots (the same ones every write judges by). The agent
+   * folder is not in the protocol's text rules; the on-disk check (folder-check.ts) refuses it, at propose and at apply.
+   */
+  private env(): { roots: FolderRoots } {
+    const r = this.ctx.config.folderRoots
+    return { roots: { home: r.home, talosHome: r.talosHome, claudeDir: r.claudeDir ?? `${r.home}/.claude` } }
+  }
+
+  /** The folder's on-disk rules for what `patch` would write, judged on the config as it is now. Null when fine. */
+  private folderProblem(cur: AgentConfigT, patch: Record<string, unknown>, scoped: boolean): string | null {
+    return folderIssue(cur, applyMergePatch(cur, patch) as AgentConfigT, this.ctx.config.folderRoots, scoped)
+  }
+
   /** The owner asked in `threadId` (see `ownerAskedIn`: his own words, within two hours, no untrusted text since). */
   private ownerAsked(threadId: string): number | undefined {
     return ownerAskedAt(this.ctx, threadId)
@@ -145,11 +163,10 @@ export class ConfigProposals {
         `This session belongs to thread "${opts.scope}" and can only propose into its own thread. Nothing was proposed.`,
       )
     ctx.config.refresh()
-    const resolved = resolveConfigChanges(
-      args.changes,
-      ctx.config.config,
-      opts.scope !== undefined ? { thread: opts.scope } : {},
-    )
+    const resolved = resolveConfigChanges(args.changes, ctx.config.config, {
+      ...(opts.scope !== undefined ? { thread: opts.scope } : {}),
+      ...this.env(),
+    })
     if (!resolved.ok) return fail(resolved.error)
     // the sub-thread rule, judged now on what the change would write, so the owner is never asked to approve a card the
     // write would then refuse (archiving a parent alone while its sub-threads still run, say)
@@ -159,6 +176,9 @@ export class ConfigProposals {
     ) as AgentConfigT
     const subIssue = subThreadPatchIssue(ctx.config.config, preview, ctx.config.subThreadOpts())
     if (subIssue) return fail(`Nothing was proposed: ${subIssue}`)
+    // the folder on disk (exists, a folder, not a refused root even through a link; a thread session's inside its parent's)
+    const onDisk = folderIssue(ctx.config.config, preview, ctx.config.folderRoots, opts.scope !== undefined)
+    if (onDisk) return fail(`Nothing was proposed: ${onDisk}`)
     // A relay and web build from before K9c would carry the card but the app could not preview it.
     if (resolved.changes.some((c) => c.path === 'theme') && !this.relayFeatures.includes(CUSTOM_THEMES_FEATURE))
       return fail(
@@ -180,7 +200,16 @@ export class ConfigProposals {
     // text reached main since his words, because the fence is what holds those sessions back.
     const opensFence = resolved.changes.some((c) => c.path === 'dev.thread_fence' && c.new === false)
     const fenceQuiet = !opensFence || (askedAt !== undefined && quietSince(ctx, askedAt))
-    const direct = asked && !locked && addsAlways.length === 0 && fenceQuiet
+    // The fields that set a thread's session up (its own session, folder, model, MCP list): the owner need not have asked in the last
+    // two hours; with the lock off the change is made when nothing outside reached the agent since his latest words (setup-gate.ts),
+    // else it is a card. Everything else keeps the two-hour rule above.
+    // Direct only when EVERY part passes its own rule: the setup parts need the lock off and a quiet agent, the rest today's rule
+    // (he asked in the last two hours, the fence's quiet, no always-allow add). One part failing makes the whole proposal a card.
+    const setup = touchesSetup(resolved.changes)
+    const hasOther = resolved.changes.some((c) => !isSetupChange(c))
+    const quiet = !locked && addsAlways.length === 0 && strictlyQuiet(ctx, opts.scope)
+    const otherOk = asked && !locked && addsAlways.length === 0 && fenceQuiet
+    const direct = (!setup || quiet) && (!hasOther || otherOk)
     const now = ctx.clock.now()
     this.proposalAt = this.proposalAt.filter((t) => now - t < 3600_000)
     const warnings = [...(resolved.warnings ?? [])]
@@ -195,9 +224,16 @@ export class ConfigProposals {
       warnings.length ? { ...r, text: `${r.text} Warning: ${warnings.join('; ')}.` } : r
     if (direct) {
       if (!opts.tool) this.proposalAt.push(now)
-      return warned(await this.applyDirect(threadId, reason, resolved.changes, opts.scope))
+      return warned(await this.applyDirect(threadId, reason, resolved.changes, opts.scope, setup))
     }
-    const lockedNote = asked && locked ? `${SETTINGS_LOCKED} It went to the owner as a card instead. ` : ''
+    const lockedNote =
+      (asked || setup) && locked
+        ? `${SETTINGS_LOCKED} It went to the owner as a card instead. `
+        : setup && !quiet && addsAlways.length === 0
+          ? 'Something from outside reached the agent since the owner last spoke, so it went to him as a card instead. '
+          : setup && hasOther && !otherOk
+            ? 'The owner has not asked for the other changes in this proposal (in this thread, in the last two hours, with nothing from outside since), so it went to him as a card. '
+            : ''
     const pending = ctx.ledger
       .list('pending')
       .filter(
@@ -260,8 +296,9 @@ export class ConfigProposals {
   }
 
   /**
-   * Trust mode, after `ownerAsked`, for a change whose every part is LOW: the same checks as an approved card (the closed list,
-   * current values, `applyPatch`), with no card in between. The owner is told in the thread, in words that name old and new and
+   * A change made with no card in between: the owner asked (two hours, a low change) or nothing outside reached the agent since
+   * he last spoke (the fields that set a session up). The same checks as an approved card (the closed list, current values, the
+   * folder on disk, `applyPatch`). The owner is told in the thread, in words that name old and new and
    * how to revert it.
    */
   private async applyDirect(
@@ -269,6 +306,7 @@ export class ConfigProposals {
     reason: string,
     changes: ConfigChange[],
     scope?: string,
+    quietSetup = false,
   ): Promise<ProposeResult> {
     const { ctx } = this
     ctx.config.refresh()
@@ -285,8 +323,11 @@ export class ConfigProposals {
       config: cur,
       ...(scope !== undefined ? { scope } : {}),
     })
-    const v = verifyConfigPayload(candidate.payload, cur, new Date(ctx.clock.now()).toISOString())
+    const v = verifyConfigPayload(candidate.payload, cur, new Date(ctx.clock.now()).toISOString(), this.env())
     if (!v.ok) return { ok: false, text: `Nothing was changed: ${v.error}` }
+    // the disk may have changed since the proposal was judged
+    const onDisk = this.folderProblem(cur, v.patch, scope !== undefined)
+    if (onDisk) return { ok: false, text: `Nothing was changed: ${onDisk}` }
     // the lock is judged again on the config this writes on: the owner may have turned it on from the phone meanwhile
     if (cur.settings_lock === true) return { ok: false, text: `Nothing was changed: ${SETTINGS_LOCKED}` }
     // The agent never writes trust_mode, whatever a card or a direct call says: the app's config.patch (with the passkey
@@ -306,10 +347,20 @@ export class ConfigProposals {
           linux: `Your computer didn't accept it: ${r.message}. Nothing was changed.`,
         }),
       }
-    await this.commit(cur, r.config, 'agent_asked')
-    ctx.log.info('config applied as the owner asked', { rev: r.config.rev, paths: v.changes.map((c) => c.path) })
+    await this.commit(cur, r.config, quietSetup ? 'agent_quiet' : 'agent_asked')
+    ctx.log.info(quietSetup ? 'config applied: lock off, nothing outside' : 'config applied as the owner asked', {
+      rev: r.config.rev,
+      paths: v.changes.map((c) => c.path),
+    })
     await this.tellOwner(threadId, v.changes)
-    return { ok: true, text: `${savedText(v.changes, cur)} (applied: the owner asked; he was told how to undo it)` }
+    return {
+      ok: true,
+      text: `${savedText(v.changes, cur)} ${
+        quietSetup
+          ? "(applied: the settings lock is off and nothing outside reached the agent since the owner's words; he was told how to undo it)"
+          : '(applied: the owner asked; he was told how to undo it)'
+      }`,
+    }
   }
 
   /**
@@ -325,7 +376,8 @@ export class ConfigProposals {
         ? (shorteningNote(ctx, c.new, ctx.clock.now(), localClock(ctx, until).local_time ?? until.slice(11, 16)) ?? [])
         : [],
     )
-    await postSystemNotice(ctx, [changedText(changes, ctx.config.config), ...notes].join(' '), {
+    const lines = setupLines(changes, ctx.config.config)
+    await postSystemNotice(ctx, [changedText(changes, ctx.config.config), ...lines, ...notes].join(' '), {
       thread: ctx.config.thread(threadId) ? threadRef(ctx, threadId) : defaultThreadRef(ctx),
       ...(id ? { id } : {}),
       settingsChanged: changes.some((c) => decidesAlerts(c.path)),
@@ -336,7 +388,11 @@ export class ConfigProposals {
    * After a write, like an owner patch: the relay learns a created or archived thread, every app learns the new config, the
    * permission relay re-reads it, a thread that is gone keeps no copies of the owner's files, and the named events are written.
    */
-  private async commit(before: AgentConfigT, after: AgentConfigT, source: 'agent_card' | 'agent_asked') {
+  private async commit(
+    before: AgentConfigT,
+    after: AgentConfigT,
+    source: 'agent_card' | 'agent_asked' | 'agent_quiet',
+  ) {
     const { ctx } = this
     const warn = (what: string) => (e: unknown) => ctx.log.warn(`${what} not sent`, { error: (e as Error).message })
     const was = new Map(before.threads.map((t) => [t.id, t]))
@@ -431,10 +487,16 @@ export class ConfigProposals {
     if (!payload.success) return this.end(row, cardId, false, 'The card could not be read. Nothing was changed.')
     ctx.config.refresh()
     const cur: AgentConfigT = ctx.config.config
-    const v = verifyConfigPayload(approved.payload, cur, new Date(ctx.clock.now()).toISOString())
+    const v = verifyConfigPayload(approved.payload, cur, new Date(ctx.clock.now()).toISOString(), this.env())
     if (!v.ok) {
       if (!v.stale) ctx.log.security('config card refused at apply', { card: cardId })
       return this.end(row, cardId, false, v.error)
+    }
+    // the folder is judged again on the disk as it is now: it may have been removed, or swapped for a link, since the card was drawn
+    const onDisk = this.folderProblem(cur, v.patch, payload.data.scope !== undefined)
+    if (onDisk) {
+      ctx.log.security('config card folder refused at apply', { card: cardId })
+      return this.end(row, cardId, false, `${onDisk}. Nothing was changed.`)
     }
     // the agent never writes trust_mode (see applyDirect): the explicit layer behind the payload schema
     if ('trust_mode' in v.patch) {

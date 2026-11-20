@@ -39,7 +39,6 @@ function setup() {
           kind: 'agent',
           order: 9,
           notify: 'all',
-          voice_context: 'recent',
           archived: false,
           created_at: '2026-01-01T00:00:00.000Z',
         },
@@ -103,7 +102,7 @@ describe('lead init: the light profile is the default', () => {
     const d = s.settings().permissions.deny as string[]
     const vault = join(s.base, 'private-agent-vault')
     for (const root of [s.agentDir, s.claudeDir, join(s.base, '.claude'), s.talosHome, vault, extra]) {
-      for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'NotebookEdit']) {
+      for (const tool of ['Read', 'Edit']) {
         expect(d, `${tool} ${root}`).toContain(`${tool}(/${root}/**)`)
         expect(d, `${tool} ${root} bare`).toContain(`${tool}(/${root})`)
       }
@@ -116,7 +115,7 @@ describe('lead init: the light profile is the default', () => {
     s.init('--agent-dir', s.agentDir)
     const d = s.settings().permissions.deny as string[]
     for (const p of SECRETS)
-      for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write']) {
+      for (const tool of ['Read', 'Edit']) {
         expect(d, `${tool} ${p}`).toContain(`${tool}(/${join(s.base, p)}/**)`)
         expect(d, `${tool} ${p} bare`).toContain(`${tool}(/${join(s.base, p)})`)
       }
@@ -126,7 +125,7 @@ describe('lead init: the light profile is the default', () => {
     const s = setup()
     s.init('--agent-dir', s.agentDir)
     const d = s.settings().permissions.deny as string[]
-    for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'NotebookEdit']) {
+    for (const tool of ['Read', 'Edit']) {
       expect(d).toContain(`${tool}(/${s.talosHome}/**)`)
       expect(d).toContain(`${tool}(/${s.talosHome})`)
     }

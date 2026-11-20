@@ -126,34 +126,28 @@ export const HELP_SECTIONS: Section[] = [
           {
             q: 'Stop the agent’s turn, compact, or start a new conversation',
             where: [
-              w('settings', 'Session', 'Stop'),
-              w('settings', 'Session', 'Compact'),
-              w('settings', 'Session', 'New conversation'),
+              w('settings', 'Your agent', 'Stop'),
+              w('settings', 'Your agent', 'Compact'),
+              w('settings', 'Your agent', 'New conversation'),
             ],
             note: '[[Stop]] shows only while the agent is working.',
           },
           {
             q: 'The agent’s model or effort',
-            where: [w('settings', 'Session', 'Model'), w('settings', 'Session', 'Effort')],
+            where: [w('settings', 'Your agent', 'Model'), w('settings', 'Your agent', 'Effort')],
             note: 'Effort changes apply from the next message.',
           },
           {
-            q: 'Let a thread have its own session',
+            q: 'Let a thread have its own agent',
             where: [
-              w('settings', 'Thread sessions', 'Allow threads to have their own session'),
-              w('thread', 'Own session'),
+              w('settings', 'Thread agents', 'Allow threads to have their own agent'),
+              w('thread', 'Its own agent'),
             ],
           },
           {
-            q: 'Live-call voice',
-            where: [w('settings', 'Voice', 'Live-call voice')],
-            note: 'It applies from your next call.',
-          },
-          { q: 'Hands-free or hold to talk', where: [w('settings', 'Voice', 'Microphone')] },
-          {
             q: 'When replies are spoken aloud',
-            where: [w('settings', 'Voice', 'Voice-note replies')],
-            note: 'Your Mac reads them with its speech command. That is a different voice from the live-call voice.',
+            where: [w('settings', 'Voice', 'Spoken replies')],
+            note: 'Your Mac reads them with its speech command.',
           },
           { q: 'Driving mode', where: [w('settings', 'Voice', 'Driving mode')] },
           { q: 'Connect an app, such as Gmail or GitHub', where: [w('settings', 'Integrations')] },
@@ -189,7 +183,7 @@ export const HELP_SECTIONS: Section[] = [
             where: [w('mac', 'Session', 'Unstick the agent when it stops answering')],
           },
           {
-            q: 'The relay address, or sign this Mac in',
+            q: 'The Talos server address, or sign this Mac in',
             where: [w('mac', 'Connection', 'Relay address'), w('mac', 'Connection', 'Sign in…')],
           },
           { q: 'End this Mac’s access to your account', where: [w('mac', 'Connection', 'Forget this Mac…')] },
@@ -210,7 +204,7 @@ export const HELP_SECTIONS: Section[] = [
           {
             q: 'Quit Talos',
             where: [w('topmenu', 'Talos', 'Quit Talos')],
-            note: 'With tmux the agent keeps running. Without it Talos stops the agent first, waiting at most 15 seconds. Logging out or shutting down never waits.',
+            note: 'With tmux your agent keeps running. Without it Talos stops your agent first, waiting at most 15 seconds. Logging out or shutting down never waits.',
           },
           {
             q: 'Check for a new version of Talos, or install one that is ready',
@@ -241,7 +235,7 @@ export const HELP_SECTIONS: Section[] = [
         kind: 'steps',
         items: [
           'On a Mac that is not set up yet, Talos opens [[Set up Talos…]] by itself (it is also in the Menu bar). It gets itself ready, you sign in to Claude, and you choose whether to connect your phone. Then your agent starts and says hello. Nothing else is needed here.',
-          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its .mcp.json, plus the hooks of any MCP apps you have, changes) or Choose (a Talos agent folder you already have). To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import.',
+          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its tool settings, plus the hooks of any tool apps you have, change) or Choose (a Talos agent folder you already have). To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import.',
           'Sign in: [[Sign in…]] in the Window menu, in the Menu bar, or in ((Mac settings → Connection)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
           'Allow the macOS permissions in ((Mac settings → Permissions)).',
           'Start the agent: ((Menu bar → Start session)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
@@ -275,7 +269,7 @@ export const HELP_SECTIONS: Section[] = [
             id: 'mac-offline',
             q: 'The app says my Mac is offline',
             steps: [
-              'Look at the Talos icon in the Mac menu bar. A head with a slash through it means the agent, the bridge or the server is down. Choose [[Start session]] if the agent is stopped.',
+              'Look at the Talos icon in the Mac menu bar. A head with a slash through it means your agent, Talos on your Mac or the Talos server is down. Choose [[Start session]] if the agent is stopped.',
               'A Mac that has gone to sleep cannot answer. While it is plugged in, [[Keep this Mac awake while plugged in]] in ((Mac settings → General)) stops it sleeping on its own. A closed lid or Sleep from the Apple menu still puts it to sleep.',
               'In Terminal, {{talos-app status}} and {{talos-app doctor}} say what is wrong in plain lines, and {{talos-app logs}} shows the bridge log.',
               '((Settings → Health)) on your phone shows what the server can see, even while the Mac is off.',
@@ -302,8 +296,8 @@ export const HELP_SECTIONS: Section[] = [
             id: 'no-replies',
             q: 'No replies after a restart',
             steps: [
-              'The first lines of the Menu bar menu say Session, Bridge and Relay. If the Bridge says unknown, restart the agent once ([[Restart session]]) so it runs the current bridge.',
-              'If Talos says another session holds the channels, the agent is still running in Terminal. Stop that one first.',
+              'The first lines of the Menu bar menu say Session, Bridge and Relay. If the Bridge says unknown, restart the agent once ([[Restart session]]) so it runs the current version of Talos on your Mac.',
+              'If Talos says “Another session holds the channels”, your agent is still running in Terminal. Stop that one first.',
               'Run {{talos-app doctor}} in Terminal. It lists what does not match, and {{talos-app logs}} shows the end of the bridge log.',
             ],
           },
@@ -341,7 +335,7 @@ export const HELP_SECTIONS: Section[] = [
             rows: [
               {
                 keys: 'Ctrl+1 to Ctrl+9',
-                what: 'Switch to tab 1 to 9 (Main first)',
+                what: 'Switch to tab 1 to 9 (main agent first)',
                 when: 'On the Terminal screen, while its tabs show. Terminals… in the menu has no key: ⌘K is the command palette in the Talos window.',
               },
             ],
@@ -405,8 +399,8 @@ export const HELP_SECTIONS: Section[] = [
               },
               {
                 keys: '⌘. or Ctrl+.',
-                what: 'Open or close the Session panel',
-                when: 'In a thread that has a Session panel.',
+                what: 'Open or close the Agent panel',
+                when: 'In a thread that has an Agent panel.',
               },
               {
                 keys: '⌘/ or Ctrl+/',
@@ -446,14 +440,10 @@ export const HELP_SECTIONS: Section[] = [
             a: 'Threads can only be archived, and an archived thread can be restored.',
           },
           {
-            q: 'Change the iPhone app’s relay address',
-            a: 'The relay address (the server the app talks to) is fixed when the iPhone app is built.',
+            q: 'Change the iPhone app’s server address',
+            a: 'The server address is fixed when the iPhone app is built.',
           },
           { q: 'Rename a device', a: 'The Devices list shows a device’s name and lets you end it. It has no rename.' },
-          {
-            q: 'Make the spoken-reply voice the live-call voice',
-            a: 'They are two voices. The live-call voice is a Settings choice; spoken replies use your Mac’s speech command.',
-          },
         ],
       },
     ],
@@ -486,7 +476,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: 'Updating. The Mac app can update itself. Choose [[Check for Updates…]] in the Talos menu at the top of the screen, or in the Menu bar menu. If Talos asks “Allow Talos to update itself?”, it has found a Talos code folder it has not used before: press Allow updates only if it is the folder you installed from (Not now hides it until the next update or the next time Talos starts, and [[Allow updates…]] in the Menu bar menu brings it back). A small window shows what is happening: downloading, waiting for the relay, waiting for a quiet moment, restarting your agent, done. If something goes wrong it says so in one line and where the log is. When an update has been downloaded and checked, the item reads Update to, with a version and a dot. Click Update now to install it as soon as your agent is not in the middle of a turn (the Return key never presses it, and it never installs while you are typing), or Later to keep it for a quiet moment (Talos then installs it by itself when no agent is working, and waits up to 2 hours for that). One update moves the app, the Talos folder and your agent together; your agent restarts and carries on its conversation. The relay (the server) does not follow releases by itself: if the window says it is behind, redeploy it in Railway. If you use Terminal instead, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. If you build the Mac app yourself, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
+        text: 'Updating. The Mac app can update itself. Choose [[Check for Updates…]] in the Talos menu at the top of the screen, or in the Menu bar menu. [[About Talos]] in the same menu opens a small Talos window with the version and a Check for Updates button; the answer (up to date, an update ready, or why it cannot update yet) shows right there, with Update now or Allow updates when one is needed. If Talos asks “Allow Talos to update itself?”, it has found a Talos code folder it has not used before: press Allow updates only if it is the folder you installed from (Not now hides it until the next update or the next time Talos starts, and [[Allow updates…]] in the Menu bar menu brings it back). A small window shows what is happening: downloading, waiting for Talos online, waiting for a quiet moment, restarting your agent, done. If something goes wrong it says so in one line and where the log is. When an update has been downloaded and checked, the item reads Update to, with a version and a dot. Click Update now to install it as soon as your agent is not in the middle of a turn (the Return key never presses it, and it never installs while you are typing), or Later to keep it for a quiet moment (Talos then installs it by itself when no agent is working, and waits up to 2 hours for that). One update moves the app, the Talos folder and your agent together; your agent restarts and carries on its conversation. The Talos server does not follow releases by itself: if the window says it is behind, redeploy it in Railway. If you use Terminal instead, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. If you build the Mac app yourself, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
       },
       {
         kind: 'p',

@@ -21,6 +21,11 @@ struct OfferState {
   var controlsSeen: [String] = []
   /// The dialog id an Enter was sent for: no second Enter for it, whatever arrives.
   var enterSentFor: String?
+  /// The dialog id an Enter was sent for whose delivery is UNKNOWN (a timeout), and the awake time its memory ends (`unsentEnterMemory`). Not
+  /// "answered": the offer is marked disturbed (no answer for that id presses anything), the same screen is not re-offered until the memory ends,
+  /// and then it is a new sighting with a new id (a key that never arrived is asked for again).
+  var enterUnsentFor: String?
+  var enterUnsentUntil: Double = 0
   /// The screen changed while an offer stood, so what holds still next may be another dialog that looks the same (the owner's Enter in the
   /// pane, a second server): a new sighting, a new id. Until then no answer for the old id presses anything (`take`, `popupClick`).
   var disturbed = false
@@ -34,6 +39,16 @@ struct OfferState {
   /// The same for the other two questions whose "no" ends the session: the bypass disclaimer's "No, exit" (`.bypass`) and the development
   /// channel's "Exit" (`.devChannels`).
   var declinedExit: DialogReader.Kind?
+  /// The tool permission's or the question's screen this offer was made for (`PaneSelect.Screen.bound`): every key of an answer is checked against it
+  /// (`PaneAnswerDriver`, `KeyGuard.Intent.pane`). nil for the dialogs `DialogReader` reads. Memory only: a relaunch never presses on a record from disk.
+  var paneBound: String?
+  /// What the pane showed at the last look (`PaneSelect.Screen.bound`), since when (awake clock), and since when it has shown none. A tool permission's
+  /// prompt is settled by its OWN rows holding still, not the whole screen: the activity dot above it never stops blinking.
+  var paneSeen: String?
+  var paneSince: Double = 0
+  var paneGoneSince: Double?
+  /// Whether the offer on offer is a tool permission or a question (it carries its screen).
+  var isPane: Bool { paneBound != nil }
 
   /// Whether the Mac pressed (or opened) anything for this dialog id already, by a verified card answer or a popup click. Only this closes
   /// the popup: a result that says nothing was pressed (a forged answer, a phone that is not paired) leaves the one place to answer up.
@@ -49,6 +64,8 @@ extension WorkerManager {
   func syncOffer(_ id: String, rows: [String], seen: DialogMatcher.Screen, settled: Bool) {
     guard let r = rt[id] else { return }
     guard seen.isDialog else {
+      // a tool permission or the agent's question, settled by its own rows (`WorkerPaneOffer.swift`)
+      if syncPane(id, rows: rows) { return }
       if settled, r.entry.dialog != nil { endOffer(id) }
       return
     }
@@ -71,6 +88,11 @@ extension WorkerManager {
     // under. A record read back from disk after a relaunch is never the same, however exactly it equals the screen: this process did not
     // see what happened on the pane while the app was away (the dialog answered there and another that reads alike in its place, the file
     // edited), so what it sees now is a new sighting with a new id, and a card or a tap for the old id applies to nothing.
+    if let o = r.entry.dialog, r.offer.enterUnsentFor == o.id, o.kind == d.kind, ExactText.equal(o.subject, d.subject),
+      ExactText.equal(o.options, d.options), awake() < r.offer.enterUnsentUntil
+    {
+      return  // inside the memory of an Enter that may have landed: neither answerable nor re-offered yet
+    }
     if let o = r.entry.dialog, o.kind == d.kind, ExactText.equal(o.subject, d.subject), ExactText.equal(o.options, d.options),
       !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil
     {
@@ -85,6 +107,8 @@ extension WorkerManager {
       expires_at: ISOTime.string(t + options.cardLifetime))
     rt[id]?.offer.sinceAwake = awake()
     rt[id]?.offer.disturbed = false
+    rt[id]?.offer.enterUnsentFor = nil
+    rt[id]?.offer.paneBound = nil
     dirty = true
   }
 
@@ -102,13 +126,15 @@ extension WorkerManager {
   /// The pane's screen is not what it was at the last look. Called for every look, whatever the screen shows: an offer this process has
   /// verified is from then on one the screen changed under, until a still screen is read again and gets a new id.
   func noteScreenChanged(_ id: String) {
-    guard let r = rt[id], r.entry.dialog != nil, r.offer.sinceAwake != nil else { return }
+    // a tool permission's offer is tied to its own rows (the key gate checks them), so the transcript above it changing is not a change under it
+    guard let r = rt[id], r.entry.dialog != nil, r.offer.sinceAwake != nil, !r.offer.isPane else { return }
     rt[id]?.offer.disturbed = true
   }
 
   func endOffer(_ id: String) {
     guard rt[id]?.entry.dialog != nil else { return }
     rt[id]?.entry.dialog = nil
+    rt[id]?.offer.paneBound = nil
     rt[id]?.offer.sinceAwake = nil
     rt[id]?.offer.misses = 0
     rt[id]?.offer.disturbed = false

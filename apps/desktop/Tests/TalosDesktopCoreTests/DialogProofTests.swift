@@ -19,7 +19,8 @@ struct DialogProofTests {
     let o = try A2Fixtures.object(name)
     return .init(
       thread: o["thread"] as! String, dialogId: o["dialog_id"] as! String,
-      kind: DialogReader.Kind(rawValue: o["dialog_kind"] as! String)!, subject: o["subject"] as? String, options: o["options"] as! [String])
+      kind: DialogReader.Kind(rawValue: o["dialog_kind"] as! String)!, subject: o["subject"] as? String, options: o["options"] as! [String],
+      freeText: o["free_text"] as? Int)
   }
   static func env(
     _ pane: DialogProofCheck.Pane, nowMs: Double = A2Fixtures.nowMs, pinnedKey: ((String) -> P256.Signing.PublicKey?)? = nil,
@@ -63,6 +64,44 @@ struct DialogProofTests {
     #expect(try Self.verify("dialog-answer", trip, Self.env(trip, screenLabel: { _ in "No, exit" })) == .no(reason: .screenChanged, step: 5))
     #expect(try Self.verify("dialog-answer", trip, Self.env(trip, screenLabel: { _ in nil })) == .no(reason: .screenChanged, step: 5))
     #expect(try Self.verify("dialog-answer", trip, Self.env(trip, alreadyPressed: true)) == .no(reason: .alreadyAnswered, step: 5))
+  }
+
+  // MARK: the agent's question and a tool permission (pane-prompts rows 8 and 9): fixtures the protocol package signed
+
+  @Test func aFreeTextAnswerCarriesTheOwnersWordsInTheSignedFrameAndAPickCarriesNone() throws {
+    let q = try Self.pane("pane-question")
+    #expect(q.freeText == 2 && q.options == ["Red", "Blue", "Other\u{2026}", "Chat about this"])
+    #expect(try Self.verify("dialog-answer-text", q) == .ok(choice: 2, label: "Other\u{2026}", deviceId: "d_rjxnk4xufxem5xago5zd"))
+    let text = try #require(try A2Fixtures.answer("dialog-answer-text"))
+    #expect(DialogProofCheck.signedText(text) == "purple")
+    #expect(try Self.verify("dialog-answer-question-pick", q) == .ok(choice: 1, label: "Blue", deviceId: "d_rjxnk4xufxem5xago5zd"))
+    #expect(DialogProofCheck.signedText(try #require(try A2Fixtures.answer("dialog-answer-question-pick"))) == nil)
+    let t = try Self.pane("pane-tool")
+    #expect(t.options == ["Allow once", "Deny"] && t.freeText == nil)
+    #expect(try Self.verify("dialog-answer-tool", t) == .ok(choice: 0, label: "Allow once", deviceId: "d_rjxnk4xufxem5xago5zd"))
+  }
+
+  @Test(arguments: [
+    ("dialog-answer-text-wrong-option", 3), ("dialog-answer-text-missing", 3), ("dialog-answer-text-newline", 3), ("dialog-answer-text-padded", 3),
+    ("dialog-answer-text-long", 3), ("dialog-answer-text-121", 3), ("dialog-answer-text-changed", 2),
+  ])
+  func aTextThatIsNotTheOwnersCleanWordsForTheFreeTextOptionIsRefused(name: String, step: Int) throws {
+    #expect(try Self.verify(name, Self.pane("pane-question")) == .no(reason: .unverified, step: step), "\(name)")
+  }
+
+  @Test func oneHundredAndTwentyCharactersIsTheMostAFreeTextAnswerCanCarry() throws {
+    #expect(try Self.verify("dialog-answer-text-120", Self.pane("pane-question")) == .ok(choice: 2, label: "Other\u{2026}", deviceId: "d_rjxnk4xufxem5xago5zd"))
+  }
+
+  @Test func aToolPermissionTakesNoTextAndTheCardMustSayTheMacsFreeTextOption() throws {
+    #expect(try Self.verify("dialog-answer-tool-text", Self.pane("pane-tool")) == .no(reason: .unverified, step: 3))
+    var none = try Self.pane("pane-question")
+    none.freeText = nil
+    #expect(try Self.verify("dialog-answer-text", none) == .no(reason: .unverified, step: 3), "no free-text option recorded: a text is nothing")
+    #expect(try Self.verify("dialog-answer-question-pick", none) == .no(reason: .unverified, step: 4), "the card named an option the Mac did not record")
+    var other = try Self.pane("pane-question")
+    other.freeText = 3
+    #expect(try Self.verify("dialog-answer-question-pick", other) == .no(reason: .unverified, step: 4))
   }
 
   // MARK: every tampered answer is refused at its step

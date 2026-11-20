@@ -214,11 +214,12 @@ struct AllowUpdatesView: View {
       }
       HStack {
         Spacer()
-        RealClickButton(title: AllowUpdatesCopy.notNowButton) { center.notNow() }
-        RealClickButton(title: AllowUpdatesCopy.allowButton, accent: true) { center.allow(clone: clone, panel: token) }
+        PillRealClickButton(title: AllowUpdatesCopy.notNowButton, width: 110) { center.notNow() }
+        PillRealClickButton(title: AllowUpdatesCopy.allowButton, primary: true, width: 150) { center.allow(clone: clone, panel: token) }
       }
     }
     .padding(16)
+    .environment(\.colorScheme, .light)  // cream either way: the text is fixed ink, so it never follows a dark appearance
     .frame(width: 400, alignment: .leading)
     .background(UpdatePalette.cream, in: RoundedRectangle(cornerRadius: 12))
     .overlay(RoundedRectangle(cornerRadius: 12).stroke(UpdatePalette.accent, lineWidth: 1))

@@ -22,9 +22,9 @@ const opts = {
 const deny = (extra = {}) => leadSettings({ ...opts, ...extra }).permissions.deny
 
 describe('leadSettings: deny rules for whole roots', () => {
-  test('Read, Grep and Glob are denied for each protected root as //<root>/**', () => {
+  test('Read (which covers Grep and Glob) is denied for each protected root as //<root>/**', () => {
     const d = deny({ protect: ['/home/alex/Documents/taxes'] })
-    for (const tool of ['Read', 'Grep', 'Glob'])
+    for (const tool of ['Read'])
       for (const root of [
         '/home/alex/My-Agent',
         '/home/alex/.claude',
@@ -38,14 +38,13 @@ describe('leadSettings: deny rules for whole roots', () => {
   })
   test('the lower-case spelling is denied too, where it differs', () => {
     expect(deny()).toContain('Read(//home/alex/my-agent/**)')
-    expect(deny()).toContain('Glob(//home/alex/.talos-app/**)')
+    expect(deny()).toContain('Read(//home/alex/.talos-app/**)')
   })
   test('the roots cannot be written either, and the lead cannot edit its own .claude', () => {
     const d = deny({ folder: '/home/alex/work/trip' })
     expect(d).toContain('Edit(//home/alex/My-Agent/**)')
-    expect(d).toContain('Write(//home/alex/.talos-app/**)')
+    expect(d).toContain('Edit(//home/alex/.talos-app/**)')
     expect(d).toContain('Edit(//home/alex/work/trip/.claude/**)')
-    expect(d).toContain('Write(//home/alex/work/trip/.claude/**)')
   })
   test('no list of single files is left: the old per-file rules are gone', () => {
     const d = deny().join('\n')
@@ -162,7 +161,8 @@ describe('leadSettings: MCP servers (the Mac app applies the thread allow list)'
   })
 })
 
-const EDITORS = ['Edit', 'Write', 'NotebookEdit']
+// Edit( ) covers Write, NotebookEdit and MultiEdit: Claude Code matches no other tool name in a path rule
+const EDITORS = ['Edit']
 
 describe('leadSettings: autostart and exec paths are closed to the file tools', () => {
   test('the fixed list is one exported constant', () => {
@@ -193,7 +193,7 @@ describe('leadSettings: autostart and exec paths are closed to the file tools', 
       ].sort(),
     )
   })
-  test('a file gets its exact path, a folder gets /** and the bare path; Edit, Write and NotebookEdit; never Read', () => {
+  test('a file gets its exact path, a folder gets /** and the bare path; Edit (so Write and NotebookEdit too); never Read', () => {
     const d = deny()
     for (const tool of EDITORS) {
       for (const f of [
@@ -230,7 +230,7 @@ describe('leadSettings: autostart and exec paths are closed to the file tools', 
   test('lower-case forms too, like the roots', () => {
     const d = deny()
     expect(d).toContain('Edit(//home/alex/library/launchagents/**)')
-    expect(d).toContain('NotebookEdit(//home/alex/.zshrc)')
+    expect(d).toContain('Edit(//home/alex/.zshrc)')
   })
   test('PATH folders are added; tmp, lead-folder, glob, relative and too-broad ones are left out; no duplicates', () => {
     const d = deny({
@@ -268,14 +268,14 @@ describe('leadSettings: autostart and exec paths are closed to the file tools', 
     expect(d).not.toContain('Edit(///**)')
     expect(new Set(d).size).toBe(d.length)
   })
-  test("NotebookEdit joins Edit and Write on the roots and on the lead's own .claude and marker", () => {
+  test("Edit (so NotebookEdit and Write too) is denied on the roots and on the lead's own .claude and marker", () => {
     const d = deny({ folder: '/home/alex/work/trip' })
     for (const r of [
-      'NotebookEdit(//home/alex/My-Agent/**)',
-      'NotebookEdit(//home/alex/.claude/**)',
-      'NotebookEdit(//home/alex/.claude.json)',
-      'NotebookEdit(//home/alex/work/trip/.claude/**)',
-      'NotebookEdit(//home/alex/work/trip/.talos-lead)',
+      'Edit(//home/alex/My-Agent/**)',
+      'Edit(//home/alex/.claude/**)',
+      'Edit(//home/alex/.claude.json)',
+      'Edit(//home/alex/work/trip/.claude/**)',
+      'Edit(//home/alex/work/trip/.talos-lead)',
     ])
       expect(d, r).toContain(r)
   })
@@ -312,7 +312,7 @@ describe('leadSettings: the OS sandbox', () => {
   })
   test('the whole Claude config folder is a root, so transcripts, history, settings, hooks and skills are all in it', () => {
     const d = deny()
-    for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write']) {
+    for (const tool of ['Read', 'Edit']) {
       expect(d, tool).toContain(`${tool}(//home/alex/.claude/**)`)
       expect(d, `${tool} bare`).toContain(`${tool}(//home/alex/.claude)`)
     }
@@ -320,11 +320,11 @@ describe('leadSettings: the OS sandbox', () => {
     expect(d.some((r) => /file-history|history\.jsonl|\/projects\//.test(r))).toBe(false)
     // the global config files are roots too, as exact paths, for reads and for writes
     for (const f of ['/home/alex/.claude.json', '/home/alex/.claude.json.backup'])
-      for (const tool of ['Read', 'Edit', 'Write']) expect(d, `${tool} ${f}`).toContain(`${tool}(/${f})`)
+      for (const tool of ['Read', 'Edit']) expect(d, `${tool} ${f}`).toContain(`${tool}(/${f})`)
   })
   test('with CLAUDE_CONFIG_DIR that folder is the root, and ~/.claude and ~/.claude.json stay roots', () => {
     const d = deny({ claudeDir: '/Volumes/x/cfg' })
-    for (const tool of ['Read', 'Edit', 'Write']) {
+    for (const tool of ['Read', 'Edit']) {
       expect(d, tool).toContain(`${tool}(//Volumes/x/cfg/**)`)
       expect(d, `${tool} home`).toContain(`${tool}(//home/alex/.claude/**)`)
       expect(d, `${tool} json`).toContain(`${tool}(//home/alex/.claude.json)`)

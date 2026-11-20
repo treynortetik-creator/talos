@@ -22,26 +22,6 @@ job_mod() {
   fi
 }
 
-# The browser job's microphone check (scripts/mic-preflight.mjs): Chromium's getUserMedia sometimes never answers on the CI Mac (a stuck
-# audio device), and then the voice specs time out one by one, 20 of them. Stuck, or the check not running at all, fails the job
-# with one plain line in the log and in the status (RESULTS/browser.why, read by report), after the tests have run. Never green.
-mic_preflight() { # mic_preflight <log>
-  local log="$1" out rc line
-  echo "+ node scripts/mic-preflight.mjs" >> "$log"
-  out="$(node scripts/mic-preflight.mjs 2>>"$log")"; rc=$? # stderr (a Node warning) goes to the log, not into the answer
-  printf '%s\n' "$out" >> "$log"
-  out="$(printf '%s\n' "$out" | tail -1)"
-  [ "$rc" = 0 ] && [ "$out" = ok ] && return 0
-  if [ "$rc" = 3 ]; then
-    line="the runner's microphone is blocked (getUserMedia never answers): check the Mac's microphone permission, then rerun"
-  else
-    line="the microphone preflight could not run (exit $rc: $(printf '%s' "$out" | head -1 | cut -c1-60)); see the log"
-  fi
-  echo "ci-local: $line" >> "$log"
-  printf '%s\n' "$line" > "$RESULTS/browser.why"
-  return 1
-}
-
 # The browser job's tests talk to localhost only. A proxy put in front of it (web protection software on the CI Mac once answered
 # page.goto with ERR_UNEXPECTED_PROXY_AUTH) is taken out of the tests' environment, and localhost is never proxied. That reaches
 # Node and the tools that read these variables. The browsers on macOS take their proxy from the system settings instead: the
@@ -98,7 +78,7 @@ browser_e2e_fold() { # browser_e2e_fold <log>: the part's answer (its state from
   run "$log" pnpm -r --workspace-concurrency=1 --no-bail --if-present "${E2E_THERE[@]}" test:e2e
 }
 job_browser() {
-  local log="$1" mic=0 only=()
+  local log="$1" only=()
   [ -z "${CI_BROWSER_E2E_PART:-}" ] || only=("${E2E_HERE[@]}")
   # CI_BROWSER_E2E_SHADOW (Lemnos in e2e-shadow, docs/CI-MACHINES.md, "The e2e packages on Titan"): every package here, as today,
   # web first and the others in a call of their own, so the shadow comparison (ci-runner.sh e2e-shadow) reads when web ended
@@ -115,7 +95,6 @@ job_browser() {
   # (with check on Titan, CI_CHECK_PART, no check suites run here: browser starts with desktop)
   { [ -n "${CI_CHECK_PART:-}" ] || wait_for_job check; } &&
   browser_ready "$log" &&
-  { mic_preflight "$log" || mic=1; true; } &&
   {
     # One failing part never hides the next: the protocol browser suite, then every e2e package (--no-bail, so a web
     # failure does not stop the relay or e2e package after it). The job fails if any part did.
@@ -129,14 +108,7 @@ job_browser() {
       run "$log" pnpm -r --workspace-concurrency=1 --no-bail --if-present "${E2E_THERE[@]}" test:e2e || { rc=$?; e2e=1; }
       echo "e2e-shadow: the other e2e packages ended with exit $rc" >> "$log"
     fi
-    if [ "$mic" = 1 ]; then
-      # A stuck microphone fails the job with the plain line (browser.why) while the other tests still run. The web voice
-      # specs always fail then, so only the protocol browser suite, which never opens the microphone, counts as "other":
-      # a failure there is named, since it can't be the audio.
-      [ "$other" = 1 ] && printf '%s\n' "$(head -1 "$RESULTS/browser.why" | cut -c1-90); other tests failed too, see the log" > "$RESULTS/browser.why"
-      return 1
-    fi
-    # the part's own red, named, when nothing here failed first (the mic's line above wins over it)
+    # the part's own red, named, when nothing here failed first
     [ ! -s "$RESULTS/browser.e2e-why" ] || [ "$other$here" != 00 ] || cp "$RESULTS/browser.e2e-why" "$RESULTS/browser.why"
     [ "$other$e2e" = 00 ]
   }

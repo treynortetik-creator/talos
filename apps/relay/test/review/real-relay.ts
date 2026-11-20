@@ -1,5 +1,4 @@
-// A relay on a free port with the REAL auth module (sessions, pinning, rate limits, step-up) and the real hub, hooks and
-// voice modules. Sessions are minted straight into the auth store (no passkey ceremony), everything else goes over HTTP
+// A relay on a free port with the REAL auth module (sessions, pinning, rate limits, step-up) and the real hub and hooks modules. Sessions are minted straight into the auth store (no passkey ceremony), everything else goes over HTTP
 // and WebSocket exactly as the PWA and the Mac do. The testkit fakes and the unit-test auth hide the bugs these tests catch.
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

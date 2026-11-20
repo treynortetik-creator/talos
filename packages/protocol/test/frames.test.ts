@@ -94,9 +94,19 @@ describe('fixtures', () => {
   })
 
   it('owner frame attachments need an explicit role (no defaults inside signed frames)', () => {
-    const f = structuredClone(fixtures.voice_note) as { attachment: Record<string, unknown> }
-    f.attachment.role = undefined
-    delete f.attachment.role
+    const att: Record<string, unknown> = {
+      media_id: 'md_01JBF3V7Q8K2M4N6P8R0S2T401',
+      kind: 'file',
+      role: 'attachment',
+      mime: 'application/pdf',
+      name: 'notes.pdf',
+      size: 2048,
+      sha256: 'ab'.repeat(32),
+    }
+    const f = structuredClone(fixtures.message) as { attachments: Array<Record<string, unknown>> }
+    f.attachments = [att]
+    expect(parseFrame(f).ok).toBe(true)
+    delete att.role
     expect(parseFrame(f).ok).toBe(false)
   })
 
@@ -181,8 +191,8 @@ describe('two-stage ack (delivered / consumed)', () => {
 })
 
 describe('original_ts on a re-signed owner frame', () => {
-  it('message and voice_note accept the time the words were first written, and still refuse other unknown fields', () => {
-    for (const type of ['message', 'voice_note']) {
+  it('message accepts the time the words were first written, and still refuses other unknown fields', () => {
+    for (const type of ['message']) {
       const base = fixtures[type] as Record<string, unknown>
       expect(parseFrame({ ...base, original_ts: '2026-10-20T09:00:00.000Z' }).ok, type).toBe(true)
       expect(parseFrame({ ...base, original_ts: 'last week' }).ok, type).toBe(false)

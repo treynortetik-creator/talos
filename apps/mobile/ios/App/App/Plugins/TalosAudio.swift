@@ -10,10 +10,8 @@ final class SystemAudioSession: AudioSessionDriving {
     func apply(_ config: SessionConfig) throws {
         var options: AVAudioSession.CategoryOptions = []
         if config.mixWithOthers { options.insert(.mixWithOthers) }
-        if config.defaultToSpeaker { options.insert(.defaultToSpeaker) }
-        if config.allowBluetooth { options.insert(.allowBluetoothHFP) }
         try session.setCategory(
-            config.category == .playAndRecord ? .playAndRecord : .playback,
+            .playback,
             mode: config.spokenAudio ? .spokenAudio : .default,
             options: options)
     }
@@ -93,7 +91,7 @@ final class SystemNowPlaying: NowPlayingDriving {
 }
 
 /// `TalosAudio.setMode({mode})`: the web adapter's `audioSession.set(...)` (IOS-SPEC 6.2). The session is parked at launch
-/// (category only, mixing, inactive) and activated only while a voice reply plays or a note is recorded.
+/// (category only, mixing, inactive) and activated only while a voice reply plays.
 /// `setNowPlaying` / `updateNowPlaying` / `clearNowPlaying` drive the lock screen and Control Center (audit D37); the system's
 /// play, pause, skip and scrub commands come back to the page as `remoteCommand` events.
 @objc(TalosAudioPlugin)
@@ -163,7 +161,7 @@ public class TalosAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func setMode(_ call: CAPPluginCall) {
         guard TalosPluginGate.allows(bridge) else { return call.reject("not allowed from this page") }
         guard let raw = call.getString("mode"), let mode = AudioMode(rawValue: raw) else {
-            return call.reject("mode must be playback, paused, record or idle")
+            return call.reject("mode must be playback, paused or idle")
         }
         TalosAudioPlugin.queue.async {
             do {

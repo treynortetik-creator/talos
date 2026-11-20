@@ -58,7 +58,6 @@ const beatOf = (over: Partial<HealthBeatT> = {}): HealthBeatT => ({
   bridge: { version: '0.4.1', started_at: START },
   mod: { state: 'alive', last_seen: START, expected: true },
   tts: true,
-  stt: true,
   sqlite: { fts5: true },
   ...over,
 })
@@ -326,21 +325,14 @@ describe('V2.3 status', () => {
     expect(JSON.stringify(s.json)).not.toContain('"bridge":{"version"')
   })
 
-  it('limits: the relay reports its own numbers (buffer days, upload cap, voice minutes) and nothing else', async () => {
+  it('limits: the relay reports its own numbers (buffer days, upload cap) and nothing else', async () => {
     const { r } = await world({
-      env: { BUFFER_DAYS: '3', MEDIA_MAX_MB: '20', VOICE_DAILY_MAX_MIN: '45', VOICE_SESSION_MAX_MIN: '15' },
+      env: { BUFFER_DAYS: '3', MEDIA_MAX_MB: '20' },
     })
     const s = await status(r)
     const parsed = HealthStatus.parse(s.json)
-    expect(parsed.limits).toEqual({
-      buffer_days: 3,
-      upload_max_mb: 20,
-      voice_daily_max_min: 45,
-      voice_session_max_min: 15,
-    })
-    expect(Object.keys((s.json as { limits: object }).limits).sort()).toEqual(
-      ['buffer_days', 'upload_max_mb', 'voice_daily_max_min', 'voice_session_max_min'].sort(),
-    )
+    expect(parsed.limits).toEqual({ buffer_days: 3, upload_max_mb: 20 })
+    expect(Object.keys((s.json as { limits: object }).limits).sort()).toEqual(['buffer_days', 'upload_max_mb'].sort())
   })
 
   it('limits: an app that does not know the field, or a status without it, still parses (old relay, old app)', () => {

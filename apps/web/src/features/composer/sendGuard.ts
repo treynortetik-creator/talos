@@ -1,7 +1,9 @@
-// After a send the box empties, and the mic and the live-call button take Send's place in the row: "Start a live call" sits
-// exactly where Send was. A second press on that spot (a double tap, a touch the screen registered twice, a quick re-tap) then
-// started a call, which asks for the microphone: "pressing Send starts dictation" (the owner, 2026-11-19). For a moment after
-// the send, a press there is swallowed before it reaches either button.
+// While the agent works, Stop sits just left of Send. Send used to go when a send emptied the box, and Stop slid into the spot
+// where Send was, so a second press on that spot (a double tap, a touch the screen registered twice, a quick re-tap) stopped the
+// agent's turn the owner was adding to. (Before voice input was archived, 2026-11-19, the mic and the live-call button took
+// Send's place: "pressing Send starts dictation", the owner.) Since 2026-11-20 Send stays in its place, dimmed, so that press
+// lands on it and does nothing. The guard is kept as a cheap safeguard: for a moment after Send turns off, a press on Stop is
+// swallowed.
 //
 // Every time here is an event's own timeStamp (when the finger or key acted), never the clock when a handler happens to run:
 // on a busy or slow phone the second tap can wait in the queue far longer than the moment itself, and was let through when the
@@ -14,7 +16,7 @@
 // made in it. A press stamped well before it was handled (Chromium, Firefox: the time it was made) is judged by its stamp.
 import { type SyntheticEvent, useEffect, useLayoutEffect, useRef } from 'react'
 
-/** How long after a send the buttons in Send's place ignore a press. A double tap is under 300 ms; a quick re-tap a bit more. */
+/** How long after a send Stop ignores a press. A double tap is under 300 ms; a quick re-tap a bit more. */
 export const SEND_GUARD_MS = 700
 
 /** A Send press older than this when the buttons appear is not the one that emptied the box (a slow send, an unrelated clear). */
@@ -66,8 +68,8 @@ function stopWatch(beat: Beat) {
 }
 
 /**
- * Handlers for an element around the buttons that replace Send, plus `sent(e)` for Send's own click. `canSend` is whether
- * Send shows: when it goes from shown to hidden, the buttons are about to be painted, and the moment starts at the Send press
+ * Handlers for an element around Stop, plus `sent(e)` for Send's own click. `canSend` is whether Send is on (not dimmed):
+ * when it goes from on to off, the moment starts at the Send press
  * (or, with no Send press just before, as when the text was sent with the Return key or deleted, at that change).
  */
 export function useSendGuard(canSend: boolean) {

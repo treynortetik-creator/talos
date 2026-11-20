@@ -33,16 +33,21 @@ describe('I14: native paths the bridge wrapper does not cover', () => {
   })
 
   // Capacitor 8.5.3 WebViewDelegationHandler.swift:50-58 grants camera/mic capture to every origin and frame
-  // (decisionHandler(.grant)). This PR adds NSMicrophoneUsageDescription, which arms that grant.
+  // (decisionHandler(.grant)). The shell declares no microphone key any more and the gate always refuses camera and
+  // microphone (voice input archived, docs/archived/voice.md); motion is decided by the trusted frame.
   it('NavigationGate decides media-capture and motion permission itself and never hands it to Capacitor', () => {
     const src = gate()
-    for (const marker of ['requestMediaCapturePermissionFor', 'requestDeviceOrientationAndMotionPermissionFor']) {
-      const body = swiftBody(src, marker)
-      expect(body, marker).toMatch(
+    const expected: Record<string, RegExp> = {
+      requestMediaCapturePermissionFor: /decisionHandler\(\.deny\)/,
+      requestDeviceOrientationAndMotionPermissionFor:
         /decisionHandler\(devicePermission\(frame, webView\) == \.grant \? \.grant : \.deny\)/,
-      )
+    }
+    for (const [marker, decision] of Object.entries(expected)) {
+      const body = swiftBody(src, marker)
+      expect(body, marker).toMatch(decision)
       expect(body, marker).not.toMatch(/inner|\bui\b/)
     }
+    expect(swiftBody(src, 'requestMediaCapturePermissionFor')).not.toMatch(/\.grant/)
     expect(swiftBody(src, 'func devicePermission')).toMatch(/guardian\.devicePermission\(/)
   })
 

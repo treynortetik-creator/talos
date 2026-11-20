@@ -132,6 +132,22 @@ export const EMPTY_CHIPS: Chip[] = []
 
 const aborts = new Map<string, AbortController>()
 
+/**
+ * An upload with no progress for this long gives up, so an answer that never comes (a relay hiccup, a dropped connection, a
+ * request the network lost) cannot hold the chip at "uploading" and the message box with it (the owner, 2026-11-20). Every
+ * progress report starts the wait again, so a large file on a slow link is never cut off while it is still moving.
+ */
+export const UPLOAD_STALL_MS = 30_000
+/**
+ * Progress counts bytes the phone has handed to its network stack, not bytes the relay has: at 100% a few megabytes can
+ * still be queued on a slow uplink, with no progress event while they drain. So once progress reaches 100% the wait for the
+ * answer grows with the file (up to 8 MB of it, at 50 KB/s), on top of the stall time. A 4 MB photo waits about 1 min 54 s.
+ */
+export function answerWaitMs(size: number): number {
+  return UPLOAD_STALL_MS + Math.round((Math.min(size, 8 * 1024 * 1024) / 50_000) * 1000)
+}
+const STALL_NOTE = "Couldn't upload: no answer. Retry or remove it."
+
 /** Uploads one file into a thread's chips. Resolves true when it is ready; false when it failed or was cancelled. */
 export async function uploadChip(
   client: TalosClient,
@@ -159,21 +175,49 @@ export async function uploadChip(
   setChips(threadId, (c) => (existingKey ? c.map((x) => (x.key === key ? chip : x)) : [...c, chip]))
   const ctl = new AbortController()
   aborts.set(key, ctl)
+  // The stall wait: raced as well as signalled (with no progress reports, as on a plain fetch, it bounds the whole upload), so an upload that never answers and ignores its signal cannot hold the chip.
+  let stalled = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let giveUp: () => void = () => {}
+  const stall = new Promise<never>((_, reject) => {
+    giveUp = () => reject(new Error('stalled'))
+  })
+  stall.catch(() => {}) // handled by the race below; never an unhandled rejection
+  const arm = (ms = UPLOAD_STALL_MS) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      stalled = true
+      ctl.abort()
+      giveUp()
+    }, ms)
+  }
+  arm()
   try {
-    const ref = await client.uploadMedia(file, {
-      name: file.name,
-      signal: ctl.signal,
-      onProgress: (f) => patch({ progress: f }),
-    })
+    const ref = await Promise.race([
+      client.uploadMedia(file, {
+        name: file.name,
+        signal: ctl.signal,
+        onProgress: (f) => {
+          arm(f >= 1 ? answerWaitMs(file.size) : UPLOAD_STALL_MS)
+          patch({ progress: f })
+        },
+      }),
+      stall,
+    ])
     if (ctl.signal.aborted) return false
     patch({ state: 'ready', ref, progress: 1 })
     return true
   } catch (e) {
+    if (stalled) {
+      patch({ state: 'error', note: STALL_NOTE })
+      return false
+    }
     if (ctl.signal.aborted) return false // cancelled: the chip is already gone
     const note = uploadFailureNote(e, hostFrom(client.store.getState().presence.features))
     patch({ state: 'error', ...(note ? { note } : {}) })
     return false
   } finally {
+    clearTimeout(timer)
     aborts.delete(key)
   }
 }

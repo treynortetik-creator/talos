@@ -129,9 +129,7 @@ export function vapidKeys(): { publicKey: string; privateKey: string } {
 
 export type Stack = Awaited<ReturnType<typeof startStack>>
 
-export async function startStack(
-  opts: { stt?: boolean; tts?: boolean; env?: Record<string, string>; at?: string } = {},
-) {
+export async function startStack(opts: { tts?: boolean; env?: Record<string, string>; at?: string } = {}) {
   const root = mkdtempSync(join(process.env.E2E_TMP_ROOT ?? tmpdir(), 'talos-e2e-'))
   // With `at` or E2E_NOW, the relay and every bun process (bridge, CLI) run on one clock that starts at that instant.
   const worldOffset = worldOffsetMs(opts.at)
@@ -216,7 +214,6 @@ export async function startStack(
     TALOS_APP_BRIDGE: '1',
     TALOS_EXPLAINER: 'off', // a journey never starts the owner's real claude to explain a permission card
     ...clockEnv(worldOffset),
-    ...(opts.stt === false ? {} : { TALOS_APP_STT_CMD: JSON.stringify(['bash', join(STUBS_DIR, 'stt.sh'), '{in}']) }),
     ...(opts.tts === false
       ? {}
       : { TALOS_APP_TTS_CMD: JSON.stringify(['bash', join(STUBS_DIR, 'tts.sh'), '{out}', '{text}']) }),

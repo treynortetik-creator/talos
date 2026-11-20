@@ -35,18 +35,7 @@ export function onAck(ctx: FrameContext, frame: FrameOf<'ack'>): void {
 }
 
 export function onError(ctx: FrameContext, frame: FrameOf<'error'>): void {
-  const {
-    set,
-    markFailed,
-    addSystemRow,
-    emit,
-    settleConfig,
-    mediaFetchIds,
-    pending,
-    historyErrors,
-    inboxSettled,
-    dropFromOutbox,
-  } = ctx
+  const { set, markFailed, addSystemRow, emit, settleConfig, mediaFetchIds, pending, historyErrors, inboxSettled } = ctx
   const outbox = ctx.getOutbox()
   if (frame.ref) {
     const fetchedMedia = mediaFetchIds.get(frame.ref)
@@ -73,11 +62,6 @@ export function onError(ctx: FrameContext, frame: FrameOf<'error'>): void {
     // A server error never deletes a signed frame: it is the only copy of what the owner said.
     const held = outbox.find((x) => x.id === frame.ref)
     if (held) {
-      // A refused voice.ask is never retried: the call that spoke it is over by the next `ready`.
-      if (held.kind === 'voice.ask') {
-        void dropFromOutbox(held.id)
-        return
-      }
       if (frame.code === 'device_not_pinned') set(() => ({ devicePinned: false }))
       else markFailed(held.clientMsgId, 'retry')
       if (frame.code === 'sig_invalid')
@@ -92,7 +76,7 @@ export function onError(ctx: FrameContext, frame: FrameOf<'error'>): void {
       ctx.ackedRefs.delete(frame.ref)
       ctx.lostIds.add(refused.clientMsgId)
       ctx.patchMessage(refused.clientMsgId, (m) => ({ ...m, receipt: 'not_delivered' as const }))
-      addSystemRow(refusedMessageNote(frame.code, frame.message, refused.voiceNote), frame.id, refused.threadId)
+      addSystemRow(refusedMessageNote(frame.code, frame.message), frame.id, refused.threadId)
       if (frame.code === 'device_not_pinned') set(() => ({ devicePinned: false }))
       return
     }

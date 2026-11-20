@@ -47,14 +47,14 @@ describe('the docked panel and sheet', () => {
     await screen.findByTestId('session-panel')
     expect(screen.queryByRole('tablist')).toBeNull()
     expect(screen.queryByRole('tab', { name: 'Commands' })).toBeNull()
-    const link = screen.getByRole('link', { name: /Settings.*Session/ })
+    const link = screen.getByRole('link', { name: /Settings.*Your agent/ })
     expect(link.getAttribute('href')).toBe('/settings/session')
   })
 
   it('groups the agents: this session first, then thread sessions with their state', async () => {
     const client = mount()
     await screen.findByTestId('session-agents')
-    expect(within(screen.getByTestId('session-agents')).getByText('This session')).toBeTruthy()
+    expect(within(screen.getByTestId('session-agents')).getByText('This agent')).toBeTruthy()
     expect(screen.queryByTestId('session-thread-sessions')).toBeNull() // no workers status yet: no group, no claim
     await act(async () => {
       client.emit('workers.status', {
@@ -102,7 +102,7 @@ describe('inline in Settings', () => {
   it('keeps the Commands, MCP servers and Plugins tabs and has no link to itself', async () => {
     mount(true)
     await screen.findByTestId('session-panel')
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Commands', 'MCP servers', 'Plugins'])
-    expect(screen.queryByRole('link', { name: /Settings.*Session/ })).toBeNull()
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Commands', 'Tools', 'Plugins'])
+    expect(screen.queryByRole('link', { name: /Settings.*Your agent/ })).toBeNull()
   })
 })

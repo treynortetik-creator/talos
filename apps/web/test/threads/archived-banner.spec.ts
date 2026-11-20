@@ -29,7 +29,6 @@ async function archiveOne(page: Page): Promise<string> {
       kind: 'agent',
       order: 5,
       notify: 'all',
-      voice_context: 'recent',
       archived: true,
       created_at: '2026-10-28T00:00:00.000Z',
     }

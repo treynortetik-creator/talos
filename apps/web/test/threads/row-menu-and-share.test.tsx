@@ -28,7 +28,6 @@ const T = (id: string, over: Partial<ThreadT> = {}): ThreadT =>
     kind: 'fixed',
     order: 0,
     notify: 'all',
-    voice_context: 'recent',
     archived: false,
     created_at: '2026-10-28T15:00:00.000Z',
     ...over,
@@ -112,7 +111,7 @@ describe('thread row menu', () => {
     fireEvent.contextMenu(screen.getByTestId('thread-row-ideas'))
     fireEvent.click(await screen.findByTestId('row-read'))
     expect(client.markThreadUnread).toHaveBeenCalledWith('ideas')
-    expect((await screen.findByTestId('row-menu-note')).textContent).toMatch(/relay/)
+    expect((await screen.findByTestId('row-menu-note')).textContent).toMatch(/Can’t reach Talos/)
   })
 
   it('Mute patches notify off through the config, and a muted thread offers Unmute', async () => {
@@ -349,7 +348,7 @@ describe('review findings', () => {
     mountList(client)
     fireEvent.contextMenu(screen.getByTestId('thread-row-plans'))
     fireEvent.click(await screen.findByTestId('row-read'))
-    expect((await screen.findByTestId('row-menu-note')).textContent).toMatch(/relay/)
+    expect((await screen.findByTestId('row-menu-note')).textContent).toMatch(/Can’t reach Talos/)
     expect(screen.getByTestId('row-menu')).toBeTruthy()
   })
 

@@ -92,7 +92,7 @@ describe('talos-app init', () => {
     const first = cliIO()
     await runCli(['init', '--relay-url', 'https://one.example.com'], first.io, { TALOS_APP_HOME: home })
     const p = paths(home)
-    writeFileSync(p.envFile, `${readFileSync(p.envFile, 'utf8')}TALOS_APP_STT_TIMEOUT_S=60\n`)
+    writeFileSync(p.envFile, `${readFileSync(p.envFile, 'utf8')}TALOS_APP_TTS_TIMEOUT_S=60\n`)
     const keyBefore = readFileSync(p.bridgeKey, 'utf8')
     const cfgBefore = readFileSync(p.configJson, 'utf8')
     const second = cliIO()
@@ -102,7 +102,7 @@ describe('talos-app init', () => {
     expect(readFileSync(p.bridgeKey, 'utf8')).toBe(keyBefore)
     expect(readFileSync(p.configJson, 'utf8')).toBe(cfgBefore)
     expect(readFileSync(p.envFile, 'utf8')).toBe(
-      'TALOS_APP_STT_TIMEOUT_S=60\nTALOS_APP_RELAY_URL=https://two.example.com\n',
+      'TALOS_APP_TTS_TIMEOUT_S=60\nTALOS_APP_RELAY_URL=https://two.example.com\n',
     )
     expect(second.out.join('\n')).toContain('kept the existing bridge key')
   })
@@ -177,16 +177,16 @@ describe('talos-app post, digest, status, doctor', () => {
     expect(req?.status).toBe(200)
   })
 
-  test('status reports reachability, key id, last connect, queue depth, STT/TTS and mirror state', async () => {
+  test('status reports reachability, key id, last connect, queue depth, TTS and mirror state', async () => {
     h = await startHarness()
     const { out, io } = cliIO()
-    expect(await runCli(['status'], io, { ...env(h), TALOS_APP_STT_CMD: '["x"]' })).toBe(0)
+    expect(await runCli(['status'], io, env(h))).toBe(0)
     const text = out.join('\n')
     expect(text).toContain('relay reachable: yes')
     expect(text).toContain(`bridge key id: ${h.relay.bridgeKey.keyId}`)
     expect(text).toMatch(/last connect: \d{4}-/)
     expect(text).toContain('queue depth: 0')
-    expect(text).toContain('STT: configured  TTS: not configured')
+    expect(text).toContain('TTS: not configured')
   })
 
   test('doctor passes on a healthy setup and fails on a world-readable key or a missing .mcp.json entry', async () => {

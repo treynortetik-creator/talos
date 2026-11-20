@@ -298,7 +298,7 @@ describe('core messaging', () => {
     const a = await k.connectedApp()
     const bridge = await k.bridge().connect()
     const cfg = { ...(a.rec.of('ready', 'in')[0]?.agent_config as object) } as Record<string, unknown>
-    const next = { ...cfg, rev: 7, agent: { name: 'Orion', voice: 'meridian', voice_persona: '' } }
+    const next = { ...cfg, rev: 7, agent: { name: 'Orion' } }
     bridge.send({ type: 'config.sync', config: next, rev: 7 })
     await a.expectFrame('config.sync', (f) => f.rev === 7)
     expect(relay.relay.services.agentConfig()?.rev).toBe(7)

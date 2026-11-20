@@ -33,15 +33,15 @@ describe('capacitorPlatform adapter', () => {
     expect(hapticCall('success').method).toBe('notification')
   })
 
-  it("audioSession.set('play-and-record') then ('playback') then ('auto') maps onto TalosAudio.setMode", () => {
+  it("audioSession.set('playback') then ('paused') then ('auto') maps onto TalosAudio.setMode", () => {
     const { scope, calls } = shell()
     const p = createCapacitorPlatform(scope)
-    p.audioSession.set('play-and-record')
     p.audioSession.set('playback')
+    p.audioSession.set('paused')
     p.audioSession.set('auto')
     expect(calls).toEqual([
-      ['TalosAudio', 'setMode', { mode: 'record' }],
       ['TalosAudio', 'setMode', { mode: 'playback' }],
+      ['TalosAudio', 'setMode', { mode: 'paused' }],
       ['TalosAudio', 'setMode', { mode: 'idle' }],
     ])
     expect(audioMode('auto')).toBe('idle')

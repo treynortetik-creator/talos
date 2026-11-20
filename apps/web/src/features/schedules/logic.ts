@@ -143,13 +143,13 @@ export function rowStatus(
   })
   if (s.today === 'held') return mk('⏸', 'On hold: changed outside the app', 'warn')
   if (s.paused) return mk('⏸', 'Paused', 'muted')
-  if (waitingOffline(s, o.nowMs, o.macOnline)) return mk('⧗', "Waiting: agent session isn't running", 'warn')
+  if (waitingOffline(s, o.nowMs, o.macOnline)) return mk('⧗', "Waiting: your agent isn't running", 'warn')
   switch (s.today) {
     case 'running':
       return mk('', 'Running…', 'accent', null, true)
     case 'waiting':
       return s.wait_reason === 'no_session'
-        ? mk('⧗', "Waiting: agent session isn't running", 'warn')
+        ? mk('⧗', "Waiting: your agent isn't running", 'warn')
         : mk('⧗', 'Waiting for the agent', 'warn')
     case 'stalled':
       return mk('✕', 'Background run stuck', 'danger')
@@ -204,10 +204,10 @@ export function groupSchedules(snap: ScheduleSnapshotT, nowMs: number): Groups {
 export type Runner = 'own_live' | 'own_parked' | 'own' | 'main'
 
 export const RUNNER_WORDS: Record<Runner, string> = {
-  own_live: 'own session · live',
-  own_parked: 'own session · parked',
-  own: 'own session',
-  main: 'run by Main',
+  own_live: 'own agent · live',
+  own_parked: 'own agent · parked',
+  own: 'own agent',
+  main: 'run by your main agent',
 }
 
 /**
@@ -243,11 +243,11 @@ export function jobRunnerText(
   if (s.kind === 'command') return { text: 'Runs as a command on the Mac', own: false }
   // a restricted job is always headless, whatever its runner field says (runsInSession)
   if (s.runner === 'headless' || (s.runner === 'session' && !runsInSession(s)))
-    return { text: 'Runs in the background, no session', own: false }
-  if (s.runner === 'both') return { text: 'Run by Main, with a background backup', own: false }
+    return { text: 'Runs in the background, no agent needed', own: false }
+  if (s.runner === 'both') return { text: 'Run by your main agent, with a background backup', own: false }
   return group === 'main'
-    ? { text: 'Run by Main', own: false }
-    : { text: `Runs in ${threadName}'s own session`, own: true }
+    ? { text: 'Run by your main agent', own: false }
+    : { text: `Run by ${threadName}'s own agent`, own: true }
 }
 
 export type ThreadLite = { id: string; name: string; archived?: boolean | undefined }
@@ -282,7 +282,7 @@ export function groupByThread(
     const g = groupSchedules({ ...snap, schedules: rows }, nowMs)
     out.push({
       key,
-      name: key === MAIN_GROUP ? 'Main' : (live.get(key)?.name ?? key),
+      name: key === MAIN_GROUP ? 'Main agent' : (live.get(key)?.name ?? key),
       runner: o.runner(key === MAIN_GROUP ? null : key),
       rows: [...g.today, ...g.later, ...g.off],
     })
@@ -411,13 +411,13 @@ export function organize(
 
 /** Words for the run kind: S5.3 "How it runs". */
 export function runnerWords(runner: ScheduleT['runner']): string {
-  if (runner === 'session') return 'In your live session (a sub-agent does the work)'
-  if (runner === 'headless') return 'In the background, with no session'
-  return 'Session, with a background backup (set outside Talos)'
+  if (runner === 'session') return 'With your live agent (a helper agent does the work)'
+  if (runner === 'headless') return 'In the background, with no agent'
+  return 'Your agent, with a background backup (set outside Talos)'
 }
 export function permissionWords(s: Pick<ScheduleT, 'permissions' | 'allowed_tools' | 'runner'>): string {
   if (s.permissions === 'full')
-    return s.runner === 'headless' ? 'Full permissions, nobody watching' : 'As your live session (its permissions)'
+    return s.runner === 'headless' ? 'Full permissions, nobody watching' : 'As your live agent (its permissions)'
   if (s.permissions === 'command') return 'Runs a command (read-only here)'
   return `Only these tools: ${s.allowed_tools.length ? s.allowed_tools.join(', ') : 'no tools'}`
 }
@@ -491,7 +491,7 @@ export function fixSteps(fix: string | null): string[] {
 }
 
 const NO_SESSION_FIX = [
-  'Open Claude Code on your Mac in your agent folder and start your session.',
+  'Open Claude Code on your Mac in your agent folder and start your agent.',
   'Waiting jobs run as soon as it is back, as long as they are inside their catch-up window.',
 ]
 
@@ -529,7 +529,7 @@ export function pickBanner(snap: ScheduleSnapshotT): Banner | null {
     cand.push({
       key: 'no_session',
       code: 'no_session',
-      text: `Your agent session isn't running. ${waitingNoSession.length} ${waitingNoSession.length === 1 ? 'job is' : 'jobs are'} waiting.`,
+      text: `Your agent isn't running. ${waitingNoSession.length} ${waitingNoSession.length === 1 ? 'job is' : 'jobs are'} waiting.`,
       fix: NO_SESSION_FIX,
       button: 'fix',
       severity: 'warn',

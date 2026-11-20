@@ -149,15 +149,12 @@ const specsIn = (...ds) => {
   return out
 }
 const first = (s) => s.split('/')[0]
-// webOwn is web_own_specs_for's twin: a voice feature source owns the voice-setup specs; a spec in a voice folder (any depth), and
-// any file in the top voice folder, owns nothing; a support file in a nested voice folder is its top folder's
+// webOwn is web_own_specs_for's twin
 const webOwn = (f) => {
-  if (glob('apps/web/test/voice/*', 'apps/web/test/*/voice/*.spec.ts')(f)) return []
   if (glob('apps/web/test/*.spec.ts')(f)) return exists(f) ? [f.slice('apps/web/'.length)] : []
   if (glob('apps/web/test/helpers/*', 'apps/web/test/*.test.ts', 'apps/web/test/*.test.tsx')(f)) return []
   if (glob('apps/web/test/*/*')(f)) return specsIn(first(f.slice('apps/web/test/'.length)))
   if (glob('apps/web/src/*.test.ts', 'apps/web/src/*.test.tsx')(f)) return []
-  if (glob('apps/web/src/features/voice/*')(f)) return specsIn('voice-setup')
   if (glob('apps/web/src/features/*/*')(f)) return specsIn(first(f.slice('apps/web/src/features/'.length)))
   return []
 }
@@ -169,7 +166,7 @@ const webFor = (f) => {
   if (glob('apps/web/test/*/*')(f)) return [...specsIn(first(f.slice('apps/web/test/'.length))), ...smoke()]
   if (glob('apps/web/src/features/*/*')(f)) {
     const x = first(f.slice('apps/web/src/features/'.length))
-    const out = x === 'voice' ? specsIn('voice', 'voice-setup') : specsIn(x)
+    const out = specsIn(x)
     return out.length ? out : smoke()
   }
   if (f === 'apps/web/src/Shell.tsx') return [...specsIn('shell'), ...smoke()]

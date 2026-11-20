@@ -38,7 +38,7 @@ const ws = new WebSocket(`${env.RELAY_WS}/bridge`)
 const send = (f: Record<string, unknown>) =>
   ws.send(JSON.stringify({ v: 1, id: newId('m').slice(2), ts: new Date().toISOString(), ...f }))
 
-const OWNER = new Set(['message', 'voice_note', 'card.resolve', 'voice.ask'])
+const OWNER = new Set(['message', 'card.resolve'])
 
 async function notify(content: string, meta: Record<string, string>) {
   const clean = Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, sanitizeMetaValue(v)]))
@@ -170,40 +170,6 @@ ws.onmessage = async (ev) => {
       card.state = 'done'
       send({ type: 'card.update', card_id: card.id, state: 'done', resolution })
     }
-    return consumed(f.id)
-  }
-  if (f.type === 'voice.ask') {
-    ackBoth(f.id)
-    const tail = f.transcript_tail.map((t) => `${t.who}: ${t.text}`).join('\n')
-    await notify(
-      `Live call in ${f.thread_id}. Question (owner, spoken): ${f.question}\nRecent call context (data, may include the voice model's words):\n${wrapExternal(tail, { source: 'Call context' })}`,
-      {
-        chat_id: f.thread_id,
-        thread_id: f.thread_id,
-        thread_name: f.thread_id,
-        message_id: f.delegation_id,
-        ts: f.ts,
-        kind: 'voice_delegation',
-        trust: 'owner_voice',
-        user: 'owner',
-        voice_session_id: f.voice_session_id,
-        voice_delegation_id: f.delegation_id,
-      },
-    )
-    return consumed(f.id)
-  }
-  if (f.type === 'voice.ended') {
-    ackBoth(f.id)
-    await notify(wrapExternal(f.transcript.map((t) => `${t.who}: ${t.text}`).join('\n'), { source: 'Call record' }), {
-      chat_id: f.thread_id,
-      thread_id: f.thread_id,
-      thread_name: f.thread_id,
-      message_id: f.voice_session_id,
-      ts: f.ts,
-      kind: 'voice_ended',
-      trust: 'external',
-      voice_session_id: f.voice_session_id,
-    })
     return consumed(f.id)
   }
   if (f.type === 'hook.digest') {

@@ -9,6 +9,9 @@
 tbrun-
 talos-vitest-run-
 
+# Pane-prompt tests (the tool permission and question screens: a marker file that swaps the screen)
+talos-pane-swap-
+
 # Allow-updates prompt tests (a scratch home with a clone and its record)
 talos-allow-
 talos-allow-own-
@@ -178,3 +181,8 @@ talos-pane-strings-
 talos-ob-home-
 talos-ob-phone-
 talos-ob-test-
+talos-mover-
+talos-mover-tidy-
+talos-modes-
+talos-about-shots-
+talos-allow-shots-

@@ -232,7 +232,6 @@ export const DEFAULT_BODY_CAP = 64 * 1024
  */
 export function ownsItsBodyCap(pathname: string, method: string): boolean {
   if (pathname === '/api/media') return true
-  if (pathname === '/api/dictate') return true
   if (pathname === '/api/bug-reports') return true
   if (pathname === '/api/bug-inbox') return true
   if (pathname.startsWith('/bridge/media/')) return true

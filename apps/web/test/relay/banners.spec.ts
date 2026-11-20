@@ -55,13 +55,13 @@ test('a superseded bridge says so, two bridges on one key get a notice, and both
       superseded: true,
     }),
   )
-  await expect(page.getByTestId('mac-banner')).toContainText(/Bridge superseded/)
+  await expect(page.getByTestId('mac-banner')).toContainText(/took your (Mac|PC|computer)'s place/)
   expect(await fits()).toBeLessThanOrEqual(0)
   harness.relay.sendToApps(
     mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0, superseded: true }),
   )
   await expect(page.getByTestId('mac-banner')).toHaveCount(0)
-  await expect(page.getByTestId('bridge-notice')).toContainText(/Another bridge connected/)
+  await expect(page.getByTestId('bridge-notice')).toContainText(/took your (Mac|PC|computer)'s place/)
   expect(await fits()).toBeLessThanOrEqual(0)
   harness.relay.sendToApps(
     mkFrame('presence', { bridge_online: true, last_seen: new Date().toISOString(), queue_depth: 0 }),
