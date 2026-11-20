@@ -107,7 +107,7 @@ describe('the dialog card', () => {
 
   it.each([
     ['trust', trust(), 'Trust this folder?'],
-    ['mcp_consent', mcp(), 'Allow this MCP server?'],
+    ['mcp_consent', mcp(), 'Use github?'],
     ['login', login(), 'Work needs you to sign in'],
   ])('%s: a whole, valid card that mirrors the dialog', (_k, d, title) => {
     const card = compose(d)
@@ -216,7 +216,9 @@ describe('the dialog card', () => {
       "This thread's session is waiting on a 'trust this folder' prompt; attach on devbox to answer: talos-app supervise attach work",
     )
     expect(dialogFallbackLine('mcp_consent', mac)).toContain("'approve a project MCP server'")
-    expect(dialogFallbackLine('login', linux)).toContain("'sign in'")
+    expect(dialogFallbackLine('login', linux)).toBe(
+      "Sign in to Claude again: This thread's session is waiting on a 'sign in' prompt. Talos started the sign-in on devbox; its link is in this thread.",
+    )
   })
 })
 
@@ -277,8 +279,8 @@ describe('caps', () => {
     )
   })
 
-  it('knows only the three kinds and refuses an extra key', () => {
-    expect(DialogCardPayload.safeParse(payload({ dialog_kind: 'bypass' })).success).toBe(false)
+  it('knows only its kinds and refuses an extra key', () => {
+    expect(DialogCardPayload.safeParse(payload({ dialog_kind: 'bypass_v2' })).success).toBe(false)
     expect(DialogCardPayload.safeParse(payload({ extra: 1 })).success).toBe(false)
   })
 
@@ -366,7 +368,7 @@ describe('workers.json carries the dialog', () => {
   it('reads a dialog that does not fit as none, and keeps the whole file', () => {
     for (const bad of [
       { ...trust(), options: Array.from({ length: 7 }, (_, i) => `o${i}`) },
-      { ...trust(), kind: 'bypass' },
+      { ...trust(), kind: 'bypass_v2' },
       { ...trust(), id: 'has space' },
       { ...trust(), expires_at: 'soon' },
       { ...trust(), kind: 'login' },
@@ -560,7 +562,8 @@ describe('one wording on every surface', () => {
 
   it.each(kinds)('%s: the card says exactly what the table says', (k) => {
     const d = k === 'trust' ? trust() : k === 'mcp_consent' ? mcp() : login()
-    const c = compose(d)
+    // a dialog whose server is not read gets the table's plain heading (one that was read is "Use <server>?", below)
+    const c = compose(k === 'mcp_consent' ? { ...d, subject: null } : d)
     expect(c.title).toBe(table.title[k].replaceAll('{thread}', 'Work'))
     expect(c.body).toBe(table.sentence[k].replaceAll('{thread}', 'Work'))
   })
@@ -643,7 +646,10 @@ describe('the dev_channels dialog card', () => {
   })
 
   it('the Mac fallback line says "sign in", never "log in"', () => {
-    expect(dialogFallbackLine('login', { kind: 'mac' })).toContain("'sign in'")
+    const line = dialogFallbackLine('login', { kind: 'mac' })
+    expect(line).toContain("'sign in'")
+    expect(line.startsWith('Sign in to Claude again')).toBe(true)
+    expect(line).not.toMatch(/Terminals|ssh|tmux|\/login/)
     expect(dialogFallbackLine('dev_channels', { kind: 'mac' })).toContain("'allow the development channel'")
   })
 
@@ -683,5 +689,75 @@ describe("Main's own answer file", () => {
   it('has a name of its own, apart from a worker on the default thread', () => {
     expect(WORKER_FILES.mainDialogAnswer).toBe('main-dialog-answer.json')
     expect(WORKER_FILES.mainDialogAnswer).not.toBe(WORKER_FILES.dialogAnswer)
+  })
+})
+
+// ---- the safety questions on a card: bypass disclaimer, MCP server, a thread's development channel (pane-prompts rows 2 to 4) ----
+const bypass = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+  trust({
+    id: 'By7Qm8ZtRx3Cw9PkNa2HdC',
+    kind: 'bypass',
+    subject: null,
+    options: ['No, exit', 'Yes, I accept'],
+    cursor: 0,
+    ...over,
+  })
+
+describe('the bypass-permissions card', () => {
+  it('is a whole, valid card: the owner’s own words as the title, the screen’s two rows as the buttons, no subject', () => {
+    const card = compose(bypass())
+    expect(Card.safeParse(card).success).toBe(true)
+    expect(validateCard(card)).toEqual([])
+    expect(card.title).toBe('Run with permission checks off?')
+    expect(card.title).toBe(DIALOG_WORDING.title.bypass)
+    expect(card.body).toContain('without asking you first')
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'bypass',
+      subject: null,
+      options: ['No, exit', 'Yes, I accept'],
+    })
+    // an old peer that does not know the kind reads the dialog as none (workers.json keeps working), never as a broken file
+    expect(WorkerDialog.safeParse(bypass()).success).toBe(true)
+    expect(WorkerDialog.safeParse({ ...bypass(), kind: 'bypass_v2' }).success).toBe(false)
+    expect(WorkerDialog.safeParse(bypass({ options: [] })).success).toBe(false)
+  })
+  it('the answered card and the expired line use the owner’s words and send nobody to a terminal', () => {
+    expect(dialogAnswerText('bypass', null, 'Yes, I accept')).toBe('Accepted: running with permission checks off')
+    expect(dialogAnswerText('bypass', null, 'No, exit')).toBe('Exited: the session was stopped')
+    for (const where of [
+      { kind: 'mac' },
+      { kind: 'linux', machine: 'devbox', attach: 'talos-app supervise attach work' },
+    ] as const)
+      for (const k of ['bypass', 'mcp_consent', 'dev_channels'] as const)
+        expect(dialogFallbackLine(k, where)).not.toMatch(/Terminals|ssh|tmux|attach|\/login/i)
+  })
+})
+
+describe('the MCP card names the server', () => {
+  it('"Use <server>?" when the server was read; the plain heading when it was not', () => {
+    expect(compose(mcp()).title).toBe('Use github?')
+    expect(dialogTitle('mcp_consent', 'Work', 'github')).toBe('Use github?')
+    expect(dialogTitle('mcp_consent', 'Work', null)).toBe('Allow this MCP server?')
+    // a hostile name is shown with its hidden characters marked and cut, never raw
+    expect(dialogTitle('mcp_consent', 'Work', 'a\u202eb')).toBe('Use a\u27e6U+202E\u27e7b?')
+    expect(dialogTitle('mcp_consent', 'Work', 'x'.repeat(200)).length).toBeLessThan(80)
+  })
+})
+
+describe("a thread's development-channels card", () => {
+  it('says the thread, not Main, and never talks about Main’s start command', () => {
+    const d = devDialog({ launch_changed: ['env'] })
+    const card = composeDialogCard({
+      card_id: newId('c'),
+      dialog: d,
+      thread_id: 'work',
+      thread_name: 'Work',
+      now: NOW,
+      main: false,
+    }) as CardT
+    expect(card.body).toContain("Work's session was started with a development channel")
+    expect(card.body).not.toMatch(/Main/)
+    // Main's own card is as it was
+    expect(compose(devDialog()).body).toBe(DIALOG_WORDING.sentence.dev_channels)
   })
 })

@@ -1827,6 +1827,53 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
   // The real tree is `sh -c "vite build && pnpm exec vite preview ..."` -> pnpm -> node: when the run goes only the shell, the leader
   // of the group, is re-parented to pid 1; the server itself keeps its pnpm as parent. So an orphan is told by its group's leader.
   describe('a stopped run leaves no preview server on its slot’s port', () => {
+    // Every tree here runs in a group of its own, which nothing above reaches, so a test cut off before its finally (a timeout, a
+    // killed worker) left it listening on a port for days, holding files in the slot's TMPDIR. So the groups are recorded, killed
+    // after each test, and the run fails if anything of these machines is still alive at the end.
+    const machines: ReturnType<typeof machine>[] = []
+    const mach = () => {
+      const m = machine('1')
+      machines.push(m)
+      return m
+    }
+    const groups = new Set<number>()
+    const ownGroup = Number(
+      spawnSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).stdout.trim(),
+    )
+    const killGroups = () => {
+      for (const g of groups) {
+        try {
+          process.kill(-g, 'SIGKILL')
+        } catch {}
+      }
+      groups.clear()
+    }
+    // the processes whose command line names one of this describe's machines (its cache folder), by pid and group
+    const leftovers = () =>
+      spawnSync('ps', ['-ww', '-Ao', 'pid=,pgid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20 })
+        .stdout.split('\n')
+        .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+        .filter(
+          (x): x is RegExpMatchArray =>
+            x !== null && Number(x[1]) !== process.pid && machines.some((m) => x[3].includes(m.cache)),
+        )
+        .map((x) => ({ pid: Number(x[1]), pgid: Number(x[2]), command: x[3] }))
+    afterEach(killGroups)
+    afterAll(async () => {
+      killGroups()
+      // a killed process leaves the list as soon as it is reaped: give that a moment before calling anything a leak
+      const end = Date.now() + 5_000 * F
+      while (leftovers().length > 0 && Date.now() < end) await sleep(50)
+      const left = leftovers()
+      for (const l of left) {
+        for (const kill of [() => process.kill(-l.pgid, 'SIGKILL'), () => process.kill(l.pid, 'SIGKILL')]) {
+          try {
+            kill()
+          } catch {}
+        }
+      }
+      expect(left, 'processes of this describe still alive: a test left a preview-server tree behind').toEqual([])
+    })
     const freePort = () =>
       new Promise<number>((res) => {
         const s = createServer().listen(0, () => {
@@ -1857,7 +1904,10 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     }
     const pidOf = async (m: ReturnType<typeof machine>, port: number) => {
       await m.until(() => existsSync(join(m.cache, `pid-${port}`)))
-      return Number(readFileSync(join(m.cache, `pid-${port}`), 'utf8'))
+      const pid = Number(readFileSync(join(m.cache, `pid-${port}`), 'utf8'))
+      const pgid = Number(ps(pid, 'pgid')) // the tree's group: killed after this test, whatever it did or did not finish
+      if (pgid > 1 && pgid !== ownGroup) groups.add(pgid)
+      return pid
     }
     const ps = (pid: number, field: string) =>
       spawnSync('ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' }).stdout.trim()
@@ -1867,7 +1917,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       })
 
     it('the tree is as the real one is: only the shell at the top is re-parented (to init, or on Linux to a subreaper), the server is not', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       orphan(m, port)
       const pid = await pidOf(m, port)
@@ -1882,7 +1932,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     })
 
     it('an orphaned `vite preview` (its group’s leader gone to pid 1) on the slot’s port is stopped before the next hold’s command runs', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       orphan(m, port)
       const pid = await pidOf(m, port)
@@ -1896,7 +1946,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     })
 
     it('a leader adopted by a subreaper (on Linux systemd --user or tini, not pid 1) is an orphan too', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       // the subreaper: a shell under the name tini, alive, which started the run's group and now is its leader's parent
       mkdirSync(join(m.cache, 'bin'), { recursive: true })
@@ -1917,7 +1967,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     it.runIf(process.platform === 'linux')(
       'a leader adopted by the init of a WSL session ("Relay(<pid>)", a gate run from a Windows terminal) is an orphan too',
       async () => {
-        const m = machine('1')
+        const m = mach()
         const port = await freePort()
         mkdirSync(join(m.cache, 'bin'), { recursive: true })
         const relay = join(m.cache, 'bin', 'Relay(4242)') // a shell under the name WSL gives its session init
@@ -1937,7 +1987,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     it.runIf(process.platform === 'linux')(
       'a parent merely named like one ("Relay(x)": no digit) is no reaper: its run is in progress',
       async () => {
-        const m = machine('1')
+        const m = mach()
         const port = await freePort()
         mkdirSync(join(m.cache, 'bin'), { recursive: true })
         const fake = join(m.cache, 'bin', 'Relay(x)')
@@ -1956,7 +2006,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     )
 
     it('a preview server of a run in progress (its group’s leader has a living parent) is never touched, and the hold says loudly who has the port', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       const live = running(m, port)
       const pid = await pidOf(m, port)
@@ -1967,7 +2017,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     })
 
     it('the port in the command line is matched whole: --port 41730 is not --port 4173', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       orphan(m, port, Number(`${port}0`))
       const pid = await pidOf(m, port)
@@ -1981,7 +2031,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     })
 
     it('a server whose working folder is not a Talos checkout (another project’s preview) is never stopped', async () => {
-      const m = machine('1')
+      const m = mach()
       const port = await freePort()
       orphan(m, port, port, m.cache)
       const pid = await pidOf(m, port)
@@ -1995,7 +2045,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     })
 
     it('a holder that is stopped is asked to stop with INT first (what Playwright tears its server down on), then TERM', async () => {
-      const m = machine('1')
+      const m = mach()
       const body = `trap 'touch "${m.cache}/int.seen"; exit 0' INT; echo $$ > "${m.cache}/a.ran"; while :; do sleep 0.05; done`
       const c = spawn('bash', [HL, 'run', 'a', '--', 'sh', '-c', body], { env: m.env })
       kids.push(c)

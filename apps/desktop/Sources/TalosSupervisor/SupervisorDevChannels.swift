@@ -15,7 +15,7 @@ extension Supervisor {
   /// The pane's process ended after the owner tapped "Exit" on the card: the same state as his Stop (`.stopped(.user)`), so nothing restarts into
   /// the same dialog, no second card comes and no crash-loop message is posted, until he starts it again.
   func stopsForOwnerExit(_ l: Launch) -> Bool {
-    guard l.devCard.ownerExit else { return false }
+    guard l.devCard.ownerExit || l.safetyOwnerExit else { return false }
     audit("dev_card_exit_stop", ["session": l.sessionId])
     finishStop(.user, closeHost: true)
     return true

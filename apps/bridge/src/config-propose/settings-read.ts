@@ -3,10 +3,11 @@
 // own session sees the global rows and its own thread only.
 import { AGENT_PATH_FORMS, type AgentConfigPath, ConfigCardPayload, readConfigPath } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
+import { isPermissionModeCard } from '../permission-mode.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 
 const MAX_VALUE = 120
-const THREAD_FORM = /^threads\.<id>\.(\w+)$/
+const THREAD_FORM = /^threads\.<id>\.([\w.]+)$/
 
 function show(path: string, value: unknown, scope?: string): string {
   if (path === 'default_thread' && scope !== undefined) return value === scope ? '"this thread"' : '"another thread"'
@@ -37,7 +38,13 @@ export function settingsReadText(ctx: BridgeContext, scope?: string): string {
   }
   const pending = ctx.ledger
     .list('pending')
-    .filter((r) => r.actor === 'bridge' && r.binding.kind === 'config' && !isScreenAllowCard(r.binding))
+    .filter(
+      (r) =>
+        r.actor === 'bridge' &&
+        r.binding.kind === 'config' &&
+        !isScreenAllowCard(r.binding) &&
+        !isPermissionModeCard(r.binding),
+    )
     .filter((r) => scope === undefined || r.thread_id === scope)
   if (!pending.length) lines.push('Pending settings cards: none')
   for (const r of pending) {

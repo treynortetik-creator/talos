@@ -213,6 +213,15 @@ export const HELP_SECTIONS: Section[] = [
             note: 'With tmux the agent keeps running. Without it Talos stops the agent first, waiting at most 15 seconds. Logging out or shutting down never waits.',
           },
           {
+            q: 'Check for a new version of Talos, or install one that is ready',
+            where: [w('topmenu', 'Talos', 'Check for Updates…'), w('menubar', 'Check for Updates…')],
+          },
+          {
+            q: 'Answer “Allow Talos to update itself?”',
+            where: [w('menubar', 'Allow updates…')],
+            note: 'It shows only while Talos waits for your answer. The same question has an Allow updates button in the update window.',
+          },
+          {
             q: 'See the agent’s terminal',
             where: [w('menubar', 'Terminals…'), w('topmenu', 'Window', 'Terminals…')],
           },
@@ -231,7 +240,8 @@ export const HELP_SECTIONS: Section[] = [
       {
         kind: 'steps',
         items: [
-          'Open the Setup checklist: Window menu or Menu bar, then [[Setup checklist…]]. Its first row, Agent folder, is the step that makes your setup. Type or browse to a folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its .mcp.json, plus the hooks of any MCP apps you have, changes) or Choose (a Talos agent folder you already have). Talos then starts the session itself, unless Claude is not signed in. Until you do this, nothing starts and no setup file exists. To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import: it saves, starts the session and tells you so.',
+          'On a Mac that is not set up yet, Talos opens [[Set up Talos…]] by itself (it is also in the Menu bar). It gets itself ready, you sign in to Claude, and you choose whether to connect your phone. Then your agent starts and says hello. Nothing else is needed here.',
+          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its .mcp.json, plus the hooks of any MCP apps you have, changes) or Choose (a Talos agent folder you already have). To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import.',
           'Sign in: [[Sign in…]] in the Window menu, in the Menu bar, or in ((Mac settings → Connection)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
           'Allow the macOS permissions in ((Mac settings → Permissions)).',
           'Start the agent: ((Menu bar → Start session)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
@@ -441,10 +451,6 @@ export const HELP_SECTIONS: Section[] = [
           },
           { q: 'Rename a device', a: 'The Devices list shows a device’s name and lets you end it. It has no rename.' },
           {
-            q: 'Check for updates inside the app',
-            a: 'There is no Check for updates button. See About below for how to update.',
-          },
-          {
             q: 'Make the spoken-reply voice the live-call voice',
             a: 'They are two voices. The live-call voice is a Settings choice; spoken replies use your Mac’s speech command.',
           },
@@ -480,7 +486,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: 'Updating. Talos does not update itself. In Terminal, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. The server redeploys from Railway when you push to your GitHub copy. For the Mac app, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
+        text: 'Updating. The Mac app can update itself. Choose [[Check for Updates…]] in the Talos menu at the top of the screen, or in the Menu bar menu. If Talos asks “Allow Talos to update itself?”, it has found a Talos code folder it has not used before: press Allow updates only if it is the folder you installed from (Not now hides it until the next update or the next time Talos starts, and [[Allow updates…]] in the Menu bar menu brings it back). A small window shows what is happening: downloading, waiting for the relay, waiting for a quiet moment, restarting your agent, done. If something goes wrong it says so in one line and where the log is. When an update has been downloaded and checked, the item reads Update to, with a version and a dot. Click Update now to install it as soon as your agent is not in the middle of a turn (the Return key never presses it, and it never installs while you are typing), or Later to keep it for a quiet moment (Talos then installs it by itself when no agent is working, and waits up to 2 hours for that). One update moves the app, the Talos folder and your agent together; your agent restarts and carries on its conversation. The relay (the server) does not follow releases by itself: if the window says it is behind, redeploy it in Railway. If you use Terminal instead, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. If you build the Mac app yourself, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
       },
       {
         kind: 'p',
@@ -496,7 +502,7 @@ export { HELP_PATH } from './path.ts'
 export const ASK_DRAFT = 'I need help with Talos. '
 
 /** Names this page says do not exist. A test checks none of them has appeared in the app, so these lines cannot go stale. */
-export const ABSENT_LABELS = ['Check for updates', 'Delete thread', 'Uninstall Talos']
+export const ABSENT_LABELS = ['Delete thread', 'Uninstall Talos']
 
 /** Every sentence as plain text, markers removed: for the search box, the tests, and any other reader of this page. */
 export function stripMarkers(text: string): string {

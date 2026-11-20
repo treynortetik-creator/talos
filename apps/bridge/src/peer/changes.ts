@@ -14,8 +14,8 @@ import { type BridgeContext, postSystemNotice } from '../context.ts'
 import { readInboundPeers } from './records.ts'
 
 const KEY = 'peer_changes_seen'
-type PeerSeen = { name: string; host: string; urlh?: string; cap: number; legacy?: true }
-type InboxSeen = { name: string; conn_id: string; rotated?: number; legacy?: true }
+type PeerSeen = { name: string; host: string; urlh?: string; cap: number; legacy?: true; via?: true }
+type InboxSeen = { name: string; conn_id: string; rotated?: number; legacy?: true; via?: true; waiting?: true }
 type Seen = { peers: PeerSeen[]; inbox: InboxSeen[]; devices: Array<{ id: string; label: string }> }
 
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
@@ -56,6 +56,15 @@ const byName = <T extends { name: string }>(xs: T[]): T[] =>
   )
 
 function read(ctx: BridgeContext, before: Seen | undefined): Seen {
+  const inbound = readInboundPeers(ctx.env.home)
+  // a one-paste link that finished: its rows are "Linked with <name>" (one per side), not "Linked peer added" and "Peer inbox created"
+  // a link this install showed a code for, still open: the inbox row waits for "Linked with"
+  const waiting = (name: string): boolean => {
+    const l = inbound.find((p) => p.name === name)?.link
+    return l?.by === 'link' && l.state === 'open'
+  }
+  const via = (name: string): { via?: true } =>
+    inbound.find((p) => p.name === name)?.link?.state === 'done' ? { via: true } : {}
   let devices = before?.devices ?? []
   try {
     // an unreadable devices.json is no news: nobody is told revoked until it can be read again
@@ -74,12 +83,15 @@ function read(ctx: BridgeContext, before: Seen | undefined): Seen {
         host: hostOf(p.url),
         urlh: urlHash(p.url),
         cap: p.daily_cap,
+        ...via(p.name),
       })),
     ),
     inbox: byName(
-      readInboundPeers(ctx.env.home).map((p) => ({
+      inbound.map((p) => ({
         name: p.name,
         conn_id: p.conn_id,
+        ...via(p.name),
+        ...(waiting(p.name) ? { waiting: true as const } : {}),
         ...(p.secret_file?.kind === 'rotate' ? { rotated: p.secret_file.at } : {}),
       })),
     ),
@@ -148,7 +160,7 @@ async function look(ctx: BridgeContext, post: (text: string) => Promise<unknown>
     const apply = (s: Seen) => {
       s.peers = put(s.peers, p)
     }
-    if (!was) rows.push({ text: `Linked peer added: ${n}`, apply })
+    if (!was) rows.push({ text: p.via ? `Linked with ${n}` : `Linked peer added: ${n}`, apply })
     else if (
       !was.legacy &&
       (was.host !== p.host || was.cap !== p.cap || (was.urlh !== undefined && was.urlh !== p.urlh))
@@ -179,8 +191,9 @@ async function look(ctx: BridgeContext, post: (text: string) => Promise<unknown>
     const apply = (s: Seen) => {
       s.inbox = put(s.inbox, p)
     }
-    if (!was) rows.push({ text: `Peer inbox created: ${n}`, apply })
-    else if (was.legacy) continue
+    if (!was) {
+      if (!p.via && !p.waiting) rows.push({ text: `Peer inbox created: ${n}`, apply }) // a finished link is told once, as "Linked with"
+    } else if (was.legacy) continue
     else if (was.conn_id !== p.conn_id) rows.push({ text: `Peer inbox replaced: ${n}`, apply })
     else if (p.rotated !== undefined && p.rotated > (was.rotated ?? Number.NEGATIVE_INFINITY))
       rows.push({ text: `Peer inbox secret replaced: ${n}`, apply })

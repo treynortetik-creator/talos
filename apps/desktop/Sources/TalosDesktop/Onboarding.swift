@@ -3,8 +3,8 @@ import SwiftUI
 import TalosDesktopCore
 import TalosSupervisor
 
-/// First-run checklist (DESKTOP-SPEC 6.6): each row green or a one-line fix, nothing blocks. Opens by itself when
-/// `desktop.json` doesn't exist yet, and from the menu.
+/// The old setup checklist (DESKTOP-SPEC 6.6), now the Advanced route "Use a folder I already have": each row green or a one-line fix,
+/// nothing blocks. It is reached from the menu only. The first-run screens are `OnboardingWindowView`.
 @MainActor
 final class OnboardingModel: ObservableObject {
   @Published var rows: [FirstRun.Row] = []
@@ -95,7 +95,7 @@ final class OnboardingModel: ObservableObject {
   }
 }
 
-struct OnboardingView: View {
+struct AdvancedSetupView: View {
   @ObservedObject var model: SupervisorController
   @StateObject private var ob = OnboardingModel()
   @StateObject private var flow: AgentFolderFlow
@@ -111,7 +111,7 @@ struct OnboardingView: View {
   var body: some View {
     ScrollView {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Set up Talos").font(.title2)
+      Text(OnboardingCopy.advancedTitle).font(.title2)
       Text("Nothing here blocks you. Each row is green or has a one-line fix.").foregroundStyle(.secondary)
       if ob.rows.isEmpty { ProgressView().controlSize(.small) }
       ForEach(ob.rows) { r in
@@ -178,6 +178,10 @@ struct OnboardingView: View {
     .onAppear { ob.refresh(config: model.supervisor.currentConfig(), setupDone: model.configured) }
     .onChange(of: ob.auth) { flow.signedIn = ob.auth }
     // Import or Adopt just made the setup: the first row turns green without pressing Check again.
-    .onChange(of: model.configRevision) { ob.refresh(config: model.supervisor.currentConfig(), setupDone: model.configured) }
+    .onChange(of: model.configRevision) {
+      ob.refresh(config: model.supervisor.currentConfig(), setupDone: model.configured)
+      // set up by this route: the new screens' in-progress marker is stale
+      OnboardingLaunch.settle(configured: model.configured, flowActive: OnboardingShared.isActive, home: NSHomeDirectory())
+    }
   }
 }

@@ -52,10 +52,10 @@ import {
 import { MEDIA_HOLD_MS, shorteningNote } from '../media-retention.ts'
 import { cardActionNotification, systemNotification } from '../notify.ts'
 import { say } from '../owner-words.ts'
+import { isPermissionModeCard } from '../permission-mode.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
-import { OWNER_SPOKE_MS, outsideTextAt, ownerAskedAt, SETTINGS_LOCKED } from '../trust.ts'
-import { anyLeadSpokeSince } from '../worker/handoff.ts'
+import { OWNER_SPOKE_MS, ownerAskedAt, quietSince, SETTINGS_LOCKED } from '../trust.ts'
 import { keptInboxThreadIds, removeGoneInboxes } from '../worker/inbox.ts'
 
 /** How recently the owner must have spoken in the thread for the agent to propose a setting there. */
@@ -76,8 +76,8 @@ export type ProposeOpts = { scope?: string; tool?: boolean }
 
 /** The result text of a saved change: what changed, then how to revert it, within the 500 characters a card result may carry. */
 const clip = (s: string, n: number) => (s.length > n ? `${clipUnits(s, n - 1)}…` : s)
-const savedText = (changes: ConfigChange[]) =>
-  `${clip(`Saved. ${changes.map(describeChange).join('; ')}`, 280)} ${clip(undoText(changes), 200)}`
+const savedText = (changes: ConfigChange[], config: AgentConfigT) =>
+  `${clip(`Saved. ${changes.map((c) => describeChange(c, config)).join('; ')}`, 280)} ${clip(undoText(changes, config), 200)}`
 /**
  * A setting that decides which alerts reach the owner: the notifications switches, the quiet window, a thread's alerts, the
  * default thread (where approval cards and security notices land). Its notice is pushed through quiet hours.
@@ -88,8 +88,8 @@ export const decidesAlerts = (path: string): boolean =>
   path === 'default_thread' ||
   /^threads\.[^.]+\.notify$/.test(path)
 /** What the owner reads in the thread after a change made because he asked: "Changed Timezone: UTC → Europe/Paris. To undo: …" */
-const changedText = (changes: ConfigChange[]) =>
-  `${clip(`Changed ${changes.map(describeChange).join('; ')}.`, 280)} ${clip(undoText(changes), 200)}`
+const changedText = (changes: ConfigChange[], config: AgentConfigT) =>
+  `${clip(`Changed ${changes.map((c) => describeChange(c, config)).join('; ')}.`, 280)} ${clip(undoText(changes, config), 200)}`
 
 /**
  * The fixed id of the line told for a card: a message id must be `m_` + 26 ULID characters, so it is the card's own 26 characters
@@ -145,7 +145,11 @@ export class ConfigProposals {
         `This session belongs to thread "${opts.scope}" and can only propose into its own thread. Nothing was proposed.`,
       )
     ctx.config.refresh()
-    const resolved = resolveConfigChanges(args.changes, ctx.config.config, opts.scope ? { thread: opts.scope } : {})
+    const resolved = resolveConfigChanges(
+      args.changes,
+      ctx.config.config,
+      opts.scope !== undefined ? { thread: opts.scope } : {},
+    )
     if (!resolved.ok) return fail(resolved.error)
     // the sub-thread rule, judged now on what the change would write, so the owner is never asked to approve a card the
     // write would then refuse (archiving a parent alone while its sub-threads still run, say)
@@ -175,11 +179,7 @@ export class ConfigProposals {
     // The owner's ruling (2026-11-16) makes the fence direct when he asked; it stays a card when any other session or outside
     // text reached main since his words, because the fence is what holds those sessions back.
     const opensFence = resolved.changes.some((c) => c.path === 'dev.thread_fence' && c.new === false)
-    const fenceQuiet =
-      !opensFence ||
-      (askedAt !== undefined &&
-        !anyLeadSpokeSince(ctx.store.db, askedAt, ctx.clock.now()) &&
-        !ctx.config.config.threads.some((t) => (outsideTextAt(ctx, t.id) ?? Number.NEGATIVE_INFINITY) >= askedAt))
+    const fenceQuiet = !opensFence || (askedAt !== undefined && quietSince(ctx, askedAt))
     const direct = asked && !locked && addsAlways.length === 0 && fenceQuiet
     const now = ctx.clock.now()
     this.proposalAt = this.proposalAt.filter((t) => now - t < 3600_000)
@@ -195,12 +195,18 @@ export class ConfigProposals {
       warnings.length ? { ...r, text: `${r.text} Warning: ${warnings.join('; ')}.` } : r
     if (direct) {
       if (!opts.tool) this.proposalAt.push(now)
-      return warned(await this.applyDirect(threadId, reason, resolved.changes))
+      return warned(await this.applyDirect(threadId, reason, resolved.changes, opts.scope))
     }
     const lockedNote = asked && locked ? `${SETTINGS_LOCKED} It went to the owner as a card instead. ` : ''
     const pending = ctx.ledger
       .list('pending')
-      .filter((r) => r.actor === 'bridge' && r.binding.kind === 'config' && !isScreenAllowCard(r.binding))
+      .filter(
+        (r) =>
+          r.actor === 'bridge' &&
+          r.binding.kind === 'config' &&
+          !isScreenAllowCard(r.binding) &&
+          !isPermissionModeCard(r.binding),
+      )
     if (pending.length >= MAX_PENDING_CONFIG_CARDS)
       return fail(`There are already ${MAX_PENDING_CONFIG_CARDS} settings cards waiting for the owner. Wait for them.`)
 
@@ -213,6 +219,8 @@ export class ConfigProposals {
       baseRev: ctx.config.config.rev,
       reason,
       changes: resolved.changes,
+      config: ctx.config.config,
+      ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
     })
     // An always-allow add: the button says what the tap grants ("Always allow emails"; with several kinds "Always allow 2 kinds",
     // the body lists them old → new), within the card's 32-character button. And it is high risk, so it is approved on the card
@@ -256,7 +264,12 @@ export class ConfigProposals {
    * current values, `applyPatch`), with no card in between. The owner is told in the thread, in words that name old and new and
    * how to revert it.
    */
-  private async applyDirect(threadId: string, reason: string, changes: ConfigChange[]): Promise<ProposeResult> {
+  private async applyDirect(
+    threadId: string,
+    reason: string,
+    changes: ConfigChange[],
+    scope?: string,
+  ): Promise<ProposeResult> {
     const { ctx } = this
     ctx.config.refresh()
     const cur: AgentConfigT = ctx.config.config
@@ -269,6 +282,8 @@ export class ConfigProposals {
       baseRev: cur.rev,
       reason,
       changes,
+      config: cur,
+      ...(scope !== undefined ? { scope } : {}),
     })
     const v = verifyConfigPayload(candidate.payload, cur, new Date(ctx.clock.now()).toISOString())
     if (!v.ok) return { ok: false, text: `Nothing was changed: ${v.error}` }
@@ -294,7 +309,7 @@ export class ConfigProposals {
     await this.commit(cur, r.config, 'agent_asked')
     ctx.log.info('config applied as the owner asked', { rev: r.config.rev, paths: v.changes.map((c) => c.path) })
     await this.tellOwner(threadId, v.changes)
-    return { ok: true, text: `${savedText(v.changes)} (applied: the owner asked; he was told how to undo it)` }
+    return { ok: true, text: `${savedText(v.changes, cur)} (applied: the owner asked; he was told how to undo it)` }
   }
 
   /**
@@ -310,7 +325,7 @@ export class ConfigProposals {
         ? (shorteningNote(ctx, c.new, ctx.clock.now(), localClock(ctx, until).local_time ?? until.slice(11, 16)) ?? [])
         : [],
     )
-    await postSystemNotice(ctx, [changedText(changes), ...notes].join(' '), {
+    await postSystemNotice(ctx, [changedText(changes, ctx.config.config), ...notes].join(' '), {
       thread: ctx.config.thread(threadId) ? threadRef(ctx, threadId) : defaultThreadRef(ctx),
       ...(id ? { id } : {}),
       settingsChanged: changes.some((c) => decidesAlerts(c.path)),
@@ -350,7 +365,7 @@ export class ConfigProposals {
     const cur = ctx.config.config
     for (const row of ctx.ledger.list('resolved')) {
       if (row.actor !== 'bridge' || row.binding.kind !== 'config' || row.resolution?.action !== 'primary') continue
-      if (isScreenAllowCard(row.binding)) continue // ScreenConsent.recover() ends its own
+      if (isScreenAllowCard(row.binding) || isPermissionModeCard(row.binding)) continue // their own recover() ends them
       const p = ConfigCardPayload.safeParse(row.binding.payload)
       const fresh = (path: AgentConfigPath, want: unknown) =>
         JSON.stringify(readConfigPath(cur, path)) === JSON.stringify(want)
@@ -366,7 +381,10 @@ export class ConfigProposals {
               p.data.changes.map((c) => ({ path: c.path, old: c.old, new: c.new })),
               toldId(row.id),
             )
-          text = savedText(p.data.changes.map((c) => ({ path: c.path, old: c.old, new: c.new })))
+          text = savedText(
+            p.data.changes.map((c) => ({ path: c.path, old: c.old, new: c.new })),
+            ctx.config.config,
+          )
         } else if (p.data.changes.every((c) => fresh(c.path, c.old)))
           text = 'The bridge restarted before this was saved. Nothing was changed. Ask again.'
       }
@@ -439,7 +457,7 @@ export class ConfigProposals {
     await this.commit(cur, r.config, 'agent_card')
     ctx.log.info('config card applied', { rev: r.config.rev, paths: v.changes.map((c) => c.path) })
     await this.tellOwner(row.thread_id, v.changes, toldId(cardId))
-    return this.end(row, cardId, true, savedText(v.changes))
+    return this.end(row, cardId, true, savedText(v.changes, cur))
   }
 
   private async end(row: LedgerRow, cardId: string, ok: boolean, text: string) {

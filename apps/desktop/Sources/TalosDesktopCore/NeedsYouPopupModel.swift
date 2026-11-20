@@ -102,7 +102,7 @@ public enum PopupNothing: Equatable, Sendable {
   case alreadyAnswered(by: String?)
   /// That dialog id is not on offer now (gone, a new sighting, expired, or only a record read back from disk).
   case notOffered
-  /// Login: no Terminals window could be brought forward.
+  /// Login: the sign-in window could not be brought forward.
   case noWindow
   /// A tmux client typed within the quiet time: the owner is at the keys.
   case typing
@@ -131,7 +131,11 @@ public struct NeedsYouPopupItem: Equatable, Sendable {
   public var phoneTold: Bool
   /// Shown before every other popup, whatever its age (Main's warning is not hidden behind older popups).
   public var first: Bool
-  public init(thread: String, threadName: String, dialog: DialogOffer, phoneTold: Bool = false, first: Bool = false) {
+  /// Main's development-channels popup only: the permission mode the changed launch starts in (`PermissionMode.label`), named so the
+  /// owner knows what his Enter lets start. nil when the flags did not change or read as no one mode.
+  public var startMode: String?
+  public init(thread: String, threadName: String, dialog: DialogOffer, phoneTold: Bool = false, first: Bool = false, startMode: String? = nil) {
+    self.startMode = startMode
     self.thread = thread
     self.threadName = threadName
     self.dialog = dialog
@@ -156,19 +160,24 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
   /// The folder or server, in the monospace box; nil when the Mac could not read it exactly.
   public var subject: String?
   public var sentence: String
-  /// The dialog's options exactly as read, in screen order, none dropped or edited (login: the one "Open in Terminals").
+  /// The dialog's options exactly as read, in screen order, none dropped or edited (login: the one "Sign in to Claude again").
   public var buttons: [NeedsYouPopupButton]
   public var footer: String
 
   public static let footer = "Also on your phone. Answer either one."
   /// `DIALOG_WORDING.footer.popupMain`: Main's own popup, where the phone only gets a notice.
   public static let footerMain = "Your phone is told to come here."
-  public static let openLabel = "Open in Terminals"
+  public static let openLabel = "Sign in to Claude again"
   /// The phone notice while Main waits at the Mac (`DIALOG_WORDING.phone.devChannelsWaiting`, committed in fixtures/needs-you/wording.json; the
   /// tests assert they are equal). Posted by the Mac itself, so it needs no bridge.
   public static let devWaitingPhone = "Main is waiting at your Mac: answer the Talos popup there."
   /// `DIALOG_WORDING.footer.popupMainHere`: Main's popup when the phone was not told (the owner started Main at the Mac).
   public static let footerMainHere = "Answer it here."
+  /// The thread id Main's own popups carry (it is not a thread id, so no worker can be mistaken for it; `Supervisor.mainPopupThread` is this).
+  public static let mainThreadId = "supervisor:main"
+
+  /// A heading's server name or thread name: cut at 60 characters, with an ellipsis (the card's `dialogTitle`).
+  static func cut60(_ s: String) -> String { s.count > 60 ? String(s.prefix(60)) + "\u{2026}" : s }
   static let screenChangedWords = "screen changed, so Talos left it alone. A new popup comes if it still needs you."
 
   /// The plain English is above the buttons; only the buttons are the screen's own words. The heading, the sentence and the footer are the
@@ -176,6 +185,7 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
   public static func make(_ item: NeedsYouPopupItem) -> NeedsYouPopupContent {
     let name = threadLabel(item.threadName)
     let d = item.dialog
+    let isMain = item.thread == mainThreadId
     let title: String
     let sentence: String
     switch d.kind {
@@ -183,14 +193,23 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
       title = "Trust this folder?"
       sentence = "\(name)'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it."
     case .mcpConsent:
-      title = "Allow this MCP server?"
+      title = d.subject.map { "Use \(Self.cut60(DialogVisibleText.show($0)))?" } ?? "Allow this MCP server?"
       sentence = "\(name)'s session wants to turn on this server's tools for its folder."
+    case .bypass:
+      title = "Run with permission checks off?"
+      sentence = "\(name)'s session was started with permission checks off. It will run commands and change files without asking you first. Accept only if you meant that."
     case .login:
       title = "\(name) needs you to sign in"
       sentence = "\(name)'s session needs you to sign in to Claude on the Mac."
+    case .apiKey:
+      title = ApiKeyCard.title
+      sentence = "\(name)'s session found an API key in your environment. If you use it, Claude Code bills that key instead of your Claude account. Claude Code's own default is not to use it."
     case .devChannels:
-      title = "Allow Talos's development channel?"
-      sentence = Self.devChannelsSentence(subject: d.subject, launchChanged: d.launch_changed)
+      title = item.startMode.map { "Start with \($0)?" } ?? "Allow Talos's development channel?"
+      sentence = isMain
+        ? Self.devChannelsSentence(subject: d.subject, launchChanged: d.launch_changed)
+          + (item.startMode.map { " Main starts with the permission mode \($0)." } ?? "")
+        : "\(name)'s session was started with a development channel, and Claude Code asks before it loads it."
     }
     let buttons =
       d.kind == .login
@@ -198,7 +217,7 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
       : d.options.enumerated().map { NeedsYouPopupButton(text: DialogVisibleText.show($1), action: .choose($0, label: $1)) }
     return NeedsYouPopupContent(
       header: "Talos · \(name) needs you", title: title, subject: d.subject.map(DialogVisibleText.show), sentence: sentence, buttons: buttons,
-      footer: d.kind != .devChannels ? footer : item.phoneTold ? footerMain : footerMainHere)
+      footer: !isMain ? footer : item.phoneTold ? footerMain : footerMainHere)
   }
 
   /// The card's words for Main's development-channels warning (`DIALOG_WORDING.sentence.dev_channels` and `.devChannels` in the protocol, committed
@@ -221,7 +240,7 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     switch why {
     case .screenChanged, .notOffered: return "Nothing pressed: \(name)'s \(screenChangedWords)"
     case .alreadyAnswered(let by): return "Already answered on \(by.map(DialogVisibleText.show) ?? "another device")"
-    case .noWindow: return "Nothing opened: Talos could not bring Terminals forward. Open it from the Talos menu."
+    case .noWindow: return "Nothing opened: Talos could not open the sign-in window. Choose Sign in to Claude again in the Talos menu."
     case .typing: return "You were typing in \(name)'s session, so Talos left it alone."
     case .couldNotCheck: return "Talos could not check whether you were typing in \(name)'s session, so it left it alone."
     }

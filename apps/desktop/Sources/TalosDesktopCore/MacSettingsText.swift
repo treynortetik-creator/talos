@@ -22,7 +22,7 @@ public enum MacSettingsText {
     "When the agent's model request looks stuck on your message, Talos presses Esc once in its window and sends the message again, then says so in your thread. Only once per message, and never while you are typing there or a question is on screen. Off: Talos only tells you."
 
   public enum Setting: String, CaseIterable, Sendable {
-    case agentFolder, launchCommand, host, notifyThread
+    case agentFolder, launchCommand, permissionMode, host, notifyThread
     case autoRestart, autoConfirmRestart, startSessionOnLaunch, openTerminalOnDialog
     case relayAddress, talosAppCommand
     case composeHotkey
@@ -34,6 +34,7 @@ public enum MacSettingsText {
     switch s {
     case .agentFolder: return AgentFolderCheck.appliesNote
     case .launchCommand: return "Applies the next time the agent starts, and that start is a cold start. Nothing restarts on its own."
+    case .permissionMode: return PermissionModeSetting.applies
     case .host: return HostChoice.appliesNote
     case .notifyThread: return "Applies to the next crash post."
     case .autoRestart: return "Applies from the next crash."

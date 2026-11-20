@@ -2,9 +2,9 @@
 // and the status line, and the app greys out what needs the mod. Everything here is capability-checked with `typeof`;
 // a Claude Code that is too old, or missing a method the link needs, makes the mod do nothing at all.
 import type { Register } from 'claude-code'
-import { AgentsCollector, AgentTracker, taskNotificationOf, teeFileOf } from './lib/agents.ts'
+import { AgentsCollector, AgentTracker, stopFileOf, taskNotificationOf, teeFileOf } from './lib/agents.ts'
 import { reportCapabilities } from './lib/capabilities.ts'
-import { ControlRunner } from './lib/controls.ts'
+import { ControlRunner, MODEL_TICKET_FILE } from './lib/controls.ts'
 import type { EngineLike } from './lib/engine.ts'
 import { EventQueue, PromptTracker, SessionFlags, TimeSource } from './lib/events.ts'
 import {
@@ -86,6 +86,22 @@ export const register: Register = (on) => {
           },
         },
         tasks: { stop: (taskId) => $.tool.call({ tool: 'TaskStop', task_id: taskId }) },
+        fallback: {
+          stop: {
+            read: async (sessionId) => {
+              const file = stopFileOf(sessionId)
+              const path = file ? `${await home()}/${file}` : undefined
+              return path && (await $.fs.exists(path)) ? $.fs.read(path) : ''
+            },
+          },
+          ticket: {
+            write: async (body) => $.fs.write(`${await home()}/${MODEL_TICKET_FILE}`, body),
+            clear: async () => {
+              const path = `${await home()}/${MODEL_TICKET_FILE}`
+              if (await $.fs.exists(path)) await $.fs.write(path, '')
+            },
+          },
+        },
       }
       teeClear = (sessionId) => engine.tee?.clear(sessionId) ?? Promise.resolve()
       // Harmless calls only. turn.abort and command.run are probed with a call the engine must reject (a made-up turn id

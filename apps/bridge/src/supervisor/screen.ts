@@ -198,6 +198,18 @@ export function liveDialog(rows: string[], region = 24): Screen {
 }
 
 /**
+ * What a thread session's pane is really showing for the owner: `liveDialog`, and the development-channels question (which has no
+ * frame rule above its title, so `liveDialog` never names it), each only when it is on screen and not quoted.
+ */
+export function liveScreen(rows: string[], region = 24): Screen {
+  const d = liveDialog(rows, region)
+  if (d.kind !== 'none') return d
+  if (!liveDevChannels(rows)) return d
+  const s = classify(rows)
+  return s.kind === 'dev_channels' ? s : d
+}
+
+/**
  * The rows between the two rules of Claude's input box (the first of them starts with `❯`): the LAST pair of rule rows with a
  * `❯` row first between them. A dialog's options (no rule after them) and a blank pane are not one. [start, end) or null.
  */

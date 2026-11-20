@@ -24,6 +24,9 @@ extension Supervisor {
     /// The dev-channels warning is answered only while no attached tmux client has typed for this long (or when the clients cannot be read: never).
     /// tmux reports a client's activity in whole seconds, so the quiet needed is up to a second longer than this.
     public var devDialogClientQuiet: Double = 5
+    /// How long Main's safety question is not offered again after an Enter whose delivery is unknown (a tmux timeout): it may have landed and the
+    /// screen not yet redrawn. Past it, the same unchanged screen is clearly still waiting and is offered again.
+    public var safetyUnsentMemory: Double = 5
     public var agentsPoll: Double = 10
     public var hangPolls: Int = 2
     public var restartWindow: Double = 900
@@ -67,6 +70,9 @@ extension Supervisor {
     /// Main's Talos bridge must show a live `status.json` within `Timings.bridgeWait` of the warning being answered, or the owner is told.
     /// Off unless the app turns it on: a supervisor with no bridge behind it (tests, a thread session) has nothing to check.
     public var checksBridge: Bool = false
+    /// Main always passes `--dangerously-load-development-channels server:talos-app` (`MainChannelFlag`), whatever command was saved or
+    /// imported. Off unless the app turns it on, like `checksBridge`: a supervisor under test has the launch its test gave it.
+    public var addsChannelsFlag: Bool = false
     /// Process groups owned by sibling supervisors (Option C: main whitelists its workers' panes, OPTION-C-SPEC 4.4).
     public var siblingGroups: (@Sendable () -> Set<Int32>)?
     /// Unix milliseconds. A request's `ts` is wall-clock time, which the monotonic clock cannot be compared with; tests move this.
@@ -148,6 +154,8 @@ extension Supervisor {
   public enum Event: Equatable, Sendable {
     case needsYou(NeedsYou)
     case openTerminal
+    /// Main is signed out: the app opens the Sign in to Claude again window (never a terminal).
+    case openSignIn
     case humanConfirmed(sessionId: String)
     /// Quiet: "Talos restarted after a crash and resumed".
     case autoConfirmed(sessionId: String)
@@ -194,6 +202,12 @@ extension Supervisor {
     public var agentActivity: String?
     /// Main's dialog on its pane as an offer for the bridge's card (SupervisorDevCard.swift); `WorkerManager` writes it to `workers.json`.
     public var devDialog: DialogOffer?
+    /// Main's API-key question as a Mac popup offer (`SupervisorFirstStart`). Not written to workers.json: there is no phone card for it yet.
+    public var apiKeyDialog: DialogOffer?
+    /// Main's MCP-server question or bypass disclaimer as a Mac popup offer (`SupervisorSafetyPopup`), answered only by a real click.
+    public var safetyDialog: DialogOffer?
+    /// The Mac told the phone, for this start, that Main waits at the Mac for one of those two (`postSafetyWaitingToPhone`).
+    public var safetyPhoneTold = false
     /// The Mac told the phone, for this start, that Main waits at the Mac (`postDevWaitingToPhone`): the popup's footer says so only then.
     public var devPhoneTold = false
     /// Main's Talos bridge was seen live (`status.json`, from this start's child) in this start. The setup screen's "done" waits for it.
@@ -202,6 +216,14 @@ extension Supervisor {
     public var configUnreadable = false
     /// The mode the main session, as launched, runs in that no thread session can be held to (`MainNarrowed`); nil when in none.
     public var mainNarrowed: String?
+    /// The saved launch command is not the one this agent started with (`LaunchPending`): the Session tab offers a restart.
+    public var launchPending = false
+    /// The saved arguments the running agent was started from, nil when not known (a pane found running with another command). Thread
+    /// sessions are held to these, never to a saved command the agent has not started with (`LaunchPending.argsForThreads`).
+    public var runningArgs: [String]?
+    /// The permission mode of the launch now running or waiting (its own arguments at the spawn, never the saved ones): what Main's
+    /// startup popup names. nil when the arguments read as no one mode or are not known.
+    public var devStartMode: String?
   }
 
   struct Holder: Equatable {
@@ -220,6 +242,8 @@ extension Supervisor {
     var fingerprint: String
     /// Per-piece hashes of this launch (folder, program, flags, env), so the card can say what differs from the confirmed one.
     var parts: [String: String] = [:]
+    /// The saved arguments (`desktop.json` `args`) this start was made from; nil for a pane found running with some other command.
+    var launchedArgs: [String]?
     var cliVersion: String?
     var expectsDevDialog: Bool
     /// The channels this start's argv passed with `--dangerously-load-development-channels`: the only ones the warning may show.
@@ -249,6 +273,27 @@ extension Supervisor {
     var mainWatch = MainWatch()
     var holders: [Holder] = []
     var notifiedScreens: Set<String> = []
+    /// The first-start screens answered with their one Enter in this start (`SupervisorFirstStart`), by `FirstStartScreens.Screen.rawValue`.
+    var firstStartEntered: Set<String> = []
+    /// Main's API-key question as a popup offer, and the dialog id a key was sent for (no second key for it).
+    var apiKeyOffer: DialogOffer?
+    var apiKeyPressedFor: String?
+    /// Main's MCP-server question or bypass disclaimer as a popup offer (`SupervisorSafetyPopup`), the dialog id a key was sent for, and the
+    /// phone line (once per start).
+    var safetyOffer: DialogOffer?
+    var safetyPressedFor: String?
+    var safetyPhonePosted = false
+    /// The owner's "No, exit" on the bypass disclaimer ended this start: the exit that follows is his stop (`stopsForOwnerExit`). Its own flag, not
+    /// the dev card's (`syncDevCard` clears that one every tick once the start runs), and gone with this `Launch` when a new start begins.
+    var safetyOwnerExit = false
+    /// The screen (its rows joined) the last safety Enter went to: the same screen is not offered again until it changes (a redraw that lags, or a
+    /// dead pane's last frame).
+    var safetyAnsweredScreen: String?
+    /// The same, for an Enter whose delivery is UNKNOWN (a timeout, not `notSent`): the screen it went to and the awake time the memory ends. Short
+    /// lived (`Timings.safetyUnsentMemory`): if the screen is still the same after it, the key never reached Claude and the question is offered again.
+    var safetyUnsentScreen: String?
+    var safetyUnsentUntil: Double = 0
+    var safetyPhoneTold = false
     /// The pane's last output as the host last reported it (a wall time), and when on the supervisor's clock that report last changed.
     /// The dialog stall is timed from the second, so a Mac clock set forward cannot raise it early nor one set back hold it off.
     var outputSeen: Date?

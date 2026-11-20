@@ -11,7 +11,7 @@
 //   it does not matter: an Enter goes only when the box holds exactly Talos's line, which text sent to a focused menu never does.)
 // - {type:'dialog', kind}: a key for one of the screens Talos answers. Allowed only when THAT kind's own exact reader matches the
 //   live region (below the last solid rule, or the whole pane when there is none, as the start screens are drawn): the exact option
-//   reader (readDialog, the one first-start answers by) for folder trust and MCP consent, first-start's reader for the theme, the
+//   reader (readDialog, the one first-start answers by) for folder trust, MCP consent and the bypass disclaimer, first-start's reader for the theme, the
 //   security notes and the dev-channels warning. A phrase on screen never names anything by itself.
 // - And, independently, never a key while Claude Code's usage-limit menu is anywhere on the pane (usage-limit.ts), nor when the
 //   pane cannot be read, nor with no intent stated.
@@ -92,7 +92,7 @@ function boxRefusal(escaped: string[], rows: string[], holds: 'empty' | 'ours'):
 function dialogLive(rows: string[], kind: DialogKeyKind): boolean {
   const region = rows.slice(regionStart(rows))
   // the same exact reader first-start answers by (without the colour check: the two must agree, or a start stalls)
-  if (kind === 'trust' || kind === 'mcp_consent') return readDialog(region)?.kind === kind
+  if (kind === 'trust' || kind === 'mcp_consent' || kind === 'bypass') return readDialog(region)?.kind === kind
   return firstStartScreen(region).kind === kind
 }
 

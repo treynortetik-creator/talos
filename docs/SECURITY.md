@@ -285,11 +285,11 @@ the backstop: it cannot stop a change, it tells the owner about one.
 
 - **Terminal check.** `enroll`, `rotate` and `trust on` refuse when stdin or stdout is not a
   terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these until he decides on adding devices). `devices` and `peer`
-  are the agent's own unless "Lock Talos settings" is on (owner ruling 2026-11-19, `agent-cli.ts`): `peer create|add|list|remove|rotate|secret-forget`
+  are the agent's own unless "Lock Talos settings" is on (owner ruling 2026-11-19, `agent-cli.ts`): `peer link|accept|create|add|list|remove|rotate|secret-forget`
   and `devices list|revoke` run from a session with no terminal, and refuse with the one lock sentence while the lock is on; a terminal runs
   as it always did, lock on or off (the desktop app's Revoke-this-device runs the CLI under a pty, and enroll and the bridge-key rotate are
-  terminal-reachable already). From a session (main or a thread's own: one rule, and the session name is only for the audit line) `peer create`, `peer add`,
-  `peer rotate` and `devices revoke` are also refused while, since the owner's latest words in any thread (counted from when the bridge received them, never the phone's clock), outside text
+  terminal-reachable already). From a session (main or a thread's own: one rule, and the session name is only for the audit line) `peer link`, `peer accept`,
+  `peer create`, `peer add`, `peer rotate` and `devices revoke` are also refused while, since the owner's latest words in any thread (counted from when the bridge received them, never the phone's clock), outside text
   reached any thread (one that has left config.json too), any lead handed main anything (a hand-off is the agent's own words, so it sets no outside text), or the peer taint
   stands; with history.sqlite missing or unreadable they are refused too. `devices revoke` never takes
   the last approved device or the one his latest message came from (the bridge keeps that device id, kv `last_owner_device`, from his
@@ -312,6 +312,13 @@ the backstop: it cannot stop a change, it tells the owner about one.
   the one list. There is no setting or
   environment variable that turns the check off. `trust off` and `trust show` stay open. This stops an agent that pipes `y` into
   a command. It does not stop one that makes a terminal (`script`, a pty from Python, `expect`).
+- **One-paste link code** (`talos-app peer link` / `peer accept`, docs/LINKED-AGENTS.md). The code is a bearer credential: single use, 15 minutes, only its
+  SHA-256 kept on the relay (compared in constant time), and the other install's address and secret are stored encrypted until the Mac collects them once.
+  Redeeming needs no signature, so it is rate limited per client address before anything is read, every failure (unknown, expired, used, wrong
+  token) is charged to the failed-verify bucket and answered with the same 404 `link_unusable`, and the relay log says which without the token. The
+  code never reaches bridge.log or the audit line, is redacted from a peer message, a report, a log tail and the text sealed into a phone push, and `peer accept` reaches only
+  the host in the code (https, a plain DNS name, port 443, no redirects, no private address). A link code pasted from anywhere but the owner links to whoever made it, so
+  only the since-owner gate stops it: `peer accept` and `peer link` are refused while outside text reached any thread since his latest words.
 - **Main's development-channel warning.** The Mac popup answers only a real click from the mouse or trackpad: a press by
   Accessibility or AppleScript sends no mouse event, and a click another program posts (cliclick, a computer-use tool) carries
   that program's process id, so neither counts. Only that click seals the start command. A phone answer to the card starts this
@@ -322,6 +329,16 @@ the backstop: it cannot stop a change, it tells the owner about one.
   with one it knows, with no prompt, and then seal a changed start itself. Closing that needs the key in the protected Keychain,
   which needs a build signed by an Apple developer team, or a helper that runs as root (installed once with an admin
   password). An agent with tmux can also press Enter on the warning itself.
+- **The permission-mode request file.** `permission_mode` lets Main change its own permission mode when the owner asked, through
+  `permission-mode-request.json` in the Talos home, which only the bridge writes (the guards deny the agent a write) and the Mac
+  app reads. A looser mode (Auto, Bypass all) is made straight away only on the owner's own words in the named thread with
+  nothing from outside since in any thread and no lead's hand-off (the quiet test `config_propose` uses to open the thread
+  fence); otherwise the owner gets a card naming the mode and only his signed Allow in the app writes the file (a notification
+  tap is refused). "Lock Talos settings" refuses every change, at the tool, at his Allow and again on the Mac. The file does not
+  say who wrote it, and any program running as the owner can write one. The Mac acts on a well-formed fresh request only while
+  Lock is off, tells the phone "The agent asked to switch ..." (never "as you asked"), and Main does not run in the new mode until
+  the owner confirms the development-channel dialog at the Mac or on the phone card (the launch seal), because the changed
+  launch is a cold start.
 - **The restart request file.** The Mac app acts on `agent-request.json` in the Talos home folder, which the bridge writes
   when the owner taps "Restart agent" on the phone, or when a session calls `restart_main`. It is restart only: restore is not
   a phone action, it stays in the Mac menu and Terminal. The agent runs as the same user and can write that file too. So the

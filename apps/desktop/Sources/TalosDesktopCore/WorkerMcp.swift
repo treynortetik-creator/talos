@@ -110,6 +110,13 @@ public enum WorkerMcp {
     return out
   }
 
+  /// The server names the folder's own `.mcp.json` defines (both shapes), for reading a name Claude Code's question wrapped over rows: the
+  /// screen's two halves are only a name when they join into one of these (`DialogReader`). Nothing here approves anything.
+  public static func projectNames(cwd: String) -> [String] {
+    guard let project = object(at: cwd + "/.mcp.json") else { return [] }
+    return table(project["mcpServers"] ?? project).keys.sorted()
+  }
+
   /// Every server a session started in `cwd` could use, by name, with its definition.
   public static func catalog(cwd: String, home: String, claudeDir: String) -> [String: [String: Any]] {
     entries(cwd: cwd, home: home, claudeDir: claudeDir).mapValues { $0.def }

@@ -3,6 +3,13 @@ import Foundation
 import SwiftTerm
 import TalosDesktopCore
 
+/// What a pairing run is for: this Mac's own window (the sign-in window with the four words), or the phone step of the setup (the setup
+/// screen shows the code and the four words itself, so the separate sign-in window never opens and the code goes nowhere but its QR).
+enum PairingPurpose: Equatable {
+  case thisMac, phone
+  var deviceName: String { self == .phone ? "Phone" : SignInHelp.label }
+}
+
 /// What the sign-in window says right now.
 enum PairingPhase: Equatable {
   case idle
@@ -28,6 +35,11 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
   static let shared = PairingController()
 
   @Published private(set) var phase: PairingPhase = .idle
+  /// The one-use link the phone opens (the setup's QR), once the program printed it. nil for this Mac's own sign-in.
+  @Published private(set) var link: String?
+  private(set) var purpose: PairingPurpose = .thisMac
+  /// How the enroll program ended once the owner had said yes (0: it registered the device). nil until then.
+  @Published private(set) var confirmedExit: Int32?
   /// Whether Confirm does anything yet (the program counts a too-quick answer as a no).
   @Published private(set) var confirmEnabled = false
   /// Tests: the clock, how long the owner has to answer, and a place to write instead of the pty.
@@ -59,16 +71,23 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
 
   var isRunning: Bool { terminal?.process.running ?? false }
 
-  func start(config: DesktopConfig, web: WebController) {
+  func start(config: DesktopConfig, web: WebController, purpose: PairingPurpose = .thisMac) {
     // A sign-in is already open: bring its window forward, never a second enroll.
     guard !starting, !isRunning else { frontPanel(); return }
-    guard let relay = web.relay else { return }
+    // the purpose first: whoever listens for this run's phases reads it, so a failure said below is never taken for another run's
+    self.purpose = purpose
+    link = nil
+    guard let relay = web.relay else {
+      if purpose == .phone { phase = .failed(OnboardingCopy.pairFailed) }
+      return
+    }
     starting = true
     lastConfig = config
+    confirmedExit = nil
     phase = .starting
     confirmEnabled = false
     self.web = web
-    web.show()  // the page must be up to receive the code
+    if purpose == .thisMac { web.show() }  // the page must be up to receive the code
     Task.detached {
       let r = TalosAppCLI.resolve(config: config)
       await MainActor.run {
@@ -90,7 +109,7 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
     launched = r.command
     launchedEnv = r.env
     exitWatch?.cancel()
-    var fresh = PairingSession(relay: relay)
+    var fresh = PairingSession(relay: relay, deviceName: purpose.deviceName)
     fresh.readDelay = readDelay
     fresh.pinWait = pinWait
     session = fresh
@@ -107,7 +126,7 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
     frontPanel()
     let env = r.env.keys.sorted().map { "\($0)=\(r.env[$0] ?? "")" }
     term.startProcess(
-      executable: r.command[0], args: Array(r.command.dropFirst()) + ["enroll", "--label", "Mac app", "--no-qr"], environment: env)
+      executable: r.command[0], args: Array(r.command.dropFirst()) + ["enroll", "--label", purpose.deviceName, "--no-qr"], environment: env)
   }
 
   private func screenChanged() {
@@ -128,7 +147,8 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
   private func ingest(screen text: String, session s: inout PairingSession) {
     let code = s.update(screen: text, now: now())
     if let code {
-      web?.sendWhenReady(.enrollCode(code))
+      // This Mac's own window gets the code; a phone's code is only ever shown as the QR the phone scans.
+      if purpose == .thisMac { web?.sendWhenReady(.enrollCode(code)) } else { link = s.link }
       phase = .waiting
     } else if s.ambiguous {
       phase = .failed("Two different setup links appeared, so nothing was sent. Close this and try again.")
@@ -222,10 +242,15 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
     frontPanel()
   }
 
+  /// Ends our own enroll child for good (SIGKILL by its process id): the one that ignored the polite end. Nothing else is touched.
+  func killChild() {
+    if let pid = terminal?.process.shellPid, pid > 0 { kill(pid, SIGKILL) }
+  }
+
   /// "Make a new code" after a mismatch or a failure: a fresh enroll (a new one-use code); the old child is already gone.
   func newCode() {
     guard let cfg = lastConfig, let web, !isRunning, !starting else { return }
-    start(config: cfg, web: web)
+    start(config: cfg, web: web, purpose: purpose)
   }
 
   /// One place the sign-in answer is written to our own enroll child's pty (KeyGuardTests names it).
@@ -253,6 +278,7 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
     label = nil
     TerminalWindowController.shared.setPairingTab(nil)
     phase = .idle
+    link = nil
     confirmEnabled = false
     panel?.close()
     panel = nil
@@ -275,6 +301,7 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
   // MARK: the sign-in window
   /// The app's own sign-in window: forward and key, over the Talos window, so the owner never hunts for it.
   func frontPanel() {
+    guard purpose == .thisMac else { return }  // the setup screen is the window for a phone's four words
     let p = panel ?? PairingPanel(controller: self)
     panel = p
     panelFronted += 1
@@ -315,6 +342,7 @@ final class PairingController: NSObject, ObservableObject, NSWindowDelegate, Loc
     confirmEnabled = false
     // The child died while the question was open (or before it was asked): nothing can be confirmed any more.
     if var s = session, s.answered == nil { _ = s.decline(); session = s }
+    if case .done = phase { confirmedExit = exitCode ?? -1 }
     switch phase {
     case .done, .failed, .idle, .mismatch: return
     default: break

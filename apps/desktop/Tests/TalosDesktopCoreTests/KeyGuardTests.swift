@@ -41,7 +41,8 @@ struct KeyGuardTests {
     try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: fixtures.appendingPathComponent("key-guard-vectors.json")))
   }
 
-  /// Every intent a Mac sender may state, by the table's names.
+  /// Every intent a Mac sender may state, by the table's names: every `KeyGuard.DialogKind` (the first-start looks `theme`, `security_notes`,
+  /// `login_success` and the API-key card's `api_key` are the senders of `SupervisorFirstStart`).
   static let intents: [(String, KeyGuard.Intent)] =
     [("box-empty", .box(.empty)), ("box-ours", .box(.ours))] + KeyGuard.DialogKind.allCases.map { ($0.rawValue, .dialog($0)) }
 
@@ -61,7 +62,10 @@ struct KeyGuardTests {
 
   /// A capture whose intents the Mac reads differently from the shared table while a change waits for the table's owner (who agrees it
   /// with the Linux side). Empty: the table holds every change. Remove an entry once the shared table says the same.
-  static let pendingTableChanges: [String: [String]] = [:]
+  /// api-key.txt: the Mac answers the API-key question from its card (`ApiKeyCard`, a real click moves the cursor and presses Enter). The Linux
+  /// guard has no such key yet (its answer is the signed phone tap, the next round of docs/PANE-PROMPTS), so the shared table lists none.
+  /// Remove this entry when the table names `api_key` for it.
+  static let pendingTableChanges: [String: [String]] = ["real-first-start-2.1.322/api-key.txt": ["api_key"]]
 
   @Test func everyRealCaptureAllowsExactlyWhatTheSharedTableSays() throws {
     let v = try Self.vectors()
@@ -533,6 +537,36 @@ struct KeyGuardTests {
       "the unstick's one key goes through the gate with its own intents")
     #expect(ownersSeen == owners.count, "control: each named exception is still where it is named (\(ownersSeen))")
     #expect(found >= 14, "control: the scan sees the senders (\(found))")
+  }
+
+  /// The safety questions (MCP server approval, bypass disclaimer on Main's pane): their two key sends state the intent the offered dialog's
+  /// kind names, and the only way into the click that sends them is the popup's answer (`NeedsYouPopupView.isRealClick` guards that button).
+  /// No file, URL scheme or tool call reaches `safetyClick`, and the file reads no answer from disk.
+  @Test func theSafetyPopupsKeysAreGatedAndOnlyAPopupClickReachesThem() throws {
+    let root = Self.fixtures.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sources")
+    let file = try String(contentsOf: root.appendingPathComponent("TalosSupervisor/SupervisorSafetyPopup.swift"), encoding: .utf8)
+    let code = file.split(separator: "\n").map(String.init).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+    let sends = code.filter { $0.contains(".sendDialogKey(") }
+    #expect(sends.count == 2, "the arrow and the Enter, no other send: \(sends)")
+    #expect(sends.allSatisfy { $0.contains("sendKey(intent") }, "every key states the offered kind's intent: \(sends)")
+    #expect(code.contains { $0.contains("KeyGuard.intent(for: offer.kind)") })
+    #expect(!code.contains { $0.contains("contents(atPath") || $0.contains("readFile") || $0.contains("DialogAnswerFile") })
+    // who calls safetyClick: one place, the popup answer of Main
+    var callers: [String] = []
+    for target in ["TalosSupervisor", "TalosDesktop", "TalosDesktopCore"] {
+      let dir = root.appendingPathComponent(target)
+      for f in try FileManager.default.contentsOfDirectory(atPath: dir.path) where f.hasSuffix(".swift") {
+        let text = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+        for line in text.split(separator: "\n") where line.contains("safetyClick(") && !line.contains("func safetyClick(") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+          callers.append("\(f): \(line.trimmingCharacters(in: .whitespaces))")
+        }
+      }
+    }
+    #expect(callers.count == 1 && callers[0].hasPrefix("SupervisorDevPopup.swift:"), "\(callers)")
+    // and that one is inside popupAnswerMain's click path, after the action is a `.choose`
+    let popup = try String(contentsOf: root.appendingPathComponent("TalosSupervisor/SupervisorDevPopup.swift"), encoding: .utf8)
+    let at = try #require(popup.range(of: "let r = safetyClick("))
+    #expect(popup[..<at.lowerBound].contains("guard case .choose(let choice, let label) = action"))
   }
 
   // MARK: the stall auto-unstick's Escape (`.interrupt`)

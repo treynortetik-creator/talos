@@ -169,6 +169,14 @@
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/hands-free.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\" check"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/mod-fallback.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\""
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -187,6 +195,16 @@
           {
             "type": "command",
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/compaction-guard.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\" save"
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/mod-fallback.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; python3 \"$f\""
           }
         ]
       }

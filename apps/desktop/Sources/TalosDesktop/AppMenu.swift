@@ -21,9 +21,22 @@ final class AppMenu: NSObject, NSMenuItemValidation {
     var hasRelay: () -> Bool
     /// True while a Talos web window is the key or main window; View > Reload is dimmed otherwise.
     var canReload: () -> Bool = { true }
+    /// "Check for Updates…", or "Update to x…" once one is downloaded; and whether the dot shows.
+    var updateTitle: () -> String = { UpdateMenu.checkTitle }
+    var updateDot: () -> Bool = { false }
   }
 
   var host: Host?
+  /// The small clay-coloured dot beside "Update to x…".
+  static let dot: NSImage = {
+    let img = NSImage(size: NSSize(width: 9, height: 9), flipped: false) { r in
+      NSColor(red: 0xD9 / 255, green: 0x69 / 255, blue: 0x2B / 255, alpha: 1).setFill()
+      NSBezierPath(ovalIn: r).fill()
+      return true
+    }
+    img.accessibilityDescription = "Update ready"
+    return img
+  }()
   private(set) var menu: NSMenu?
   private var observers: [NSObjectProtocol] = []
 
@@ -103,7 +116,9 @@ final class AppMenu: NSObject, NSMenuItemValidation {
     return m.items.map { top -> [String] in
       let subs = top.submenu?.items.map { i -> String in
         let t: String = i.target === NSApp ? "app" : (i.target is AppMenu ? "menu" : (i.target == nil ? "chain" : "other"))
-        return i.isSeparatorItem ? "-" : "\(i.title)|\(i.keyEquivalent)|\(i.keyEquivalentModifierMask.rawValue)|\(t)"
+        // the update item's title changes with the update's state; its place in the menu is what is kept
+        let title = (i.representedObject as? String) == AppMenuSpec.Action.checkForUpdates.rawValue ? UpdateMenu.checkTitle : i.title
+        return i.isSeparatorItem ? "-" : "\(title)|\(i.keyEquivalent)|\(i.keyEquivalentModifierMask.rawValue)|\(t)"
       } ?? []
       return ["# \(top.title)"] + subs
     }
@@ -201,6 +216,10 @@ final class AppMenu: NSObject, NSMenuItemValidation {
       return true
     case .reload:
       return host.canReload()
+    case .checkForUpdates:
+      item.title = host.updateTitle()
+      item.image = host.updateDot() ? Self.dot : nil
+      return true
     default:
       return true
     }

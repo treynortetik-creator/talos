@@ -2,7 +2,7 @@
 # Installs Talos.app into ~/Applications (no admin prompt). With tmux the agent keeps running when the old app quits and
 # the new app re-attaches (DESKTOP-SPEC 6.5); with the owned-pty fallback host the agent stops when Talos quits.
 # Private development: rebuild locally, then run this.
-#   install.sh [--app PATH] [--dest DIR] [--no-open] [--no-quit] [--no-relay-wait] [--new-identity]
+#   install.sh [--app PATH] [--dest DIR] [--no-open] [--no-quit] [--no-relay-wait] [--new-identity] [--use-this-clone]
 #   install.sh --from-release <https URL | path of a .zip> --sha256 <hex> --team <TEAM ID> [--dest DIR] [...as above]
 #   install.sh --from-release <...> --sha256 <hex> --team <TEAM ID> --check-only
 #   install.sh --rollback [--dest DIR] [--no-open] [--no-quit]
@@ -13,6 +13,8 @@
 #     --no-quit  don't ask a running Talos to quit first (tests)
 #     --rollback  put the one kept previous version back (see below); takes no --app
 #     --no-relay-wait  install without waiting for the relay (below)
+#     --use-this-clone  record the clone this script runs from as the one the app uses, even when another clone is already recorded
+#             (without it, a recorded clone that is still a whole Talos clone is kept, and the run says so)
 #     --from-release  install the prebuilt app (release-app.sh) instead of a local build; takes no --app. Downloaded over https
 #             only (or copied from a local path) into a private temp folder, then, before anything else happens, in this order:
 #             its sha256 must be the one given with --sha256; the zip must hold Talos.app and nothing else; the app must pass
@@ -59,7 +61,7 @@
 # items, ~/.config/talos or the agent's tmux server, in either mode; the only process it speaks to is Talos itself, by bundle id, to ask it to quit.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$HERE/.build/app/Talos.app" DEST="$HOME/Applications" OPEN=1 QUIT=1 MODE=install APP_GIVEN=0 RELAY_WAIT=1
+APP="$HERE/.build/app/Talos.app" DEST="$HOME/Applications" OPEN=1 QUIT=1 MODE=install APP_GIVEN=0 RELAY_WAIT=1 USE_THIS_CLONE=0
 RELEASE="" PIN="" TEAM="${TALOS_RELEASE_TEAM:-}" NEW_IDENTITY=0 REL_TMP="" CHECK_ONLY=0
 WANT_ID="app.talos.desktop"
 # The tools that decide what is installed, by full path: a program of the same name earlier on PATH is never asked.
@@ -75,6 +77,7 @@ while [ $# -gt 0 ]; do
     --no-open) OPEN=0; shift ;;
     --no-quit) QUIT=0; shift ;;
     --no-relay-wait) RELAY_WAIT=0; shift ;;
+    --use-this-clone) USE_THIS_CLONE=1; shift ;;
     --from-release) [ $# -ge 2 ] || { echo "install: --from-release needs a URL or a path" >&2; exit 64; }; RELEASE="$2"; shift 2 ;;
     --sha256) [ $# -ge 2 ] || { echo "install: --sha256 needs the zip's sha256" >&2; exit 64; }; PIN="$2"; shift 2 ;;
     --team) [ $# -ge 2 ] || { echo "install: --team needs a team id" >&2; exit 64; }; TEAM="$2"; shift 2 ;;
@@ -466,6 +469,7 @@ if [ "$REGRANT" = 1 ]; then
 fi
 # A prebuilt app carries no clone path (release-app.sh), so this clone is recorded as the one it uses for Create, Adopt and
 # Choose. A local build names its own clone in Info.plist, which the app prefers; the file is then left as it is.
+# record-clone: begin (install-record-clone-test.sh runs exactly this block)
 if [ "$MODE" = install ] && [ -z "$(plist_val "$TARGET" TalosCheckout)" ]; then
   CLONE="$(cd "$HERE/../.." && pwd -P)"
   if [ -f "$CLONE/install.sh" ] && [ -f "$CLONE/apps/bridge/src/cli.ts" ] && [ -d "$CLONE/plugins/talos-app-mod" ]; then
@@ -477,8 +481,57 @@ if [ "$MODE" = install ] && [ -z "$(plist_val "$TARGET" TalosCheckout)" ]; then
       if mkdir -p "$dir" && printf '%s\n' "$CLONE" > "$dir/.checkout.$$" && mv -f "$dir/.checkout.$$" "$dir/checkout"; then return 0; fi
       rm -f "$dir/.checkout.$$"; return 1
     }
-    if record_clone "$SUPPORT"; then
-      echo "install: Talos will use this clone ($CLONE) for its agent folder setup"
+    # A clone is already recorded and passes the app's own rules for a recorded clone (AgentFolderSetup.recordedCloneProblem): it stays,
+    # unless --use-this-clone says otherwise. Running this script from another checkout used to repoint the app at that checkout without
+    # a word (seen on 2026-11-19). A record that fails the rules (a link, another owner, writable by others, inside a folder agent
+    # sessions work in) is not kept: the record is then written as before. Any program running as the owner can write that file, so
+    # "it names a folder with three files in it" is not enough. TALOS_TEST_CLONE_UNSAFE replaces the temp roots (tests only).
+    under() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
+    owned_ok() {  # a real file or folder, not a link, ours, writable by no one else
+      local f="$1" me st perm
+      [ -e "$f" ] && [ ! -L "$f" ] || return 1
+      me="$(id -u)"; st="$(stat -f '%u %Lp' "$f" 2>/dev/null)" || return 1
+      [ "${st%% *}" = "$me" ] || return 1
+      perm="${st#* }"; [ $(( 8#$perm & 8#022 )) -eq 0 ]
+    }
+    # The folders agent sessions work in, as recordedCloneProblem's `unsafe` list has them: the agent folder (desktop.json agent_dir), the
+    # Talos home (desktop.json env.TALOS_APP_HOME, else TALOS_APP_HOME, else the default) and each thread's own folder (its config.json
+    # `cwd`s). One per line; a file that cannot be read adds nothing.
+    session_roots() {
+      local cfg="$OLD_SUPPORT/desktop.json" ah ad
+      ah="$(/usr/bin/plutil -extract env.TALOS_APP_HOME raw -expect string -o - "$cfg" 2>/dev/null || true)"
+      [ -n "$ah" ] || ah="${TALOS_APP_HOME:-$HOME/.config/talos/app}"
+      case "$ah" in "~") ah="$HOME" ;; "~/"*) ah="$HOME/${ah#"~/"}" ;; esac
+      ad="$(/usr/bin/plutil -extract agent_dir raw -expect string -o - "$cfg" 2>/dev/null || true)"
+      case "$ad" in "~") ad="$HOME" ;; "~/"*) ad="$HOME/${ad#"~/"}" ;; esac
+      printf '%s\n' "$ah" "$ad"
+      grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' "$ah/config.json" 2>/dev/null | sed -e 's/^[^:]*:[[:space:]]*"//' -e 's/"$//'
+    }
+    recorded_clone_ok() {  # $1 the recorded path, $2 the record file
+      local p="$1" real u f
+      case "$p" in /*) ;; *) return 1 ;; esac
+      p="${p%/}"; real="$(cd "$p" 2>/dev/null && pwd -P)" || return 1
+      [ "$real" = "$p" ] || return 1
+      for u in "$SUPPORT" "$OLD_SUPPORT" ${TALOS_TEST_CLONE_UNSAFE-/tmp /private/tmp /var/folders /private/var/folders "${TMPDIR:-/tmp}"}; do
+        [ -n "$u" ] || continue
+        if under "$real" "$u" || under "$u" "$real"; then return 1; fi
+      done
+      while IFS= read -r u; do
+        case "$u" in /*) ;; *) continue ;; esac
+        u="${u%/}"; [ -n "$u" ] || continue
+        if under "$real" "$u" || under "$u" "$real"; then return 1; fi
+      done < <(session_roots)
+      for f in "$2" "$real" "$real/install.sh" "$real/plugins/talos-app-mod" "$real/apps/bridge/src/cli.ts"; do owned_ok "$f" || return 1; done
+    }
+    RECORDED="$(head -n 1 "$SUPPORT/checkout" 2>/dev/null || true)"
+    if [ -n "$RECORDED" ] && [ "$RECORDED" != "$CLONE" ] && [ "$USE_THIS_CLONE" = 0 ] && recorded_clone_ok "$RECORDED" "$SUPPORT/checkout"; then
+      echo "install: kept the clone Talos already uses ($RECORDED); this script ran from $CLONE, which was not recorded. To switch Talos to this one, run this again with --use-this-clone" >&2
+    elif record_clone "$SUPPORT"; then
+      if [ -n "$RECORDED" ] && [ "$RECORDED" != "$CLONE" ]; then
+        echo "install: Talos now uses this clone ($CLONE) for its agent folder setup; it used $RECORDED before"
+      else
+        echo "install: Talos will use this clone ($CLONE) for its agent folder setup"
+      fi
       record_clone "$OLD_SUPPORT" || echo "install: note: could not also record it in $OLD_SUPPORT/checkout (only an older Talos reads that one)" >&2
     else
       echo "install: warning: could not record this clone in $SUPPORT/checkout; Create, Adopt and Choose in Talos will say they cannot find a clone" >&2
@@ -487,6 +540,7 @@ if [ "$MODE" = install ] && [ -z "$(plist_val "$TARGET" TalosCheckout)" ]; then
     echo "install: warning: $CLONE is not a whole Talos clone, so it was not recorded; run this script from your clone of the Talos repo" >&2
   fi
 fi
+# record-clone: end
 # The relaunched app must not inherit another session's identity: run from a thread session, this script's environment holds
 # TALOS_APP_WORKER_THREAD (with the role and the nonce) and Claude Code's session variables, and Main's bridge refused to be the live
 # bridge because of them (2026-11-09). Main's own environment is built from the login shell and desktop.json, never from this one.

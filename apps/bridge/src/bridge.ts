@@ -56,7 +56,7 @@ import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
 import { withPaneRun } from './pane-run.ts'
-import { notePeerChanges, notePeerTaint, PeerService } from './peer/service.ts'
+import { notePeers, notePeerTaint, PeerService } from './peer/service.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
 import { RelayClient } from './relay-client.ts'
@@ -211,7 +211,7 @@ export class Bridge {
     this.pollMs = opts.pollMs ?? POLL_MS
     this.paths = pathsOf(env.home, env.inboxRoot)
     const p = this.paths
-    for (const d of [p.home, p.media, p.approved, p.enrollPending]) ensureDir(d)
+    for (const d of [p.home, p.media, p.approved, p.enrollPending, p.onboardingDir]) ensureDir(d)
     this.log = opts.logger ?? createLogger(p.home, env.logLevel)
     this.keyRef = keyRef
     this.after = opts
@@ -621,7 +621,7 @@ export class Bridge {
     this.ctx.apps?.start()
     this.schedulePoll()
     // the owner's y/N lands in enroll-pending/ (a non-recursive watch of home never sees it), so watch both
-    for (const dir of [this.paths.home, this.paths.enrollPending]) {
+    for (const dir of [this.paths.home, this.paths.enrollPending, this.paths.onboardingDir]) {
       try {
         this.watchers.push(
           quietWatch(dir, () => {
@@ -782,7 +782,7 @@ export class Bridge {
 
   /** A trust mode flip is said out loud in the thread, whether it happened while the bridge ran or while it was down. */
   private noteTrust() {
-    const notes = { trust: noteTrustFlip, lock: noteLockFlip, fence: noteFenceFlip, peer: notePeerChanges }
+    const notes = { trust: noteTrustFlip, lock: noteLockFlip, fence: noteFenceFlip, peer: notePeers }
     for (const [what, note] of Object.entries(notes))
       void note(this.ctx).catch((e) => this.log.warn(`${what} note failed`, { error: (e as Error).message }))
   }
@@ -812,7 +812,7 @@ export class Bridge {
       if (this.client?.connected) (this.ctx.transport as LiveTransport).flushOutbox({ idleOnly: true })
       await this.checkKeyFile()
       this.statusWriter?.poke() // permission_relay, queue depth
-      await this.enrollment.poll()
+      await this.enrollment.poll() // and the app's other local request, the setup hello
       this.expiry.sync()
       this.optionCTick()
     } catch (e) {

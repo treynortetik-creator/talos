@@ -288,14 +288,16 @@ export function checkWorkerCwd(
   const parts = cwd.split('/').slice(1)
   if (parts.some((p) => p === '.' || p === '..')) return 'the folder path must not contain . or .. segments'
   const norm = `/${parts.filter(Boolean).join('/')}`
-  const under = (root: string) => {
-    const r = root.replace(/\/+$/, '')
-    return norm === r || norm.startsWith(`${r}/`)
-  }
-  if (!under(roots.home) || norm === roots.home.replace(/\/+$/, '')) return 'the folder must be inside your home folder'
-  if (under(`${roots.home.replace(/\/+$/, '')}/.claude`) || (roots.claudeDir && under(roots.claudeDir)))
+  const root = (r: string) => r.replace(/\/+$/, '')
+  const under = (r: string) => norm === root(r) || norm.startsWith(`${root(r)}/`)
+  // only the refused folders ignore case: a Mac's disk is case-insensitive, so `.CLAUDE` is `.claude` there (refusing the other
+  // spelling on a case-sensitive disk too costs nothing). "Inside home" and "not home itself" are exact, as the disk spells them.
+  const low = norm.toLowerCase()
+  const underFold = (r: string) => low === root(r).toLowerCase() || low.startsWith(`${root(r).toLowerCase()}/`)
+  if (!under(roots.home) || norm === root(roots.home)) return 'the folder must be inside your home folder'
+  if (underFold(`${root(roots.home)}/.claude`) || (roots.claudeDir && underFold(roots.claudeDir)))
     return "the folder can't be inside ~/.claude"
-  if (under(roots.talosHome)) return "the folder can't be inside the Talos data folder"
+  if (underFold(roots.talosHome)) return "the folder can't be inside the Talos data folder"
   return null
 }
 

@@ -334,7 +334,7 @@ const FOLDER_ONLY: Record<string, string[]> = {
   // the agent folder (TALOS_AGENT_DIR), to name the kit's state folder the way the kit does (from the real path): a folder only
   'action-rule-asks.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'real = realpathSync(dir)'],
   'cli-main.ts': [
-    "import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'",
+    "import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'",
     'return realpathSync(p)',
   ],
   'files/wiring.ts': ["import { realpathSync } from 'node:fs'", 'return foldPath(realpathSync(p))'],

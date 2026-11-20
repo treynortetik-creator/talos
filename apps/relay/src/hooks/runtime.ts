@@ -8,6 +8,7 @@ import { sealLegacyEvents } from './event-seal.ts'
 import { wakeSnoozed } from './inbox.ts'
 import { idle, kick } from './ingest.ts'
 import { purgePeerFrames } from './peer.ts'
+import { sweepPeerLinks } from './peer-link.ts'
 import { pollDue } from './poller.ts'
 import { deliverPending, dropAppCopies, notifyNewItems, wipeRawIfDone } from './route.ts'
 import { DAY_MS, HOUR_MS, type HooksRuntime, type RuntimeOptions } from './types.ts'
@@ -64,6 +65,7 @@ export function purge(rt: HooksRuntime): void {
   db.prepare('delete from hooks_deliveries where at < ?').run(now - 7 * DAY_MS)
   db.prepare('delete from hooks_claims where expires_at < ?').run(now - DAY_MS)
   purgePeerFrames(rt)
+  sweepPeerLinks(rt)
 }
 
 /** Everything that happens on a clock rather than on a request. Safe to call at any time and from tests. */

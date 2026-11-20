@@ -54,14 +54,22 @@ export const DIALOG_WORDING = {
     mcp_consent: 'Allow this MCP server?',
     login: '{thread} needs you to sign in',
     dev_channels: "Allow Talos's development channel?",
+    bypass: 'Run with permission checks off?',
   },
+  /** The heading when the server is known: `Use github?`. `{server}` is the name as read (hidden characters shown, cut at 60). */
+  titleNamed: { mcp_consent: 'Use {server}?' },
   sentence: {
     trust:
       "{thread}'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.",
     mcp_consent: "{thread}'s session wants to turn on this server's tools for its folder.",
     login: "{thread}'s session needs you to sign in to Claude on the Mac.",
     dev_channels: "Main session's start needs this to talk to the Talos app.",
+    bypass:
+      "{thread}'s session was started with permission checks off. It will run commands and change files without asking you first. Accept only if you meant that.",
   },
+  /** The sentence for a thread session's development-channels question (Main's is `sentence.dev_channels`). */
+  sentenceThreadDevChannels:
+    "{thread}'s session was started with a development channel, and Claude Code asks before it loads it.",
   /** The lines the development-channels card adds under its sentence: a channel Talos did not add, and a start command the owner has not confirmed. */
   devChannels: {
     alsoLoads: "Also loads {channels}, which Talos didn't add.",
@@ -90,6 +98,7 @@ const DIALOG_PROMPT: Record<DialogKindT, string> = {
   mcp_consent: 'approve a project MCP server',
   login: 'sign in',
   dev_channels: 'allow the development channel',
+  bypass: 'run with permission checks off',
 }
 
 /** What a dialog card binds: the dialog, nothing else. */
@@ -126,10 +135,20 @@ const name = (threadName: string): string => dialogVisibleText(threadName).trim(
 
 const fill = (text: string, thread: string): string => text.replaceAll('{thread}', () => thread)
 
-/** The heading of the card (a card title is at most 120 characters, so a long thread name is cut). */
-export function dialogTitle(kind: DialogKindT, threadName: string): string {
-  const n = [...name(threadName)]
-  return fill(DIALOG_WORDING.title[kind], n.length > 60 ? `${n.slice(0, 60).join('')}\u2026` : n.join(''))
+const cut60 = (text: string): string => {
+  const n = [...text]
+  return n.length > 60 ? `${n.slice(0, 60).join('')}\u2026` : n.join('')
+}
+
+/**
+ * The heading of the card (a card title is at most 120 characters, so a long thread name or server name is cut). An MCP question
+ * whose server was read says which: "Use github?".
+ */
+export function dialogTitle(kind: DialogKindT, threadName: string, subject: string | null = null): string {
+  const server =
+    kind === 'mcp_consent' && subject !== null && subject.trim() !== '' ? cut60(dialogVisibleText(subject)) : null
+  if (server !== null) return DIALOG_WORDING.titleNamed.mcp_consent.replaceAll('{server}', () => server)
+  return fill(DIALOG_WORDING.title[kind], cut60(name(threadName)))
 }
 
 /** The channels a `dev_channels` dialog's subject names, in the order the screen showed them. */
@@ -146,17 +165,23 @@ const devChannelsOf = (subject: string | null): string[] =>
 export function dialogBody(
   kind: DialogKindT,
   threadName: string,
-  more: { subject?: string | null; launch_changed?: readonly string[] | undefined } = {},
+  more: { subject?: string | null; launch_changed?: readonly string[] | undefined; main?: boolean } = {},
 ): string {
-  const lines = [fill(DIALOG_WORDING.sentence[kind], name(threadName))]
+  const sentence =
+    kind === 'dev_channels' && more.main === false
+      ? DIALOG_WORDING.sentenceThreadDevChannels
+      : DIALOG_WORDING.sentence[kind]
+  const lines = [fill(sentence, name(threadName))]
   if (kind === 'dev_channels') {
     const w = DIALOG_WORDING.devChannels
     const others = devChannelsOf(more.subject ?? null).filter((c) => c !== TALOS_DEV_CHANNEL)
     if (others.length > 0)
       lines.push(w.alsoLoads.replace('{channels}', () => others.map((c) => dialogVisibleText(c)).join(', ')))
     const lc = more.launch_changed
-    if (lc !== undefined) lines.push(lc.length === 0 ? w.launchUnconfirmed : w.launchChanged)
-    if (lc !== undefined && lc.length > 0) lines.push(w.launchChangedWhat.replace('{what}', () => lc.join(', ')))
+    // the launch-confirmation lines are about Main's own start command only
+    if (more.main !== false && lc !== undefined) lines.push(lc.length === 0 ? w.launchUnconfirmed : w.launchChanged)
+    if (more.main !== false && lc !== undefined && lc.length > 0)
+      lines.push(w.launchChangedWhat.replace('{what}', () => lc.join(', ')))
   }
   return lines.join(' ')
 }
@@ -176,6 +201,15 @@ export type DialogWhere = { kind: 'mac' } | { kind: 'linux'; machine: string; at
  */
 export function dialogFallbackLine(kind: DialogKindT, where: DialogWhere): string {
   const what = `This thread's session is waiting on a '${DIALOG_PROMPT[kind]}' prompt`
+  // signed out: Talos signs in itself, in the app (the Mac) or on the computer's own sign-in (Linux); no terminal, no command
+  if (kind === 'login')
+    return where.kind === 'mac'
+      ? `Sign in to Claude again: ${what}. Choose Sign in to Claude again in the Talos menu on the Mac.`
+      : `Sign in to Claude again: ${what}. Talos started the sign-in on ${where.machine}; its link is in this thread.`
+  // the converted questions (a card with buttons): nothing here sends the owner to a terminal. The card is the way to answer; once it has
+  // expired nothing is pressed, and the line says so
+  if (kind === 'mcp_consent' || kind === 'dev_channels' || kind === 'bypass')
+    return `${what}. Its card expired without an answer, so nothing was pressed.`
   return where.kind === 'mac'
     ? `${what}; open this thread in Terminals on the Mac to answer.`
     : `${what}; attach on ${where.machine} to answer: ${where.attach}`
@@ -187,6 +221,10 @@ export function dialogFallbackLine(kind: DialogKindT, where: DialogWhere): strin
  */
 export function dialogAnswerText(kind: DialogKindT, subject: string | null, label: string): string {
   if (kind === 'trust' && /^yes\b/i.test(label.trim())) return `Trusted ${dialogVisibleText(subject ?? 'this folder')}`
+  if (kind === 'bypass')
+    return /^yes\b/i.test(label.trim())
+      ? 'Accepted: running with permission checks off'
+      : 'Exited: the session was stopped'
   return dialogVisibleText(label)
 }
 
@@ -204,6 +242,8 @@ export type ComposeDialogCardInput = {
   thread_id: string
   thread_name: string
   now: number
+  /** The dialog is Main's own (`supervisor.main_dialog`). Only the development-channels words differ; Main's is the default. */
+  main?: boolean
 }
 
 /**
@@ -228,11 +268,15 @@ export function composeDialogCard(input: ComposeDialogCardInput): CardT | null {
     id: input.card_id,
     thread_id: input.thread_id,
     kind: 'dialog',
-    title: dialogTitle(d.kind, input.thread_name),
+    title: dialogTitle(d.kind, input.thread_name, d.subject),
     // one line for lists and notifications; nothing from the screen goes in it
     summary: `${name(input.thread_name)}'s session is waiting for you.`,
     destination: [],
-    body: dialogBody(d.kind, input.thread_name, { subject: d.subject, launch_changed: d.launch_changed }),
+    body: dialogBody(d.kind, input.thread_name, {
+      subject: d.subject,
+      launch_changed: d.launch_changed,
+      main: input.main ?? d.kind === 'dev_channels',
+    }),
     body_format: 'plain',
     fields: [],
     attachments: [],

@@ -318,7 +318,7 @@ export class AgentTracker {
    * `classic.Stop`'s `background_tasks`: the engine's own list of what is still in flight. Shells and monitors on it are
    * live (new ones added); live ones missing from it have ended. Subagents on it are ignored ($.agent.list owns them).
    */
-  backgroundSnapshot(tasks: unknown, now: number): void {
+  backgroundSnapshot(tasks: unknown, now: number, asOf: number = now): void {
     if (!Array.isArray(tasks)) return
     const live = new Set<string>()
     for (const t of tasks.slice(0, 200) as BackgroundTaskLike[]) {
@@ -342,8 +342,10 @@ export class AgentTracker {
           startedAt: now,
         })
     }
+    // `asOf`: when the list was taken (the kit Stop hook's file is read up to a tick later): a shell started since is not on
+    // it, and has not ended
     for (const s of this.shells.values())
-      if (!live.has(s.id) && !isEnded(s.status)) {
+      if (!live.has(s.id) && !isEnded(s.status) && s.startedAt <= asOf) {
         s.status = 'completed'
         s.endedAt = now
       }
@@ -548,6 +550,33 @@ export function teeFileOf(sessionId: string): string | undefined {
 export type AgentsEngineLike = {
   agent?: { list(): Promise<unknown> }
   tee?: { read(sessionId: string): Promise<string> }
+  fallback?: { stop: { read(sessionId: string): Promise<string> } }
+}
+
+/** Where the kit's Stop hook writes the session's `background_tasks` (kit/hooks/mod-fallback.py), one file per session. */
+export function stopFileOf(sessionId: unknown): string | undefined {
+  return typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(sessionId)
+    ? `state/agents-stop/${sessionId}.json`
+    : undefined
+}
+
+/**
+ * The kit Stop hook's file: `{ v: 1, at: <ms>, session_id, background_tasks: [...] }`, the same list `classic.Stop` carries.
+ * Undefined for anything else, or a file that names another session.
+ */
+export function parseStopFile(
+  text: string | undefined,
+  sessionId: string,
+): { at: number; tasks: unknown[] } | undefined {
+  if (!text) return undefined
+  try {
+    const o = JSON.parse(text) as { v?: unknown; at?: unknown; session_id?: unknown; background_tasks?: unknown }
+    if (o.v !== 1 || typeof o.at !== 'number' || o.session_id !== sessionId || !Array.isArray(o.background_tasks))
+      return undefined
+    return { at: o.at, tasks: o.background_tasks }
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -557,6 +586,8 @@ export type AgentsEngineLike = {
 export class AgentsCollector {
   /** The session `session.end` named: from then on its snapshot is empty (the process may go on under a new id). */
   private endedSession: string | undefined
+  /** The `at` of the kit Stop hook's file already applied, so each turn end's list is applied once (from the first tick). */
+  private stopAppliedAt: number | undefined
 
   constructor(
     private readonly $: AgentsEngineLike,
@@ -585,6 +616,19 @@ export class AgentsCollector {
       tee = this.$.tee ? parseTee(await this.$.tee.read(sessionId), now, sessionId) : undefined
     } catch {
       tee = undefined // no tee file: the rows use the tool line and the mod's own token count
+    }
+    // The kit's Stop hook: the turn end's background_tasks, for an engine that never hands this plugin `classic.Stop` (a
+    // Team or Enterprise organization's security plugin passes it on past user plugins). Applied once per turn end.
+    try {
+      // a file from before this collector's first tick (a restart, a resume under the same id) is history: not applied
+      this.stopAppliedAt ??= now
+      const stop = this.$.fallback ? parseStopFile(await this.$.fallback.stop.read(sessionId), sessionId) : undefined
+      if (stop && stop.at > this.stopAppliedAt) {
+        this.stopAppliedAt = stop.at
+        this.tracker.backgroundSnapshot(stop.tasks, now, stop.at)
+      }
+    } catch {
+      // bookkeeping only: no file, or one that cannot be read
     }
     const { rows, tee: usedTee } = this.tracker.rows(list, tee, now, this.canStop)
     return { session_id: sessionId, source: usedTee ? 'mod+tee' : 'mod', can_stop: this.canStop, rows, at }

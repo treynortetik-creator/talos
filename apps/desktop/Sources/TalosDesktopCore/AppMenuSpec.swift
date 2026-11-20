@@ -5,6 +5,8 @@ import Foundation
 public enum AppMenuSpec {
   public enum Action: String, Equatable, Sendable, CaseIterable {
     case about, settings, hide, hideOthers, showAll, quit
+    /// Under About: runs the update check now. Once an update is downloaded it reads "Update to x" with a dot (`UpdateMenu`).
+    case checkForUpdates
     case showTalos, showTerminal, quickCompose, companionToggle, signIn, signOut, setupChecklist, permissions
     case help
     /// View > Reload: the web view of the frontmost Talos window loads its current page again. Never a session, never a terminal pane.
@@ -40,7 +42,8 @@ public enum AppMenuSpec {
   public static let talosMenu = Menu(
     title: "Talos",
     items: [
-      Item(.about, "About Talos"), nil,
+      Item(.about, "About Talos"),
+      Item(.checkForUpdates, "Check for Updates\u{2026}"), nil,
       Item(.settings, "Settings\u{2026}", key: ","), nil,
       Item(.hide, "Hide Talos", key: "h"),
       Item(.hideOthers, "Hide Others", key: "h", option: true),
@@ -63,7 +66,7 @@ public enum AppMenuSpec {
       Item(.companionToggle, "Show Companion"),
       Item(.signIn, "Sign in\u{2026}"),
       Item(.signOut, "Sign out"), nil,
-      Item(.setupChecklist, "Setup checklist\u{2026}"),
+      Item(.setupChecklist, "Set up Talos\u{2026}"),
       Item(.permissions, "Permissions\u{2026}"),
     ])
 

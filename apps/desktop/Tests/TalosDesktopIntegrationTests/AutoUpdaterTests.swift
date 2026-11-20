@@ -82,6 +82,8 @@ struct AutoUpdaterTests {
     let mainCanRestart = Box(true)
     /// Added to the wall clock (a long prepare, a day passing).
     let wallShift = Box(0.0)
+    /// What the jitter draws (0 up to 1).
+    let random = Box(0.5)
 
     init() throws {
       root = try TestTemp.real(TestTemp.base) + "au-\(UUID().uuidString.prefix(8))"
@@ -179,12 +181,13 @@ struct AutoUpdaterTests {
     /// for real; otherwise the swap runs to its end inside the spawn. `healthy`: what this app says of its own health.
     func updater(
       version: String = "1.4.0", wallOffset: Double = 0, look: (@Sendable () -> [String])? = nil, healthy: Bool = false,
-      realSwap: Bool = false, appPath: String? = nil, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil
+      realSwap: Bool = false, appPath: String? = nil, jitter: Double = 0, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil
     ) -> AutoUpdater {
       var o = AutoUpdater.Options(
         talosHome: home, appPath: appPath ?? dest + "/Talos.app", appVersion: version, keys: ReleaseTrust.testKeys)
       o.allowLocalFeed = true
       o.firstCheckAfter = 0
+      o.checkJitter = jitter  // the jitter has its own tests (AutoUpdaterCheckNowTests); the rest count in whole checkEvery
       o.applyScript = AutoUpdaterTests.repo() + "/apps/desktop/scripts/auto-update-apply.sh"
       o.auditLogPath = root + "/audit.log"
       o.healthWait = 2
@@ -210,6 +213,7 @@ struct AutoUpdaterTests {
         return 999_999  // a pid that is gone by the time anyone looks
       }
       h.awake = { [clock] in clock.get() }
+      h.random = { [random] in random.get() }
       h.wall = { [wallShift] in Date().timeIntervalSince1970 + wallOffset + wallShift.get() }
       h.processStart = { [starts] pid in starts.get()[pid] }
       h.stopGroup = { [stopped] pid in stopped.edit { $0.append(pid) } }
@@ -431,7 +435,10 @@ struct AutoUpdaterTests {
     #expect(r.posts.get().first?.contains("the Talos code folder could not be moved") == true, "\(r.posts.get())")
   }
 
-  @Test func anUnacceptedRecordedCloneRaisesTheCardOnceAndAcceptingItLetsTheUpdateProceed() throws {
+  /// ROOT CAUSE of the stall on the first self-update: the question used to be asked once per clone and remembered on disk, while the
+  /// card it raised lived only in memory. After any relaunch (an update restarts the app) nobody asked again, and the owner had a
+  /// window with no button. Now every check that meets an unaccepted clone asks, a relaunch included, and the status says so.
+  @Test func anUnacceptedRecordedCloneIsAskedAboutAtEveryCheckAndARelaunchAsksAgain() throws {
     let r = try Rig()
     try r.publish()
     let accepted = Box<Bool>(false)
@@ -441,24 +448,41 @@ struct AutoUpdaterTests {
       // what the app's wiring answers: the clone is the recorded one; it is used only once accepted
       h.checkout = { accepted.get() ? co : nil }
       h.unacceptedClone = { accepted.get() ? nil : co }
-      h.offerClone = { clone in offers.edit { $0.append(clone) } }
+      h.offerClone = { clone, version in offers.edit { $0.append(clone + "@" + version) } }
     }
     let u = r.updater(hooks: hook)
     u.tick()
-    #expect(offers.get() == [co] && r.downloads.get() == 0, "the card was raised and nothing ran: \(offers.get())")
-    r.clock.edit { $0 += AutoUpdate.checkEvery }
-    u.tick()
-    r.clock.edit { $0 += AutoUpdate.checkEvery }
-    u.tick()
-    #expect(offers.get() == [co], "asked once, not on every check")
-    // a second updater (the next app launch) remembers it too
-    r.updater(hooks: hook).tick()
-    #expect(offers.get() == [co], "asked once across launches")
-    // the owner pressed Use this clone: the Keychain now holds it, and the next check goes ahead
+    #expect(offers.get() == [co + "@1.5.0"] && r.downloads.get() == 0, "the question was put and nothing ran: \(offers.get())")
+    #expect(u.status == .needsAllow(version: "1.5.0", clone: co), "the window is told what it waits for")
+    // a second updater (the next app launch) asks again: nothing about the question is remembered on disk
+    let relaunched = r.updater(hooks: hook)
+    relaunched.tick()
+    #expect(offers.get().count == 2, "asked again after a relaunch: \(offers.get())")
+    // the owner really clicked Allow updates: the Keychain now holds it, and the next check goes ahead
     accepted.edit { $0 = true }
     r.clock.edit { $0 += AutoUpdate.checkEvery }
     u.tick()
     #expect(r.downloads.get() == 1, "the update proceeds once the clone is accepted")
+    #expect(u.status.allowClone == nil)
+  }
+
+  /// A Keychain that cannot be read is not a "no": no question is raised (nobody is asked about something that cannot be checked), the
+  /// owner is told in plain words in the update window, and the log has it.
+  @Test func aKeychainThatCannotBeReadRaisesNoQuestionAndSaysSoInPlainWords() throws {
+    let r = try Rig()
+    try r.publish()
+    let offers = Box<[String]>([])
+    let why = AllowUpdatesCopy.keychainUnreadable(-25308)
+    let u = r.updater(hooks: { h in
+      h.checkout = { nil }
+      h.unacceptedClone = { nil }
+      h.keychainProblem = { why }
+      h.offerClone = { c, _ in offers.edit { $0.append(c) } }
+    })
+    u.tick()
+    #expect(offers.get().isEmpty && r.downloads.get() == 0, "no question, nothing ran")
+    #expect(u.status == .failed(line: why, logPath: u.logPathForOwner), "\(u.status)")
+    #expect(r.audit().contains("clone_keychain_unreadable"))
   }
 
   // MARK: refused after the download

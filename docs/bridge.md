@@ -145,6 +145,7 @@ codes, never message text, tokens, codes or cookies.
 | `run/hub.sock`                           | 0600 | Option C: the live bridge's socket for thread sessions (only while live; `run/` is 0700, apart from home)                                                                                     |
 | `workers.json`, `workers/<thread>/`      | 0600 | Option C: written by the desktop supervisor (`workers.json`, `nonce`) and the hub (`wake`, `ready`)                                                                                           |
 | `agent-request.json`                     | 0600 | Phone recovery: `{"v":1,"control_id","action":"restart","ts":<unix ms>,"proof"?}`, written atomically for the Mac app, which reads it and acts (the phone's Restart agent, or `restart_main`) |
+| `permission-mode-request.json`           | 0600 | `permission_mode`: `{"v":1,"action":"set_permission_mode","mode","control_id","ts"}`, written atomically for the Mac app, which saves the mode and restarts Main                              |
 | `main-restart-check.json`                | 0600 | Written by the Mac app, read by `restart_main`: would Main come back after a restart (contract below)                                                                                         |
 | `apps/`                                  | 0700 | MCP apps: `catalog.json`, `resources/`, `captures/`, `pending/`, `claimed/`, `scan.log`, `live-cc-version`                                                                                    |
 
@@ -554,6 +555,32 @@ and a session whose thread went back to shared, are refused.
   answer says only that the request was written and that the Mac app decides and tells the owner.
 - The phone's `agent.recover` is still answered only by Main's live bridge: a thread lead's bridge has no relay socket and
   receives no owner frames, so when Main's bridge is down the phone's request waits at the relay until it is back.
+
+### `permission_mode` (Main's permission mode, on request)
+
+`permission_mode {mode: "auto" | "ask" | "bypass", thread_id, why?}` asks the Mac app to change how Main asks permission:
+Auto (Claude Code's auto mode, recommended), Ask me (its default mode) or Bypass all (no prompts, so no permission cards reach
+the phone). Main's live bridge on a Mac only: a thread session, a headless job and a non-Mac computer are refused. The owner has the
+same choice in Mac settings → Session → Permission mode; the Mac app writes one permission flag in the saved launch command and
+restarts Main cold, so Main ends and the new start waits at the development-channel dialog until the owner confirms it.
+
+- "Lock Talos settings" on: refused for every mode ("Talos settings are locked ..."), nothing written, no card.
+- `ask` is made at once (the bridge cannot tell what Main runs in now, so only the mode that is never wider is made without the owner).
+  `auto` and `bypass` are made at once only when the owner asked in `thread_id` in his own words (trust.ts `ownerAskedAt`: within two
+  hours, no outside text, share or lead hand-off in that thread since) AND the quiet test holds across every thread (trust.ts
+  `quietSince`, the one `config_propose` uses to open the thread fence): no thread's lead handed Main anything, and no outside text
+  reached the agent in any thread, since his words. The agent picks `thread_id`, so one thread's quiet is not enough. Otherwise the
+  bridge puts ONE card to the owner, "Allow the agent to switch to <mode>?" (Allow, Not now), kind `config` with payload
+  `{v:1, permission_mode:{mode}}`, and the tool answers at once "Asked the owner ... try again after they answer"; nothing is written.
+  At most one pending card per mode and 6 an hour; Not now holds that mode for an hour. The card is applied only by the owner's
+  signed `card.resolve` in the app: a notification tap (`native.act`) is refused (`open_in_app`) and the handler checks the frame
+  kind again. On Allow the bridge looks at the lock again, then writes the request file. The agent is not told of the answer.
+  A card whose Allow was in flight at a bridge restart ends in words, and is never written afterward.
+- The request file (`permission-mode-request.json`, above) is written atomically, 0600, only when no earlier one is waiting and the
+  last was written more than 120 s ago (kept in the store; the Mac refuses a sooner one too). The Mac app reads `settings_lock` in
+  `config.json` again, discards a request older than 5 minutes or from before its launch, acts once per `control_id`, and tells
+  the phone "The agent asked to switch ..." itself. The file does not say who wrote it; Main does not run in the new mode until the
+  owner confirms the development-channel dialog at the Mac or on the phone card. The agent's own Write, Edit and shell commands that name the file are denied it (guards).
 
 ### The screen tools (`screen_shot`, `screen_click`, `screen_type`, `screen_key`, `screen_scroll`, `screen_apps`, `screen_open_app`)
 

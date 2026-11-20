@@ -43,6 +43,8 @@ export const WORKER_READ_OK: readonly string[] = ['status', 'doctor', 'logs']
  * fence is unchanged. `devices` alone lists; a `devices` or `peer` word not named in talos.ts AGENT_UNLESS_LOCKED stays terminal-only.
  */
 export const WORKER_AGENT_OK: readonly string[] = [
+  'peer link',
+  'peer accept',
   'peer create',
   'peer add',
   'peer list',

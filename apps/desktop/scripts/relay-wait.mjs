@@ -262,7 +262,7 @@ async function main() {
       if (!told) {
         const upTo = limit >= 60_000 ? `${Math.round(limit / 60_000)} min` : `${limit / 1000} s`
         say(
-          `the relay is on ${got.version}, behind this build (${buildSha}); waiting for it, checking every ${interval / 1000} s for up to ${upTo}`,
+          `the relay is on ${got.version}, behind this build (${buildSha}); waiting for it, checking every ${interval / 1000} s for up to ${upTo}. It does not move by itself: redeploy the relay in Railway (its project, Deployments, Redeploy), or stop now and run this again with --no-relay-wait`,
         )
         told = true
       }

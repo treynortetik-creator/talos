@@ -13,8 +13,8 @@ import Foundation
 ///   Enter and the Backspaces) also no prompt or dialog live anywhere on the pane (`prompt_on_pane`); the Enter is checked after it
 ///   went (`EnterDetection`).
 /// - `.dialog(kind)`: a key for one of the screens Talos presses keys into. Allowed only when THAT kind's own exact reader matches the live
-///   region (from the last solid rule down, or the whole pane when there is none): `DialogReader` for folder trust and MCP consent (the tap
-///   answerer), the live warning for the development channels, the exact block for the computer-use permission dialog (its one Escape).
+///   region (from the last solid rule down, or the whole pane when there is none): `DialogReader` for folder trust, MCP consent and the bypass
+///   disclaimer (the tap answerer), the live warning for the development channels, the exact block for the computer-use permission dialog (its one Escape).
 ///   A phrase on screen never names anything by itself.
 /// - `.devWarning(highlighted, channels)`: Main's auto-accept and its card and popup. The development-channels warning, with the cursor on
 ///   exactly the row the sender read and exactly the channel list it checked (`devWarning`): counts alone never name the row a key lands on.
@@ -31,13 +31,20 @@ import Foundation
 public enum KeyGuard {
   public enum BoxHolds: String, Sendable { case empty, ours }
 
-  /// The screens a key may be meant for. The Mac has no first-start answerer (Linux's theme and security notes) and Linux has no
-  /// computer-use dialog; the rest are the same names.
+  /// The screens a key may be meant for. Linux has no computer-use dialog and no login-success or API-key key; the rest are the same names.
   public enum DialogKind: String, Sendable, CaseIterable {
     case trust
     case mcpConsent = "mcp_consent"
     case devChannels = "dev_channels"
     case computerUse = "computer_use"
+    /// First-start screens that are only a look: one Enter, nothing else (`FirstStartScreens`; Linux's `theme` and `security_notes`).
+    case theme
+    case securityNotes = "security_notes"
+    case loginSuccess = "login_success"
+    /// The API-key question, answered from its card by a real click: an arrow toward the chosen row, then Enter (`ApiKeyCard`).
+    case apiKey = "api_key"
+    /// The Bypass Permissions disclaimer (`No, exit` / `Yes, I accept`): answered only from its card or popup, by the owner's own tap or click.
+    case bypass
   }
 
   /// What the sender means to press: the screen must be exactly this.
@@ -82,6 +89,8 @@ public enum KeyGuard {
     case .mcpConsent: return .dialog(.mcpConsent)
     case .devChannels: return .dialog(.devChannels)
     case .login: return nil
+    case .apiKey: return .dialog(.apiKey)
+    case .bypass: return .dialog(.bypass)
     }
   }
 
@@ -177,8 +186,13 @@ public enum KeyGuard {
     switch kind {
     case .trust: return DialogReader.read(rows: region)?.kind == .trust
     case .mcpConsent: return DialogReader.read(rows: region)?.kind == .mcpConsent
+    case .bypass: return DialogReader.read(rows: region)?.kind == .bypass
     case .computerUse: return DialogMatcher.computerUseBlock(region) != nil
     case .devChannels: return devWarning(rows) != nil
+    case .theme: return FirstStartScreens.read(region) == .theme
+    case .securityNotes: return FirstStartScreens.read(region) == .securityNotes
+    case .loginSuccess: return FirstStartScreens.read(region) == .loginSuccess
+    case .apiKey: return FirstStartScreens.read(region) == .apiKey
     }
   }
 

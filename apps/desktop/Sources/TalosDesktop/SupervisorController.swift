@@ -130,12 +130,13 @@ final class SupervisorController: ObservableObject {
     // our own worker panes never block main's takeover check (OPTION-C 4.4)
     opts.siblingGroups = { box.groups }
     opts.launchTrust = Self.launchTrust
+    opts.addsChannelsFlag = true  // a saved or imported command without the channels flag still starts Main with it
     opts.checksBridge = true  // Main's Talos bridge must show a live status after the warning is answered, or the owner is told
     opts.configKnownUnreadable = start.unreadable
     let sup = Supervisor(options: opts, host: host, probe: probe)
     supervisor = sup
     workers = Self.makeWorkers(cfg: cfg, env: env, probe: probe, mainPid: { sup.status.childPid ?? 0 }, current: { sup.currentConfig() },
-      mainNarrowed: { sup.status.mainNarrowed })
+      mainNarrowed: { sup.status.mainNarrowed }, runningArgs: { sup.status.runningArgs }, savedIsConfirmed: { sup.savedLaunchIsConfirmed($0, claude: $1) })
     status = supervisor.status
     // Before setup the file doesn't exist and the supervisor would start from the defaults: hand it the held values.
     if !start.hasFile {
@@ -195,6 +196,12 @@ final class SupervisorController: ObservableObject {
       Task { @MainActor in self?.showThreadTerminal(thread) }
       return true
     }
+    // a login card's button: the in-app sign-in, never a terminal
+    m.openSignIn = { [weak self] _ in
+      guard self != nil else { return false }
+      Task { @MainActor in self?.showSignIn(startNow: true) }
+      return true
+    }
   }
 
   /// desktop.json can name another Talos home after the app opened (an imported `TALOS_APP_HOME=… claude …`). Main and its bridge
@@ -231,7 +238,8 @@ final class SupervisorController: ObservableObject {
           }
           let made = Self.makeWorkers(
             cfg: cfg, env: env, probe: self.probe, mainPid: { sup.status.childPid ?? 0 }, current: { sup.currentConfig() },
-            tmux: o.tmux, conf: o.tmuxConf, mainNarrowed: { sup.status.mainNarrowed })
+            tmux: o.tmux, conf: o.tmuxConf, mainNarrowed: { sup.status.mainNarrowed },
+            runningArgs: { sup.status.runningArgs }, savedIsConfirmed: { sup.savedLaunchIsConfirmed($0, claude: $1) })
           self.wire(made)
           self.workers = made
           self.workersHome = wanted
@@ -257,7 +265,7 @@ final class SupervisorController: ObservableObject {
   static func makeWorkers(
     cfg: DesktopConfig, env: [String: String], probe: SystemProbe, mainPid: @escaping @Sendable () -> Int32,
     current: (@Sendable () -> DesktopConfig)? = nil, tmux: String? = nil, conf: String? = nil, auditPath: String? = nil,
-    mainNarrowed: (@Sendable () -> String?)? = nil
+    mainNarrowed: (@Sendable () -> String?)? = nil, runningArgs: (@Sendable () -> [String]?)? = nil, savedIsConfirmed: (@Sendable (DesktopConfig, String) -> Bool)? = nil
   ) -> WorkerManager? {
     guard cfg.host != .direct, let tmux = tmux ?? findTmux(env: env),
       let conf = conf ?? Bundle.main.path(forResource: "tmux", ofType: "conf")
@@ -269,7 +277,22 @@ final class SupervisorController: ObservableObject {
     launchEnv.refresh()  // in the background, so the first start usually finds it done
     let o = workerOptions(cfg: cfg, talosHome: talosHome, tmux: tmux, conf: conf, auditPath: auditPath)
     let m = WorkerManager(options: o, probe: probe, baseEnv: { launchEnv.env() }, mainPanePid: mainPid)
-    m.launchSource = { Self.launchSource(now(), loginEnv: launchEnv.env()) }
+    m.launchSource = {
+      var cfg = now()
+      var src = Self.launchSource(cfg, loginEnv: launchEnv.env())
+      if let r = runningArgs {
+        let running = r()
+        // the seal is read only when the saved launch is not the one Main runs (a Keychain read per tick is not worth it otherwise)
+        let differs = LaunchPending.holdsThreads(saved: cfg.args, running: running, confirmedSaved: false)
+        let held = differs && !(savedIsConfirmed?(cfg, src.claudePath) ?? false)
+        if held {
+          cfg.args = LaunchPending.argsForThreads(saved: cfg.args, running: running, pending: true)
+          src = Self.launchSource(cfg, loginEnv: launchEnv.env())
+          src.held = true
+        }
+      }
+      return src
+    }
     m.hasLoginEnv = { launchEnv.hasLoginEnv }
     // restart on update: desktop.json `env` as it is now is part of a thread session's launch spec (`launch-env`)
     m.updateRestart.launchEnv = { now().env }
@@ -339,6 +362,9 @@ final class SupervisorController: ObservableObject {
     case .needsYou(let n):
       notice = "\(SupervisorNotice.needsYou): \(Self.describe(n))"
       needsYouEventNotice = notice
+    case .openSignIn:
+      // shown, never forced on the owner: no activation, no key, and no login is started until he clicks (`showSignIn(startNow: false)`)
+      if StatusCoordinator.shared.quietNow != true { showSignIn(startNow: false) }
     case .openTerminal:
       // Emitted when `open_terminal_on_dialog` is on. Nothing handled it, so the setting did nothing (audit D8).
       TerminalWindowController.shared.attach(model: self)
@@ -617,12 +643,15 @@ final class SupervisorController: ObservableObject {
   /// One settings edit, without waiting on the supervisor's queue (a tick holds it through its tmux calls and the login-shell
   /// read). The edit still runs there, on the config as it is at that moment; `configNow` shows it at once. `bumpRevision`: tell
   /// the open windows to reload, once `currentConfig()` has it.
-  private func edit(_ change: @escaping @Sendable (inout DesktopConfig) -> Void, bumpRevision: Bool = false) {
+  private func edit(
+    _ change: @escaping @Sendable (inout DesktopConfig) -> Void, bumpRevision: Bool = false,
+    through: ((@escaping @Sendable (inout DesktopConfig) -> Void, @escaping @Sendable () -> Void) -> Void)? = nil
+  ) {
     var c = configNow
     change(&c)
     pendingConfig = c
     pendingEdits += 1
-    supervisor.mutateConfig(change) { [weak self] in
+    let done: @Sendable () -> Void = { [weak self] in
       Task { @MainActor in
         guard let self else { return }
         self.pendingEdits -= 1
@@ -631,6 +660,7 @@ final class SupervisorController: ObservableObject {
         if bumpRevision || self.supervisor.status.configUnreadable { self.configRevision += 1 }
       }
     }
+    if let through { through(change, done) } else { supervisor.mutateConfig(change, then: done) }
   }
 
   /// With `desktop.json` unreadable no setting is saved (the supervisor refuses, whoever asks); this puts the reason in the menu at
@@ -666,6 +696,35 @@ final class SupervisorController: ObservableObject {
         }, bumpRevision: true)
     }
     return o
+  }
+
+  /// The permission mode picker (Mac settings → Session). The flag is replaced in the saved arguments; with `restart` a running agent
+  /// is restarted cold in the same step (`Supervisor.changePermissionMode`). The owner has decided about a turn in progress by now
+  /// (`PermissionModeSetting.followUp`). Nothing is saved or restarted for the mode already in force.
+  @discardableResult
+  func setPermissionMode(_ mode: PermissionMode, restart: Bool) -> PermissionModeSetting.Outcome {
+    guard configured, !refusedForUnreadableConfig() else { return .unchanged }
+    let o = PermissionModeSetting.evaluate(mode, against: configNow)
+    guard case .updated = o else { return o }
+    let go = restart && prepareToStart()
+    if go { supervisor.startTicking() }
+    edit(
+      { $0.args = PermissionModeSetting.applying(mode, to: $0.args) }, bumpRevision: true,
+      through: { [supervisor] _, done in supervisor.changePermissionMode(mode, restart: go, then: done) })
+    return o
+  }
+
+  /// "Restart to apply": a cold restart of an agent that is up, decided again on the supervisor's queue (never starts a stopped one).
+  func restartToApply() {
+    guard prepareToStart() else { return }
+    supervisor.startTicking()
+    supervisor.restartColdIfLive()
+  }
+
+  /// Whether the agent is up and whether it is on a turn: what decides between saving, restarting and asking first.
+  var permissionModeFollowUp: PermissionModeSetting.FollowUp {
+    PermissionModeSetting.followUp(
+      sessionUp: sessionIsUp, turnRunning: PermissionModeSetting.turnRunning(agentActivity: supervisor.status.agentActivity))
   }
 
   /// Adopt (4.7): read the live session that blocks us and pre-fill the config from it. Read-only. The reads run the owner's login

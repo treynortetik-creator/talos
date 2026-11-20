@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Testing
 import TalosDesktopCore
+import TalosSupervisor
 
 @testable import TalosDesktop
 import TalosTestSupport
@@ -661,12 +662,13 @@ struct AgentFolderRecordedCloneGuiTests {
     }
   }
 
-  fileprivate func flow(_ w: World, recorded: Box, acceptance: MemoryCloneAcceptance, unsafe avoid: [String]?, stamped: String? = nil) -> AgentFolderFlow {
+  fileprivate func flow(_ w: World, recorded: Box, acceptance: MemoryCloneAcceptance, unsafe avoid: [String]?, stamped: String? = nil, home: String? = nil, adjust: ((inout AgentFolderFlow.Deps) -> Void)? = nil) -> AgentFolderFlow {
     let record = TestTemp.base + "k7-record-" + UUID().uuidString
     FileManager.default.createFile(atPath: record, contents: Data("x\n".utf8))
     let appHome = w.appHome
     var deps = AgentFolderFlow.Deps(repoRoot: { stamped })
     deps.recordedRoot = { recorded.value }
+    if let home { deps.home = home }
     deps.recordFile = record
     deps.acceptance = acceptance
     if let list = avoid {
@@ -679,6 +681,7 @@ struct AgentFolderRecordedCloneGuiTests {
       e["STUB_MODE"] = "ok"
       return e
     }
+    adjust?(&deps)
     let f = AgentFolderFlow(model: w.model, deps: deps)
     f.signedIn = true
     return f
@@ -761,6 +764,83 @@ struct AgentFolderRecordedCloneGuiTests {
     await f.useClone()
     #expect(w.failedText(f)?.contains("Keychain") == true)
     #expect(!ran(w) && !w.model.configured)
+  }
+
+  /// A scratch home laid out as a fresh Mac's: the app's own folder with the clone at its fixed place and the record naming it.
+  fileprivate func ownHome(clone at: String? = nil) throws -> (home: String, clone: String) {
+    let raw = TestTemp.base + "talos-allow-own-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: raw, withIntermediateDirectories: true)
+    let home = Self.real(raw)
+    let fixed = AutoSetup.cloneFolder(home: home)
+    for dir in Set([fixed, at].compactMap { $0 }) {
+      for f in ["install.sh", "plugins/talos-app-mod/x", "apps/bridge/src/cli.ts"] {
+        try FileManager.default.createDirectory(atPath: ((dir + "/" + f) as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try Data("x\n".utf8).write(to: URL(fileURLWithPath: dir + "/" + f))
+      }
+    }
+    try Data(((at ?? fixed) + "\n").utf8).write(to: URL(fileURLWithPath: AutoSetup.appFolder(home: home) + "/checkout"))
+    return (home, fixed)
+  }
+
+  /// Onboarding's own clone: accepted without a click only when it is the app's own fixed-place clone and passes the checks.
+  @Test func theOnboardingsOwnCloneCountsAsAcceptedAndAPlantedOneIsStillAsked() throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let own = try ownHome()
+    let f = flow(w, recorded: Box(own.clone), acceptance: MemoryCloneAcceptance(), unsafe: [], home: own.home)
+    #expect(f.ownCloneAccepted(own.clone, madeHere: true), "the app's own clone, whole, in its fixed place")
+    #expect(!f.ownCloneAccepted(own.home + "/elsewhere", madeHere: true), "a clone the record does not name there")
+    // a clone someone recorded elsewhere: the record names it, it is whole, and it is still asked about
+    let plantedDir = TestTemp.base + "talos-allow-planted-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: plantedDir, withIntermediateDirectories: true)
+    let planted = try ownHome(clone: Self.real(plantedDir))
+    let planter = try #require(AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: planted.home))?.clone)
+    let g = flow(w, recorded: Box(planter), acceptance: MemoryCloneAcceptance(), unsafe: [], home: planted.home)
+    #expect(!g.ownCloneAccepted(planter, madeHere: true), "not the fixed place: asked, never assumed")
+    // a reused folder is never counted, whatever it looks like
+    #expect(!f.ownCloneAccepted(own.clone, madeHere: false), "this run did not make it")
+    // the fixed place, but made loose
+    chmod(own.clone, 0o777)
+    #expect(!f.ownCloneAccepted(own.clone, madeHere: true), "fails the same checks as a recorded clone")
+  }
+
+  /// `ensureCheckout` with a provisioner that answers .ok: a tree this run made is accepted; a reused folder at the same fixed place, whole
+  /// and matching, is asked about (the panel is requested, the clone card is up, nothing is remembered).
+  @Test func ensureCheckoutAcceptsAFreshCloneAndAsksAboutAReusedOne() async throws {
+    let w = try World()
+    defer { w.cleanUp() }
+    let center = CloneConfirmCenter.shared
+    let (savedPresent, savedDismiss) = (center.present, center.dismiss)
+    var presented: [String] = []
+    center.present = { _, t in presented.append(t.clone) }
+    center.dismiss = {}
+    defer {
+      center.clear()
+      center.present = savedPresent
+      center.dismiss = savedDismiss
+    }
+    for madeHere in [true, false] {
+      center.clear()
+      presented = []
+      let own = try ownHome()
+      let accepted = MemoryCloneAcceptance()
+      let f = flow(w, recorded: Box(nil), acceptance: accepted, unsafe: [], home: own.home) { d in
+        d.provision = {
+          CloneProvisioner.Config(
+            version: "0.1.5", destination: own.clone, recordFile: AutoSetup.appFolder(home: own.home) + "/checkout", git: nil, pnpm: nil, env: [:])
+        }
+        d.runProvisioner = { _, _ in (.ok(clone: own.clone), madeHere) }
+      }
+      let ok = await f.ensureCheckout()
+      if madeHere {
+        #expect(ok && accepted.accepted() == own.clone, "this run's own fresh clone counts as accepted")
+        #expect(presented.isEmpty)
+      } else {
+        #expect(!ok && accepted.accepted() == nil, "a reused folder is not accepted")
+        #expect(presented == [own.clone], "the owner is asked, with the panel")
+        if case .confirmClone(let shown, _) = f.step { #expect(shown == own.clone) } else { Issue.record("the clone card is not up: \(f.step)") }
+      }
+    }
   }
 
   @Test func aStampedCloneNeedsNoCard() async throws {

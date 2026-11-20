@@ -2,6 +2,7 @@
 import { signStandard } from '@talos-app/integrations'
 import { newPeerMessageId, type PeerMessageT } from '@talos-app/protocol'
 import { type FakeClock, fakeClock } from '@talos-app/testkit'
+import type { Logger } from '../../src/services.ts'
 import { startTestRelay, type TestRelay } from '../core/harness.ts'
 import { bridgeFetch } from '../core/helpers.ts'
 
@@ -28,9 +29,9 @@ export type PeerWorld = {
   count(table: string): number
 }
 
-export async function peerWorld(env: Record<string, string> = {}): Promise<PeerWorld> {
+export async function peerWorld(env: Record<string, string> = {}, log?: Logger): Promise<PeerWorld> {
   const clock = fakeClock(START)
-  const r = await startTestRelay({ clock, env })
+  const r = await startTestRelay({ clock, env, ...(log ? { log } : {}) })
   const mac: PeerWorld['mac'] = (method, path, body) =>
     bridgeFetch(
       r,

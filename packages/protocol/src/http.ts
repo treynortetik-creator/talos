@@ -12,6 +12,7 @@ import {
   ThreadUpsertFrame,
 } from './frames.ts'
 import { HealthStatus } from './health.ts'
+import { peerLinkRouteDefs } from './http-peer-link.ts'
 import { ConnId, DeviceId, HttpsUrl, IntegrationId, IsoTs, MediaId, ThreadId, VoiceId } from './ids.ts'
 import { AttachmentRef, Device, InboxItem, isAgentCardKind, isAppMessage, JwkP256 } from './models.ts'
 import { PageInfo, PageList, PageOwnerAction, PagePublished } from './org-pages.ts'
@@ -93,7 +94,7 @@ export const ConnectionCreated = Connection.extend({
 
 // ---- route table ------------------------------------------------------------------------------------------------
 
-type RouteDef = {
+export type RouteDef = {
   id: string
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   /** Hono-style pattern. */
@@ -863,6 +864,7 @@ export const routes = {
     res: PeerRotated,
     note: 'a new secret, shown once; the old one verifies for 24 hours more. 404 not_found for an unknown name',
   },
+  ...peerLinkRouteDefs,
   pagesList: {
     id: 'pagesList',
     method: 'GET',

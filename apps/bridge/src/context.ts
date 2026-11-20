@@ -298,6 +298,8 @@ export type BridgeContext = {
   dialogs?: DialogCards
   /** Screen helper consent: one card per app per Mac (screen-consent.ts). Live main session only. */
   screenConsent?: import('./screen-consent.ts').ScreenConsent
+  /** Consent cards for a permission-mode change the owner has not said yes to (permission-mode.ts). Live main session only. */
+  permissionModeConsent?: import('./permission-mode.ts').PermissionModeConsent
   /** The kit's "ask first" rules as cards (action-rule-asks.ts): live main bridge only. */
   actionRuleAsks?: import('./action-rule-asks.ts').ActionRuleAsks
   /** v2 features (docs/V2-FEATURES.md V8): set by WP-V2, WP-V5 and WP-V1; absent = the read answers a fixed error. */

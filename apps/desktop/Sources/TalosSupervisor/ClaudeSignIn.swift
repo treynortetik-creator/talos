@@ -104,25 +104,37 @@ public final class ClaudeSignInCoordinator: @unchecked Sendable {
   private var task: Task<Void, Never>?
   private var session: ClaudeLoginSession?
   private var _onChange: (@Sendable () -> Void)?
+  private var observers: [UUID: @Sendable () -> Void] = [:]
 
   public init() {}
   deinit { stopNow() }
 
   public var state: State { lock.withLock { _state } }
   public var isRunning: Bool { lock.withLock { task != nil } }
-  /// The latest window's refresh; a new window replaces it.
+  /// A subscriber of its own: any number can listen at once, and none displaces another (the setup window's `onChange` slot, the Sign in to
+  /// Claude again card's watcher). Remove it with `unobserve`.
+  @discardableResult
+  public func observe(_ f: @escaping @Sendable () -> Void) -> UUID {
+    let id = UUID()
+    lock.withLock { observers[id] = f }
+    return id
+  }
+
+  public func unobserve(_ id: UUID) { lock.withLock { observers[id] = nil } }
+
+  /// The latest setup window's refresh; a new window replaces it (and only it: `observe` subscribers stay).
   public var onChange: (@Sendable () -> Void)? {
     get { lock.withLock { _onChange } }
     set { lock.withLock { _onChange = newValue } }
   }
 
   private func set(_ s: State) {
-    let cb: (@Sendable () -> Void)? = lock.withLock {
-      guard _state != s else { return nil }
+    let cbs: [@Sendable () -> Void] = lock.withLock {
+      guard _state != s else { return [] }
       _state = s
-      return _onChange
+      return (_onChange.map { [$0] } ?? []) + Array(observers.values)
     }
-    cb?()
+    for cb in cbs { cb() }
   }
 
   /// false when a sign-in is already running (nothing new is started).
@@ -169,4 +181,32 @@ public final class ClaudeSignInCoordinator: @unchecked Sendable {
   }
 
   public func reset() { if !isRunning { set(.idle) } }
+}
+
+/// Runs `done` once when a sign-in the coordinator runs ends in success (signed in, or already was). Its own subscriber: a window that sets
+/// `onChange` later cannot take it away. `stop()` ends it.
+public final class SignInDoneWatcher: @unchecked Sendable {
+  private let coordinator: ClaudeSignInCoordinator
+  private var token: UUID?
+  private let lock = NSLock()
+  private var fired = false
+
+  public init(_ coordinator: ClaudeSignInCoordinator = .shared, done: @escaping @Sendable () -> Void) {
+    self.coordinator = coordinator
+    token = coordinator.observe { [weak self] in
+      guard let self, case .finished(let o) = coordinator.state, o.isSuccess else { return }
+      let first: Bool = self.lock.withLock {
+        defer { self.fired = true }
+        return !self.fired
+      }
+      if first { done() }
+    }
+  }
+
+  public func stop() {
+    if let t = token { coordinator.unobserve(t) }
+    token = nil
+  }
+
+  deinit { stop() }
 }

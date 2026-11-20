@@ -61,7 +61,7 @@ export const keyNotSent = (r: PtySendResult): boolean => r === 'failed' || r ===
 /** The keys a dialog answer may press. Nothing else is ever sent to a dialog. */
 export type PtyDialogKey = 'Up' | 'Down' | 'Enter'
 /** The screen a dialog key is meant for: the host's key guard checks the live screen is exactly that one (no kind, no key). */
-export type DialogKeyKind = 'theme' | 'security_notes' | 'trust' | 'mcp_consent' | 'dev_channels'
+export type DialogKeyKind = 'theme' | 'security_notes' | 'trust' | 'mcp_consent' | 'dev_channels' | 'bypass'
 
 export interface PtyExit {
   pid: number
@@ -492,7 +492,13 @@ export const AUTO_CONFIRM = {
  * picker, only for the root-approved launch, the install's folder and exactly talos-app (apps/bridge/src/supervisor/first-start.ts).
  * REVIEW (Mac): the Mac shows those to the owner; nothing changes there unless a no-terminal Mac install is wanted.
  */
-export const SUPERVISOR_DIALOG_KINDS: readonly DialogKindT[] = ['trust', 'mcp_consent', 'login', 'dev_channels']
+export const SUPERVISOR_DIALOG_KINDS: readonly DialogKindT[] = [
+  'trust',
+  'mcp_consent',
+  'login',
+  'dev_channels',
+  'bypass',
+]
 
 /**
  * The launch seal: proof that the owner confirmed THIS launch (folder, program, flags, env) on a card or a popup. An Enter typed

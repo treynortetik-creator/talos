@@ -13,8 +13,12 @@ import Foundation
 /// With the escaped capture (`capture-pane -e`) given, it must show the same screen as the plain rows, the cursor row must be the coloured
 /// one and every other option plain, and no option may be dim: the Select Claude draws, not text that looks like one.
 public enum DialogReader {
-  /// `devChannels` is Main's own warning about the development channel: it is published as `supervisor.main_dialog` (never read off a worker's pane by `read`).
-  public enum Kind: String, Codable, Equatable, Sendable { case trust, mcpConsent = "mcp_consent", login, devChannels = "dev_channels" }
+  /// `devChannels` is the development-channels startup question: Main's own copy is offered by `SupervisorDevCard` (and published as
+  /// `supervisor.main_dialog`); a thread session's copy is read off its pane by `read`. `bypass` is the Bypass Permissions disclaimer.
+  public enum Kind: String, Codable, Equatable, Sendable { case trust, mcpConsent = "mcp_consent", login, devChannels = "dev_channels", bypass
+    /// Main's own API-key question (`ApiKeyCard`): a Mac popup answered by a real click; never read off a worker's pane and not on the phone yet.
+    case apiKey = "api_key"
+  }
 
   public struct Dialog: Equatable, Sendable {
     public var kind: Kind
@@ -40,21 +44,66 @@ public enum DialogReader {
   /// An option row, with its indent, at or past this many characters may be the first row of a wrapped label.
   static let maxRow = 62
 
-  public static func read(rows: [String], escapedRows: [String]? = nil) -> Dialog? {
+  /// `mcpNames`: the server names the folder's own `.mcp.json` defines, for an MCP question that wrapped the name over rows (see `wrappedMcpName`).
+  public static func read(rows: [String], escapedRows: [String]? = nil, mcpNames: [String] = []) -> Dialog? {
     if let escapedRows, normalized(rows) != normalized(escapedRows) { return nil }
     switch DialogMatcher.liveDialog(rows) {
     case .loginExpired: return Dialog(kind: .login, subject: nil, options: [], cursor: nil)
-    case .trust: return readSelect(.trust, rows, escapedRows)
-    case .mcpConsent: return readSelect(.mcpConsent, rows, escapedRows)
+    case .trust: return readSelect(.trust, rows, escapedRows, mcpNames)
+    case .mcpConsent: return readSelect(.mcpConsent, rows, escapedRows, mcpNames)
+    case .bypassDisclaimer: return readSelect(.bypass, rows, escapedRows, mcpNames)
     // never offered for a tap: computer use (Enter opens System Settings) and the usage-limit screen (an option spends usage credits)
     case .computerUsePermissions, .usageLimit: return nil
-    default: return nil
+    default: return DialogMatcher.liveDevChannels(rows) ? readDevChannels(rows, escapedRows) : nil
     }
+  }
+
+  /// The development-channels question, read exactly: ONE title, ONE `Channels:` line naming at least one channel (no empty entry, no control
+  /// character, none cut with an ellipsis), the two numbered rows `1. I am using this for local development` and `2. Exit` and nothing else
+  /// numbered, the cursor on exactly one of them. The channel list is the subject.
+  private static func readDevChannels(_ rows: [String], _ escaped: [String]?) -> Dialog? {
+    guard case .devChannels(let d) = DialogMatcher.classify(rows), d.titleCount == 1, d.channelLineCount == 1, let channels = d.channels,
+      !channels.isEmpty, let hl = d.highlighted
+    else { return nil }
+    guard !channels.contains(where: { $0.isEmpty || hasControl($0) || $0.contains("\u{2026}") }) else { return nil }
+    let wanted = [DialogMatcher.Strings.devConfirm, DialogMatcher.Strings.devExit]
+    guard let cursor = wanted.firstIndex(where: { ExactText.equal($0, hl) }) else { return nil }
+    let cleaned = rows.map(DialogMatcher.clean)
+    let numbered = cleaned.filter(numberedRow).map { $0.hasPrefix("\(DialogMatcher.Strings.pointer) ") ? String($0.dropFirst(2)) : $0 }
+    guard numbered.count == wanted.count, zip(numbered, wanted.indices).allSatisfy({ ExactText.equal($0, "\($1 + 1). \(wanted[$1])") }) else {
+      return nil
+    }
+    let subject = channels.joined(separator: ", ")
+    guard subject.count <= maxSubject else { return nil }
+    // no option row dim in the coloured capture
+    if let escaped {
+      for r in escaped where numberedRow(DialogMatcher.clean(InputBoxAttributes.stripEscapes(r))) && r.contains("\u{1B}[2m") { return nil }
+    }
+    return Dialog(kind: .devChannels, subject: subject, options: wanted, cursor: cursor)
+  }
+
+  private static func numberedRow(_ r: String) -> Bool {
+    let t = r.hasPrefix("\(DialogMatcher.Strings.pointer) ") ? String(r.dropFirst(2)) : r
+    guard let dot = t.firstIndex(of: "."), dot != t.startIndex else { return false }
+    return t[..<dot].allSatisfy(\.isNumber) && t[t.index(after: dot)...].hasPrefix(" ")
+  }
+
+  /// The server name when its question wrapped it over rows: the rows from the name to the blank row, joined with nothing between, when that is
+  /// exactly one of the names the folder's own `.mcp.json` defines. Anything else is no name (a half is never offered).
+  private static func wrappedMcpName(_ header: [String], _ h: Int, first: String, known: [String]) -> String? {
+    var parts = [first]
+    var k = h + 1
+    while k < header.count, !isBlank(header[k]) {
+      parts.append(header[k].trimmingCharacters(in: .whitespaces))
+      k += 1
+    }
+    let joined = parts.joined()
+    return known.contains(where: { ExactText.equal($0, joined) }) ? valid(joined) : nil
   }
 
   // MARK: the select
 
-  private static func readSelect(_ kind: Kind, _ rows: [String], _ escaped: [String]?) -> Dialog? {
+  private static func readSelect(_ kind: Kind, _ rows: [String], _ escaped: [String]?, _ mcpNames: [String] = []) -> Dialog? {
     guard let rule = rows.lastIndex(where: DialogMatcher.isFrameRule) else { return nil }
     let top = rule + 1
     let block = Array(rows[top...])
@@ -86,6 +135,11 @@ public enum DialogReader {
     let header = Array(block[0..<first])
     let subject: String?
     switch kind {
+    case .bypass:
+      // the disclaimer has no subject; its title above, and exactly its two rows
+      guard header.contains(where: { $0.trimmingCharacters(in: .whitespaces) == DialogMatcher.Strings.bypass }), options == ["No, exit", "Yes, I accept"]
+      else { return nil }
+      subject = nil
     case .trust:
       guard let h = header.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "Accessing workspace:" }) else { return nil }
       subject = rowAfter(header, h)
@@ -97,11 +151,11 @@ public enum DialogReader {
       } else if t.hasPrefix(mcpHeader + ": ") {
         // the name is on this row; a wrapped one continues on the next, so the row below must be blank
         let name = String(t.dropFirst(mcpHeader.count + 2)).trimmingCharacters(in: .whitespaces)
-        subject = h + 1 < header.count && isBlank(header[h + 1]) ? valid(name) : nil
+        subject = h + 1 < header.count && isBlank(header[h + 1]) ? valid(name) : wrappedMcpName(header, h, first: name, known: mcpNames)
       } else {
         return nil
       }
-    case .login, .devChannels: return nil  // login has no select; Main's own warning is never read off a worker's pane
+    case .login, .devChannels, .apiKey: return nil  // login has no select; the channel question has its own reader
     }
     if let escaped, !intensityOK(escaped, top: top, options: first...last, cursor: c) { return nil }
     return Dialog(kind: kind, subject: subject, options: options, cursor: c - first)

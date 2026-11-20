@@ -35,6 +35,8 @@ export type RelayHttpHost = {
   acceptBridgePost(frame: Frame, raw: Record<string, unknown>, ack: { seq?: number }): void
 }
 
+const method0 = (req: IncomingMessage): string => req.method ?? 'GET'
+
 export class RelayHttp {
   readonly records: HttpRecord[] = []
   readonly media = new Map<string, { bytes: Buffer; sha256: string; mime: string; name?: string }>()
@@ -63,6 +65,12 @@ export class RelayHttp {
     }
 
     if (path === '/healthz') return send(200, { ok: true, version: 'fake' })
+
+    // the other install redeeming a link code: no signature, the code is the credential
+    if (method0(req) === 'POST' && path === '/peer-link/redeem') {
+      const a = this.host.peers.redeem(safeJson(body))
+      return send(a.status, a.body)
+    }
 
     if (path.startsWith('/bridge/')) {
       if (this.host.opts.bridgeAuth !== 'off') {
@@ -130,17 +138,21 @@ export class RelayHttp {
     const method = req.method ?? 'GET'
     if (path === '/bridge/peers' || path.startsWith('/bridge/peers/')) {
       const p = this.host.peers
-      const name = /^\/bridge\/peers\/([^/]+)(\/rotate)?$/.exec(path)
+      const name = /^\/bridge\/peers\/([^/]+)(\/rotate|\/link)?$/.exec(path)
       const a =
-        method === 'POST' && path === '/bridge/peers'
-          ? p.create(safeJson(body))
-          : method === 'GET' && path === '/bridge/peers'
-            ? p.list()
-            : method === 'DELETE' && name && !name[2]
-              ? p.remove(decodeURIComponent(name[1] as string))
-              : method === 'POST' && name?.[2]
-                ? p.rotate(decodeURIComponent(name[1] as string))
-                : { status: 404, body: { error: 'not found' } }
+        method === 'POST' && name?.[2] === '/link'
+          ? p.mintLink(decodeURIComponent(name[1] as string))
+          : method === 'GET' && name?.[2] === '/link'
+            ? p.getLink(decodeURIComponent(name[1] as string))
+            : method === 'POST' && path === '/bridge/peers'
+              ? p.create(safeJson(body))
+              : method === 'GET' && path === '/bridge/peers'
+                ? p.list()
+                : method === 'DELETE' && name && !name[2]
+                  ? p.remove(decodeURIComponent(name[1] as string))
+                  : method === 'POST' && name?.[2] === '/rotate'
+                    ? p.rotate(decodeURIComponent(name[1] as string))
+                    : { status: 404, body: { error: 'not found' } }
       return send(a.status, a.body)
     }
     if (method === 'POST' && path === '/bridge/post') {

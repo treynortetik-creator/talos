@@ -67,7 +67,7 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 | 4+2                | 11-15 | heartbeat/runner: record before input when ps is slow; wake cap                                         |
 | 1 (17 since 11-11) | 11-16 | heartbeat/process-info: a slow ps does not stall the loop                                               |
 | 1                  | 11-16 | enroll: the live bridge pins from the file watch (also in known-flakes)                                 |
-| 1+1                | 11-16 | hub-run: config edit seen within 3 s / 1 s (watch of home)                                              |
+| 1+1+1 (fixed)      | 11-19 | hub-run: config edit seen within 3 s / 1 s (watch of home): now 8 s, inside the 10 s poll               |
 | 3                  | 11-15 | child-wait-sites: Chronos adapter timeout; discovery `version` deadline                                 |
 | 2                  | 11-16 | cc-c1: elided Allow kept with the exact note                                                            |
 | 1                  | 11-16 | server: a second live bridge stops the first via the PID file                                           |
@@ -99,12 +99,13 @@ Suspected: file-watch latency (fseventsd ran at 107% CPU until the owner restart
 
 ### E. e2e
 
-| count       | last  | test                                                     |
-| ----------- | ----- | -------------------------------------------------------- |
-| 1           | 11-15 | schedules.spec stall: a background run that never starts |
-| 1           | 11-15 | apps.spec E17 two apps each wait for their own card      |
-| 1 (3 total) | 11-14 | bridge-oversize-card: card.create over 256 KiB           |
-| 1           | 11-19 | apps.spec E10 fullscreen keeps the same frame (load)     |
+| count       | last  | test                                                                                 |
+| ----------- | ----- | ------------------------------------------------------------------------------------ |
+| 1           | 11-15 | schedules.spec stall: a background run that never starts                             |
+| 1           | 11-15 | apps.spec E17 two apps each wait for their own card                                  |
+| 1 (3 total) | 11-14 | bridge-oversize-card: card.create over 256 KiB                                       |
+| 1           | 11-19 | apps.spec E10 fullscreen keeps the same frame (load)                                 |
+| 1           | 11-19 | old-client.spec:74 Run hands the agent the script once: the 10 s "Sent…" wait (load) |
 
 E10 (11-19, passed on retry): Titan, the e2e packages on 8 workers beside a live check-titan (a load measurement).
 
@@ -157,3 +158,7 @@ A, negative windows (about 550 bridge/relay, about 80 e2e/web at 1500 ms, Swift 
 
 C (pacing under test): long-press thresholds, apps.spec 5.6 s activation window, the enroll prompt's 500 ms guard. Fine;
 page.clock would make the web ones deterministic.
+
+old-client.spec:74 (11-19): refused the sign-in card's landing on Delphi at 14:52 MST, while a full gate (check-updates) and the owner's
+0.1.6 app build ran beside it; the "Sent…" status was not visible within 10 s. The same spec passed 4/4 in about 20 s on the branch and on
+main at ca35a226e in the gate's clean environment. Root fix: Cyclops.

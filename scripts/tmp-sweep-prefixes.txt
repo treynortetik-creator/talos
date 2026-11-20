@@ -9,6 +9,11 @@
 tbrun-
 talos-vitest-run-
 
+# Allow-updates prompt tests (a scratch home with a clone and its record)
+talos-allow-
+talos-allow-own-
+talos-allow-planted-
+
 # Bridge tests (inside tbrun-; listed for leftovers from runs before that folder existed, and for the contract runs, which have none)
 talos-bridge-test-
 talos-chronos-box-
@@ -167,3 +172,9 @@ talos-release-dryrun-
 talos-dryrun-wanted-
 talos-rpath-test-
 talos-rpath-out-
+talos-pane-strings-
+
+# The Mac app's setup screens' tests (OnboardingGuiTests, OnboardingFlowTests).
+talos-ob-home-
+talos-ob-phone-
+talos-ob-test-

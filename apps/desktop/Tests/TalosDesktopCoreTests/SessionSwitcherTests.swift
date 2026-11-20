@@ -159,6 +159,6 @@ struct SessionSwitcherTests {
     #expect(WorkerNotice.promptName(.loginExpired) == "sign in")
     #expect(
       WorkerNotice.line(screen: .loginExpired)
-        == "This thread's session is waiting on a 'sign in' prompt; open this thread in Terminals on the Mac to answer.")
+        == "This thread's session is waiting on a 'sign in' prompt: Claude Code is signed out. Choose Sign in to Claude again in the Talos menu on the Mac.")
   }
 }

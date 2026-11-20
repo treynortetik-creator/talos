@@ -136,14 +136,24 @@ const quoted = (names: string[]) =>
 
 export const lines = {
   dialog: (kind: Screen['kind'], w: Where) =>
+    // the questions that have a card (MCP server, bypass disclaimer, development channel): no terminal, no command. This line is what
+    // the owner gets when no card could be made for it, and it says so (the screen could not be read whole, or no bridge made one)
+    kind === 'mcp_consent' || kind === 'bypass_disclaimer' || kind === 'dev_channels'
+      ? `This thread's session is waiting on a '${promptName(kind)}' prompt. Talos could not put it on a card, so nothing was pressed and it still waits for your answer.`
+      : w.windows
+        ? `This thread's session is waiting on a '${promptName(kind)}' prompt. ${WINDOWS_OPEN_SESSION}`
+        : `This thread's session is waiting on a '${promptName(kind)}' prompt; attach on ${w.machine} to answer: ${w.attach}`,
+  /**
+   * Signed out: "Sign in to Claude again". The supervisor runs the sign-in itself (signin.ts), so this names no terminal, no ssh and no
+   * command. Nothing here starts a login (the code box on the phone is not built yet, signin.ts `startLogins`), so the line says where to
+   * sign in and promises nothing that is not sent.
+   */
+  login: (w: Where, link?: string | null) =>
     w.windows
-      ? `This thread's session is waiting on a '${promptName(kind)}' prompt. ${WINDOWS_OPEN_SESSION}`
-      : `This thread's session is waiting on a '${promptName(kind)}' prompt; attach on ${w.machine} to answer: ${w.attach}`,
-  /** Login has no card: the line names the fix. */
-  login: (w: Where) =>
-    w.windows
-      ? `This thread's session is waiting on a 'sign in' prompt: Claude Code is signed out. ${WINDOWS_SIGN_IN}, then restart this thread's session from your phone.`
-      : `This thread's session is waiting on a 'sign in' prompt: Claude Code is signed out. To fix it, ssh to ${w.machine} and run \`claude /login\`, then run \`${w.restart}\`.`,
+      ? `Sign in to Claude again: Claude Code is signed out for this thread's session. ${WINDOWS_SIGN_IN}, then restart this thread's session from your phone.`
+      : link
+        ? `Sign in to Claude again: Claude Code is signed out for this thread's session. Talos started the sign-in on ${w.machine}; its link is ${link}. Taking the code from your phone is not built yet, so it cannot be finished from here.`
+        : `Sign in to Claude again: Claude Code is signed out for this thread's session. Sign in to Claude on ${w.machine}, the computer that runs Talos; this thread's session starts again on your next message after that.`,
   prompt: (p: Prompt, w: Where) =>
     w.windows
       ? `This thread's session is waiting on ${promptWhat(p)}. ${WINDOWS_OPEN_SESSION}`
@@ -377,6 +387,8 @@ export type NoticeDeps = {
   audit(event: string, fields?: Record<string, string>): void
   /** The line for a dialog offered as a card waits for that card (part 4b-ii); none waits without it. */
   lineWaits?(id: string): boolean
+  /** The sign-in link of the supervisor's own sign-in (signin.ts), when one is running and has shown it. */
+  signInLink?: (() => string | null) | undefined
 }
 
 export class WorkerNotices {
@@ -495,7 +507,7 @@ export class WorkerNotices {
     // the usage-limit screen is never "answered": its own line, with the model, the reset and the way on (usage-limit.ts)
     const text =
       scr.kind === 'login_expired'
-        ? lines.login(where)
+        ? lines.login(where, this.d.signInLink?.() ?? null)
         : scr.kind === 'usage_limit'
           ? usageLimitThreadLine(scr.info, where.attach, where.windows)
           : lines.dialog(scr.kind, where)

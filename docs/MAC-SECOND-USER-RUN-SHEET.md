@@ -246,7 +246,9 @@ address (or a file to copy over), its sha256 and the team id, all printed by `ap
       under Screen & System Audio Recording and under Accessibility, press −, and press Grant in Talos's Permissions again.
 12. **[HER] Open Talos** from `~/Applications`, unless it opened by itself. In Setup, Agent folder, use **Choose** with her
     folder (step 10 with `--no-app` does not name it to the app). The first time, Talos shows the clone it will run scripts from
-    and asks "Use this clone"; it should be her clone from step 5. It asks again only if that record changes. macOS should show no dialog before Talos's first screen, because step 11
+    and asks "Use this clone"; it should be her clone from step 5. Separately, a clone that `install.sh` recorded and Talos has not
+    used makes Talos ask "Allow Talos to update itself?" (Allow updates / Not now) at launch; it should name her clone from step 5.
+    It asks again only if that record changes. macOS should show no dialog before Talos's first screen, because step 11
     removed the download flag after its checks. If macOS asks "downloaded from the Internet... Open?" anyway, step 11 printed a
     warning that the flag could not be removed: quit Talos, run the `xattr -dr com.apple.quarantine` line it printed, and open
     it again. A Talos opened with the flag still on runs from a temporary copy; it says so once in its default thread and takes

@@ -538,6 +538,24 @@ describe('guard decisions', () => {
     ])
       expect(bash(c), c).toBeDefined()
   })
+  test('denies the permission-mode request file to a write, a move, a delete and any command that names it, wildcards included', () => {
+    const f = join(home, 'permission-mode-request.json')
+    for (const tool_name of ['Write', 'Edit', 'MultiEdit'])
+      expect(write(f, tool_name)?.deny, tool_name).toContain('permission-mode-request.json')
+    expect(write(join(home, 'media', '..', 'permission-mode-request.json'))).toBeDefined()
+    for (const c of [
+      `echo '{}' > ${f}`,
+      `cd ${home} && printf x > permission-mode-request.json`,
+      `rm ${home}/permission-mode-request.json`,
+      `rm ${home}/permission-mode-req*`,
+      `cd ${home} && rm permission-mode-req*`,
+    ])
+      expect(bash(c), c).toBeDefined()
+    expect(denyRules(cfg)).toContain('Bash(*permission-mode-request.json*)')
+    expect(denyRules(cfg).some((r) => r.startsWith('Edit(/') && r.endsWith('/permission-mode-request.json)'))).toBe(
+      true,
+    )
+  })
   test('a wildcard deny names every kind of protected file, agent-request.json included', () => {
     for (const c of [`rm ${home}/agent-req*`, `cd ${home} && rm agent-req*`])
       expect(bash(c)?.deny, c).toContain('agent-request')

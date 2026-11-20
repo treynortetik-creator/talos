@@ -8,7 +8,7 @@ private func offer(
   _ id: String, kind: DialogReader.Kind = .trust, subject: String? = "/Users/alex/Projects/garden",
   options: [String]? = nil, seen: String = "2026-11-07T10:00:00.000Z"
 ) -> DialogOffer {
-  let opts = options ?? (kind == .trust ? ["No, exit", "Yes, I trust this folder"] : kind == .login ? [] : ["Use this MCP server", "Use this and all future MCP servers in this project", "Continue without using this MCP server"])
+  let opts = options ?? (kind == .trust ? ["No, exit", "Yes, I trust this folder"] : kind == .login ? [] : kind == .bypass ? ["No, exit", "Yes, I accept"] : kind == .devChannels ? ["I am using this for local development", "Exit"] : ["Use this MCP server", "Use this and all future MCP servers in this project", "Continue without using this MCP server"])
   return DialogOffer(id: id, kind: kind, subject: subject, options: opts, cursor: kind == .login ? nil : 0, seen_at: seen, expires_at: "2026-11-07T10:15:00.000Z")
 }
 
@@ -73,18 +73,19 @@ struct NeedsYouPopupWordsTests {
   @Test func theMcpPopupSaysWhatTheServerWillDo() {
     let c = NeedsYouPopupContent.make(item(idA, kind: .mcpConsent, subject: "harmless"))
     #expect(c.header == "Talos · Garden needs you")
-    #expect(c.title == "Allow this MCP server?")
+    #expect(c.title == "Use harmless?", "the heading names the server that was read")
+    #expect(NeedsYouPopupContent.make(item(idA, kind: .mcpConsent, subject: nil)).title == "Allow this MCP server?", "and the plain one when it was not")
     #expect(c.subject == "harmless")
     #expect(c.sentence == "Garden's session wants to turn on this server's tools for its folder.")
     #expect(c.footer == "Also on your phone. Answer either one.")
   }
 
-  @Test func theLoginPopupHasNoSubjectAndOneButtonThatTypesNothing() {
+  @Test func theLoginPopupHasNoSubjectAndOneButtonThatStartsTheSignInInTheApp() {
     let c = NeedsYouPopupContent.make(item(idA, kind: .login, subject: nil))
     #expect(c.title == "Garden needs you to sign in", "sign in, never log in")
     #expect(c.subject == nil)
     #expect(c.sentence == "Garden's session needs you to sign in to Claude on the Mac.")
-    #expect(c.buttons == [NeedsYouPopupButton(text: "Open in Terminals", action: .open)])
+    #expect(c.buttons == [NeedsYouPopupButton(text: "Sign in to Claude again", action: .open)])
   }
 
   /// The phone and web card and the Mac popup say ONE thing: the table in packages/protocol (`DIALOG_WORDING`), committed as
@@ -95,11 +96,13 @@ struct NeedsYouPopupWordsTests {
     var footer: [String: String]
     var devChannels: [String: String]
     var phone: [String: String]
+    var titleNamed: [String: String] = [:]
+    var threadDevChannels = ""
   }
   static func wording() throws -> Wording {
     let o = try A2Fixtures.object("wording")
     func dict(_ k: String) throws -> [String: String] { try #require(o[k] as? [String: String]) }
-    return Wording(title: try dict("title"), sentence: try dict("sentence"), footer: try dict("footer"), devChannels: try dict("devChannels"), phone: (o["phone"] as? [String: String]) ?? [:])
+    return Wording(title: try dict("title"), sentence: try dict("sentence"), footer: try dict("footer"), devChannels: try dict("devChannels"), phone: (o["phone"] as? [String: String]) ?? [:], titleNamed: (o["titleNamed"] as? [String: String]) ?? [:], threadDevChannels: (o["sentenceThreadDevChannels"] as? String) ?? "")
   }
   func wording() throws -> Wording { try Self.wording() }
 
@@ -110,11 +113,14 @@ struct NeedsYouPopupWordsTests {
     #expect(NeedsYouPopupContent.devWaitingPhone == w.phone["devChannelsWaiting"])
   }
 
-  @Test(arguments: [DialogReader.Kind.trust, .mcpConsent, .login, .devChannels])
+  @Test(arguments: [DialogReader.Kind.trust, .mcpConsent, .login, .devChannels, .bypass])
   func thePopupSaysExactlyWhatTheSharedWordingTableSays(kind: DialogReader.Kind) throws {
     let w = try wording()
-    let c = NeedsYouPopupContent.make(item(idA, kind: kind, subject: kind == .login ? nil : kind == .devChannels ? "server:talos-app" : "x"))
-    #expect(c.title == w.title[kind.rawValue]?.replacingOccurrences(of: "{thread}", with: "Garden"), "\(kind)")
+    // Main's development-channels warning is Main's own popup (its thread is the one `Supervisor.mainPopupThread` names)
+    let c = NeedsYouPopupContent.make(
+      item(idA, thread: kind == .devChannels ? NeedsYouPopupContent.mainThreadId : "garden", kind: kind, subject: kind == .login || kind == .bypass ? nil : kind == .devChannels ? "server:talos-app" : "x"))
+    let title = kind == .mcpConsent ? w.titleNamed["mcp_consent"]?.replacingOccurrences(of: "{server}", with: "x") : w.title[kind.rawValue]
+    #expect(c.title == title?.replacingOccurrences(of: "{thread}", with: "Garden"), "\(kind)")
     #expect(c.sentence == w.sentence[kind.rawValue]?.replacingOccurrences(of: "{thread}", with: "Garden"), "\(kind)")
     #expect(c.footer == (kind == .devChannels ? w.footer["popupMainHere"] : w.footer["popup"]), "\(kind)")
     #expect(NeedsYouPopupContent.footerMain == w.footer["popupMain"] && NeedsYouPopupContent.footer == w.footer["popup"])
@@ -127,7 +133,7 @@ struct NeedsYouPopupWordsTests {
     func popup(_ subject: String?, _ changed: [String]?) -> NeedsYouPopupContent {
       NeedsYouPopupContent.make(
         NeedsYouPopupItem(
-          thread: "general", threadName: "General",
+          thread: NeedsYouPopupContent.mainThreadId, threadName: "General",
           dialog: DialogOffer(
             id: idA, kind: .devChannels, subject: subject, options: ["I am using this for local development", "Exit"], cursor: 0,
             launch_changed: changed, seen_at: "2026-11-07T10:00:00.000Z", expires_at: "2026-11-07T10:15:00.000Z")))
@@ -139,6 +145,46 @@ struct NeedsYouPopupWordsTests {
     #expect(popup("server:talos-app", []).sentence == base + " " + (w.devChannels["launchUnconfirmed"] ?? ""))
     let lc = popup("server:talos-app", ["program", "env"]).sentence
     #expect(lc == base + " " + (w.devChannels["launchChanged"] ?? "") + " " + (w.devChannels["launchChangedWhat"] ?? "").replacingOccurrences(of: "{what}", with: "program, env"))
+  }
+
+  /// A thread session's own development-channels question says the thread, never Main, and none of Main's start-command lines.
+  @Test func aThreadsDevChannelsPopupIsAboutThatThread() throws {
+    let w = try wording()
+    let o = DialogOffer(
+      id: idA, kind: .devChannels, subject: "server:talos-app", options: ["I am using this for local development", "Exit"], cursor: 0, launch_changed: ["env"],
+      seen_at: "2026-11-07T10:00:00.000Z", expires_at: "2026-11-07T10:15:00.000Z")
+    let c = NeedsYouPopupContent.make(NeedsYouPopupItem(thread: "garden", threadName: "Garden", dialog: o))
+    #expect(c.sentence == w.threadDevChannels.replacingOccurrences(of: "{thread}", with: "Garden"))
+    #expect(!c.sentence.contains("Main"))
+    #expect(c.footer == w.footer["popup"], "a thread's popup is also on the phone")
+  }
+
+  /// The bypass disclaimer: the owner's words as the heading, the screen's two rows as the buttons in screen order, no subject box.
+  @Test func theBypassPopupAsksInPlainWordsAndHasTheScreensTwoRows() throws {
+    let c = NeedsYouPopupContent.make(item(idA, kind: .bypass, subject: nil))
+    #expect(c.title == "Run with permission checks off?")
+    #expect(c.subject == nil)
+    #expect(c.sentence.contains("without asking you first"))
+    #expect(c.buttons.map(\.text) == ["No, exit", "Yes, I accept"])
+    #expect(c.buttons.map(\.action) == [.choose(0, label: "No, exit"), .choose(1, label: "Yes, I accept")])
+  }
+
+  /// Main's own safety popups (MCP server, bypass): the phone is told to come here only when the Mac said so, else "Answer it here."
+  @Test(arguments: [DialogReader.Kind.mcpConsent, .bypass])
+  func mainsSafetyPopupsSayWhereToAnswer(kind: DialogReader.Kind) throws {
+    let w = try wording()
+    let base = item(idA, thread: NeedsYouPopupContent.mainThreadId, name: "Main", kind: kind, subject: kind == .bypass ? nil : "github")
+    #expect(NeedsYouPopupContent.make(base).footer == w.footer["popupMainHere"])
+    var told = base
+    told.phoneTold = true
+    #expect(NeedsYouPopupContent.make(told).footer == w.footer["popupMain"])
+    #expect(NeedsYouPopupContent.make(base).header == "Talos · Main needs you")
+  }
+
+  @Test func anMcpServerNameIsShownWithItsHiddenCharactersMarkedAndCutInTheHeading() {
+    #expect(NeedsYouPopupContent.make(item(idA, kind: .mcpConsent, subject: "a\u{202E}b")).title == "Use a⟦U+202E⟧b?")
+    let long = NeedsYouPopupContent.make(item(idA, kind: .mcpConsent, subject: String(repeating: "x", count: 200))).title
+    #expect(long == "Use " + String(repeating: "x", count: 60) + "\u{2026}?")
   }
 
   @Test func noSubjectNoBox() {

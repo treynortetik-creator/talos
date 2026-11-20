@@ -34,7 +34,7 @@ const cards = (x: Harness) =>
     .map((r) => r.raw.card as CardT)
 
 /** The Mac app's workers.json, saying whether it checks sub-thread folders (without it no sub-thread may change). */
-function macSays(home: string, subthreads: boolean, ownFolder = false, sharedFolder = false) {
+function macSays(home: string, subthreads: boolean, ownFolder = false, sharedFolder = false, folderless = false) {
   writeFileSync(
     join(home, 'workers.json'),
     JSON.stringify({
@@ -46,13 +46,16 @@ function macSays(home: string, subthreads: boolean, ownFolder = false, sharedFol
         subthreads_supported: subthreads,
         ...(ownFolder ? { subthreads_own_folder: true } : {}),
         ...(sharedFolder ? { subthreads_shared_folder: true } : {}),
+        ...(folderless ? { subthreads_folderless_parent: true } : {}),
       },
       threads: {},
     }),
   )
 }
 
-async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: boolean; shared?: boolean } = {}) {
+async function start(
+  o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: boolean; shared?: boolean; folderless?: boolean } = {},
+) {
   h = await startHarness({
     relay: RELAY,
     config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
@@ -74,7 +77,7 @@ async function start(o: { trust?: boolean; mac?: boolean; lock?: boolean; own?: 
       ],
     })) as never,
   })
-  macSays(h.home, o.mac !== false, o.own === true, o.shared === true)
+  macSays(h.home, o.mac !== false, o.own === true, o.shared === true, o.folderless === true)
   return h
 }
 
@@ -174,6 +177,25 @@ describe('threads.<id>.parent through config_propose', () => {
     expect(text(r)).toContain(
       'thread "repo" keeps its own folder, so it does not get "boss"\'s instructions; the parent\'s privacy rules still apply',
     )
+  })
+
+  // Main follows the owner's own folder rules (d92f4285): a dedicated thread with a folder of its own, put under a parent with
+  // none, is judged against the agent folder by the supervisor's capability; P1's thread-session reach rules do not apply to Main.
+  test('Main puts a dedicated thread with its own folder under a parent with none: made when the supervisor can run it', async () => {
+    const x = await start({ trust: true, own: true, folderless: true })
+    await ownerAsks(x, 'put Repo under Bare')
+    const r = await propose(x, [{ path: 'threads.repo.parent', value: 'bare' }])
+    expect(r.isError, text(r)).toBeFalsy()
+    expect(parentOf(x, 'repo')).toBe('bare')
+  })
+
+  test('Main puts it there with an older Mac app: refused by the owner rule, in its words', async () => {
+    const x = await start({ trust: true, own: true })
+    await ownerAsks(x, 'put Repo under Bare')
+    const r = await propose(x, [{ path: 'threads.repo.parent', value: 'bare' }])
+    expect(r.isError).toBe(true)
+    expect(text(r)).toContain('can\'t have a folder of its own while "bare" has none')
+    expect(parentOf(x, 'repo')).toBeUndefined()
   })
 
   // the owner's bug: two threads that work in one folder could not be put one under the other

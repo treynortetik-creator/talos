@@ -167,7 +167,19 @@ public struct PairingSession: Sendable {
   public var readDelay = PairingSession.defaultReadDelay
   public var pinWait = PairingSession.defaultPinWait
 
-  public init(relay: RelayOrigin?) { output = EnrollOutput(relay: relay) }
+  /// The device name the program asks about (`Pin "<name>" [...]`): "Mac app" for this Mac, "Phone" for the setup's phone step.
+  public let deviceName: String
+
+  public init(relay: RelayOrigin?, deviceName: String = SignInHelp.label) {
+    output = EnrollOutput(relay: relay)
+    self.deviceName = deviceName
+  }
+
+  /// The one-use link a device opens (`https://<relay>/enroll#<code>`), once the program has printed exactly one.
+  public var link: String? {
+    guard let relay = output.relay, case .code(let c) = output.result else { return nil }
+    return relay.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/enroll#" + c
+  }
 
   /// The code to send to the page now, or nil (nothing yet, already sent, or two different links were seen).
   public mutating func update(screen: String, now: Date = Date()) -> String? {
@@ -178,7 +190,7 @@ public struct PairingSession: Sendable {
       out = c
     }
     if sent, answered == nil {
-      let read = PinPrompt.read(screen: screen)
+      let read = PinPrompt.read(screen: screen, name: deviceName)
       if case .ready(let w) = read {
         if case .ready(let old) = pin, old == w {} else { readySince = now }  // new words: the read delay starts again
       } else {

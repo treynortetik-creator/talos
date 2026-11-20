@@ -55,6 +55,8 @@ import { supervisorPlan } from './plan-wiring.ts'
 import { runTool, systemIdentity } from './proc.ts'
 import { restartActorWiring } from './restart-wiring.ts'
 import { kitAnchor } from './rooted-kit.ts'
+import type { SignInDriver } from './signin.ts'
+import { signInDriverFor } from './signin-wiring.ts'
 import { checkTakeover, parseAgents, procOf, readBotPid, readBridgePid } from './takeover.ts'
 import { superviseAttach, superviseThreads } from './thread-view.ts'
 import { TmuxPtyHost } from './tmux-host.ts'
@@ -807,8 +809,10 @@ async function runSupervisor(home: string, userHome: string, io: CliIO): Promise
     const e = loginEnv.current()
     return e ? buildLaunchEnv(e, launchCfg()?.env ?? {}) : {}
   })
+  let signIn: SignInDriver | null = null // the supervisor's own sign-in (signin.ts)
   const workers: WorkerManager = new WorkerManager({
     home,
+    signInLink: () => signIn?.link() ?? null,
     mainSignedIn: () => main.status().phase === 'running' && !main.signedOut(),
     agentDir: () => launchCfg()?.agentDir ?? null,
     hostFor: (id) =>
@@ -863,6 +867,15 @@ async function runSupervisor(home: string, userHome: string, io: CliIO): Promise
     // a tap's proof is checked against the bridge's own paired devices (read fresh when the file changes)
     pinnedKey: (id) => pairedDevices.pinnedKey(id),
   })
+  signIn = signInDriverFor({
+    env: () => fsw.withToken({ ...(loginShellEnv() ?? processEnv()), TALOS_APP_HOME: home }),
+    claude: (env) => resolveOnPath(launchCfg()?.claudePath ?? 'auto', env),
+    main,
+    stoppedFlag,
+    threads: configReaders.threads,
+    workers,
+    audit,
+  })
   let workersTicking = false
   audit('supervisor_start', { pid: String(process.pid) })
   const control = join(home, SUPERVISOR_FILES.control)
@@ -884,6 +897,7 @@ async function runSupervisor(home: string, userHome: string, io: CliIO): Promise
     if (stopping) return
     stopping = true
     clearInterval(timer)
+    signIn?.cancel()
     main.halt() // a tick already queued does nothing once the lock goes
     // the supervisor quits, Main does not: the next supervisor adopts it. What is already queued finishes first (bounded);
     // no new pass is added (a supervisor that lost the lock must not touch Main again)
@@ -913,6 +927,7 @@ async function runSupervisor(home: string, userHome: string, io: CliIO): Promise
         await main.start({ anyway: ask === 'start-anyway' })
       }
       await tokenRestart.tick()
+      await signIn?.tick()
       await restartActor.tick()
       await main.tick()
       // on its own queue, one pass at a time: a slow worker read never holds up Main's heartbeat

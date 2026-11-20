@@ -62,6 +62,8 @@ export function terminalOnly(argv: readonly string[], prog: 'talos' | 'talos-app
  * subcommand: terminal-only as ever).
  */
 export const AGENT_UNLESS_LOCKED = [
+  'peer link',
+  'peer accept',
   'peer create',
   'peer add',
   'peer list',
@@ -243,7 +245,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   ownerTerminal(
     'peer',
     'Link this Talos to another of yours (your agent may, unless settings are locked)',
-    'create <name> | add <name> --url <https url> [--secret-file <file>] | list | remove <name> | rotate <name> | secret-forget <name>',
+    'link <name> | accept <code> --name <name> | create <name> | add <name> --url <https url> [--secret-file <file>] | list | remove <name> | rotate <name> | secret-forget <name>',
   ),
   {
     name: 'start',

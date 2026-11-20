@@ -236,6 +236,15 @@ public enum DialogMatcher {
     return block.map(clean).filter { $0.first == Strings.pointer }.count == 1
   }
 
+  /// What a thread session's pane is really showing for the owner: `liveDialog`, and the development-channels question (no frame rule above
+  /// its title, so `liveDialog` never names it), each only when it is on screen and not quoted in a conversation.
+  public static func liveScreen(_ rows: [String], region: Int = 24) -> Screen {
+    let d = liveDialog(rows, region: region)
+    if d != .none { return d }
+    guard liveDevChannels(rows, region: region), case .devChannels = classify(rows) else { return d }
+    return classify(rows)
+  }
+
   /// A rule row of a dialog's frame: the line Claude draws above it (`────────`), or a box edge (`╭──────╮`).
   static func isFrameRule(_ row: String) -> Bool {
     let box: Set<Character> = ["─", "━", "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "═"]

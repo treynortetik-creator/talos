@@ -81,14 +81,55 @@ struct DialogReaderTests {
 
   // MARK: refusals
 
-  @Test func theBypassDisclaimerIsNeverRead() throws {
+  @Test func theRealBypassDisclaimerIsReadWithNoSubjectAndItsTwoExactRows() throws {
     let rows = try RealScreens.rows("bypass-disclaimer")
     #expect(DialogMatcher.liveDialog(rows) == .bypassDisclaimer, "control: it is a known dialog")
-    #expect(DialogReader.read(rows: rows) == nil)
+    #expect(DialogReader.read(rows: rows) == DialogReader.Dialog(kind: .bypass, subject: nil, options: ["No, exit", "Yes, I accept"], cursor: 0))
+  }
+
+  @Test func aBypassDisclaimerWithAChangedExtraOrMissingRowIsNotReadSoNoCardAndNoKey() throws {
+    let rows = try RealScreens.rows("bypass-disclaimer")
+    #expect(DialogReader.read(rows: rows) != nil, "control")
+    #expect(DialogReader.read(rows: S.replacing(rows, where: { $0 == "    Yes, I accept" }, with: ["    Yes, I accept everything"])) == nil)
+    #expect(DialogReader.read(rows: S.replacing(rows, where: { $0 == "    Yes, I accept" }, with: ["    Yes, I accept", "    Maybe"])) == nil)
+    #expect(DialogReader.read(rows: rows.filter { !$0.contains("Yes, I accept") }) == nil)
+    // the title cut off the top of the screen
+    #expect(DialogReader.read(rows: rows.filter { !$0.contains("WARNING: Claude Code running") }) == nil)
+    // the same words quoted in a conversation: no frame rule, no cursor
+    #expect(DialogReader.read(rows: ["⏺ the disclaimer says: WARNING: Claude Code running in Bypass Permissions mode", "  Yes, I accept"]) == nil)
+  }
+
+  @Test func theRealDevelopmentChannelsQuestionIsReadOffAPane() throws {
+    let rows = try RealScreens.rows("dev-channels-capture", in: "real-dev-channels")
+    #expect(DialogReader.read(rows: rows) == DialogReader.Dialog(kind: .devChannels, subject: "server:talos-app", options: ["I am using this for local development", "Exit"], cursor: 0))
+  }
+
+  @Test func aDevelopmentChannelsQuestionCutShortWithExtraRowsOrNoCursorIsNotRead() throws {
+    let rows = try RealScreens.rows("dev-channels-capture", in: "real-dev-channels")
+    #expect(DialogReader.read(rows: rows) != nil, "control")
+    #expect(DialogReader.read(rows: rows.filter { !$0.contains("Channels:") }) == nil)
+    #expect(DialogReader.read(rows: S.replacing(rows, where: { $0.contains("Channels:") }, with: [" Channels: server:talos-app,"])) == nil, "a dangling comma")
+    #expect(DialogReader.read(rows: S.replacing(rows, where: { $0.contains("2. Exit") }, with: ["   2. Exit", "   3. Something else"])) == nil)
+    #expect(DialogReader.read(rows: S.replacing(rows, where: { $0.contains("Channels:") }, with: [" Channels: server:a\u{2026}"])) == nil, "cut with an ellipsis")
+    #expect(DialogReader.read(rows: rows.map { $0.replacingOccurrences(of: "❯ ", with: "  ") }) == nil, "no cursor")
+    #expect(DialogReader.read(rows: rows.filter { !$0.contains("Enter to confirm") }) == nil, "no footer: not live")
+  }
+
+  /// A wrapped name is a subject only when the two halves join into a name the folder's own `.mcp.json` defines.
+  @Test func aWrappedMcpServerNameIsReadOnlyWhenTheFoldersMcpJsonDefinesExactlyThatName() throws {
+    let wrapped = S.replacing(try S.rows("20-mcp-first"), where: { $0.contains("New MCP server found") }, with: [
+      "  New MCP server found in this project: a-very-long-na", "  me-that-wrapped",
+    ])
+    #expect(DialogReader.read(rows: wrapped)?.subject == nil, "no names: no subject, as before")
+    #expect(DialogReader.read(rows: wrapped, mcpNames: ["a-very-long-name-that-wrapped"])?.subject == "a-very-long-name-that-wrapped")
+    #expect(DialogReader.read(rows: wrapped, mcpNames: ["other"])?.subject == nil)
+    #expect(DialogReader.read(rows: wrapped, mcpNames: ["a-very-long-na"])?.subject == nil, "a half of a name")
+    #expect(DialogReader.read(rows: wrapped, mcpNames: ["a-very-long-name-that-wrapped-and-more"])?.subject == nil)
+    #expect(DialogReader.read(rows: try S.rows("20-mcp-first"), mcpNames: ["not-it"])?.subject == "harmless", "a name on one row comes from the screen")
   }
 
   @Test func screensThatAreNotTheseDialogsAreNeverRead() throws {
-    let positives: Set<String> = ["trust-dialog", "trust-dialog-tcap", "mcp-consent", "login-not-logged-in"]
+    let positives: Set<String> = ["trust-dialog", "trust-dialog-tcap", "mcp-consent", "login-not-logged-in", "bypass-disclaimer"]
     let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/real-2.1.318")
     let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".txt") }.map { String($0.dropLast(4)) }
     #expect(names.count > 30, "control: the captures were found")

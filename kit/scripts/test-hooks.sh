@@ -606,6 +606,53 @@ tg="$(bash "$KIT/scripts/test-timeline-guard.sh" 2>&1)"; tg_rc=$?
 tg_sum="$(printf '%s' "$tg" | grep -E 'PASS [0-9]+ +FAIL [0-9]+' | tail -1 | sed 's/^ *//')"
 [ "$tg_rc" -eq 0 ] && ok "timeline guard: scripts/test-timeline-guard.sh passes ($tg_sum)" || no "timeline guard suite failed" "$(printf '%s' "$tg" | grep FAIL | head -5)"
 
+# ---- mod-fallback.py: what the Talos mod needs when Claude Code passes its Stop and PreModelSwitch hooks by (a Team or
+# Enterprise organization's security plugin, cc-plugin-sec-default, seats itself outermost and sends them on past user plugins)
+MH="$SB/talos-app"; mkdir -p "$MH"
+MF() { ( cd "$A" && TALOS_APP_HOME="$MH" python3 hooks/mod-fallback.py 2>"$SB/stderr" ); }
+SID="sess_abc-1"
+out="$(printf '{"hook_event_name":"Stop","session_id":"%s","stop_hook_active":false,"background_tasks":[{"id":"bash_1","type":"shell","status":"running","description":"dev server","command":"pnpm dev","extra":"x"}],"session_crons":[]}' "$SID" | MF)"; rc=$?
+f="$MH/state/agents-stop/$SID.json"
+{ [ "$rc" = 0 ] && [ -z "$out" ] && python3 -c '
+import json, os, stat, sys
+d = json.load(open(sys.argv[1]))
+t = d["background_tasks"][0]
+assert d["v"] == 1 and d["session_id"] == sys.argv[2] and isinstance(d["at"], int)
+assert t == {"id": "bash_1", "type": "shell", "status": "running", "description": "dev server", "command": "pnpm dev"}, t
+assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o600
+' "$f" "$SID"; } && ok "mod-fallback Stop: background_tasks go to state/agents-stop/<session>.json (0600, known fields only), nothing printed" || no "mod-fallback Stop did not write the file" "rc=$rc out=$out $(cat "$SB/stderr")"
+printf '{"hook_event_name":"Stop","session_id":"../x","background_tasks":[]}' | MF
+[ ! -e "$MH/state/agents-stop/../x.json" ] && [ ! -e "$MH/state/x.json" ] && ok "mod-fallback Stop: a session id that is not a file name writes nothing" || no "a path-like session id was written"
+rm -rf "$SB/nohome"; printf '{"hook_event_name":"Stop","session_id":"s1","background_tasks":[]}' | ( cd "$A" && TALOS_APP_HOME="$SB/nohome" python3 hooks/mod-fallback.py ); rc=$?
+{ [ "$rc" = 0 ] && [ ! -e "$SB/nohome" ]; } && ok "mod-fallback: no Talos home (an agent without the app): nothing is created, exit 0" || no "mod-fallback created a Talos home or failed (rc=$rc)"
+for junk in 'not json' '[]' '{"hook_event_name":"Stop","session_id":"s","background_tasks":"x"}' ''; do printf '%s' "$junk" | MF; [ $? = 0 ] || no "mod-fallback failed on: $junk"; done
+ok "mod-fallback: bad input exits 0 and never fails the turn"
+T="$MH/state/model-ticket.json"
+ticket() { python3 -c 'import json,sys,time; print(json.dumps({"v":1,"to_model":sys.argv[1],"exp_ms":int(time.time()*1000)+int(sys.argv[2]),"control_id":"c1"}))' "$1" "$2" > "$T"; }
+sw() { printf '{"hook_event_name":"PreModelSwitch","source":"%s","requested_model":"%s","to_model":"%s"}' "$1" "$2" "$3" | MF; }
+ticket sonnet 10000; out="$(sw command sonnet claude-sonnet-5-5)"
+{ <<<"$out" grep -q '"permissionDecision": "allow"' && [ ! -e "$T" ]; } && ok "mod-fallback PreModelSwitch: the mod's ticket allows its own /model once, and is spent" || no "the ticket did not allow the switch, or was not spent" "$out"
+out="$(sw command sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: a second switch with no ticket gets no decision" || no "a spent ticket allowed a second switch" "$out"
+ticket sonnet 10000; out="$(sw command haiku claude-haiku-5-5)"; { [ -z "$out" ] && [ -e "$T" ]; } && ok "mod-fallback PreModelSwitch: another model gets no decision, and the ticket is kept for its own switch" || no "another model was allowed" "$out"
+ticket sonnet 10000; out="$(sw picker sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: a switch from the picker (not the mod's command) gets no decision" || no "a picker switch was allowed" "$out"
+ticket sonnet -1000; out="$(sw command sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: an expired ticket gets no decision" || no "an expired ticket allowed the switch" "$out"
+: > "$T"; out="$(sw command sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: the blanked file (the mod's switch over) gets no decision" || no "a blank ticket allowed the switch" "$out"
+rm -f "$T"; ln -s "$SB/elsewhere.json" "$T"; ticket sonnet 10000 2>/dev/null; python3 -c 'import json,time; json.dump({"v":1,"to_model":"sonnet","exp_ms":int(time.time()*1000)+10000},open("'"$SB"'/elsewhere.json","w"))'
+out="$(sw command sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: a ticket that is a link is not read" || no "a linked ticket allowed the switch" "$out"
+rm -f "$T"
+python3 -c 'import json,time; print(json.dumps({"v":1,"to_model":"sonnet","exp_ms":int(time.time()*1000)+600000}))' > "$T"
+out="$(sw command sonnet claude-sonnet-5-5)"; [ -z "$out" ] && ok "mod-fallback PreModelSwitch: a ticket for longer than the mod's 15 s (not the mod's) gets no decision" || no "a long-lived ticket allowed the switch" "$out"
+python3 -c 'import json,time; print(json.dumps({"v":1,"to_model":"sonnet","exp_ms":int(time.time()*1000)+10000,"session_id":"sess_main"}))' > "$T"
+out="$(printf '{"hook_event_name":"PreModelSwitch","session_id":"sess_thread","source":"command","requested_model":"sonnet"}' | MF)"
+{ [ -z "$out" ] && [ -e "$T" ]; } && ok "mod-fallback PreModelSwitch: another session's /model does not spend the ticket" || no "another session spent the ticket" "$out"
+out="$(printf '{"hook_event_name":"PreModelSwitch","session_id":"sess_main","source":"command","requested_model":"sonnet"}' | MF)"
+<<<"$out" grep -q allow && ok "mod-fallback PreModelSwitch: the mod's own session gets it" || no "the mod's own session was refused" "$out"
+rm -f "$T"
+python3 -c 'import json,time; print(json.dumps({"v":1,"to_model":"sonnet","exp_ms":int(time.time()*1000)+10000}))' > "$T"
+out="$(printf '{"hook_event_name":"PreModelSwitch","source":"command","to_model":"claude-sonnet-5-5"}' | MF)"
+<<<"$out" grep -q allow && ok "mod-fallback PreModelSwitch: without requested_model, an alias ticket matches the resolved id (the mod's ticketMatches)" || no "the alias did not match the resolved id" "$out"
+rm -f "$T"
+
 export HOME="$REALHOME"
 echo "  hooks: PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

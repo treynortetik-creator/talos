@@ -9,12 +9,14 @@ import { z } from 'zod'
 import { CardId, IsoTs, ThreadId } from './ids.ts'
 
 /**
- * The dialogs a card is made for. The bypass-permissions disclaimer and any dialog Talos does not know stay as they are.
- * `dev_channels` is Main's own warning about the development channel (its `subject` is the channels, comma separated);
- * the supervisor publishes it as `supervisor.main_dialog` in workers.json, because Main has no entry of its own, and the card
- * goes to the default thread.
+ * The dialogs a card is made for. Any dialog Talos does not know stays as it is.
+ * `dev_channels` is the development-channels startup question (its `subject` is the channels, comma separated); on Main the
+ * supervisor publishes it as `supervisor.main_dialog` in workers.json, because Main has no entry of its own, and the card
+ * goes to the default thread; a thread session's own copy is an entry's `dialog`.
+ * `bypass` is Claude Code's "running in Bypass Permissions mode" disclaimer: no subject, two options (No, exit / Yes, I accept).
+ * It is a SAFETY question: only the owner's own tap answers it (a signed paired-device answer on the phone, a real click on the Mac).
  */
-export const DIALOG_KINDS = ['trust', 'mcp_consent', 'login', 'dev_channels'] as const
+export const DIALOG_KINDS = ['trust', 'mcp_consent', 'login', 'dev_channels', 'bypass'] as const
 export const DialogKind = z.enum(DIALOG_KINDS)
 export type DialogKindT = z.infer<typeof DialogKind>
 

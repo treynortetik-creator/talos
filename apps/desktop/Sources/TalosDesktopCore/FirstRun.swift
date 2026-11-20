@@ -133,7 +133,7 @@ public enum FirstRun {
           state: .unknown(
             i.setupDone == false
               ? "Comes after the first step above."
-              : "Not started yet. The first time, Claude asks about the folder and the dev-channel: answer both in Terminals….")))
+              : "Not started yet. The first time, Claude asks about the folder (answer it in Terminals…) and the dev-channel (answer it in the Talos popup).")))
     }
     if protectedFolder(i.agentDir, home: i.home) != nil {
       r.append(

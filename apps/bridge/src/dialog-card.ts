@@ -93,6 +93,8 @@ type Rec = {
   mac?: { choice: number | null; label: string | null }
   /** The thread line for an expired dialog was posted (or tried: at most once). */
   line?: true
+  /** The dialog is Main's own (`supervisor.main_dialog`), answered through Main's answer file; any other is the thread session's. */
+  main?: true
 }
 
 export type DialogPrecheck =
@@ -110,8 +112,9 @@ const dialogWhere = (thread: string): DialogWhere =>
     ? { kind: 'mac' }
     : { kind: 'linux', machine: hostname(), attach: `talos-app supervise attach ${thread}` }
 
-const answerFile = (kind: DialogKindT): string =>
-  kind === 'dev_channels' ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
+/** Main's own dialog has an answer file of its own; a thread session's development-channels question (or any other) uses the thread's. */
+const answerFile = (main: boolean | undefined): string =>
+  main ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
 
 export class DialogCards {
   private relayOk = false
@@ -281,31 +284,41 @@ export class DialogCards {
   /**
    * A dialog on a thread's pane in this workers.json, by id: the worker's own, or, on the default thread, Main's (`supervisor.main_dialog`:
    * Main has no entry of its own, and its card goes to the default thread). Looked up side by side, so a worker's dialog on the default
-   * thread never hides Main's. Only Main publishes `dev_channels`, and Main publishes nothing else.
+   * thread never hides Main's. Main publishes only `dev_channels` (the source decides which answer file a tap goes to, never the kind:
+   * a thread session can ask the same question).
    */
   private liveDialog(file: WorkersFileT | null, thread: string, id: string): Dialog | undefined {
+    return this.liveSource(file, thread, id)?.dialog
+  }
+
+  private liveSource(
+    file: WorkersFileT | null,
+    thread: string,
+    id: string,
+  ): { dialog: Dialog; main: boolean } | undefined {
     const own = file?.threads[thread]?.dialog
-    if (own?.id === id && own.kind !== 'dev_channels') return own
+    if (own?.id === id) return { dialog: own, main: false }
     const main = file?.supervisor.main_dialog
-    if (main?.id === id && main.kind === 'dev_channels' && thread === this.ctx.config.config.default_thread) return main
+    if (main?.id === id && main.kind === 'dev_channels' && thread === this.ctx.config.config.default_thread)
+      return { dialog: main, main: true }
     return undefined
   }
 
   private mintNew(file: WorkersFileT): void {
-    const found: Array<[string, Dialog]> = []
+    const found: Array<[string, Dialog, boolean]> = []
     for (const [thread, entry] of Object.entries(file.threads))
-      if (entry.dialog && entry.dialog.kind !== 'dev_channels') found.push([thread, entry.dialog])
+      if (entry.dialog) found.push([thread, entry.dialog, false])
     const main = file.supervisor.main_dialog
-    if (main?.kind === 'dev_channels') found.push([this.ctx.config.config.default_thread, main])
-    for (const [thread, d] of found) {
+    if (main?.kind === 'dev_channels') found.push([this.ctx.config.config.default_thread, main, true])
+    for (const [thread, d, isMain] of found) {
       if (this.rec(d.id) || !this.ctx.config.thread(thread)) continue
-      this.mint(thread, d).catch((e) =>
+      this.mint(thread, d, isMain).catch((e) =>
         this.ctx.log.warn('dialog card not made', { thread, error: (e as Error).message }),
       )
     }
   }
 
-  private async mint(thread: string, d: Dialog): Promise<void> {
+  private async mint(thread: string, d: Dialog, isMain: boolean): Promise<void> {
     const { ctx } = this
     const now = ctx.clock.now()
     const card = composeDialogCard({
@@ -314,17 +327,32 @@ export class DialogCards {
       thread_id: thread,
       thread_name: threadRef(ctx, thread).name,
       now,
+      main: isMain,
     })
     if (!card) return
     assertFrameFits(cardCreateFrame(now, card))
     // the record first: a second look at the same file while this one is being sent finds it and makes nothing
-    this.save(d.id, { card_id: card.id, thread, kind: d.kind, phase: 'waiting', at: now })
+    this.save(d.id, {
+      card_id: card.id,
+      thread,
+      kind: d.kind,
+      phase: 'waiting',
+      at: now,
+      ...(isMain ? { main: true as const } : {}),
+    })
     ctx.ledger.create(card, 'bridge')
     try {
       await ctx.transport.sendDurable(cardCreateFrame(now, card))
     } catch (e) {
       ctx.ledger.expire(card.id)
-      this.save(d.id, { card_id: card.id, thread, kind: d.kind, phase: 'closed', at: now })
+      this.save(d.id, {
+        card_id: card.id,
+        thread,
+        kind: d.kind,
+        phase: 'closed',
+        at: now,
+        ...(isMain ? { main: true as const } : {}),
+      })
       throw e
     }
     ctx.expiry?.sync()
@@ -463,7 +491,7 @@ export class DialogCards {
             },
       })
       if (!verdict.ok) throw new Error(`proof check: ${verdict.why}`)
-      this.writeFile(d.thread, answerFile(d.dialog_kind), checked)
+      this.writeFile(d.thread, answerFile(found.main), checked)
     } catch (e) {
       ctx.log.warn('dialog answer not written', { thread: d.thread, error: (e as Error).message })
       this.save(d.dialog_id, { ...(this.rec(d.dialog_id) ?? found), phase: 'done' })
@@ -569,7 +597,7 @@ export class DialogCards {
     // The report never came. Say what is known (never that the key was pressed) and take the answer back, so a Mac that is
     // late finds nothing to press.
     if (now - (rec.answered_at ?? rec.at) >= DIALOG_RESULT_WAIT_MS) {
-      this.removeOwn(rec.thread, answerFile(rec.kind))
+      this.removeOwn(rec.thread, answerFile(rec.main))
       this.finish(id, rec, null)
     }
   }

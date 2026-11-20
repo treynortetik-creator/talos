@@ -15,7 +15,10 @@ public final class MainAndWorkersPopupSource: NeedsYouPopupSource, @unchecked Se
     self.main = main
   }
 
-  public func popupOffers() -> [NeedsYouPopupItem] { workers.popupOffers() + (main.mainPopupItem().map { [$0] } ?? []) }
+  public func popupOffers() -> [NeedsYouPopupItem] {
+    workers.popupOffers() + (main.mainPopupItem().map { [$0] } ?? []) + (main.apiKeyPopupItem().map { [$0] } ?? [])
+      + (main.safetyPopupItem().map { [$0] } ?? [])
+  }
 
   public func popupAnswer(thread: String, dialogId: String, action: NeedsYouPopupAction, completion: @escaping @Sendable (PopupAnswerResult) -> Void) {
     if thread == Supervisor.mainPopupThread {
@@ -37,12 +40,15 @@ public final class NoWorkerPopups: NeedsYouPopupSource, @unchecked Sendable {
 
 extension Supervisor {
   /// Main has no thread of its own; this is not a thread id, so no worker can be mistaken for it.
-  public static let mainPopupThread = "supervisor:main"
+  public static let mainPopupThread = NeedsYouPopupContent.mainThreadId
 
   /// The popup item for Main's warning while it is offered and not past its time; nil when none.
   public func mainPopupItem() -> NeedsYouPopupItem? {
     guard let d = status.devDialog, d.isValid, (ISOTime.parse(d.expires_at) ?? 0) > options.wallClock() / 1000 else { return nil }
-    return NeedsYouPopupItem(thread: Self.mainPopupThread, threadName: "Main", dialog: d, phoneTold: status.devPhoneTold, first: true)
+    // a changed permission flag: the popup names the mode this start would run in
+    var startMode: String?
+    if d.launch_changed?.contains("flags") == true { startMode = status.devStartMode }
+    return NeedsYouPopupItem(thread: Self.mainPopupThread, threadName: "Main", dialog: d, phoneTold: status.devPhoneTold, first: true, startMode: startMode)
   }
 
   /// The owner clicked a button of Main's popup. `completion` is called on the supervisor queue.
@@ -51,6 +57,22 @@ extension Supervisor {
   }
 
   private func mainPopupClick(_ dialogId: String, _ action: NeedsYouPopupAction) -> PopupAnswerResult {
+    if var l = launch, let offer = l.apiKeyOffer, ExactText.equal(offer.id, dialogId) {
+      guard case .choose(let choice, let label) = action, let expires = ISOTime.parse(offer.expires_at), options.wallClock() / 1000 < expires else {
+        return .nothing(.notOffered)
+      }
+      let r = apiKeyClick(choice, label: label, offer: offer, launch: &l)
+      launch = l
+      return r
+    }
+    if var l = launch, let offer = l.safetyOffer, ExactText.equal(offer.id, dialogId) {
+      guard case .choose(let choice, let label) = action, let expires = ISOTime.parse(offer.expires_at), options.wallClock() / 1000 < expires else {
+        return .nothing(.notOffered)
+      }
+      let r = safetyClick(choice, label: label, offer: offer, launch: &l)
+      launch = l
+      return r
+    }
     guard var l = launch, let offer = l.devCard.offer, ExactText.equal(offer.id, dialogId), let expires = ISOTime.parse(offer.expires_at),
       options.wallClock() / 1000 < expires
     else { return .nothing(.notOffered) }

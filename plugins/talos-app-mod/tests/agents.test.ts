@@ -8,6 +8,8 @@ const SYNC = 'mcp__talos-app__talos_mod_sync' as const
 const HELLO = 'mcp__talos-app__talos_mod_hello' as const
 const KEY = 'k'.repeat(43)
 const TEE = '/opt/talos-home/state/agents-tee/sess_test.json' // one file per session (R6)
+// the kit's Stop hook writes the turn end's background_tasks here (kit/hooks/mod-fallback.py)
+const STOPF = '/opt/talos-home/state/agents-stop/sess_test.json'
 const ID = (n: number) => `01JBF3V7Q8K2M4N6P8R0S2T4${n.toString(36).toUpperCase().padStart(2, '0')}`
 
 type On = Parameters<typeof mock.clock>[0]
@@ -22,7 +24,16 @@ const until = async (done: () => boolean, ms = 5000) => {
   for (let waited = 0; !done() && waited < ms; waited += 5) await new Promise((r) => setTimeout(r, 5))
 }
 
-function wire(on: On, o: { features?: string[]; teeText?: () => string; noTaskStop?: boolean } = {}) {
+function wire(
+  on: On,
+  o: {
+    features?: string[]
+    teeText?: () => string
+    stopText?: () => string
+    noTaskStop?: boolean
+    noStop?: boolean
+  } = {},
+) {
   const clock = mock.clock(on)
   const calls: Array<{ tool: string; args: Json }> = []
   const queue: unknown[][] = []
@@ -62,9 +73,10 @@ function wire(on: On, o: { features?: string[]; teeText?: () => string; noTaskSt
   on('env.get', () => ({ value: '/opt/talos-home' }))
   on('fs.read', (_$, e) => {
     if (e.path === TEE) return o.teeText ? { value: o.teeText() } : { deny: 'no such file' }
+    if (e.path === STOPF) return o.stopText ? { value: o.stopText() } : { deny: 'no such file' }
     return { value: `${KEY}\n` }
   })
-  on('fs.exists', () => ({ value: true }))
+  on('fs.exists', (_$, e) => ({ value: e.path !== STOPF || o.stopText !== undefined }))
   on('fs.write', (_$, e) => {
     h.teeWrites.push(`${e.path}=${e.text}`)
     return { value: undefined }
@@ -85,7 +97,7 @@ function wire(on: On, o: { features?: string[]; teeText?: () => string; noTaskSt
     if (e.tool === 'Monitor') return { result: { taskId: 'mon_1', timeoutMs: 300000 } }
     return { result: { stdout: 'ok' } }
   })
-  on('classic.Stop', () => ({}))
+  if (!o.noStop) on('classic.Stop', () => ({}))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }) as never)
   on('mcp.call', (_$, e) => {
     calls.push({ tool: e.tool, args: e.args ?? {} })
@@ -258,6 +270,85 @@ test('background Bash and Monitor are tracked, ended by a task notification, cor
     ['bash_1', 'completed'],
     ['mon_1', 'completed'],
     ['bash_9', 'running'],
+  ])
+})
+
+// A Team or Enterprise organization's security plugin (cc-plugin-sec-default@builtin) passes `classic.Stop` and
+// `session.append` on past user plugins, so the mod never sees them. The kit's Stop settings hook writes the same list.
+test("with classic.Stop never handed to the mod, the kit Stop hook's file ends a finished shell, once per turn end", async ($, on) => {
+  let stop = ''
+  const h = wire(on, { features: ['agents'], stopText: () => stop, noStop: true })
+  await connect($, h)
+  await $.tool.call({
+    tool: 'Bash',
+    command: 'pnpm dev',
+    description: 'Run the dev server',
+    run_in_background: true,
+  } as never)
+  await $.tool.call({
+    tool: 'Monitor',
+    description: 'Watch the build',
+    timeout_ms: 1000,
+    command: 'tail -f x',
+  } as never)
+  await tick(h)
+  const rows = () => h.last()?.rows ?? []
+  expect(rows().map((r) => [r.id, r.status])).toEqual([
+    ['bash_1', 'running'],
+    ['mon_1', 'running'],
+  ])
+  // a turn end: the monitor is still in flight, the shell is not (it ended)
+  stop = JSON.stringify({
+    v: 1,
+    at: h.clock.now() + 1,
+    session_id: 'sess_test',
+    background_tasks: [{ id: 'mon_1', type: 'monitor', status: 'running', description: 'Watch the build' }],
+  })
+  await tick(h)
+  expect(rows().map((r) => [r.id, r.status])).toEqual([
+    ['bash_1', 'completed'],
+    ['mon_1', 'running'],
+  ])
+  // the same file again is not applied twice: the shell started again since (the engine reuses its id here) stays running
+  // until the next turn end says otherwise
+  await $.tool.call({
+    tool: 'Bash',
+    command: 'pnpm dev',
+    description: 'Run the dev server',
+    run_in_background: true,
+  } as never)
+  await tick(h)
+  expect(rows().find((r) => r.id === 'bash_1')?.status).toBe('running')
+  // a file for another session, or not in the shape, is ignored
+  stop = JSON.stringify({ v: 1, at: h.clock.now() + 1, session_id: 'other', background_tasks: [] })
+  await tick(h)
+  expect(rows().find((r) => r.id === 'mon_1')?.status).toBe('running')
+})
+
+test("a kit Stop file from before the mod's first tick (a restart, a resume under the same id) is history, not applied", async ($, on) => {
+  let at = 0
+  const h = wire(on, {
+    features: ['agents'],
+    noStop: true,
+    stopText: () =>
+      JSON.stringify({ v: 1, at, session_id: 'sess_test', background_tasks: [{ id: 'old_1', type: 'shell' }] }),
+  })
+  at = h.clock.now() - 1 // written before this mod started
+  await connect($, h)
+  await tick(h)
+  await tick(h)
+  expect((h.last()?.rows ?? []).some((r) => r.id === 'old_1')).toBe(false)
+})
+
+test('the Stop list ends only the shells that were running when it was taken (it is read up to a tick later)', () => {
+  const t = new AgentTracker()
+  t.shellStarted('bash_1', 'shell', 'before', 1000)
+  t.shellStarted('bash_2', 'shell', 'after', 5000)
+  t.backgroundSnapshot([], 6000, 4000)
+  const rows = t.rows([], undefined, 6000, false).rows
+  expect(rows.map((r) => [r.id, r.status])).toEqual([
+    ['bash_1', 'completed'],
+    ['bash_2', 'running'],
   ])
 })
 

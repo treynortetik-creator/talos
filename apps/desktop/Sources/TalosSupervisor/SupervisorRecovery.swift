@@ -9,6 +9,12 @@ struct RecoveryState {
   var usageLimit = UsageLimitWatch()
   /// The control_id last acted on. A request with the same one is cleared and ignored.
   var lastHandledId: String?
+  /// The same for the agent's permission-mode request (SupervisorPermissionMode.swift), and when (awake clock) one was last acted on.
+  var permissionHandledId: String?
+  var permissionActedAt: Double?
+  /// The saved arguments of the newest launch that got to `.running` (its development-channel dialog answered): what Main really runs
+  /// with. Thread sessions are held to these, so a saved change is never passed on before Main runs in it.
+  var confirmedArgs: [String]?
   /// Set when an automatic restore starts, whatever came of it; reset by a healthy start. Keeps the automatic restore to one.
   var restoredOnce = false
   var restoreInFlight = false
@@ -54,6 +60,7 @@ extension Supervisor {
   var requestPath: String { talosAppHome + "/" + AgentRequest.fileName }
 
   func recoveryTick(_ now: Double) {
+    permissionModeTick(now)
     if phase != .starting { recovery.postColdStart = false }
     guard !recovery.restoreInFlight else { return }
     let file = AgentRequestFile.read(path: requestPath)

@@ -150,6 +150,11 @@ describe('every settings row has a risk', () => {
       archived: 'high',
       parent: 'high',
       idle_park_min: 'low',
+      color: 'low',
+      effort: 'low',
+      model: 'high',
+      mcp_allow: 'high',
+      'session_opts.cwd': 'high',
     })
   })
 
@@ -199,12 +204,12 @@ describe('thread operations as proposals', () => {
     for (const field of [
       'kind',
       'order',
-      'color',
       'session_opts',
       'created_at',
       'id',
       'voice_context',
-      'session_opts.cwd',
+      'session_opts.model',
+      'session_opts.cwd.x',
     ])
       expect(refused([{ path: `threads.trip.${field}`, value: 'x' }]), field).toMatch(/not a setting you may propose/)
     expect(refused([{ path: 'threads', value: [] }])).toMatch(/not a setting you may propose/)
@@ -270,7 +275,10 @@ describe('thread operations as proposals', () => {
 
   it('a thread session may touch its own thread only', () => {
     expect(ok([{ path: 'threads.trip.name', value: 'Travel' }], cfg, { thread: 'trip' })).toHaveLength(1)
-    expect(ok([{ path: 'threads.trip.archived', value: true }], cfg, { thread: 'trip' })).toHaveLength(1)
+    // never its own archiving, session, folder, model or MCP list (the thread-setup tests cover the rest)
+    expect(refused([{ path: 'threads.trip.archived', value: true }], cfg, { thread: 'trip' })).toMatch(
+      /thread's archived/,
+    )
     expect(refused([{ path: 'threads.garden.name', value: 'Plants' }], cfg, { thread: 'trip' })).toMatch(/own thread/)
     expect(
       refused(
@@ -284,7 +292,7 @@ describe('thread operations as proposals', () => {
     ).toMatch(/own thread/)
     expect(refused([{ path: 'timezone', value: 'Europe/Paris' }], cfg, { thread: 'trip' })).toMatch(/own thread/)
     expect(refused([{ path: 'threads.errands', value: { name: 'Errands' } }], cfg, { thread: 'trip' })).toMatch(
-      /own thread/,
+      /under it/,
     )
   })
 

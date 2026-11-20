@@ -68,6 +68,20 @@ function recordMiss(rt: HooksRuntime, ip: string, limit = MISS_LIMIT): boolean {
   return recent.length > limit
 }
 
+/** Peer-link redeem failures, one bucket per client address (a prober cannot dodge it by trying other connection ids). */
+const linkKey = (ip: string): string => `fail|link|${ip}`
+/** True when this client already used up its failed-verify budget for the last minute: asked BEFORE any check, charges nothing. */
+export function linkFailuresOver(rt: HooksRuntime, ip: string): boolean {
+  const now = rt.now()
+  return (
+    (missLog.get(rt)?.get(linkKey(ip)) ?? []).filter((t) => now - t < MISS_WINDOW_MS).length >= FAILED_VERIFY_PER_MIN
+  )
+}
+/** Charges one failed redeem to that bucket (the same size and window as the inbox's bad-signature bucket). */
+export function chargeLinkFailure(rt: HooksRuntime, ip: string): void {
+  recordMiss(rt, linkKey(ip), FAILED_VERIFY_PER_MIN)
+}
+
 /** Charges an UNVERIFIED request to its own small bucket (per connection + client). Verified traffic never touches it. */
 function recordFailedVerify(rt: HooksRuntime, connId: string, ip: string): 'ok' | 'first_over' | 'over' {
   const over = recordMiss(rt, `fail|${connId}|${ip}`, FAILED_VERIFY_PER_MIN)

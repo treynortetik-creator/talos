@@ -81,7 +81,7 @@ public final class Supervisor: @unchecked Sendable {
   private var stopDeadline: Double?
   private var stopThen: StopReason = .user
   private var stopCloseHost = true
-  private var afterStop: (() -> Void)?
+  var afterStop: (() -> Void)?
   /// Read by the recovery tick, in the same pass that may have just raised it; `status` is the copy of the pass before.
   var needsYou: NeedsYou?
   var agentActivity: String?
@@ -336,7 +336,7 @@ public final class Supervisor: @unchecked Sendable {
     // from `confirmedLaunch`: `AutoConfirmGuard` `launchChanged`). A cold start with the same launch is automatic.
     let claude = resolvedClaude ?? c.claudePath
     let programChanged = c.claudePath != config.claudePath
-    if programChanged || c.launchFingerprint(resolvedClaude: claude) != config.launchFingerprint(resolvedClaude: claude)
+    if programChanged || launchFingerprint(c, claude) != launchFingerprint(config, claude)
       || c.env != config.env
     {
       nextRestartIsCold = true
@@ -415,7 +415,7 @@ public final class Supervisor: @unchecked Sendable {
     if owner { signaller.own(pid, leaderStart: snap?.startTime ?? 0) }
     previousChild = nil
     let claude = resolveClaude(env: launchEnv())
-    let fp = config.launchFingerprint(resolvedClaude: claude ?? config.claudePath)
+    let fp = launchFingerprint(config, claude ?? config.claudePath)
     let markerFp = host.marker("talos_launch")
     let markerSession = host.marker("talos_session")
     // A pane launched with another command or conversation keeps running, but its next restart is cold.
@@ -432,7 +432,7 @@ public final class Supervisor: @unchecked Sendable {
     launch = Launch(
       kind: .attached, resumeId: config.session.id, sessionId: markerSession ?? config.session.id ?? "",
       startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: markerFp ?? "",
-      parts: sameLaunch ? config.launchParts(resolvedClaude: claude ?? config.claudePath) : [:], cliVersion: nil,
+      parts: sameLaunch ? launchParts(config, claude ?? config.claudePath) : [:], launchedArgs: sameLaunch ? config.args : nil, cliVersion: nil,
       expectsDevDialog: waiting, launchedChannels: sameLaunch ? AutoConfirmGuard.channels(inArgv: config.args) : [],
       awakeStartedAt: -.infinity, devDialogSeen: nil, dialogAnswered: !waiting, agentDir: config.expandedAgentDir(home: options.home))
     launch?.narrowed = MainNarrowed.found(
@@ -445,7 +445,7 @@ public final class Supervisor: @unchecked Sendable {
     return true
   }
 
-  private func startColdLocked() {
+  func startColdLocked() {
     switch phase {
     case .starting, .running, .cleaningUp, .waitingToRestart, .stopping: return
     default: break
@@ -522,6 +522,7 @@ public final class Supervisor: @unchecked Sendable {
       mode = .newSession(sessionId)
     }
     var args = ResumeRewrite.apply(config.args, mode)
+    args = withChannelsFlag(args)  // Main always passes the channels flag (MainChannelFlag)
     // the installed guards rebuilt by the bridge from this release, re-pinned to the bun and checkout found now, BEFORE they are read
     refreshGuards(env: env)
     // optional guards (talos-app install-guards): added when installed; a --settings of the owner's own wins and is warned about
@@ -559,14 +560,15 @@ public final class Supervisor: @unchecked Sendable {
     }
     let snap = probe.snapshot(pid)
     signaller.own(pid, leaderStart: snap?.startTime ?? 0)
-    let fp = config.launchFingerprint(resolvedClaude: claude)
+    migrateChannelsFlagSeal(claude: claude)
+    let fp = launchFingerprint(config, claude)
     host.setMarker("talos_launch", fp)
     host.setMarker("talos_session", sessionId)
-    let expects = config.args.contains("--dangerously-load-development-channels")
+    let expects = MainChannelFlag.passes(args)
     launch = Launch(
       kind: kind, resumeId: { if case .resume(let id) = mode { return id } else { return nil } }(),
       sessionId: sessionId, startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: fp,
-      parts: config.launchParts(resolvedClaude: claude), cliVersion: version,
+      parts: launchParts(config, claude), launchedArgs: config.args, cliVersion: version,
       expectsDevDialog: expects, launchedChannels: AutoConfirmGuard.channels(inArgv: args), awakeStartedAt: options.awake(),
       devDialogSeen: nil, startedWallMs: options.wallClock(), agentDir: cwd, afterCleanExit: launchingAfterCleanExit)
     launch?.narrowed = MainNarrowed.mode(args: args, env: env)
@@ -981,8 +983,9 @@ public final class Supervisor: @unchecked Sendable {
       startKind: launch?.kind, needsYou: needsYou, lastExit: lastExit,
       restartsInWindow: loop.restartsInWindow(now: clock.now()), cliVersion: launch?.cliVersion,
       ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer,
+      apiKeyDialog: launch?.apiKeyOffer, safetyDialog: launch?.safetyOffer, safetyPhoneTold: launch?.safetyPhoneTold ?? false,
       devPhoneTold: launch?.devCard.phoneTold ?? false, bridgeLive: launch?.bridgeSeenLive ?? false,
-      configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed)
+      configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed, launchPending: launchPendingNow, runningArgs: recovery.confirmedArgs, devStartMode: launchStartMode)
     statusLock.withLock { _status = s }
   }
 

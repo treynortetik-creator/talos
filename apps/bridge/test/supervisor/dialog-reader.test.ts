@@ -119,14 +119,72 @@ describe('DialogReader reads the known dialogs', () => {
       expect(readDialog(nyRows(name, dir), dir === CAP ? escaped(name, dir) : undefined)).toEqual(LOGIN)
     })
 
-  it('the bypass disclaimer is never read', () => {
+  it('the real bypass disclaimer is read: no subject, its two exact rows, the cursor on "No, exit"', () => {
     const r = rows('bypass-disclaimer')
     expect(liveDialog(r).kind).toBe('bypass_disclaimer') // control: it is a known dialog
-    expect(readDialog(r)).toBeNull()
+    expect(readDialog(r)).toEqual({ kind: 'bypass', subject: null, options: ['No, exit', 'Yes, I accept'], cursor: 0 })
+  })
+
+  it('SYNTHETIC: a bypass disclaimer with a changed, extra or missing row is not read, so no card and no key', () => {
+    const r = rows('bypass-disclaimer')
+    expect(readDialog(r)).not.toBeNull() // control
+    expect(readDialog(replacing(r, (x) => x === '    Yes, I accept', ['    Yes, I accept everything']))).toBeNull()
+    expect(readDialog(replacing(r, (x) => x === '    Yes, I accept', ['    Yes, I accept', '    Maybe']))).toBeNull()
+    expect(readDialog(r.filter((x) => !x.includes('Yes, I accept')))).toBeNull()
+    // the same words quoted in a conversation (no frame rule, no cursor) are no dialog
+    expect(
+      readDialog(['⏺ the disclaimer says: WARNING: Claude Code running in Bypass Permissions mode', '  Yes, I accept']),
+    ).toBeNull()
+    // the title gone (a screen cut at the top)
+    expect(readDialog(r.filter((x) => !x.includes('WARNING: Claude Code running')))).toBeNull()
+  })
+
+  it("SYNTHETIC: a wrapped MCP server name is read only when the two halves join into a name the folder's .mcp.json defines", () => {
+    const wrapped = replacing(nyRows('20-mcp-first'), (x) => x.includes('New MCP server found'), [
+      '  New MCP server found in this project: a-very-long-na',
+      '  me-that-wrapped',
+    ])
+    expect(must(readDialog(wrapped)).subject).toBeNull() // no names: no subject, as before
+    expect(must(readDialog(wrapped, undefined, ['a-very-long-name-that-wrapped'])).subject).toBe(
+      'a-very-long-name-that-wrapped',
+    )
+    // a name the folder does not define, a half of one, and a name that only starts the same way are never subjects
+    expect(must(readDialog(wrapped, undefined, ['other'])).subject).toBeNull()
+    expect(must(readDialog(wrapped, undefined, ['a-very-long-na'])).subject).toBeNull()
+    expect(must(readDialog(wrapped, undefined, ['a-very-long-name-that-wrapped-and-more'])).subject).toBeNull()
+    // a name on one row still comes from the screen, whatever the folder says
+    expect(must(readDialog(nyRows('20-mcp-first'), undefined, ['not-it'])).subject).toBe('harmless')
+  })
+
+  it('the real development-channels question is read off a pane: the channels are the subject, the two rows its options', () => {
+    const r = parseCapture(readFileSync(resolve(FIX, 'real-dev-channels', 'dev-channels-capture.txt'), 'utf8'))
+    expect(readDialog(r)).toEqual({
+      kind: 'dev_channels',
+      subject: 'server:talos-app',
+      options: ['I am using this for local development', 'Exit'],
+      cursor: 0,
+    })
+  })
+
+  it('SYNTHETIC: a development-channels question cut short, with an extra row, with two lists or with its cursor on no row is not read', () => {
+    const r = parseCapture(readFileSync(resolve(FIX, 'real-dev-channels', 'dev-channels-capture.txt'), 'utf8'))
+    expect(readDialog(r)).not.toBeNull() // control
+    expect(readDialog(r.filter((x) => !x.includes('Channels:')))).toBeNull()
+    expect(readDialog(replacing(r, (x) => x.includes('Channels:'), [' Channels: server:talos-app,']))).toBeNull() // a dangling comma
+    expect(readDialog(replacing(r, (x) => x.includes('2. Exit'), ['   2. Exit', '   3. Something else']))).toBeNull()
+    expect(readDialog(replacing(r, (x) => x.includes('Channels:'), [' Channels: server:a…']))).toBeNull() // cut with an ellipsis
+    expect(readDialog(r.map((x) => x.replace('❯ ', '  ')))).toBeNull() // no cursor
+    expect(readDialog(r.filter((x) => !x.includes('Enter to confirm')))).toBeNull() // no footer: not live
   })
 
   it('screens that are not these dialogs are never read', () => {
-    const positives = new Set(['trust-dialog', 'trust-dialog-tcap', 'mcp-consent', 'login-not-logged-in'])
+    const positives = new Set([
+      'trust-dialog',
+      'trust-dialog-tcap',
+      'mcp-consent',
+      'login-not-logged-in',
+      'bypass-disclaimer',
+    ])
     const names = readdirSync(resolve(FIX, 'real-2.1.318'))
       .filter((f) => f.endsWith('.txt'))
       .map((f) => f.slice(0, -4))

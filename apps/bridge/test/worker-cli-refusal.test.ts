@@ -159,6 +159,8 @@ describe('commands that read across threads or the Talos home, from a thread ses
   })
   test('peer create|add|list|remove|rotate|secret-forget and devices (list, revoke) are open to a thread session; the rest of the fence is unchanged', () => {
     for (const argv of [
+      ['peer', 'link', 'work'],
+      ['peer', 'accept', 'talos-link:relay.example.com/cn_x/y', '--name', 'home'],
       ['peer', 'create', 'work'],
       ['peer', 'add', 'work'],
       ['peer', 'list'],

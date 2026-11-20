@@ -12,6 +12,7 @@ import { handleClaim } from './claim.ts'
 import { applyInboxUpdate } from './inbox.ts'
 import { type HookResponse, handleHookRequest, idle } from './ingest.ts'
 import { PEER_BODY_MAX_BYTES } from './peer.ts'
+import { peerLinkRoutes } from './peer-link-routes.ts'
 import { markDelivered } from './route.ts'
 import { createRuntime, runtimeFor, startTicking, tick } from './runtime.ts'
 import { type BodyRead, MAX_BODY_BYTES } from './types.ts'
@@ -165,6 +166,7 @@ routes.route('/', hookRoutes())
 routes.route('/', apiRoutes())
 routes.route('/', bridgeRoutes())
 routes.route('/', bridgePeerRoutes())
+routes.route('/', peerLinkRoutes())
 
 export function register(services: RelayServices): void {
   const rt = runtimeFor(services) // tests install a configured runtime first

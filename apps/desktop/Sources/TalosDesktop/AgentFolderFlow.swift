@@ -68,6 +68,14 @@ final class AgentFolderFlow: ObservableObject {
         env: env, home: home, workDir: AutoSetup.appFolder(home: home), scriptPath: Bundle.main.path(forResource: "claude-install", ofType: "sh"))
       return c
     }
+    /// Runs the provisioner (a test hands in one that answers without a network). `madeHere`: this run cloned or downloaded and verified
+    /// the tree itself; false when it reused a folder that was already there.
+    var runProvisioner: @Sendable (CloneProvisioner.Config, @Sendable (CloneProvisioner.Step, CloneProvisioner.State) -> Void)
+      -> (result: CloneProvisioner.Result, madeHere: Bool) = { config, progress in
+        CloneProvisioner(config).runReportingOrigin(progress: progress)
+      }
+    /// The owner's home: where the app's own folder and its own clone are.
+    var home: String = NSHomeDirectory()
     /// The recorded clone the owner said yes to.
     var acceptance: any CloneAcceptance = KeychainCloneAcceptance()
     /// Folders a recorded clone may not be in. nil: `AgentFolderSetup.sessionFolders` (the Talos home, the agent folder, each
@@ -93,6 +101,9 @@ final class AgentFolderFlow: ObservableObject {
   @Published var path: String
   /// Whether Claude is signed in, from the checklist's last check. false keeps the session from starting; nil does not.
   var signedIn: Bool?
+  /// The new setup starts the agent itself once the owner reaches its end (sign-in and phone come first), so `finish` makes the folder
+  /// and the setup file and starts nothing.
+  var holdStart = false
   var busy: Bool {
     switch step {
     case .working, .provisioning: return true
@@ -100,7 +111,9 @@ final class AgentFolderFlow: ObservableObject {
     }
   }
   /// One fetch of the Talos code at a time, whoever asks (the automatic run, a button, a second press).
-  private let fetch = SingleFlight<CloneProvisioner.Result?>()
+  private let fetch = SingleFlight<Provisioned?>()
+  /// What a provisioner run answered, and whether that run made the tree itself (`CloneProvisioner.runReportingOrigin`).
+  struct Provisioned: Sendable { var result: CloneProvisioner.Result; var madeHere: Bool }
   private var fetchSteps = LinesBox()
 
   private let model: SupervisorController
@@ -208,14 +221,17 @@ final class AgentFolderFlow: ObservableObject {
     if !fetch.isRunning { fetchSteps = LinesBox() }
     let box = fetchSteps
     let make = deps.provision
+    let run = deps.runProvisioner
     let outcome = await fetch.run {
-      await Task.detached { () -> CloneProvisioner.Result? in
+      await Task.detached { () -> Provisioned? in
         guard let config = make() else { return nil }
-        return CloneProvisioner(config).run { s, st in
+        let report: @Sendable (CloneProvisioner.Step, CloneProvisioner.State) -> Void = { s, st in
           progress?(s, st)
           let snapshot = box.set(s, st)
           DispatchQueue.main.async { MainActor.assumeIsolated { self.showProvisioning(snapshot) } }
         }
+        let r = run(config, report)
+        return Provisioned(result: r.result, madeHere: r.madeHere)
       }.value
     }
     guard let result = outcome else {
@@ -223,8 +239,13 @@ final class AgentFolderFlow: ObservableObject {
       return false
     }
     lines = box.lines
-    switch result {
+    switch result.result {
     case .ok(let clone):
+      guard ownCloneAccepted(clone, madeHere: result.madeHere) else {
+        CloneConfirmCenter.shared.request(clone)
+        step = .confirmClone(clone: clone, then: pending ?? .acceptOnly)
+        return false
+      }
       guard deps.acceptance.accept(clone) else {
         step = .provisionFailed(lines, message: "Talos couldn't remember its new copy in the Keychain. Check that the login keychain is unlocked, then press Retry.")
         return false
@@ -235,6 +256,18 @@ final class AgentFolderFlow: ObservableObject {
       step = .provisionFailed(lines, message: message)
       return false
     }
+  }
+
+  /// The clone this app just made counts as accepted (no click) only when THIS run cloned or downloaded and verified the tree
+  /// (`madeHere`: never a folder that was already there, whatever its marker says, since anything able to write the owner's files
+  /// can plant one), it is provably the app's own fixed-place clone, named by the app's own record, and it passes every check a
+  /// recorded clone passes (`AgentFolderSetup.ownCloneMayBeAccepted`). Anything else is asked about. This only decides;
+  /// `ensureCheckout` writes the acceptance.
+  func ownCloneAccepted(_ clone: String, madeHere: Bool) -> Bool {
+    madeHere
+      && AgentFolderSetup.ownCloneMayBeAccepted(
+        clone: clone, record: AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: deps.home)), home: deps.home,
+        unsafe: unsafeFolders())
   }
 
   private func showProvisioning(_ lines: [ProvisionLine]) {
@@ -264,6 +297,21 @@ final class AgentFolderFlow: ObservableObject {
     if path.trimmingCharacters(in: .whitespaces).isEmpty { path = AutoSetup.defaultAgentDir }
     await create()
     return model.configured
+  }
+
+  /// Adds Chronos to the agent folder (the scheduler, pinned by the kit, its jobs off until the agent finishes its own setup). Never
+  /// fatal: the agent exists whatever this says. nil: added; else the plain words for why not.
+  func ensureChronos() async -> String? {
+    guard let repo = deps.repoRoot().flatMap({ $0.isEmpty ? nil : $0 }) ?? deps.recordedRoot().flatMap({ $0.isEmpty ? nil : $0 }) else {
+      return AgentFolderSetup.chronosLater
+    }
+    let dir = PathUtil.expandTilde(path.trimmingCharacters(in: .whitespaces), home: NSHomeDirectory())
+    guard dir.hasPrefix("/") else { return AgentFolderSetup.chronosLater }
+    let env = deps.environment
+    let r = await Task.detached {
+      ProcessRunner.run(["/bin/bash"] + AgentFolderSetup.chronosArguments(repo: repo, dir: dir), env: env(), cwd: repo, timeout: 900)
+    }.value
+    return r.ok ? nil : AgentFolderSetup.chronosLater
   }
 
   /// Yes to the kit update card: run the update as a preview. It changes nothing; the real update is a command for Terminal.
@@ -308,13 +356,16 @@ final class AgentFolderFlow: ObservableObject {
     return recorded
   }
 
-  private func recordedProblem(_ recorded: String) -> String? {
-    if recorded.isEmpty { return AgentFolderSetup.cloneProblem("") }
-    let avoid =
-      deps.unsafeFolders?()
+  private func unsafeFolders() -> [String] {
+    deps.unsafeFolders?()
       ?? AgentFolderSetup.sessionFolders(
         talosHome: model.workersHome, agentDir: model.supervisor.currentConfig().expandedAgentDir(home: NSHomeDirectory()),
         configJSON: FileManager.default.contents(atPath: model.workersHome + "/config.json"), supportDir: SupervisorController.supportDir)
+  }
+
+  private func recordedProblem(_ recorded: String) -> String? {
+    if recorded.isEmpty { return AgentFolderSetup.cloneProblem("") }
+    let avoid = unsafeFolders()
     let file = deps.recordFile
       ?? AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory()))?.file
       ?? AutoSetup.appFolder(home: NSHomeDirectory()) + "/checkout"
@@ -348,12 +399,6 @@ final class AgentFolderFlow: ObservableObject {
     CloneConfirmCenter.shared.clear()
   }
 
-  /// The updater asked the owner to accept a clone: show the card (only when nothing else is on screen). Their press accepts.
-  func presentUpdaterRequest() {
-    guard let clone = CloneConfirmCenter.shared.pending, case .idle = step else { return }
-    step = .confirmClone(clone: clone, then: .acceptOnly)
-  }
-
   /// The folder box as an absolute path, and the clone. A failure is already on the card.
   private func target(mustExist: Bool = false, for action: CloneAction) -> (dir: String, repo: String)? {
     let home = NSHomeDirectory()
@@ -384,13 +429,15 @@ final class AgentFolderFlow: ObservableObject {
     var note: String
     if wasConfigured {
       note = "\(dir) is now the agent folder. It applies the next time the agent starts (Restart session in the menu bar item)."
+    } else if holdStart {
+      note = "Set up."
     } else if signedIn == false {
       note =
-        "Set up. Claude isn't signed in, so nothing has started: run claude in Terminal, type /login, then choose Start session in the menu bar item."
+        "Set up. Claude isn't signed in, so nothing has started: choose Sign in to Claude again in the menu bar item, then choose Start session."
     } else {
       note =
         model.beginSession(model)
-        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: open Terminals… in the menu bar item and answer them there."
+        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: connector and permission questions come as a Talos popup with buttons; for the folder question, open Terminals… in the menu bar item."
         : "Set up, but the session did not start (the menu bar item says why). Choose Start session when you are ready."
     }
     if let f = FirstRun.protectedFolder(dir, home: NSHomeDirectory()) {

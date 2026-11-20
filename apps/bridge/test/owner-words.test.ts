@@ -113,6 +113,8 @@ const MAC_ONLY_FILES = new Set([
   'screen.ts',
   'screen-consent.ts',
   'tools/screen.ts',
+  'permission-mode.ts', // the Talos app's permission mode: the Mac app is the only place it can change
+  'tools/permission-mode.ts',
   'apps/keychain.ts', // the macOS Keychain
   'pane-run.ts', // Run in Terminal: the terminal pane exists only in the Mac app, so every refusal there is about the Mac
 ])
@@ -131,6 +133,8 @@ const MAC_ONLY_TEXT = [
   'is passed between the Mac and the bridge', // the Mac app's dialog file
   'the Mac app runs it at each start of Main', // guards refresh is the Mac app's
   '3. Mac app: run', // printed only on a Mac
+  'asked the Mac app to check for a new version', // `talos-app update`, printed only on a Mac (askMacAppToCheck)
+  'could not ask the Mac app to check for a new version', // and its failure, the same guard
   'The Mac app re-pins it', // and says what to do without it
   'No scheduler is installed on this Mac. Tell the owner', // NO_SCHEDULER_TEXT, the Mac's branch of noSchedulerText()
   'macOS or Linux (or a WSL distro you set up yourself): bun upgrade', // bun-floor.ts: names each platform, one line each
@@ -214,11 +218,15 @@ describe('the thread notices on the Windows PC', () => {
     lines.needsMac('folder trust', w),
   ]
   test('Linux keeps its commands; the Windows PC gets none, and the gap-1 sentence where Linux attaches', () => {
-    for (const l of said(linuxWhere)) expect(l).toMatch(/talos-app supervise|claude \/login/)
+    // the sign-in line names no command anywhere (signin.ts: it is answered in Talos, never in a terminal)
+    for (const l of said(linuxWhere))
+      if (l === lines.login(linuxWhere)) expect(l).not.toMatch(/talos-app|ssh|claude \/login|attach on/)
+      else expect(l).toMatch(/talos-app supervise|claude \/login/)
     const win = said(winWhere)
     for (const l of win) {
       expect(l).not.toMatch(/talos-app|ssh|attach on|Mac\b/)
-      expect(l.startsWith('This thread') || l.startsWith('Talos')).toBe(true) // the line's own first sentence is kept
+      // the line's own first sentence is kept (the sign-in line opens with its action, Sign in to Claude again)
+      expect(l.startsWith('This thread') || l.startsWith('Talos') || l.startsWith('Sign in to Claude again')).toBe(true)
     }
     expect(win.filter((l) => l.endsWith(WINDOWS_OPEN_SESSION)).length).toBe(11)
     expect(lines.login(winWhere)).toContain(WINDOWS_SIGN_IN)

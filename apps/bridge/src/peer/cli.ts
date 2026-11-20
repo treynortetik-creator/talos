@@ -20,6 +20,7 @@ import { openHistory } from '../history-store.ts'
 import { type RelayHttp, RelayHttpError } from '../relay-http.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PeerLedger } from './ledger.ts'
+import { type LinkCliDeps, type LinkEnv, runLink } from './link-cli.ts'
 import {
   addInboundPeer,
   PEER_SECRET_SERVICE,
@@ -38,18 +39,31 @@ import {
 import { utcDayStart } from './service.ts'
 import { validPeerSecret } from './sign.ts'
 
-export const PEER_USAGE = `usage: talos-app peer create <name> [--cap N]
+export const PEER_USAGE = `usage: talos-app peer link <name> [--cap N]          (shows ONE code; give it to your other Talos)
+       talos-app peer accept <code> --name <name> [--cap N]   (on the other Talos: paste the code; <name> is what you call the first one)
+       talos-app peer create <name> [--cap N]
        talos-app peer add <name> --url <https inbox url> [--cap N] [--secret-file <file>]   (the secret is asked for, or read from the file; never typed on the command line)
        talos-app peer list | peer remove <name> | peer rotate <name> | peer secret-forget <name>
-Linking two Talos installs takes both directions. On each install: "peer create <name>" makes an inbox: in a terminal it prints an inbox
+The one-paste link: on the first Talos run "peer link work" (work is what it calls the second one) and give the code it prints to the
+second Talos, which runs "peer accept <code> --name home" (home is what the second one calls the first). The code works once, for 15 minutes.
+The manual two-step link, if that cannot be used, takes both directions. On each install: "peer create <name>" makes an inbox: in a terminal it prints an inbox
 url and a secret once; run by your agent it prints the url and writes the secret to a file (<talos home>/peer-secrets/<name>.secret).
 Give both to the OTHER install, which runs "peer add <name> --url <url>" and pastes the secret when asked, or "--secret-file <file>"
 (the file is deleted once stored). The creator's file is deleted when the first message arrives; "peer secret-forget <name>" deletes it by
 hand. <name> is what this install calls the other one (for example work).`
 
+const OPTIONS = {
+  cap: { type: 'string' },
+  url: { type: 'string' },
+  'secret-file': { type: 'string' },
+  name: { type: 'string' },
+} as const
+
 class AgentRefusal extends Error {}
 
 export type PeerCliDeps = {
+  /** `peer accept`: the redeem call and the name lookup behind it (tests). */
+  link?: LinkCliDeps
   secrets?: SecretStore /** Run with no terminal (an agent): no secret is printed or read from stdin. */
   agent?: boolean
 }
@@ -98,19 +112,9 @@ async function runPeer(
       io,
       'a secret never goes on the command line. Run "peer add <name> --url <url>" and paste it when asked.',
     )
-  let parsed: ReturnType<
-    typeof parseArgs<{
-      options: { cap: { type: 'string' }; url: { type: 'string' }; 'secret-file': { type: 'string' } }
-      allowPositionals: true
-    }>
-  >
+  let parsed: ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>
   try {
-    parsed = parseArgs({
-      args: rest,
-      options: { cap: { type: 'string' }, url: { type: 'string' }, 'secret-file': { type: 'string' } },
-      allowPositionals: true,
-      strict: true,
-    })
+    parsed = parseArgs({ args: rest, options: OPTIONS, allowPositionals: true, strict: true })
   } catch (e) {
     io.err(`talos-app: ${(e as Error).message}`)
     io.err(PEER_USAGE)
@@ -149,6 +153,9 @@ async function runPeer(
   }
 
   switch (sub) {
+    case 'link':
+    case 'accept':
+      return runLink(sub, positionals, values, linkEnvOf(env, io, http, deps, secrets, config), PEER_USAGE)
     case 'create': {
       const n = needName()
       if (typeof n === 'number') return n
@@ -380,6 +387,24 @@ async function runPeer(
       return sub === undefined || sub === 'help' ? 0 : 2
   }
 }
+
+const linkEnvOf = (
+  env: BridgeEnv,
+  io: CliIO,
+  http: () => Promise<RelayHttp>,
+  deps: PeerCliDeps,
+  secrets: () => Promise<SecretStore>,
+  config: () => ConfigFile,
+): LinkEnv => ({
+  env,
+  io,
+  agent: deps.agent === true,
+  http,
+  secrets,
+  config,
+  clearRevoked: (n) => withLedger(env, (l) => l.clearRevoked(n)),
+  deps: deps.link ?? {},
+})
 
 /** Runs `fn` on the peer ledger in this home's history, when there is one (a fresh home has nothing to clear). */
 function withLedger(env: BridgeEnv, fn: (l: PeerLedger) => void): void {

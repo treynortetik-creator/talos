@@ -113,6 +113,8 @@ export type WorkerDeps = {
   home: string
   /** Main is running and signed in: a thread failed at the sign-in screen starts again on its next message (stateAfterSignin). */
   mainSignedIn?(): boolean
+  /** The sign-in link of the supervisor's own sign-in (signin.ts), for the thread line, while one is waiting on the owner. */
+  signInLink?: (() => string | null) | undefined
   hostFor(threadId: string): WorkerHost
   /** The dedicated threads; null when config.json cannot be read (the last good list is kept). */
   threads(): WorkerThread[] | null

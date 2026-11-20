@@ -6,6 +6,14 @@ extension WorkerManager {
   public static let declinedTrustText =
     "you chose not to trust this folder, so its session was stopped. Send a message to start it again and be asked again, or pick another folder"
 
+  /// What the thread is told when the owner answered "No, exit" to the bypass disclaimer, or "Exit" to the development-channels question
+  /// (the Linux twin: `declinedTrustText` in worker-dialogs.ts).
+  public static func declinedExitText(_ kind: DialogReader.Kind) -> String {
+    kind == .bypass
+      ? "you chose not to run with permission checks off, so its session was stopped. Send a message to start it again and be asked again"
+      : "you chose to exit instead of loading the development channel, so its session was stopped. Send a message to start it again and be asked again"
+  }
+
   /// The owner chose this folder for the thread, so Claude Code's trust question for it is answered now (`FolderTrust`), before the
   /// session starts. Never the agent folder (Main's trust is first-start's). A refusal or a failure never stops the start: it is audited,
   /// and the question on the pane then reaches the phone as a card (`WorkerDialogOffer.swift`). The Linux twin is `acceptFolderTrust`

@@ -37,6 +37,7 @@ import {
   permissionCardAllowsPrimary,
   visibleText,
 } from './permission.ts'
+import { redactLinkCodes } from './redact.ts'
 
 const subtle = () => globalThis.crypto.subtle
 
@@ -543,7 +544,7 @@ export function richContentFor(a: {
   threadId?: string
   card?: { id: string; risk: 'low' | 'high'; payload_hash: string }
 }): RichContentT {
-  const body = clipUtf8(normalizeNoticeText(a.text), SEAL_TEXT_MAX_BYTES - 300)
+  const body = clipUtf8(normalizeNoticeText(redactLinkCodes(a.text)), SEAL_TEXT_MAX_BYTES - 300)
   const out: RichContentT = { v: 1, b: body || ' ', k: a.kind }
   if (a.subtitle) out.s = clipUtf8(a.subtitle, 60)
   if (a.threadId && ThreadId.safeParse(a.threadId).success) out.t = a.threadId

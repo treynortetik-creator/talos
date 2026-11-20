@@ -14,6 +14,8 @@ extension Supervisor {
     let unread = read == nil
     let screen = DialogMatcher.classify(rows)
     if case .devChannels(let d) = screen { l.devDialogSeen = d }
+    if !unread { mainFirstStart(rows, launch: &l) }
+    if !unread { mainSafetyQuestions(rows, launch: &l) }
     if !unread { watchPrompt(rows, launch: &l, now: now) }
     if !unread { mainComputerUse(rows, launch: &l) }
     if !unread { mainUsageLimit(rows, launch: &l) }
@@ -95,7 +97,13 @@ extension Supervisor {
       l.notifiedScreens = l.notifiedScreens.filter { !$0.hasPrefix("stall:") || $0 == showing }
       // The start-stalled warning is over too once the dev-channel dialog is up: the wait it was about has an answer.
       var over = needsYou == .startStalled && dialogOnScreen
-      if case .dialog(let named) = needsYou, !screen.isDialog || named != screen.label { over = true }
+      if case .dialog(let named) = needsYou {
+        // the first-start sign-in and API-key needs-you are about the screen `FirstStartScreens` reads, which `DialogMatcher` does not call a dialog
+        let first = FirstStartScreens.read(rows)
+        if named == Self.signInLabel { over = !(first == .loginMethod || first == .oauthPaste) }
+        else if named == Self.apiKeyLabel { over = first != .apiKey }
+        else if !screen.isDialog || named != screen.label { over = true }
+      }
       // A held question is about the dialog on screen. Once that is gone and the stall was told before, the stall is what is left.
       if needsYouNamesTheDialog, !dialogOnScreen, l.notifiedScreens.contains("start") { over = true }
       // A screen read blank between two dialogs empties the slot while the cold-start question is still held. The dev-channel
@@ -172,6 +180,9 @@ extension Supervisor {
     audit("needs_you", ["why": key])
     emit(.needsYou(n))
     if config.openTerminalOnDialog, Self.opensTerminal(for: n) { emit(.openTerminal) }
+    // the sign-in card shows only for the real auth screen (the login hint under a live box, or a first-start sign-in screen), never for
+    // the words "Run /login" somewhere on a conversation (`signInIsLive`)
+    if case .dialog(let label) = n, Self.isSignIn(label: label), signInIsLive() { emit(.openSignIn) }
   }
 
   /// Whether a running session belongs to the folder the config names now. After a switch of folder nothing restarts, so the old

@@ -282,16 +282,17 @@ public struct DesktopConfig: Codable, Equatable, Sendable {
   /// What a start launches: SHA-256 over a length-prefixed encoding of the folder, the program, the flags (without the resume id) and the
   /// environment, so no value can pass for a separator and no two launches share a fingerprint by design. A change to any of these makes the
   /// next start a cold start (4.3 step 6) and, for the dev-channels warning, a launch the owner has not confirmed.
-  public func launchFingerprint(resolvedClaude: String) -> String {
-    let flags = ResumeRewrite.strip(args)
+  /// `args`: the flags as launched, when they are not the saved ones (Main always passes the channels flag, `MainChannelFlag`).
+  public func launchFingerprint(resolvedClaude: String, args launched: [String]? = nil) -> String {
+    let flags = ResumeRewrite.strip(launched ?? args)
     let envRows = env.keys.sorted().flatMap { [$0, env[$0] ?? ""] }
     return Fingerprint.sha256(["dir", agentDir, "claude", resolvedClaude, "args"] + [String(flags.count)] + flags + ["env"] + [String(envRows.count)] + envRows)
   }
 
   /// The same inputs as `launchFingerprint`, one short hash per piece (`LaunchChange`-style names the owner knows: the folder, the program, the
   /// flags, the environment). A card compares two of these to say WHICH piece changed, never to decide anything.
-  public func launchParts(resolvedClaude: String) -> [String: String] {
-    let flags = ResumeRewrite.strip(args)
+  public func launchParts(resolvedClaude: String, args launched: [String]? = nil) -> [String: String] {
+    let flags = ResumeRewrite.strip(launched ?? args)
     let envRows = env.keys.sorted().flatMap { [$0, env[$0] ?? ""] }
     return [
       "folder": Fingerprint.sha256([agentDir], bytes: 8), "program": Fingerprint.sha256([resolvedClaude], bytes: 8),

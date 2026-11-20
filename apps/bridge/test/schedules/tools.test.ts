@@ -71,6 +71,7 @@ describe('registration', () => {
       'peer_send',
       'thread_session',
       'restart_main',
+      'permission_mode',
       ...SCREEN_BRIDGE_TOOLS,
     ])
       expect(names).toContain(t)
@@ -81,7 +82,7 @@ describe('registration', () => {
         CONFIG_BRIDGE_TOOLS.length +
         ATTACHMENT_BRIDGE_TOOLS.length +
         PAGE_BRIDGE_TOOLS.length +
-        4 + // handoff, peer_send, thread_session, restart_main
+        5 + // handoff, peer_send, thread_session, restart_main, permission_mode
         SCREEN_BRIDGE_TOOLS.length,
     )
   })

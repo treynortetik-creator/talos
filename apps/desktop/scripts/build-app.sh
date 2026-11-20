@@ -187,6 +187,25 @@ for src in "$MENUBAR_SRC"/*.png; do
   fi
 done
 
+# The setup screens' own art and type: the Talos robot, Cinzel and Inter (both SIL OFL, see THIRD_PARTY_NOTICES.md). Committed, so absent is
+# a broken checkout and the build fails; copied before codesign so they are sealed into the bundle.
+ONBOARDING_SRC="${TALOS_ONBOARDING_SRC:-Resources/onboarding}"
+for f in talos-robot.png Cinzel.ttf Inter.ttf; do
+  if [ ! -s "$ONBOARDING_SRC/$f" ]; then
+    echo "build-app: $ONBOARDING_SRC/$f is missing or empty; the setup screens would ship without their art" >&2
+    exit 1
+  fi
+done
+rm -rf "$APP/Contents/Resources/onboarding"
+mkdir -p "$APP/Contents/Resources/onboarding"
+for f in talos-robot.png Cinzel.ttf Inter.ttf; do
+  cp "$ONBOARDING_SRC/$f" "$APP/Contents/Resources/onboarding/$f"
+  if ! cmp -s "$ONBOARDING_SRC/$f" "$APP/Contents/Resources/onboarding/$f"; then
+    echo "build-app: $f in the bundle differs from $ONBOARDING_SRC" >&2
+    exit 1
+  fi
+done
+
 # The tools a clean Mac lacks: bun and tmux, pinned and checksummed (bundle-tools.sh), beside their licences. Copied before codesign.
 # The nested-code pass below signs them with the app's identity; bun alone gets its engine's entitlements.
 if [ "$BUNDLE_TOOLS" = 1 ]; then

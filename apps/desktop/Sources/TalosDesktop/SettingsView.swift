@@ -36,6 +36,9 @@ struct SettingsView: View {
   @State private var launchLoaded = ""
   @State private var launchError: String?
   @State private var launchSaved = false
+  @State private var pendingMode: PermissionMode?
+  @State private var confirmRestart = false
+  @State private var modeNote = ""
   @State private var threads = ThreadChoices.Listing.unreadable
   @State private var generalNote = ""
   @AppStorage("showDockIcon") private var showDock = false
@@ -171,6 +174,9 @@ struct SettingsView: View {
   private var session: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 10) {
+        restartToApplySection
+        permissionSection
+        Divider()
         hostSection
         Divider()
         Text("Agent folder").font(.headline)
@@ -235,6 +241,106 @@ struct SettingsView: View {
       }
       AppliesNote(setting: .host)
     }
+  }
+
+  /// A saved launch command the running agent does not have (a picker choice saved without a restart, an edit in the box below, an
+  /// import): said here, with ONE button that restarts cold. Never left unapplied without a word.
+  @ViewBuilder private var restartToApplySection: some View {
+    if model.configured, model.sessionIsUp, model.status.launchPending {
+      VStack(alignment: .leading, spacing: 6) {
+        Text(LaunchPending.line).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        Button(LaunchPending.button) {
+          switch model.permissionModeFollowUp {
+          case .askFirst: confirmRestart = true
+          default: model.restartToApply()
+          }
+        }
+        .accessibilityIdentifier("restart-to-apply")
+        .alert(PermissionModeSetting.askFirstTitle, isPresented: $confirmRestart) {
+          Button("Restart now") { model.restartToApply() }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text(PermissionModeSetting.askFirstBody)
+        }
+      }
+      Divider()
+    }
+  }
+
+  private var permissionSection: some View {
+    let reading = PermissionModeSetting.read(cfg.args)
+    return VStack(alignment: .leading, spacing: 6) {
+      Text(PermissionModeSetting.title).font(.headline)
+      if model.configured {
+        Picker(
+          PermissionModeSetting.title,
+          selection: Binding<String>(
+            get: {
+              switch reading {
+              case .mode(let m): return m.rawValue
+              case .custom: return "custom"
+              }
+            },
+            set: { v in if let m = PermissionMode(rawValue: v) { chooseMode(m) } })
+        ) {
+          ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+          if reading == .custom { Text(PermissionModeSetting.customLabel).tag("custom") }
+        }
+        .pickerStyle(.radioGroup)
+        .labelsHidden()
+        .accessibilityLabel(PermissionModeSetting.title)
+        if reading == .mode(.bypass) {
+          Text(PermissionModeSetting.bypassLine).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("permission-bypass-line")
+        }
+        if reading == .custom {
+          Text(PermissionModeSetting.customLine).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if !modeNote.isEmpty {
+          Text(modeNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("permission-mode-note")
+        }
+      } else {
+        Text(SetupText.launchNeedsSetup).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      }
+      AppliesNote(setting: .permissionMode)
+    }
+    .alert(
+      PermissionModeSetting.askFirstTitle, isPresented: Binding(get: { pendingMode != nil }, set: { if !$0 { pendingMode = nil } }),
+      presenting: pendingMode
+    ) { m in
+      Button("Restart now") { applyMode(m, restart: true) }
+      Button("Save, restart later") { applyMode(m, restart: false) }
+      Button("Cancel", role: .cancel) {}
+    } message: { _ in
+      Text(PermissionModeSetting.askFirstBody)
+    }
+  }
+
+  /// A choice in the picker: the mode already in force does nothing; a running agent is restarted for you, and asked about first only
+  /// while it is on a turn.
+  private func chooseMode(_ mode: PermissionMode) {
+    guard loaded, PermissionModeSetting.evaluate(mode, against: model.configNow) != .unchanged else { return }
+    // a half-typed launch command would save over the new flag: it is saved or reverted first
+    guard launchDraft == launchLoaded else {
+      modeNote = "The launch command box has changes that are not saved. Save or revert them first, then choose a mode."
+      return
+    }
+    switch model.permissionModeFollowUp {
+    case .askFirst: pendingMode = mode
+    case .restartNow: applyMode(mode, restart: true)
+    case .saveOnly: applyMode(mode, restart: false)
+    }
+  }
+
+  private func applyMode(_ mode: PermissionMode, restart: Bool) {
+    pendingMode = nil
+    model.setPermissionMode(mode, restart: restart)
+    cfg = model.configNow
+    modeNote =
+      restart
+      ? "Restarting the agent. Confirm the development-channel dialog once when it asks."
+      : (model.sessionIsUp ? "Saved. It applies the next time the agent starts." : PermissionModeSetting.savedNotRunning)
   }
 
   private var launchSection: some View {

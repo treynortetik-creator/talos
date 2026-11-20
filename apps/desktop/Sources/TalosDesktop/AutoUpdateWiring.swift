@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import TalosDesktopCore
 import TalosSupervisor
 
@@ -49,17 +50,39 @@ extension SupervisorController {
       },
       post: { text in sup.postAutoUpdateLine(text) },
       env: { box.manager?.loginEnvironment() ?? env })
-    // an existing install's recorded clone that was never accepted: ask once (the "Use this clone" card), never accept for them
-    hooks.unacceptedClone = {
+    // a recorded clone nobody accepted (an install.sh run, or an install from before): the owner is asked, never assumed. Not asked when
+    // automatic updates are off, nor when the Keychain could not be read (that is not a "no": it is said in the update window).
+    let log = Logger(subsystem: "app.talos.desktop", category: "allow-updates")
+    let look: @Sendable () -> AllowUpdatesLook = {
+      guard !sup.status.configUnreadable else { return .nothing }
       let c = sup.currentConfig()
+      guard c.autoUpdate else { return .nothing }
       let unsafe = [home, c.expandedAgentDir(home: NSHomeDirectory()), Self.supportDir, NSTemporaryDirectory(), "/tmp"]
-      return AgentFolderSetup.unacceptedRecordedClone(
-        record: AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory())),
-        accepted: KeychainCloneAcceptance().accepted(), unsafe: unsafe)
+      return AllowUpdatesLook.make(
+        record: AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory())), read: KeychainCloneAcceptance().read(),
+        unsafe: unsafe)
     }
-    hooks.offerClone = { clone in
-      Task { @MainActor in CloneConfirmCenter.shared.request(clone) }
-      sup.postAutoUpdateLine("Talos needs your OK before it can keep itself up to date: it has not used the Talos code folder \(clone) before. Open Talos's Set up window (Agent folder) and press Use this clone if it is the one you installed from.")
+    hooks.unacceptedClone = {
+      if case .ask(let clone) = look() { return clone }
+      return nil
+    }
+    hooks.keychainProblem = {
+      if case .keychainUnreadable(let s) = look() { return AllowUpdatesCopy.keychainUnreadable(s) }
+      return nil
+    }
+    hooks.offerClone = { clone, version in Task { @MainActor in CloneConfirmCenter.shared.request(clone, version: version) } }
+    Task { @MainActor in
+      let c = sup.currentConfig()
+      CloneConfirmCenter.shared.unsafe = { [home, c] in
+        [home, c.expandedAgentDir(home: NSHomeDirectory()), Self.supportDir, NSTemporaryDirectory(), "/tmp"]
+      }
+      CloneConfirmCenter.shared.onAccepted = { UpdateController.shared.checkAgain() }
+    }
+    AllowUpdatesWatch.start {
+      let l = look()
+      if case .keychainUnreadable(let s) = l { log.error("keychain unreadable for the accepted clone (status \(s, privacy: .public)); not asking") }
+      if case .ask(let clone) = l { return clone }
+      return nil
     }
     // the owner's newest message, as the live bridge last wrote it: a change during the 2-minute notice postpones the update
     hooks.ownerActivity = { BridgeStatus.decode(FileManager.default.contents(atPath: home + "/status.json") ?? Data())?.lastOwnerAt }
@@ -88,13 +111,39 @@ extension SupervisorController {
         bridge: BridgeStatus.decode(FileManager.default.contents(atPath: home + "/status.json") ?? Data()), now: Date(),
         pidAlive: { kill($0, 0) == 0 || errno == EPERM })
     }
+    // what the update window and the menu show: every step the updater takes
+    hooks.onStatus = { s in Task { @MainActor in UpdateController.shared.apply(s) } }
+    // the build the relay serves now (its /healthz `version`), for "the relay is behind"; nothing is claimed when it cannot be read
+    hooks.relayBuild = {
+      let c = sup.currentConfig()
+      guard
+        let relay = RelayConfig.resolve(
+          configured: c.relayUrl, configEnv: c.env, processEnv: ProcessInfo.processInfo.environment, userHome: NSHomeDirectory(),
+          read: { try? String(contentsOfFile: $0, encoding: .utf8) })
+      else { return nil }
+      guard let d = CappedFetch.data(relay.url.appending(path: "healthz"), 16_384, 8) else { return nil }
+      return AutoUpdateWiring.relayVersion(d)
+    }
     let u = AutoUpdater(options: o, hooks: hooks)
     autoUpdater = u
+    Task { @MainActor in
+      UpdateController.shared.updater = u
+      UpdateController.shared.apply(u.status)
+    }
     u.start()
   }
 }
 
 enum AutoUpdateWiring {
+  /// `version` from a relay's /healthz answer (`{"ok": true, "version": "..."}`); nil for anything else. One line, at most 80 characters.
+  static func relayVersion(_ body: Data) -> String? {
+    guard let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], o["ok"] as? Bool == true,
+      let v = o["version"] as? String
+    else { return nil }
+    let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+    return t.isEmpty || t.count > 80 || t.contains(where: \.isNewline) ? nil : t
+  }
+
   /// `pid` is `ancestor` or below it (its parents walked, at most 32 levels).
   static func descends(_ pid: Int32, from ancestor: Int32?) -> Bool {
     guard let ancestor, ancestor > 1 else { return false }

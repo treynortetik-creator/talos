@@ -15,7 +15,8 @@ public enum OnboardingText {
   public static let signInNoClaude = "Claude Code isn't installed yet. Install it first (see claude above), then come back here."
   public static let signInCancelled = "Cancelled. Nothing was changed."
   public static let signInNotYet = "Claude is not signed in yet."
-  public static let terminalFallback = "If it keeps failing, open Terminal and run: claude auth login"
+  /// What a repeating sign-in failure says to do. The sign-in stays in the app: no terminal, no command to type.
+  public static let terminalFallback = "If it keeps failing, update Claude Code (the claude row above) and press Try again."
   public static let signInTimedOut =
     "Still not signed in after \(Int(ClaudeSignInPlan.defaultLimit / 60)) minutes. Press Try again and finish the page in your browser. \(terminalFallback)"
   public static let signInEnded = "The sign-in ended before Claude was signed in. Press Try again. \(terminalFallback)"
@@ -40,6 +41,10 @@ public enum OnboardingText {
   public static let brewFailed = "The install did not finish. Open Terminal and run: brew install tmux"
   public static let brewMissingForTmux = "tmux needs Homebrew first. Open brew.sh, install it, then press Check again."
 
+  /// The sentence on the "Sign in to Claude again" window (a thread or Main found Claude signed out).
+  public static let signInAgainSentence =
+    "Claude Code is signed out, so a session is waiting. Sign in below: open the link, then paste the code it gives you."
+
   // First start
   public static let firstStartTitle = "Start your agent"
   public static let firstStartIdle = "Not started. Finish the steps above, then choose Start session in the menu bar item."
@@ -48,7 +53,11 @@ public enum OnboardingText {
   public static let firstStartDone = "Done. Your agent is running and its Talos bridge is live."
   public static let firstStartStalled = "Claude has not finished starting. Open Terminals\u{2026} in the menu bar item and look at the pane."
   public static let firstStartTerminal =
-    "Claude is showing a question that only you can answer (a folder trust, a connector or a sign-in). Open Terminals\u{2026} in the menu bar item and look at the pane."
+    "Claude is showing a question that only you can answer (a folder trust). Open Terminals\u{2026} in the menu bar item and look at the pane."
+  public static let firstStartSafety =
+    "Claude is asking whether to use a project connector (an MCP server), or whether to run with permission checks off. Answer in the Talos popup."
+  public static let firstStartSignIn = "Claude is signed out. Choose Sign in to Claude again in the menu bar item, then follow the steps in that window."
+  public static let firstStartApiKey = "Claude found an API key in your environment and is asking whether to use it. Answer in the Talos popup."
   public static let firstStartBlocked = "Another session holds the channels, so the agent did not start. Close it, then choose Start session in the menu bar item."
   public static let firstStartStopped = "The agent stopped before the bridge came up. Choose Start session in the menu bar item."
 

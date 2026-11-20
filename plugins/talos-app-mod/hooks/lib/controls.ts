@@ -46,6 +46,13 @@ const OWN_ACTION_COMMANDS = new Set(['compact', 'clear'])
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'auto'])
 const ALIAS = /^(default|best|fable|opus|sonnet|haiku)(\[1m\])?$/
 
+/**
+ * The one-shot ticket file under $TALOS_APP_HOME that the kit's PreModelSwitch settings hook (kit/hooks/mod-fallback.py) allows
+ * the mod's own `/model` with, for an engine that never hands this plugin `classic.PreModelSwitch` (a Team or Enterprise
+ * organization's security plugin passes it on past user plugins). Written while the switch is in flight, blanked after.
+ */
+export const MODEL_TICKET_FILE = 'state/model-ticket.json'
+
 type Ctl = {
   id: string
   action: string
@@ -407,8 +414,19 @@ export class ControlRunner {
     this.ticket = ticket
     const burn = () => {
       if (this.ticket === ticket) this.ticket = undefined
+      void this.engine.fallback?.ticket.clear().catch(() => {})
     }
     ticket.inFlight = true // from here a PreModelSwitch for this model may be allowed, once
+    // and the kit's settings hook allows it the same way when this plugin's own PreModelSwitch hook is skipped
+    try {
+      // the session's own id: another session's `/model` (a thread session, the same Talos home) must not spend it
+      const session_id = await this.engine.session.id().catch(() => undefined)
+      await this.engine.fallback?.ticket.write(
+        JSON.stringify({ v: 1, to_model: tk.to_model, exp_ms: exp, control_id: c.id.slice(0, 80), session_id }),
+      )
+    } catch {
+      // without the file the switch still runs: the confirmation at the Mac decides, as before
+    }
     this.switchedTo = undefined
     const before = await this.currentModel()
     return this.raced(() => this.engine.command.run({ command: 'model', args: tk.to_model }), {

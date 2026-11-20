@@ -40,6 +40,7 @@ export type Kind =
   | 'handoff'
   | 'wake'
   | 'peer_message'
+  | 'onboarding'
 
 const KEY = /^[A-Za-z0-9_]+$/
 
@@ -520,6 +521,11 @@ export function backlogNotification(a: {
 
 export function systemNotification(a: { thread: ThreadRef; text: string; ts: string; id: string }): Notification {
   return { content: a.text, meta: base(a.thread, a.id, a.ts, 'system', 'system') }
+}
+
+/** The setup hello (onboarding-hello.ts): the bridge's own fixed text. `trust=system`, kind `onboarding`: never the owner's words. */
+export function onboardingNotification(a: { thread: ThreadRef; text: string; ts: string; id: string }): Notification {
+  return { content: a.text, meta: base(a.thread, a.id, a.ts, 'onboarding', 'system') }
 }
 
 // ---- Schedules (docs/SCHEDULES.md S6.3) -------------------------------------------------------------------------

@@ -60,10 +60,18 @@ public enum MainRestartCheck {
 
   /// `LaunchSeal.isConfirmed` with the inputs a cold start would use (`launchLocked`: `launchFingerprint`/`launchParts` of the resolved
   /// claude), and, when it says no, which piece. The key is asked about only when nothing else explains the no.
-  public static func seal(_ c: DesktopConfig, resolvedClaude: String, trust: LaunchTrust) -> Seal {
-    let fp = c.launchFingerprint(resolvedClaude: resolvedClaude)
-    let parts = c.launchParts(resolvedClaude: resolvedClaude)
+  /// `args`: the flags the start passes when they are not the saved ones (the channels flag added). A launch confirmed before that flag was
+  /// added is still confirmed (the start re-seals it once, `Supervisor.migrateChannelsFlagSeal`).
+  public static func seal(_ c: DesktopConfig, resolvedClaude: String, trust: LaunchTrust, args: [String]? = nil) -> Seal {
+    let fp = c.launchFingerprint(resolvedClaude: resolvedClaude, args: args)
+    let parts = c.launchParts(resolvedClaude: resolvedClaude, args: args)
     if LaunchSeal.isConfirmed(c, fingerprint: fp, parts: parts, trust: trust) { return .confirmed }
+    if let args, args != c.args,
+      LaunchSeal.isConfirmed(
+        c, fingerprint: c.launchFingerprint(resolvedClaude: resolvedClaude), parts: c.launchParts(resolvedClaude: resolvedClaude), trust: trust)
+    {
+      return .confirmed
+    }
     if DesktopConfig.changedPieces(confirmed: c.confirmedLaunchParts, now: parts).contains("program") { return .programChanged }
     if c.confirmedLaunch == fp, c.confirmedLaunchMac != nil, c.confirmedLaunchParts == (parts.isEmpty ? nil : parts),
       trust.mac("talos-restart-check/key-probe", createKey: false) == nil

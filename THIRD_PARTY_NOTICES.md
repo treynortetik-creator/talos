@@ -304,11 +304,12 @@ SOFTWARE.
 
 ## Fonts (apps/web)
 
-| Package                             | Upstream                           | Version | Licence                                                                                                  |
-| ----------------------------------- | ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| @fontsource-variable/cinzel         | github.com/NDISCOVER/Cinzel        | 5.3.0   | SIL OFL 1.1, Copyright 2020 The Cinzel Project Authors; npm dependency, bundled into the web app         |
-| @fontsource-variable/inter          | github.com/rsms/inter              | 5.3.0   | SIL OFL 1.1, Copyright 2016 The Inter Project Authors; npm dependency, bundled into the web app          |
-| @fontsource-variable/jetbrains-mono | github.com/JetBrains/JetBrainsMono | 5.3.0   | SIL OFL 1.1, Copyright 2020 The JetBrains Mono Project Authors; npm dependency, bundled into the web app |
+| Package                               | Upstream                           | Version | Licence                                                                                                                                |
+| ------------------------------------- | ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| @fontsource-variable/cinzel           | github.com/NDISCOVER/Cinzel        | 5.3.0   | SIL OFL 1.1, Copyright 2020 The Cinzel Project Authors; npm dependency, bundled into the web app                                       |
+| @fontsource-variable/inter            | github.com/rsms/inter              | 5.3.0   | SIL OFL 1.1, Copyright 2016 The Inter Project Authors; npm dependency, bundled into the web app                                        |
+| Cinzel and Inter (TrueType, variable) | github.com/google/fonts (ofl/)     | 2020-24 | SIL OFL 1.1, same authors as the two rows above; also bundled in the Mac app for its setup screens (apps/desktop/Resources/onboarding) |
+| @fontsource-variable/jetbrains-mono   | github.com/JetBrains/JetBrainsMono | 5.3.0   | SIL OFL 1.1, Copyright 2020 The JetBrains Mono Project Authors; npm dependency, bundled into the web app                               |
 
 The three fonts reach users as `.woff2` files in the web build. Each package's own `LICENSE` is the SIL Open Font License,
 Version 1.1, with the copyright line shown in the table; the licence text is the same in all three and is kept here in full.

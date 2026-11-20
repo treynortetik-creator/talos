@@ -782,7 +782,7 @@ struct MacHomesScreensGuiTests {
     let had = UserDefaults.standard.object(forKey: key)
     UserDefaults.standard.removeObject(forKey: key)
     defer { if let had { UserDefaults.standard.set(had, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
-    let (_, h) = host(OnboardingView(model: m), size: NSSize(width: 560, height: 1100), dark: false)
+    let (_, h) = host(AdvancedSetupView(model: m), size: NSSize(width: 560, height: 1100), dark: false)
     await settle(h, 3.0)
     #expect(UserDefaults.standard.bool(forKey: key) == false, "still off by default (O7)")
     let src = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

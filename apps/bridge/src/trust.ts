@@ -3,7 +3,7 @@
 import { riskForTrust, trustOn } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice } from './context.ts'
 import { isShareOnly } from './share-only.ts'
-import { leadSpokeSince } from './worker/handoff.ts'
+import { anyLeadSpokeSince, leadSpokeSince } from './worker/handoff.ts'
 
 /** The one sentence the agent is given while the owner keeps "Lock Talos settings" on. */
 export const SETTINGS_LOCKED =
@@ -68,6 +68,25 @@ export function ownerAskedIn(ctx: Pick<BridgeContext, 'store' | 'clock' | 'confi
 export function outsideTextAt(ctx: Pick<BridgeContext, 'store'>, thread: string): number | undefined {
   const t = Number(ctx.store.kvGet(OUTSIDE_KEY(thread)))
   return Number.isFinite(t) ? t : undefined
+}
+
+/**
+ * True when nothing but the owner has reached Main since `askedAt`: no thread's lead handed Main anything, and no outside text
+ * (`noteOutsideText`) reached the agent in ANY thread. For a change that must not be made on the strength of text the agent may have
+ * read anywhere (config_propose opening the thread fence, `permission_mode` going to Auto or Bypass all): the thread the agent names
+ * is its own choice, so the quiet is judged across all of them.
+ */
+export function quietSince(ctx: Pick<BridgeContext, 'store' | 'clock' | 'config'>, askedAt: number): boolean {
+  return (
+    !anyLeadSpokeSince(ctx.store.db, askedAt, ctx.clock.now()) &&
+    !ctx.config.config.threads.some((t) => (outsideTextAt(ctx, t.id) ?? Number.NEGATIVE_INFINITY) >= askedAt)
+  )
+}
+
+/** `ownerAskedIn` for `threadId`, and `quietSince` his words. */
+export function ownerAskedQuietly(ctx: Pick<BridgeContext, 'store' | 'clock' | 'config'>, threadId: string): boolean {
+  const at = ownerAskedAt(ctx, threadId)
+  return at !== undefined && quietSince(ctx, at)
 }
 
 /** `ownerAskedIn`, giving the time (ms) of his words when every check passes, else undefined. */

@@ -25,6 +25,14 @@ import { IsoTs, ThreadId } from './ids.ts'
 import { THREAD_TOPIC_MAX, type ThreadT } from './models.ts'
 import { themeProblems, validateTheme } from './theme.ts'
 import { canBeDedicated, DEFAULT_IDLE_PARK_MIN, threadSessionsAllowed } from './thread-sessions.ts'
+import {
+  NewThread,
+  none,
+  Plain,
+  SETUP_THREAD_FIELD_RULES,
+  ThreadIdleValue,
+  ThreadSessionValue,
+} from './thread-setup-fields.ts'
 
 /**
  * Stock voices GPT-Live documents. The default, `meridian`, is documented as North American. One list for the Settings
@@ -55,18 +63,6 @@ export const VOICE_CHOICES = [
   'vesper',
   'willow',
 ] as const
-
-// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/
-const Plain = (min: number, max: number) =>
-  z
-    .string()
-    .min(min)
-    .max(max)
-    .refine(
-      (s) => !UNSAFE_TEXT.test(s) && s.trim() === s && s.trim().length >= min,
-      'plain text, no control characters',
-    )
 
 const QuietWindow = z
   .object({ start: HHMM, end: HHMM })
@@ -195,17 +191,9 @@ export function defineSettingsTable<const T extends SettingsTableShape>(
 const MEMORY_BROWSER_OFF_ONLY = 'the memory browser can only be turned on at your Mac (talos-app memory on)'
 
 const onOff = (v: unknown) => (v === true ? 'on' : v === false ? 'off' : String(v))
-const none = (v: unknown) => (v === '' || v === null || v === undefined ? 'none' : String(v))
 
 /** The model picker's list: the same alias grammar the config file reads. */
 const ModelList = z.array(ModelValue).min(1).max(MAX_SESSION_MODELS)
-
-/** A new thread: a name, and optionally the "what goes here" line and an icon. Strict, so nothing else (a folder, a kind) can ride along. */
-const NewThread = z.strictObject({
-  name: Plain(1, 40),
-  topic: Plain(0, THREAD_TOPIC_MAX).optional(),
-  icon: Plain(0, 16).optional(),
-})
 
 /**
  * Row order is the order the lists derived from it read in, and the agent sees `AGENT_CONFIG_ALLOWLIST` in its tool
@@ -263,12 +251,52 @@ export const SETTINGS_TABLE = defineSettingsTable({
     agentRule: {
       label: 'New thread',
       phrase: 'threads',
-      hint: 'a new thread: {"name":"1-40 chars","topic":"what goes here","icon":"key"}',
+      hint: 'a new thread: {"name":"1-40 chars","topic":"what goes here","icon":"key"}, and optionally "color", "parent" (a thread id), "session" ("dedicated"), "session_opts":{"cwd":"/absolute/folder"}, "model", "effort", "mcp_allow" and "idle_park_min" with the same values as threads.<id>.<field>',
       value: NewThread,
       show: (v) => {
         if (v === null || v === undefined) return 'does not exist'
-        const t = v as { name: string; topic?: string; icon?: string }
-        return `"${t.name}"${t.topic ? ` (${t.topic})` : ''}${t.icon ? `, icon ${t.icon}` : ''}`
+        // every key it sets, so the card shows what the thread is given: the folder and MCP servers by name
+        const t = v as {
+          name: string
+          topic?: string
+          icon?: string
+          color?: string
+          parent?: string
+          session?: string
+          session_opts?: { cwd?: string }
+          model?: string
+          effort?: string
+          mcp_allow?: string[]
+          idle_park_min?: number
+        }
+        // a thread on the main session has no session settings of its own to show, unless it names them; one with its own session and
+        // none of its own takes them from its parent, or the agent folder and every server
+        const own = t.session === 'dedicated'
+        const list = t.mcp_allow
+          ? t.mcp_allow.length
+            ? t.mcp_allow.join(', ')
+            : 'none'
+          : own
+            ? t.parent
+              ? `same as ${t.parent}`
+              : 'all'
+            : ''
+        const more = [
+          t.icon ? `icon ${t.icon}` : '',
+          t.color ? `colour ${t.color}` : '',
+          t.parent ? `under ${t.parent}` : '',
+          t.session === 'dedicated' ? 'own session' : '',
+          t.session_opts?.cwd
+            ? `folder: ${t.session_opts.cwd}`
+            : own
+              ? `folder: ${t.parent ? `same as ${t.parent}` : 'the agent folder'}`
+              : '',
+          t.model ? `model ${t.model}` : '',
+          t.effort ? `effort ${t.effort}` : '',
+          t.idle_park_min !== undefined ? `parked after ${t.idle_park_min} min idle` : '',
+          list ? `MCP servers: ${list}` : '',
+        ].filter(Boolean)
+        return `"${t.name}"${t.topic ? ` (${t.topic})` : ''}${more.length ? `, ${more.join(', ')}` : ''}`
       },
     },
     default: undefined,
@@ -662,6 +690,11 @@ export const THREAD_FIELDS = [
   'archived',
   'parent',
   'idle_park_min',
+  'color',
+  'effort',
+  'model',
+  'mcp_allow',
+  'session_opts.cwd',
 ] as const
 export type ThreadField = (typeof THREAD_FIELDS)[number]
 
@@ -678,7 +711,7 @@ export type ThreadFieldRow = {
     readonly phrase: string
     readonly when: (value: unknown, config: AgentConfigT, threadId: string) => boolean
   }
-  /** The value now on the thread; what the card shows as old. */
+  /** The value now on the thread, raw (null when it has none); what the card shows as old, and what is compared and hashed. */
   readonly read: (t: ThreadT) => unknown
   /**
    * The keys to put on the thread for a new value (`null` clears a key; a threads patch drops it). `t` is the thread as it is now,
@@ -688,9 +721,9 @@ export type ThreadFieldRow = {
 }
 
 /**
- * Per-thread operations, with their risk. Name, topic, icon and alerts are low; a thread's own session, archiving it and putting
+ * Per-thread operations, with their risk. Name, topic, icon, colour, effort and alerts are low; a thread's own session, archiving it and putting
  * it under another thread are high (a session uses the owner's plan; archiving keeps the thread's inbox copies; a sub-thread takes
- * its parent's folder, model and MCP list).
+ * its parent's folder, model and MCP list). A session's folder, model and MCP list are high too: they are what it can reach.
  */
 export const THREAD_FIELD_RULES: Readonly<Record<ThreadField, ThreadFieldRow>> = {
   name: {
@@ -747,7 +780,7 @@ export const THREAD_FIELD_RULES: Readonly<Record<ThreadField, ThreadFieldRow>> =
       label: 'own session',
       phrase: 'thread sessions',
       hint: '"dedicated" (its own Claude Code session) or "shared" (the main session answers)',
-      value: z.enum(['shared', 'dedicated']),
+      value: ThreadSessionValue,
     },
     read: (t) => t.session ?? 'shared',
     set: (v) => ({ session: v }),
@@ -784,12 +817,13 @@ export const THREAD_FIELD_RULES: Readonly<Record<ThreadField, ThreadFieldRow>> =
       label: 'idle minutes before parking',
       phrase: "how long a thread's own session idles before it is parked",
       hint: `5-720 minutes (default ${DEFAULT_IDLE_PARK_MIN})`,
-      value: z.number().int().min(5).max(720),
+      value: ThreadIdleValue,
       show: (v) => `${String(v)} min`,
     },
     read: (t) => t.session_opts?.idle_park_min ?? DEFAULT_IDLE_PARK_MIN,
     set: (v, t) => ({ session_opts: { ...(t?.session_opts ?? {}), idle_park_min: v } }),
   },
+  ...SETUP_THREAD_FIELD_RULES,
 }
 
 /** Whether a thread may have its own session, in the words a refusal uses; null when it may. */

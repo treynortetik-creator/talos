@@ -82,6 +82,7 @@ struct NeedsYouPopupTests {
     ("trust", 1, ["DOWN", "ENTER"], "Yes, I trust this folder"), ("mcp", 0, ["UP", "UP", "ENTER"], "Use this MCP server"),
     ("mcp", 1, ["UP", "ENTER"], "Use this and all future MCP servers in this project"),
     ("mcp", 2, ["ENTER"], "Continue without using this MCP server"),
+    ("bypass", 1, ["DOWN", "ENTER"], "Yes, I accept"), ("dev", 0, ["ENTER"], "I am using this for local development"),
   ])
   func aClickPressesTheClickedOptionAndTheMacSaysSo(dlg: String, choice: Int, expected: [String], label: String) throws {
     let (r, keys, _) = try make(dlg)
@@ -147,13 +148,13 @@ struct NeedsYouPopupTests {
     let (r, keys, owner) = try make("login")
     defer { r.teardown(); keys.remove() }
     let spy = OpenSpy()
-    r.mgr.openTerminals = { spy.opened($0); return true }
+    r.mgr.openSignIn = { spy.opened($0); return true }
     let o = try offered(r)
     #expect(click(r, o, choice: nil) == .opened)
     try r.writeAnswer(o, owner: owner, choice: nil, control: "ctl_1", open: true)
     #expect(r.wait(15) { r.resultControl() == "ctl_1" })
     #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "already_answered", "\(String(describing: r.result))")
-    #expect(spy.all == ["trip"], "Terminals was brought forward once")
+    #expect(spy.all == ["trip"], "the sign-in window was opened once")
   }
 
   // MARK: 3. card answer first, then a popup click
@@ -362,11 +363,11 @@ struct NeedsYouPopupTests {
 
   // MARK: 7. login
 
-  @Test func aLoginClickBringsTerminalsForwardTypesNothingAndTheResultIsOpened() throws {
+  @Test func aLoginClickOpensTheInAppSignInTypesNothingAndTheResultIsOpened() throws {
     let (r, keys, _) = try make("login")
     defer { r.teardown(); keys.remove() }
     let spy = OpenSpy()
-    r.mgr.openTerminals = { spy.opened($0); return true }
+    r.mgr.openSignIn = { spy.opened($0); return true }
     let o = try offered(r)
     #expect(click(r, o, choice: nil) == .opened)
     #expect(spy.all == ["trip"] && keys.keys.isEmpty)
@@ -379,11 +380,11 @@ struct NeedsYouPopupTests {
   @Test func whenNoWindowCanBeBroughtNothingIsOpenedAndNoResultIsWritten() throws {
     let (r, keys, _) = try make("login")
     defer { r.teardown(); keys.remove() }
-    r.mgr.openTerminals = { _ in false }
+    r.mgr.openSignIn = { _ in false }
     let o = try offered(r)
     #expect(click(r, o, choice: nil) == .nothing(.noWindow))
     #expect(!FileManager.default.fileExists(atPath: r.resultPath) && keys.keys.isEmpty)
-    r.mgr.openTerminals = nil
+    r.mgr.openSignIn = nil
     #expect(click(r, o, choice: nil) == .nothing(.noWindow))
     #expect(!FileManager.default.fileExists(atPath: r.resultPath))
   }
@@ -392,14 +393,14 @@ struct NeedsYouPopupTests {
     let (l, lkeys, _) = try make("login")
     defer { l.teardown(); lkeys.remove() }
     let spy = OpenSpy()
-    l.mgr.openTerminals = { spy.opened($0); return true }
+    l.mgr.openSignIn = { spy.opened($0); return true }
     let lo = try offered(l)
     #expect(click(l, lo, choice: 0, label: "x") == .nothing(.notOffered))
     #expect(lkeys.keys.isEmpty && spy.all.isEmpty)
     let (t, tkeys, _) = try make("trust")
     defer { t.teardown(); tkeys.remove() }
     let tspy = OpenSpy()
-    t.mgr.openTerminals = { tspy.opened($0); return true }
+    t.mgr.openSignIn = { tspy.opened($0); return true }
     let to = try offered(t)
     #expect(click(t, to, choice: nil) == .nothing(.notOffered))
     #expect(tkeys.keys.isEmpty && tspy.all.isEmpty)
@@ -502,7 +503,7 @@ struct NeedsYouPopupTests {
     let (r, keys, owner) = try make(dlg)
     defer { r.teardown(); keys.remove() }
     let spy = OpenSpy()
-    r.mgr.openTerminals = { spy.opened($0); return true }
+    r.mgr.openSignIn = { spy.opened($0); return true }
     let o = try offered(r)
     let before = screen(r)
     if dlg == "trust" {

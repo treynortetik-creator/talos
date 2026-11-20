@@ -26,10 +26,8 @@ struct AgentFolderPanel: View {
       card
     }
     .task {
-      flow.presentUpdaterRequest()
       await flow.autoSetup()
     }
-    .onReceive(CloneConfirmCenter.shared.$pending) { _ in flow.presentUpdaterRequest() }
   }
 
   @ViewBuilder private var card: some View {

@@ -194,6 +194,20 @@ public struct CloneProvisioner: Sendable {
   }
 
   public func run(progress: @Sendable (Step, State) -> Void = { _, _ in }) -> Result {
+    var made = false
+    return runCore(progress: progress, madeHere: &made)
+  }
+
+  /// `run`, and whether THIS run made the tree: it was cloned or downloaded and verified against the stamped commit here, and put in
+  /// place by this run's own rename. false when a folder was already at the destination (reused, whatever its marker says) or another
+  /// run put it there first. Only a tree made here may be counted as accepted without the owner's click.
+  public func runReportingOrigin(progress: @Sendable (Step, State) -> Void = { _, _ in }) -> (result: Result, madeHere: Bool) {
+    var made = false
+    let r = runCore(progress: progress, madeHere: &made)
+    return (r, made)
+  }
+
+  private func runCore(progress: @Sendable (Step, State) -> Void, madeHere: inout Bool) -> Result {
     func fail(_ step: Step, _ message: String) -> Result {
       progress(step, .failed(message))
       return .failed(step: step, message: message)
@@ -280,8 +294,9 @@ public struct CloneProvisioner: Sendable {
         guard raced else { return fail(.clone, "Talos couldn't put the download in place at \(dest) (error \(code)). Nothing was kept.") }
         // another run finished first: its copy is used if it is the right one
         if let why = existingProblem(dest, git: git, want: want, tag: tag) { return fail(.clone, why) }
-      } else if fresh != staging {
-        discard()  // the archive's staging folder is empty now
+      } else {
+        madeHere = true  // this run's own verified download is what is at the destination now
+        if fresh != staging { discard() }  // the archive's staging folder is empty now
       }
     }
     progress(.clone, .done)

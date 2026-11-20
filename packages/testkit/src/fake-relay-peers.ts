@@ -3,8 +3,18 @@
 // Webhooks headers, the body, header id = body id, the 7-day dedupe, the daily cap per UTC day, then one durable `peer.message`
 // frame for the Mac. The signature check is written out here (HMAC-SHA256, the 5-minute window) so it is an independent reader of
 // what the bridge signs. A revoke removes the frames the Mac has not taken, like the real relay.
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { newUlid, PEER_DAILY_CAP_DEFAULT, PEER_MAX, PeerCreate, parsePeerMessage } from '@talos-app/protocol'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import {
+  formatPeerLinkCode,
+  newUlid,
+  PEER_DAILY_CAP_DEFAULT,
+  PEER_LINK_TTL_MS,
+  PEER_MAX,
+  PeerCreate,
+  PeerLinkRedeem,
+  parsePeerMessage,
+  peerInboxUrl,
+} from '@talos-app/protocol'
 
 type Row = { conn_id: string; name: string; cap: number; created_at: number; secrets: string[] }
 type Answer = { status: number; body: unknown }
@@ -16,6 +26,15 @@ export type PeerHost = {
   toBridge(frame: Record<string, unknown>): Record<string, unknown>
   /** Drops queued frames of this type for which `drop` is true that the Mac has not taken (delivered = false). */
   recallQueued(drop: (frame: Record<string, unknown>) => boolean): void
+}
+
+type Link = {
+  hash: Buffer
+  expires: number
+  state: 'open' | 'redeemed' | 'collected'
+  backUrl?: string
+  backSecret?: string
+  replayed: boolean
 }
 
 const DAY_MS = 86_400_000
@@ -37,7 +56,81 @@ export class FakePeers {
   /** Set to make the inbox answer this status (with `error`) before any check, like a relay that is down. */
   refuse: { status: number; error: string } | null = null
 
+  /** The public origin this relay claims (https, so a link code can name it). Unset: the real listening address, as before. */
+  publicOrigin: string | null = null
+  /** The one-paste link codes, newest per connection (the real relay's table, in memory). */
+  readonly links = new Map<string, Link>()
+  /** Every redeem attempt's answer status, for a test to read. */
+  readonly redeems: number[] = []
+  /** How many failed redeems from one client the relay tolerates in a minute (the real one: 20). */
+  private failures: number[] = []
+
   constructor(private readonly host: PeerHost) {}
+
+  private origin(): string {
+    return this.publicOrigin ?? this.host.origin()
+  }
+
+  mintLink(name: string): Answer {
+    const row = this.rows.find((r) => r.name === name)
+    if (!row) return { status: 404, body: { error: 'not_found' } }
+    const token = randomBytes(32).toString('base64url')
+    const code = formatPeerLinkCode(this.origin(), row.conn_id, token)
+    if (code === null) return { status: 409, body: { error: 'link_origin' } }
+    if (this.links.get(row.conn_id)?.state === 'redeemed') return { status: 409, body: { error: 'link_pending' } }
+    this.links.set(row.conn_id, {
+      hash: createHash('sha256').update(token).digest(),
+      expires: this.host.now() + PEER_LINK_TTL_MS,
+      state: 'open',
+      replayed: false,
+    })
+    return { status: 200, body: { code } }
+  }
+
+  getLink(name: string): Answer {
+    const row = this.rows.find((r) => r.name === name)
+    const l = row ? this.links.get(row.conn_id) : undefined
+    if (!l) return { status: 404, body: { error: 'not_found' } }
+    const replayed = l.replayed ? { replayed: true } : {}
+    if (l.state === 'open')
+      return { status: 200, body: { state: l.expires <= this.host.now() ? 'expired' : 'open', ...replayed } }
+    if (l.state === 'collected' || !l.backUrl || !l.backSecret)
+      return { status: 200, body: { state: l.state, ...replayed } }
+    const out = { state: 'redeemed', back_url: l.backUrl, back_secret: l.backSecret, ...replayed }
+    l.state = 'collected'
+    delete l.backSecret
+    return { status: 200, body: out }
+  }
+
+  redeem(raw: unknown): Answer {
+    const now = this.host.now()
+    this.failures = this.failures.filter((t) => now - t < 60_000)
+    if (this.failures.length >= 20) return this.redeemed(429, { error: 'too_many_requests' })
+    const fail = (status: number, error: string): Answer => {
+      this.failures.push(now)
+      return this.redeemed(status, { error })
+    }
+    const body = PeerLinkRedeem.safeParse(raw)
+    if (!body.success) return fail(400, 'bad_request')
+    const row = this.rows.find((r) => r.conn_id === body.data.conn_id)
+    const l = row ? this.links.get(row.conn_id) : undefined
+    const given = createHash('sha256').update(body.data.token).digest()
+    if (!row || !l || !timingSafeEqual(given, l.hash)) return fail(404, 'link_unusable')
+    if (l.state !== 'open') {
+      l.replayed = true
+      return fail(404, 'link_unusable')
+    }
+    if (l.expires <= now) return fail(404, 'link_unusable')
+    l.state = 'redeemed'
+    l.backUrl = body.data.back.url
+    l.backSecret = body.data.back.secret
+    return this.redeemed(200, { secret: row.secrets[0] })
+  }
+
+  private redeemed(status: number, body: unknown): Answer {
+    this.redeems.push(status)
+    return { status, body }
+  }
 
   create(raw: unknown): Answer {
     const body = PeerCreate.safeParse(raw)
@@ -55,7 +148,7 @@ export class FakePeers {
     this.rows.push(row)
     return {
       status: 201,
-      body: { conn_id: row.conn_id, inbox_url: `${this.host.origin()}/hook/peer/${row.conn_id}`, secret },
+      body: { conn_id: row.conn_id, inbox_url: peerInboxUrl(this.origin(), row.conn_id), secret },
     }
   }
 
@@ -77,6 +170,7 @@ export class FakePeers {
     if (i >= 0) {
       const [gone] = this.rows.splice(i, 1)
       this.host.recallQueued((f) => f.type === 'peer.message' && f.conn_id === gone?.conn_id)
+      if (gone) this.links.delete(gone.conn_id)
     }
     return { status: 200, body: { ok: true } }
   }

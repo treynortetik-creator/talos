@@ -1153,15 +1153,29 @@ describe("Main's development-channels dialog", () => {
     expect(dialogCards(x)).toHaveLength(0)
   })
 
-  test("a dev_channels dialog under a worker's entry, or another kind as main_dialog, is no card (only Main publishes its own)", async () => {
+  test('another kind as main_dialog is no card (Main publishes only its own development-channels question)', async () => {
     await start()
     const x = h as Harness
-    writeWorkers(x, { trip: dev(x, { id: 'Ew5Qm8ZtRx3Cw9PkNa2HdB' }) })
-    x.bridge.optionCTick()
     writeMain(x, trust(x, { id: 'Fw5Qm8ZtRx3Cw9PkNa2HdB' }))
     x.bridge.optionCTick()
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
+  })
+
+  test("a thread session's own development-channels question is a card: its words are the thread's, and the tap goes to the thread's own answer file", async () => {
+    await start()
+    const x = h as Harness
+    writeWorkers(x, { trip: dev(x, { id: 'Ew5Qm8ZtRx3Cw9PkNa2HdB' }) })
+    x.bridge.optionCTick()
+    await waitFor(() => dialogCards(x).length === 1, 4000, "the thread's dev-channels card")
+    const card = dialogCards(x)[0] as CardT
+    expect(dialogOf(card)).toMatchObject({ dialog_kind: 'dev_channels', thread: 'trip' })
+    expect(card.body).toContain("Trip's session was started with a development channel")
+    expect(card.body).not.toMatch(/Main/)
+    await tap(x, card, 0)
+    await waitFor(() => existsSync(file(x, 'trip', 'dialog-answer.json')), 4000, 'the answer file')
+    expect(existsSync(file(x, 'trip', 'main-dialog-answer.json'))).toBe(false)
+    expect(answerOf(x)).toMatchObject({ choice: 0, label: 'I am using this for local development' })
   })
 
   test("a worker's own dialog on the default thread never hides Main's: both are carded, and the answer goes to Main's own file", async () => {
@@ -1192,5 +1206,47 @@ describe("Main's development-channels dialog", () => {
     await tap(x, card, 0)
     await waitFor(() => existsSync(file(x, main, 'main-dialog-answer.json')), 4000, 'the answer file')
     expect(existsSync(file(x, main, 'dialog-answer.json'))).toBe(false)
+  })
+})
+
+describe('the safety questions on a card (pane-prompts rows 2 and 4)', () => {
+  const BYPASS_ID = 'By7Qm8ZtRx3Cw9PkNa2HdC'
+  const bypass = (x: Harness): WorkerDialogT =>
+    trust(x, { id: BYPASS_ID, kind: 'bypass', subject: null, options: ['No, exit', 'Yes, I accept'], cursor: 0 })
+
+  test('the bypass disclaimer is one card with its own heading and the screen’s two buttons; a tap hands the signed answer to the thread', async () => {
+    await start()
+    const x = h as Harness
+    const card = await show(x, bypass(x))
+    expect(card.title).toBe('Run with permission checks off?')
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'bypass',
+      subject: null,
+      options: ['No, exit', 'Yes, I accept'],
+    })
+    await tap(x, card, 1)
+    await waitFor(() => existsSync(file(x, 'trip', 'dialog-answer.json')), 4000, 'the answer file')
+    const a = DialogAnswer.parse(answerOf(x))
+    expect(a).toMatchObject({ dialog_id: BYPASS_ID, choice: 1, label: 'Yes, I accept' })
+    // a safety question is answered only with the owner's signed tap: the file carries the proof the Mac or supervisor checks
+    expect(a.proof?.device_id).toMatch(/^d_[a-z2-7]{20}$/)
+    await cardFile(x, { status: 'answered', label: 'Yes, I accept' })
+  })
+
+  test('a choice that is not one of the two rows, with the bypass card, is refused and writes nothing', async () => {
+    await start()
+    const x = h as Harness
+    const card = await show(x, bypass(x))
+    const r = await pushCardResolvePastRelay(x, card, card.payload_hash, 'primary', { choice: 2 })
+    await waitFor(() => errors(x).some((e) => e.ref === r.id), 4000, 'the refusal')
+    await sleep(200)
+    expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(false)
+  })
+
+  test('an MCP question whose server was read is "Use <server>?" on the card', async () => {
+    await start()
+    const x = h as Harness
+    const card = await show(x, mcp(x))
+    expect(card.title).toBe('Use github?')
   })
 })

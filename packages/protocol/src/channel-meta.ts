@@ -30,6 +30,8 @@ export const CHANNEL_KINDS = [
   'wake',
   // Linked agents (peer.ts): a message from the owner's other Talos install, always trust=external, never the owner's word
   'peer_message',
+  // Setup's one hello (apps/bridge/src/onboarding-hello.ts): a fixed template the bridge itself makes, always trust=system, never the owner's word
+  'onboarding',
 ] as const
 /** `agent` is another Talos session (main or a thread lead): never the owner's word, and it approves nothing. */
 export const CHANNEL_TRUSTS = ['owner', 'owner_voice', 'external', 'system', 'agent'] as const
@@ -125,6 +127,9 @@ export const ChannelMeta = z
         if (meta[k] !== undefined)
           ctx.addIssue({ code: 'custom', path: [k], message: `${k} is only for kind peer_message` })
     }
+    // the setup hello is the bridge's own text: any other trust would make it somebody's words
+    if (meta.kind === 'onboarding' && meta.trust !== 'system')
+      ctx.addIssue({ code: 'custom', path: ['trust'], message: 'onboarding must be trust system' })
     if (meta.thread_id !== meta.chat_id)
       ctx.addIssue({ code: 'custom', path: ['chat_id'], message: 'chat_id must equal thread_id' })
   })

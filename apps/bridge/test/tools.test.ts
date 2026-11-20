@@ -33,6 +33,7 @@ describe('tools', () => {
         'peer_send',
         'thread_session',
         'restart_main',
+        'permission_mode',
         ...SCREEN_BRIDGE_TOOLS,
       ].sort(),
     )

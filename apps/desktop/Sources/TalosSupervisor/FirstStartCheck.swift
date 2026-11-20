@@ -8,8 +8,14 @@ public enum FirstStartCheck {
   public enum State: Equatable, Sendable {
     case notStarted
     case warning
-    /// A dialog only the owner answers (trust, connector consent, sign-in): it opens Terminal, not the popup.
+    /// A dialog only the owner answers that the app has no popup or window for yet (the folder trust): it opens Terminal.
     case terminalDialog
+    /// Claude asks whether to use a project MCP server, or to run with permission checks off: the Talos popup answers it (a real click only).
+    case safetyQuestion
+    /// Claude is signed out: the Sign in to Claude again window answers it (no terminal).
+    case signIn
+    /// Claude asks whether to use an API key from the environment: the Talos popup answers it.
+    case apiKeyQuestion
     case blocked
     case waitingForBridge
     case done
@@ -23,6 +29,9 @@ public enum FirstStartCheck {
       case .notStarted: return OnboardingText.firstStartIdle
       case .warning: return OnboardingText.firstStartWarning
       case .terminalDialog: return OnboardingText.firstStartTerminal
+      case .safetyQuestion: return OnboardingText.firstStartSafety
+      case .signIn: return OnboardingText.firstStartSignIn
+      case .apiKeyQuestion: return OnboardingText.firstStartApiKey
       case .blocked: return OnboardingText.firstStartBlocked
       case .waitingForBridge: return OnboardingText.firstStartWaiting
       case .done: return OnboardingText.firstStartDone
@@ -44,6 +53,9 @@ public enum FirstStartCheck {
       if phase == .running, bridgeLive { return .done }
       switch needsYou {
       case .stuck?, .startStalled?: return .failed(OnboardingText.firstStartStalled)
+      case .dialog(let label)? where label == Supervisor.signInLabel || label == DialogMatcher.Screen.loginExpired.label: return .signIn
+      case .dialog(let label)? where label == Supervisor.apiKeyLabel: return .apiKeyQuestion
+      case .dialog(let label)? where Supervisor.isSafetyLabel(label): return .safetyQuestion
       case .dialog?: return .terminalDialog
       case .some: return .warning
       case nil: return .waitingForBridge

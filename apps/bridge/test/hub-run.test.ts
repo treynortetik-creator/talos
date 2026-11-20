@@ -16,7 +16,7 @@ afterEach(async () => {
   for (const s of servers.splice(0)) await new Promise<void>((r) => s.close(() => r()))
 })
 
-test('the hub socket is in its own 0700 folder, and a config edit is seen within 3 s (the watch of home works, not the 10 s poll)', async () => {
+test('the hub socket is in its own 0700 folder, and a config edit is seen before the 10 s poll (the watch of home works)', async () => {
   h = await startHarness()
   const sock = join(h.home, 'run', 'hub.sock')
   await waitFor(() => existsSync(sock), 5000, 'the hub socket')
@@ -29,7 +29,9 @@ test('the hub socket is in its own 0700 folder, and a config edit is seen within
   writeFileSync(p, JSON.stringify(cfg), { mode: 0o600 })
   // the poll is every 10 s: only the watch can see it this soon
   const name = () => (h?.bridge.ctx.config.config as { agent?: { name?: string } } | undefined)?.agent?.name
-  await waitFor(() => name() === 'Watched', 3000, 'the edit, within 3 s') // 1 s timed out under a full gate's load
+  // 8 s: still inside the 10 s poll, so only the watch can have seen it; 1 s and then 3 s timed out under a full gate's load beside
+  // a Swift build (flake inventory, hub-run, 11-16 and 11-19)
+  await waitFor(() => name() === 'Watched', 8000, 'the edit, before the 10 s poll')
 })
 
 test("a dead bridge's socket where it used to be (home/hub.sock) is taken out when the bridge starts", async () => {

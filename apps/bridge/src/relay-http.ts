@@ -3,6 +3,8 @@
 import {
   type Frame,
   type PeerCreatedT,
+  PeerLinkState,
+  type PeerLinkStateT,
   type PeerRow,
   RELAY_DESCRIPTOR_PATH,
   RelayDescriptorRead,
@@ -162,6 +164,18 @@ export class RelayHttp {
   async deletePeer(name: string): Promise<void> {
     const res = await this.request('DELETE', `/bridge/peers/${encodeURIComponent(name)}`)
     if (!res.ok) throw new RelayHttpError(res.status, `DELETE /bridge/peers -> ${res.status}`, await relayReason(res))
+  }
+
+  /** POST /bridge/peers/:name/link: a one-paste link code for that inbox (it replaces the open one). */
+  mintPeerLink(name: string) {
+    return this.json<{ code: string }>('POST', `/bridge/peers/${encodeURIComponent(name)}/link`, {})
+  }
+
+  /** GET /bridge/peers/:name/link: the newest code's state; the first read after a redeem carries the other side's url and secret, once. */
+  async getPeerLink(name: string): Promise<PeerLinkStateT> {
+    const res = await this.request('GET', `/bridge/peers/${encodeURIComponent(name)}/link`)
+    if (!res.ok) throw new RelayHttpError(res.status, `GET /bridge/peers/link -> ${res.status}`, await relayReason(res))
+    return PeerLinkState.parse(await res.json())
   }
 
   rotatePeer(name: string) {

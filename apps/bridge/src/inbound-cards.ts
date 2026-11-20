@@ -24,6 +24,7 @@ import type { Inbound } from './inbound.ts'
 import { CLOCK_OFF_MESSAGE, type Item, type Of, oneLine } from './inbound-shared.ts'
 import { cardActionNotification } from './notify.ts'
 import { say } from './owner-words.ts'
+import { isPermissionModeCard } from './permission-mode.ts'
 import { isScreenAllowCard } from './screen-consent.ts'
 
 export const cardsFrames = {
@@ -87,6 +88,9 @@ export const cardsFrames = {
     const row = ctx.ledger.get(act.card_id)
     if (row?.binding.risk === 'high')
       return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'high_risk')
+    // a permission-mode change is allowed from the card in the app only: its Allow is the owner's signed card.resolve
+    if (row && isPermissionModeCard(row.binding))
+      return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'permission_mode_card')
     // Approvals bind what was shown. The words the notification displayed are rebuilt here from THIS Mac's copy of the
     // card; the phone signed a hash of what it displayed. A relay that sealed other words, or a card that cannot be shown
     // whole in a notification, is refused. (A card the ledger does not know falls through to the normal resolve refusal.)
@@ -214,6 +218,15 @@ export const cardsFrames = {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       await (ctx.screenConsent?.onResolved(row, f.action, it.raw) ?? Promise.resolve()).catch((e) =>
         ctx.log.warn('screen consent card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    } else if (row.actor === 'bridge' && isPermissionModeCard(row.binding)) {
+      // A permission-mode consent card (permission-mode.ts): the bridge writes the Mac's request file after the owner's yes, looking
+      // at the lock again. The agent is never told; it was answered at once and tries again.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.permissionModeConsent?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('permission mode card not applied', { card: f.card_id, error: (e as Error).message }),
       )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)

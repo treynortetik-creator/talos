@@ -1030,6 +1030,55 @@ describe('what a worker’s pane tells the owner (P3d3, part 4b-i)', () => {
     await ticks(x, 30)
     expect(x.m.state('trip')).toBe('failed') // never restarted by itself
   })
+  it('the bypass disclaimer and the development-channels question on a thread: offered as cards; with no card the line names no terminal and no command', async () => {
+    const BYPASS = cap('real-2.1.318', 'bypass-disclaimer')
+    const DEVCH = cap('real-dev-channels', 'dev-channels-capture')
+    for (const [screen, kind, name] of [
+      [BYPASS, 'bypass', 'bypass permissions'],
+      [DEVCH, 'dev_channels', 'development channels'],
+    ] as const) {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      x.host().screen = screen
+      // as Claude Code draws it: the cursor row coloured (the real 2.1.318 capture is plain text only)
+      x.host().screenEscaped = screen.map((r) =>
+        r.includes('❯ ') ? r.replace(/❯ (.*)$/, '\u001b[38;5;153m❯ $1\u001b[39m') : r,
+      )
+      await ticks(x, WORKER_TIMING.dialog_settle_s + 1)
+      expect(x.file()?.threads.trip?.dialog, kind).toMatchObject({ kind })
+      expect(x.posts, kind).toHaveLength(0) // the card gets its time first
+      await ticks(x, DIALOG_CARD_WAIT_MS / 1000)
+      expect(x.posts).toHaveLength(1)
+      const line = x.posts[0]?.[1] ?? ''
+      expect(line).toContain(`'${name}' prompt`)
+      expect(line).not.toMatch(/attach|ssh|tmux|Terminal|talos-app supervise/i)
+    }
+  })
+  it('a partial disclaimer on a thread (a row missing) gets no card, only the line, and it still names no terminal', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    x.host().screen = cap('real-2.1.318', 'bypass-disclaimer').filter((r) => !r.includes('Yes, I accept'))
+    await ticks(x, WORKER_TIMING.dialog_settle_s + 2)
+    expect(x.file()?.threads.trip?.dialog).toBeUndefined()
+    expect(x.posts).toHaveLength(1)
+    expect(x.posts[0]?.[1]).not.toMatch(/attach|ssh|tmux|Terminal|talos-app supervise/i)
+  })
+  it('after the owner’s "No, exit" on the bypass disclaimer the session ends as that answer, in its own words, never a crash', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    x.host().screen = cap('real-2.1.318', 'bypass-disclaimer')
+    await ticks(x, WORKER_TIMING.dialog_settle_s + 1)
+    const w = (x.m as unknown as { workers: Map<string, { offer: { declinedExit: string | null } }> }).workers.get(
+      'trip',
+    )
+    if (!w) throw new Error('no worker')
+    w.offer.declinedExit = 'bypass'
+    x.host().exit(1)
+    await ticks(x, 3)
+    expect(x.m.state('trip')).toBe('failed')
+    expect(x.m.entry('trip')?.error?.detail).toContain('permission checks off')
+    expect(x.m.entry('trip')?.restarts ?? []).toEqual([])
+  })
   it('a "No" that was pressed but did not end the session is forgotten once the session runs: a later crash is a crash', async () => {
     const x = setup({ threads: NAMED })
     await live(x)

@@ -294,6 +294,46 @@ struct OnboardingSignInTests {
     #expect(t.read("login-starts").split(separator: "\n").count == 1, "one login only")
   }
 
+  /// The card's watcher and the setup window's `onChange` slot are separate: a window created after the card (its model sets the slot) must not
+  /// take the watcher away, or a successful sign-in would never restart Main or close the card.
+  @Test func aWindowTakingTheOnChangeSlotDoesNotSilenceTheCardsWatcher() async throws {
+    let t = try FakeTools()
+    defer { t.remove() }
+    let c = ClaudeSignInCoordinator()
+    defer { c.stopNow() }
+    let fired = SignInTick()
+    let watcher = SignInDoneWatcher(c) { fired.bump() }
+    defer { watcher.stop() }
+    let window = SignInTick()
+    c.onChange = { window.bump() }  // a ClaudeSignInModel is created after the card: it sets this slot
+    c.onChange = { window.bump() }  // and a second window replaces it
+    #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "ok", "FAKE_LOGIN_DELAY": "0.4"]), interval: 0.1, limit: 20))
+    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    #expect(c.state == .finished(.signedIn))
+    #expect(fired.value == 1, "the sign-in's success reached the card once")
+    #expect(window.value > 0, "the window's own slot heard it too")
+    // after stop() nothing is told, and a failed sign-in never fires it
+    watcher.stop()
+    c.reset()
+    t.signOut()
+    #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "ok", "FAKE_LOGIN_DELAY": "0.2"]), interval: 0.1, limit: 20))
+    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    #expect(fired.value == 1)
+  }
+
+  @Test func aFailedSignInNeverFiresTheCardsWatcher() async throws {
+    let t = try FakeTools()
+    defer { t.remove() }
+    let c = ClaudeSignInCoordinator()
+    defer { c.stopNow() }
+    let fired = SignInTick()
+    let watcher = SignInDoneWatcher(c) { fired.bump() }
+    defer { watcher.stop() }
+    #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "fail"]), interval: 0.1, limit: 5))
+    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    #expect(fired.value == 0)
+  }
+
   @Test func aFinishedSignInIsClearedAndCanStartAgain() async throws {
     let t = try FakeTools()
     defer { t.remove() }
@@ -468,4 +508,11 @@ struct OnboardingPrereqTests {
     #expect(await ClaudeSignIn.run(claude: f.claude?.path, env: t.env) == .noClaude)
     #expect(PrereqPlan.fix(for: "claude", brew: nil) == .openPage(label: OnboardingText.openClaudePage, url: "https://claude.com/claude-code"))
   }
+}
+
+final class SignInTick: @unchecked Sendable {
+  private let lock = NSLock()
+  private var n = 0
+  func bump() { lock.withLock { n += 1 } }
+  var value: Int { lock.withLock { n } }
 }

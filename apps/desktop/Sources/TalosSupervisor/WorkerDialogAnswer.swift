@@ -110,7 +110,7 @@ extension WorkerManager {
       guard rt[id]?.offer.disturbed != true else { return .nothing() }
       guard let choice, let label else {
         // login: no key. The Terminals window comes to the thread. With no window to bring (no handler, or it can't), nothing happened.
-        guard let open = openTerminals, open(id) else { return .nothing(nil) }
+        guard let open = openSignIn, open(id) else { return .nothing(nil) }
         rt[id]?.offer.openedFor = offer.id  // once per dialog id, for the popup's button too
         return .init(outcome: .opened)
       }
@@ -133,7 +133,7 @@ extension WorkerManager {
     guard plain.ok, coloured.ok else { return nil }
     // no key ever goes to the usage-limit screen: nothing is read off it, so nothing is pressed
     guard !DialogMatcher.takesNoKeys(TmuxCommands.parseCapture(plain.out)) else { return nil }
-    return DialogReader.read(rows: TmuxCommands.parseCapture(plain.out), escapedRows: TmuxCommands.parseCapture(coloured.out))
+    return DialogReader.read(rows: TmuxCommands.parseCapture(plain.out), escapedRows: TmuxCommands.parseCapture(coloured.out), mcpNames: mcpNames(id))
   }
 
   /// Whether a tmux client may be typing: one typed within `clientQuiet` (`.typing`), or the clients could not be read (`.unreadable`). Unlike
@@ -163,6 +163,10 @@ extension WorkerManager {
         rt[id]?.offer.enterSentFor = offer.id
         // only a delivery tmux confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
         if offer.kind == .trust, !chosen.hasPrefix("Yes"), sent.ok { rt[id]?.offer.declinedTrust = true }
+        // the other two questions whose "no" ends the session on its own: the disclaimer's "No, exit" and the channel's "Exit"
+        if sent.ok, (offer.kind == .bypass && !chosen.hasPrefix("Yes")) || (offer.kind == .devChannels && ExactText.equal(chosen, DialogMatcher.Strings.devExit)) {
+          rt[id]?.offer.declinedExit = offer.kind
+        }
         return .init(outcome: .pressed, choice: choice, label: chosen)
       }
       guard let sent = sendKey(id, tmux(id).sendDialogKey(key), intent), sent.ok || sent.timedOut, moved(id, offer, key, from: from) else {

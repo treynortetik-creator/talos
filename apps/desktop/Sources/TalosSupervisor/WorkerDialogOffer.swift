@@ -6,7 +6,7 @@ import TalosDesktopCore
 /// the thread has always got ("This thread's session is waiting on …; open this thread in Terminals on the Mac to answer.") is the
 /// fallback, not the first thing: it waits `cardAckWait` (15 s) for the bridge's card file (`workers/<id>/dialog-card.json`, naming
 /// the dialog, in any status), and a dialog the bridge has a card for never gets it from the Mac. A dialog
-/// the reader refuses, the bypass disclaimer and every unknown question keep the line at once. So does a dialog whose subject cannot be read
+/// the reader refuses and every unknown question keep the line at once. So does a dialog whose subject cannot be read
 /// (a folder path wrapped over rows, a consent with no server name on its row): with nothing to tell it from another dialog of its kind, a
 /// card for it could be answered onto a lookalike that took its place. Answering is `WorkerDialogAnswer.swift`.
 
@@ -31,6 +31,9 @@ struct OfferState {
   var openedFor: String?
   /// The owner's tap pressed "No, exit" on the folder-trust question: the exit that follows is that answer, not a crash (`exited`).
   var declinedTrust = false
+  /// The same for the other two questions whose "no" ends the session: the bypass disclaimer's "No, exit" (`.bypass`) and the development
+  /// channel's "Exit" (`.devChannels`).
+  var declinedExit: DialogReader.Kind?
 
   /// Whether the Mac pressed (or opened) anything for this dialog id already, by a verified card answer or a popup click. Only this closes
   /// the popup: a result that says nothing was pressed (a forged answer, a phone that is not paired) leaves the one place to answer up.
@@ -52,7 +55,7 @@ extension WorkerManager {
     // colours too: the reader takes the Select Claude draws, not text that looks like one. A failed capture says nothing.
     let c = run(tmux(id).capturePaneEscaped())
     guard c.ok else { return }
-    guard let d = DialogReader.read(rows: rows, escapedRows: TmuxCommands.parseCapture(c.out)) else {
+    guard let d = DialogReader.read(rows: rows, escapedRows: TmuxCommands.parseCapture(c.out), mcpNames: mcpNames(id)) else {
       guard r.entry.dialog != nil else { return }
       rt[id]?.offer.misses += 1
       if (rt[id]?.offer.misses ?? 0) >= 2 { endOffer(id) }
@@ -60,7 +63,8 @@ extension WorkerManager {
     }
     // Nothing to tell this dialog from another of its kind: the line, never a card. Login is offered without one: its card sends no key
     // (it brings Terminals forward), so there is nothing to land on a lookalike.
-    if d.kind != .login, d.subject == nil { return endOffer(id) }
+    // The bypass disclaimer has no subject at all: its two exact rows (the reader checks them) are what tells it apart.
+    if d.kind != .login, d.kind != .bypass, d.subject == nil { return endOffer(id) }
     rt[id]?.offer.misses = 0
     let t = now()
     // The same dialog, still there: one THIS process offered (`sinceAwake`), and not one the Mac pressed Enter on or saw the screen change
@@ -82,6 +86,12 @@ extension WorkerManager {
     rt[id]?.offer.sinceAwake = awake()
     rt[id]?.offer.disturbed = false
     dirty = true
+  }
+
+  /// The server names the thread folder's `.mcp.json` defines, for an MCP question whose name wrapped over rows.
+  func mcpNames(_ id: String) -> [String] {
+    guard let cwd = rt[id]?.entry.cwd else { return [] }
+    return WorkerMcp.projectNames(cwd: cwd)
   }
 
   /// `workers` and the thread's folder in it are folders themselves, not links: nothing is read from or written to a folder that is somewhere else.

@@ -119,7 +119,9 @@ describe('the Help page', () => {
       )
       for (const sec of sections) expect(sec.children.length, `"${q}": an empty section`).toBeGreaterThan(1)
       const count = Number(/^(\d+) /.exec(screen.getByTestId('help-count').textContent ?? '')?.[1] ?? 0)
-      const parts = sections.reduce((n, sec) => n + sec.children.length - 1, 0)
+      // the heading is not a part, and neither is the live build box that always ends the About section
+      const extra = (sec: Element) => 1 + (sec.getAttribute('aria-labelledby') === 'help-about' ? 1 : 0)
+      const parts = sections.reduce((n, sec) => n + sec.children.length - extra(sec), 0)
       expect(count, q).toBe(parts)
     }
   })

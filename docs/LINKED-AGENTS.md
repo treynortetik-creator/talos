@@ -12,7 +12,28 @@ It does not link while outside text (a message from a linked agent, a hook, a sh
 has reached it since you last spoke; ask again in your own words. A request made by voice, or one followed by outside text arriving (a hook, a share, a call ending), may be
 refused for that reason: ask again in a typed message, or run it in a terminal. `peers` in config.json is still refused to the agent's config tools and hidden from phones.
 
-A peer is named by what THIS Mac calls the other one (`work`, `home`). Both directions need two commands each:
+### One paste (the way to link)
+
+A peer is named by what THIS Mac calls the other one (`work`, `home`). Linking is one code, carried once:
+
+1. On A: `talos-app peer link work` (`work` is what A calls the other Talos). It makes the inbox for it and prints ONE code,
+   `talos-link:<A's relay host>/<id>/<token>`, and a line saying it works once, for 15 minutes. No secret is shown, written or kept on A.
+2. Paste that code to B's agent. On B: `talos-app peer accept <code> --name home` (`home` is what B calls A; `--name` is required, and
+   your agent takes it from your words, "link with my home Talos" means `--name home`, or asks you). B makes its own inbox, redeems
+   the code once at A's relay (https only, no redirects, no private addresses, 10 seconds), keeps A's secret in the key store, and
+   points `peers` at A. Nothing secret is printed, written to a file or put on the command line.
+3. A's bridge picks up B's inbox address and secret from A's own relay (it asks every 10 seconds while the code is open), checks them again,
+   and keeps them. Both directions are live. Each side gets one quiet row: "Linked with <name>".
+
+The code is a bearer credential for 15 minutes: whoever pastes it first links to whoever made it. If a code is stolen and used first,
+the owner's own `peer accept` fails with "this link code can't be used: it expired, was already used, or is wrong", leaves nothing behind on
+B, and A's thread gets the row "Link to <name> was taken by another install; run talos-app peer remove <name>" (A notices a second
+use of the code). Ask for a new code with `peer link` again (it replaces the old one). A relay that is not on public https cannot make a code:
+use the manual way below. `--cap N` works as below.
+
+### Manual, two steps (the fallback)
+
+Both directions need two commands each:
 
 1. On A: `talos-app peer create work`. It makes an inbox on A's relay for the other install and prints a URL and a secret, once. When
    your agent runs it, the secret is never printed: it goes to `<talos home>/peer-secrets/work.secret` (0600), and the agent carries the URL

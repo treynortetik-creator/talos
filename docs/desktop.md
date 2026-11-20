@@ -64,7 +64,7 @@ apps/desktop/scripts/install.sh --from-release <https URL or path> --sha256 <sha
 - `release-app.sh` writes the zip, its `.sha256` and a manifest (version, git sha, sha256, architectures, team id). The app
   carries no clone path. With no clone recorded, the app fetches one itself: the public repository at the tag for its own version
   (`mac-v<version>`, not main) into `~/Library/Application Support/app.talos.desktop/talos` (outside the folders macOS protects).
-  First, if `xcode-select -p` fails (no Command Line Tools), it asks macOS to install them (`xcode-select --install`), shows "One quick Apple install first: click Install when macOS asks (about 5 minutes)", and polls until they are there (30 minutes at most; closing Apple's window is a failure with Try again); no git or python3 runs before that. The code is pinned by the signed app: release-app.sh makes the release's own source tarball (`talos-source-mac-v<version>.tar.gz`, from the public commit the tag names, checked against the public tag; `TALOS_PUBLIC_COMMIT`), stamps its sha256 and that commit into Info.plist (`TalosSourceSHA256`, `TalosSourceCommit`), and release-publish.sh uploads it as a release asset. First setup downloads that asset over https and checks its sha256 before unpacking (no git needed). A build with a commit stamp but no tarball hash clones with git instead, requiring the tag and HEAD to be the stamped commit; a build with no stamp (a development build) will not fetch code by itself. After the hash check the unpacked copy is made a git checkout of the stamped commit (`git init`, `fetch --depth 1 origin <commit>`, `reset`) and must show no difference and no extra file against that commit (`git status --porcelain --ignored` empty), so the git updater can move it; the updater also refuses a folder whose `git rev-parse --show-toplevel` is not itself. A recorded clone that was never accepted (an install from before this) is not silently skipped: the updater asks once, in a message and the Set up window's "Use this clone" card, and never accepts for the owner. release-publish.sh refuses a release whose app carries TalosSourceSHA256 unless the matching source tarball is in the folder. It installs
+  First, if `xcode-select -p` fails (no Command Line Tools), it asks macOS to install them (`xcode-select --install`), shows "One quick Apple install first: click Install when macOS asks (about 5 minutes)", and polls until they are there (30 minutes at most; closing Apple's window is a failure with Try again); no git or python3 runs before that. The code is pinned by the signed app: release-app.sh makes the release's own source tarball (`talos-source-mac-v<version>.tar.gz`, from the public commit the tag names, checked against the public tag; `TALOS_PUBLIC_COMMIT`), stamps its sha256 and that commit into Info.plist (`TalosSourceSHA256`, `TalosSourceCommit`), and release-publish.sh uploads it as a release asset. First setup downloads that asset over https and checks its sha256 before unpacking (no git needed). A build with a commit stamp but no tarball hash clones with git instead, requiring the tag and HEAD to be the stamped commit; a build with no stamp (a development build) will not fetch code by itself. After the hash check the unpacked copy is made a git checkout of the stamped commit (`git init`, `fetch --depth 1 origin <commit>`, `reset`) and must show no difference and no extra file against that commit (`git status --porcelain --ignored` empty), so the git updater can move it; the updater also refuses a folder whose `git rev-parse --show-toplevel` is not itself. A recorded clone that was never accepted (an `install.sh` run by hand, or an install from before this) is not silently skipped: Talos shows "Allow Talos to update itself?" (a small panel that never takes focus, with Allow updates and Not now) at the next launch, or within 15 seconds if it is running, and the update window and the menu bar item "Allow updates..." offer the same button while an update waits. Allow updates is a real click (no key, no Accessibility press) and remembers exactly the folder shown, only if the record still names it and it passes the checks; the app's own first-setup clone counts as accepted without a click only when that very run cloned or downloaded and verified it (never a folder that was already there), it is the app's fixed-place clone, named by the app's own record, and passes the same checks. A relaunch asks again: nothing about the question is remembered on disk, only the answer in the Keychain. Not now hides it until the next release or launch. release-publish.sh refuses a release whose app carries TalosSourceSHA256 unless the matching source tarball is in the folder. It installs
   Claude Code only when missing, with Anthropic's installer script: the exact pinned copy shipped inside the signed app (`Contents/Resources/claude-install.sh`, fetched and sha256-checked at build time; nothing is downloaded at install time, and a copy whose checksum differs is not run), checks
   the prerequisites with that clone's own `install.sh --dry-run`, installs the packages with `pnpm install --frozen-lockfile` or,
   when there is no pnpm, the app's own bundled bun (`bun install --frozen-lockfile --ignore-scripts`, also what the updater uses, which installs what `pnpm-lock.yaml` pins;
@@ -114,7 +114,7 @@ automatically" (`desktop.json` `auto_update`) turns it on or off. It is on for a
 setting existed has no `auto_update` key and reads as off, so a Mac that is kept up to date another way stays that way until its
 owner switches it on.
 
-- On launch (a minute after) and every 6 hours it fetches `latest.json` and `latest.json.sig` from the feed (`update_feed_url`,
+- On launch (a minute after) and about every hour (60 minutes, moved by up to 10 either way, drawn for each check) it fetches `latest.json` and `latest.json.sig` from the feed (`update_feed_url`,
   default `https://github.com/treynortetik-creator/talos/releases/latest/download/`; https only). The feed is only an address:
   the manifest names its signer's `kid` and must be signed (ECDSA P-256, raw low-S signature) by a release key the app trusts:
   the list pinned in the app (`RELEASE_KEYS` in `packages/protocol/src/release-manifest.ts`, `ReleaseTrust.keys` in
@@ -167,6 +167,29 @@ owner switches it on.
   1.5.0: <why>. It's still on 1.4.0." A failure is said once per version and reason, and that version is not tried again for a
   day. A swap that has not said how it ended after 30 minutes is stopped (its process, known by pid and start time), the
   checkout goes back and the line is posted. Every step is a row in the Mac app's log (`auto_update ...`).
+- **Check for Updates.** The Talos menu (under About) and the menu bar menu have "Check for Updates...", which runs the check now
+  and opens a small window (`UpdateWindow`) that shows the updater's live step (`UpdateStatus`): checking, downloading, up to date,
+  waiting for the relay (both builds, and what to do), waiting for a quiet moment (and why), getting ready, restarting the agent,
+  done, or the failure in one line with the log's path. While the code folder waits for the owner's OK the window says "Allow Talos to update itself?" with an Allow updates button. Once a release is downloaded and verified the item reads "Update to x..."
+  with a dot and a banner says so once (a panel that never takes focus and can never become key); "Update now" runs the same
+  prepare, swap and health gate, skipping only the 2-hour wait and the 2-minute notice: while a turn is running or the owner is typing
+  it stays waiting ("Waiting for your agent to finish its turn") and NOTHING moves (the code folder stays on the old commit under the
+  old app); then the same 2 quiet looks in a row, then the prepare and the swap together (a turn that starts meanwhile puts the folder
+  back and it waits again); after 2 hours of waiting it gives up with nothing moved.
+  It is not a default button, has no key equivalent and needs a real click (the Needs-you popup's check), so a stray Return does
+  nothing. "Later" keeps it pending. Only the owner's click on Check for Updates retries a release that failed today; a request
+  file runs the check the timer would, backoff included. "Check again" clears a failure and looks again. `$TALOS_APP_HOME/auto-update/check-now.json`
+  (`{"v":1,"action":"check","ts":"<ISO time>"}`, written by `talos-app update`) means "check now": the app claims it by renaming it,
+  reads it only if it is a small regular file of the owner's own with a fresh `ts`, runs one check and removes it; a stale,
+  future-dated, oversized or malformed file is ignored and removed. The 30-second look is how soon it is seen. The relay's build
+  is read from its `/healthz`; it is called behind only when its commit is in the clone and an ancestor of the release's.
+- Main's launch always carries `--dangerously-load-development-channels server:talos-app` (`MainChannelFlag`, added to the launch
+  and never to the saved command), so a command saved or imported without it still gets pushed messages after an update. The launch
+  fingerprint, parts and seal are computed over the flags as launched; an install confirmed over its saved flags before this is
+  sealed again once over the launched ones (audit row `channels_flag_reseal`), only when its old seal verifies.
+- `install.sh` keeps a clone that is already recorded (and passes the recorded-clone rules: a real path with no link, owned by the
+  user and not writable by others, not in the Talos home, the agent folder, a thread's own folder, the support folder or a temp folder) when it runs from another checkout, and says which it kept;
+  `--use-this-clone` switches. The updater never writes the recorded clone at all.
 - Turning the switch off stops a check or a waiting update at the next look (30 seconds), putting the checkout back if it had
   moved; a swap already started finishes.
 
@@ -233,6 +256,18 @@ apps/desktop/scripts/install.sh --rollback
    session that is already running in Terminal; it cannot read environment variables, so Import the command first if
    yours sets any.
 
+   **Permission mode**: at the top of **Session**, one choice: Auto (recommended), Ask me or Bypass all. Picking one
+   replaces the permission flag in your saved launch command (`--permission-mode auto`, `--permission-mode default`,
+   `--dangerously-skip-permissions`; never two) and restarts the agent for you, a cold start: Talos stops the old claude process
+   and starts it again with the saved command and the same conversation, and you confirm the development-channel dialog once.
+   While a turn is running it asks first. A command with no permission flag shows Auto (Claude Code's own default since 2.1.283);
+   an imported command with `--dangerously-skip-permissions` shows Bypass all; any other combination (plan, accept edits, two
+   flags that disagree) shows "Custom (from your launch command)" and is left alone until you choose a mode. Under Bypass all
+   no permission cards reach your phone. Any saved launch command the running agent does not have yet (a choice saved
+   without restarting, an edit in the launch box, an import) shows **Restart to apply**, one button that restarts the same way.
+   The agent can change the mode when you ask it to (`permission_mode`, docs/bridge.md); the Mac does it only while **Lock
+   Talos settings** is off, and a change toward more freedom (Auto or Bypass all) after text from outside reached the agent
+   waits for your Allow on a card. A switch by the agent to Bypass all always posts a visible line to your phone ("Your agent switched itself to Bypass all", with the way back; the Mac cannot know you asked, so it says what happened and how to undo it), and the Mac's startup popup for the changed launch is titled "Start with Bypass all?" (the phone card for that dialog still uses the shared wording; naming the mode there needs a protocol change).
 3. **Permissions**: press each **Ask now** and approve; add Talos to Full Disk Access, Accessibility and Screen Recording
    if you want the agent to use them.
 4. **Sign in**: menu, **Sign in...** pairs the Talos window with your relay as another device. It runs

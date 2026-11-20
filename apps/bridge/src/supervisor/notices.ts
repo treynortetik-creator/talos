@@ -52,7 +52,7 @@ export const escapeMarkup = (s: string) => s.replaceAll('&', '&amp;').replaceAll
 const DIALOG_NAMES: Record<string, string> = {
   trust: 'the folder-trust question',
   mcp_consent: 'the MCP server question',
-  login: 'that it is signed out (run /login)',
+  login: 'that it is signed out',
   dev_channels: 'the development-channels warning',
   unknown: 'a question',
 }

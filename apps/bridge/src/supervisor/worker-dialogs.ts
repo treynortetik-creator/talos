@@ -1,7 +1,7 @@
 // Needs-you dialogs on a worker's pane, offered as a card and answered by a tap (P3d3, part 4b-ii; the Mac's
 // WorkerDialogOffer.swift and WorkerDialogAnswer.swift, with DialogFiles.swift, DialogProofsUsed.swift and DialogAnswer.swift).
 //
-// The offer: a known dialog (folder trust, MCP consent) that readDialog reads EXACTLY, on a screen that has held still for
+// The offer: a known dialog (folder trust, MCP consent, the bypass-permissions disclaimer, the development-channels question) that readDialog reads EXACTLY, on a screen that has held still for
 // dialog_settle_s, goes into the worker's workers.json entry as `dialog`, so the bridge makes a card. The thread's line waits
 // DIALOG_CARD_WAIT_MS for the bridge's dialog-card.json; a dialog the bridge has a card for never gets the line. Login is a line
 // only (no card here). Two looks in a row that cannot read the offered dialog end the offer.
@@ -58,6 +58,8 @@ export type OfferState = {
   proofsUsed: string[]
   /** The owner's tap pressed "No, exit" on the folder-trust question: the session's exit that follows is that answer, not a crash. */
   declinedTrust: boolean
+  /** The same for the other two questions whose "no" ends the session: the bypass disclaimer's "No, exit" and the development channel's "Exit". */
+  declinedExit: 'bypass' | 'dev_channels' | null
 }
 
 export const newOfferState = (): OfferState => ({
@@ -68,15 +70,28 @@ export const newOfferState = (): OfferState => ({
   disturbed: false,
   proofsUsed: [],
   declinedTrust: false,
+  declinedExit: null,
 })
 
 /** What the thread is told when the owner answered "No, exit" to the folder-trust question (null: they did not); taking it clears the mark. */
 export function declinedTrustText(o: OfferState): string | null {
   const was = o.declinedTrust
+  const exit = o.declinedExit
   o.declinedTrust = false
-  return was
-    ? 'you chose not to trust this folder, so its session was stopped. Send a message to start it again and be asked again, or pick another folder'
-    : null
+  o.declinedExit = null
+  if (was)
+    return 'you chose not to trust this folder, so its session was stopped. Send a message to start it again and be asked again, or pick another folder'
+  if (exit === 'bypass')
+    return 'you chose not to run with permission checks off, so its session was stopped. Send a message to start it again and be asked again'
+  if (exit === 'dev_channels')
+    return 'you chose to exit instead of loading the development channel, so its session was stopped. Send a message to start it again and be asked again'
+  return null
+}
+
+/** A session that runs was not ended by a "No": the marks of an answer that ended one are forgotten. */
+export function forgetDeclined(o: OfferState): void {
+  o.declinedTrust = false
+  o.declinedExit = null
 }
 
 /** One worker as this module sees it: its id, its offer state, and the entry's `dialog`. */
@@ -85,6 +100,8 @@ export type OfferTarget = {
   offer: OfferState
   dialog(): WorkerDialogT | undefined
   setDialog(d: WorkerDialogT | undefined): void
+  /** The server names the thread folder's `.mcp.json` defines, for a question whose server name wrapped over rows (none: no names). */
+  mcpNames?(): readonly string[]
 }
 
 /** What the answer needs of the pane (TmuxPtyHost has all of it). */
@@ -210,7 +227,7 @@ export class WorkerDialogs {
     // colours too: the reader takes the Select Claude draws, not text that looks like one. A failed capture says nothing
     const escaped = await pane.visibleRowsEscaped()
     if (escaped === null) return
-    const d = readDialog(rows, escaped)
+    const d = readDialog(rows, escaped, t.mcpNames?.() ?? [])
     if (!d) {
       if (!cur) return
       t.offer.misses++
@@ -218,9 +235,9 @@ export class WorkerDialogs {
       return
     }
     // login is a line only: no card, so nothing on offer. Nor a dialog whose subject cannot be read (a folder path wrapped over
-    // rows, a consent with no name on its row): a card for it could be answered onto a lookalike that replaced it, so the line
-    // is the way for those
-    if (d.kind === 'login' || d.kind === 'dev_channels' || d.subject === null) {
+    // rows, a consent with no name on its row, channels cut off): a card for it could be answered onto a lookalike that replaced
+    // it, so the line is the way for those. The bypass disclaimer has no subject: its two exact rows are what tells it apart
+    if (d.kind === 'login' || (d.kind !== 'bypass' && d.subject === null)) {
       if (cur) this.end(t)
       return
     }
@@ -244,6 +261,7 @@ export class WorkerDialogs {
       return
     }
     t.offer.declinedTrust = false
+    t.offer.declinedExit = null
     t.setDialog({
       id: newDialogId(),
       kind: d.kind,
@@ -385,18 +403,18 @@ export class WorkerDialogs {
     return this.d.wallMs() - Math.max(...c) < WORKER_TIMING.dialog_client_quiet_s * 1000
   }
 
-  private async lookAtDialog(pane: DialogPane): Promise<Dialog | null> {
+  private async lookAtDialog(pane: DialogPane, names: readonly string[]): Promise<Dialog | null> {
     const plain = await pane.visibleRows()
     const coloured = await pane.visibleRowsEscaped()
     if (plain === null || coloured === null) return null
-    return readDialog(plain, coloured)
+    return readDialog(plain, coloured, names)
   }
 
   /** The screen as readDialog reads it, with a few tries: the plain capture and the coloured one are two looks. */
-  private async readFresh(pane: DialogPane): Promise<Dialog | null> {
+  private async readFresh(pane: DialogPane, names: readonly string[]): Promise<Dialog | null> {
     for (let k = 0; k < READ_TRIES; k++) {
       if (k > 0) await this.sleep(READ_PAUSE_MS)
-      const d = await this.lookAtDialog(pane)
+      const d = await this.lookAtDialog(pane, names)
       if (d) return d
     }
     return null
@@ -409,15 +427,16 @@ export class WorkerDialogs {
     choice: number,
     chosen: string,
   ): Promise<Outcome> {
+    const names = t.mcpNames?.() ?? []
     for (let step = 0; step <= offer.options.length; step++) {
       if (await this.typingBlocks(pane)) return nothing()
-      const fresh = await this.readFresh(pane)
+      const fresh = await this.readFresh(pane, names)
       const key = planKeys(offer, fresh, choice)?.[0]
       if (!key || !fresh || fresh.cursor === null) return nothing()
       if (key === 'Enter') {
         // the typing check, then the last look, then the Enter: only onto the signed choice's row, as just seen
         if (await this.typingBlocks(pane)) return nothing()
-        const last = await this.readFresh(pane)
+        const last = await this.readFresh(pane, names)
         if (!last || dialogDiffers(offer, last) || last.cursor === null || last.options[last.cursor] !== chosen)
           return nothing()
         // a timeout may have been delivered: counted, never repeated
@@ -426,20 +445,29 @@ export class WorkerDialogs {
         t.offer.enterSentFor = offer.id
         // only a delivery the pane confirmed makes the exit that follows the owner's "No"; a timeout may or may not have landed
         if (offer.kind === 'trust' && !chosen.startsWith('Yes') && sent === 'sent') t.offer.declinedTrust = true
+        // the other two questions whose "no" ends the session on its own: the disclaimer's "No, exit" and the channel's "Exit"
+        if (sent === 'sent' && offer.kind === 'bypass' && !chosen.startsWith('Yes')) t.offer.declinedExit = 'bypass'
+        if (sent === 'sent' && offer.kind === 'dev_channels' && chosen === 'Exit') t.offer.declinedExit = 'dev_channels'
         return { outcome: 'pressed', choice, label: chosen }
       }
       if (keyNotSent(await pane.sendDialogKey(key, offer.kind as DialogKeyKind))) return nothing()
-      if (!(await this.moved(pane, offer, key, fresh.cursor))) return nothing()
+      if (!(await this.moved(pane, offer, key, fresh.cursor, names))) return nothing()
     }
     return nothing()
   }
 
   /** The arrow shows: the same dialog with the highlighted row exactly one step on. A failed read is looked at again. */
-  private async moved(pane: DialogPane, offer: WorkerDialogT, key: 'Up' | 'Down', from: number): Promise<boolean> {
+  private async moved(
+    pane: DialogPane,
+    offer: WorkerDialogT,
+    key: 'Up' | 'Down',
+    from: number,
+    names: readonly string[],
+  ): Promise<boolean> {
     const to = key === 'Up' ? from - 1 : from + 1
     for (let k = 0; k < ECHO_POLLS; k++) {
       await this.sleep(ECHO_POLL_MS)
-      const fresh = await this.lookAtDialog(pane)
+      const fresh = await this.lookAtDialog(pane, names)
       if (!fresh) continue
       if (dialogDiffers(offer, fresh)) return false
       if (fresh.cursor === to) return true

@@ -259,6 +259,7 @@ struct NeedsYouTests {
     ("trust", 1, ["DOWN", "ENTER"], "Yes, I trust this folder"), ("mcp", 0, ["UP", "UP", "ENTER"], "Use this MCP server"),
     ("mcp", 1, ["UP", "ENTER"], "Use this and all future MCP servers in this project"),
     ("mcp", 2, ["ENTER"], "Continue without using this MCP server"),
+    ("bypass", 1, ["DOWN", "ENTER"], "Yes, I accept"), ("dev", 0, ["ENTER"], "I am using this for local development"),
   ])
   func aSignedTapIsArrowsAndEnterAndTheSessionContinues(dlg: String, choice: Int, expected: [String], label: String) throws {
     let (r, keys, _, owner) = try make(dlg)
@@ -504,11 +505,11 @@ struct NeedsYouTests {
 
   // MARK: open (login)
 
-  @Test func openOnTheMacAsksTerminalsAndSendsNoKey() throws {
+  @Test func openOnTheMacStartsTheInAppSignInAndSendsNoKey() throws {
     let (r, keys, _, owner) = try make("login")
     defer { r.teardown(); keys.remove() }
     let spy = OpenSpy()
-    r.mgr.openTerminals = { spy.opened($0); return true }
+    r.mgr.openSignIn = { spy.opened($0); return true }
     let o = try offered(r)
     try r.writeAnswer(o, owner: owner, choice: nil, control: "ctl_1", open: true)
     #expect(r.wait(15) { r.result != nil })
@@ -521,7 +522,7 @@ struct NeedsYouTests {
     let (r, keys, _, _) = try make("login")
     defer { r.teardown(); keys.remove() }
     let spy = OpenSpy()
-    r.mgr.openTerminals = { spy.opened($0); return true }
+    r.mgr.openSignIn = { spy.opened($0); return true }
     let o = try offered(r)
     try r.writeAnswer(o, owner: TestOwner(), choice: nil, control: "ctl_1", open: true)
     nothing(r, keys, reason: "unverified")
@@ -531,7 +532,7 @@ struct NeedsYouTests {
   @Test func openWhenNoWindowCanBeShownIsNotOpened() throws {
     let (r, keys, _, owner) = try make("login")
     defer { r.teardown(); keys.remove() }
-    r.mgr.openTerminals = { _ in false }
+    r.mgr.openSignIn = { _ in false }
     let o = try offered(r)
     try r.writeAnswer(o, owner: owner, choice: nil, control: "ctl_1", open: true)
     nothing(r, keys, reason: nil)
@@ -637,7 +638,7 @@ struct NeedsYouTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(15) { log.all.count == 1 }, "no line: \(r.mgr.needsYou()) offer \(String(describing: r.offer)) \(r.why("trip"))")
-    #expect(log.all.first?.text == "This thread's session is waiting on a 'approve a project MCP server' prompt; open this thread in Terminals on the Mac to answer.")
+    #expect(log.all.first?.text == "This thread's session is waiting on a 'approve a project MCP server' prompt. Talos could not put it on a card, so nothing was pressed and it still waits for your answer.")
     #expect(r.mgr.needsYou()["trip"] == "approve a project MCP server")
     #expect(r.offer == nil && r.mgr.popupOffers().isEmpty, "offered with no subject: \(String(describing: r.offer))")
     let rows = r.tmuxCmd(["capture-pane", "-p", "-J", "-t", "=t-trip:"]).out.components(separatedBy: "\n")
@@ -777,13 +778,134 @@ struct NeedsYouTests {
     nothing(r, keys, reason: nil)
   }
 
+  // MARK: the safety questions (pane-prompts rows 2 to 4)
+
+  @Test func aRealBypassDisclaimerIsOfferedWithNoSubjectAndItsTwoRows() throws {
+    let (r, keys, log, _) = try make("bypass")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    #expect(o.kind == .bypass && o.subject == nil && o.options == ["No, exit", "Yes, I accept"] && o.cursor == 0)
+    #expect(keys.keys.isEmpty && log.all.isEmpty, "offering it presses nothing and, inside the card window, says nothing")
+    let c = NeedsYouPopupContent.make(NeedsYouPopupItem(thread: "trip", threadName: "Trip", dialog: o))
+    #expect(c.title == "Run with permission checks off?" && c.buttons.map(\.text) == ["No, exit", "Yes, I accept"])
+  }
+
+  @Test func theDevelopmentChannelsQuestionOnAThreadIsOfferedWithItsChannelsAsTheSubject() throws {
+    let (r, keys, _, _) = try make("dev")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    #expect(o.kind == .devChannels && o.subject == "server:talos-app" && o.options == ["I am using this for local development", "Exit"] && o.cursor == 0)
+    #expect(r.mgr.needsYou()["trip"] == "development channels")
+  }
+
+  /// A server name the question wrapped over two rows is a subject (and a card) only when the thread folder's own `.mcp.json` defines exactly
+  /// that name: not from the screen alone, and not with another name there.
+  @Test func aWrappedMcpNameIsOfferedOnlyWhenTheFoldersMcpJsonDefinesExactlyThatName() throws {
+    let (r, keys, _, _) = try make("mcpwrap")
+    defer { r.teardown(); keys.remove() }
+    try #"{"mcpServers":{"first-server-name-wrapped-a":{"command":"x"},"other":{"command":"y"}}}"#.write(toFile: r.agentDir + "/.mcp.json", atomically: true, encoding: .utf8)
+    let o = try offered(r)
+    #expect(o.kind == .mcpConsent && o.subject == "first-server-name-wrapped-a", "\(String(describing: o.subject))")
+    #expect(NeedsYouPopupContent.make(NeedsYouPopupItem(thread: "trip", threadName: "Trip", dialog: o)).title == "Use first-server-name-wrapped-a?")
+    let (r2, keys2, log2, _) = try make("mcpwrap")
+    defer { r2.teardown(); keys2.remove() }
+    try #"{"mcpServers":{"first-server-name":{"command":"x"}}}"#.write(toFile: r2.agentDir + "/.mcp.json", atomically: true, encoding: .utf8)
+    r2.mgr.startTicking()
+    try r2.wake("trip")
+    #expect(r2.wait(15) { log2.all.count == 1 }, "no line: \(r2.mgr.needsYou())")
+    #expect(r2.offer == nil, "a half of the name is not a subject: \(String(describing: r2.offer))")
+  }
+
+  /// "No, exit" on the bypass disclaimer: the session ends as the owner's answer, failed with its own words, never a crash, no retry.
+  @Test func aSignedNoOnTheBypassDisclaimerStopsTheSessionCleanly() throws {
+    let (r, keys, _, owner) = try make("bypass")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    #expect(r.wait(15) { r.result != nil })
+    #expect(r.result?["outcome"] as? String == "pressed" && r.result?["label"] as? String == "No, exit")
+    #expect(r.wait(15) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+    let e = try #require(r.entry("trip")?.error)
+    #expect(e.code == "start_failed" && e.detail == WorkerManager.declinedExitText(.bypass))
+    #expect(e.detail?.contains("permission checks off") == true)
+    #expect(r.entry("trip")?.restarts.isEmpty == true, "not a crash")
+    usleep(1_500_000)
+    #expect(r.state("trip") == "failed", "it does not start itself again")
+    #expect(keys.keys == ["ENTER"])
+  }
+
+  @Test func aSignedExitOnTheDevelopmentChannelQuestionStopsTheSessionCleanly() throws {
+    let (r, keys, _, owner) = try make("dev")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    #expect(r.wait(15) { r.result != nil })
+    #expect(r.result?["outcome"] as? String == "pressed" && r.result?["label"] as? String == "Exit")
+    #expect(r.wait(15) { r.state("trip") == "failed" }, "\(r.why("trip"))")
+    #expect(r.entry("trip")?.error?.detail == WorkerManager.declinedExitText(.devChannels))
+    #expect(r.entry("trip")?.restarts.isEmpty == true)
+    #expect(keys.keys == ["DOWN", "ENTER"])
+  }
+
+  /// The HARD RULE: these answer safety questions, so only the owner's signed tap does. An answer file anything else could write presses nothing.
+  @Test(arguments: ["bypass", "mcp", "dev"])
+  func aProoflessGarbledOrUnlistedAnswerOnASafetyQuestionPressesNothing(dlg: String) throws {
+    let (r, keys, _, _) = try make(dlg)
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    let accept = o.options.count - 1
+    // no proof at all
+    try r.writeRaw(["v": 2, "dialog_id": o.id, "choice": accept, "label": o.options[accept], "by": "an agent", "at": ISOTime.string(Date().timeIntervalSince1970), "control_id": "ctl_1"])
+    usleep(2_000_000)
+    #expect(r.result == nil && keys.keys.isEmpty && !FileManager.default.fileExists(atPath: r.answerPath), "taken, nothing pressed")
+    // a proof with garbage in it
+    try r.writeRaw([
+      "v": 2, "dialog_id": o.id, "choice": accept, "label": o.options[accept], "by": "an agent", "at": ISOTime.string(Date().timeIntervalSince1970), "control_id": "ctl_2",
+      "proof": ["signed": "{}", "osig": String(repeating: "A", count: 86), "device_id": "d_aaaaaaaaaaaaaaaaaaaa", "binding": "{}"],
+    ])
+    nothing(r, keys, reason: "unverified", control: "ctl_2")
+    // a valid signature by a key nobody paired
+    try r.writeAnswer(o, owner: TestOwner(), choice: accept, control: "ctl_3")
+    nothing(r, keys, reason: "unverified", control: "ctl_3")
+  }
+
+  /// A card the owner signed for another kind of dialog, or other rows, is not an answer to this one.
+  @Test func aBypassAnswerSignedAsAnotherKindOrOtherRowsPressesNothing() throws {
+    let (r, keys, _, owner) = try make("bypass")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1", edit: ProofEdit(kind: "mcp_consent"))
+    nothing(r, keys, reason: "unverified", control: "ctl_1")
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_2", edit: ProofEdit(options: ["No, exit", "Yes, I accept", "Always"]))
+    nothing(r, keys, reason: "unverified", control: "ctl_2")
+  }
+
+  /// A different dialog in the bypass disclaimer's place by the time of the tap: nothing is pressed (the key gate checks the live screen is the
+  /// one the key states).
+  @Test func aTapForTheBypassDisclaimerNeverLandsOnAnotherDialogThatTookItsPlace() throws {
+    let trigger = TestTemp.base + "swap-\(UUID().uuidString.prefix(6))"
+    let (r, keys, _, owner) = try make("bypass", ["FAKE_DLG_SWAP": trigger, "FAKE_DLG_SWAP_TO": "mcp"])
+    defer { r.teardown(); keys.remove(); unlink(trigger) }
+    let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 60 }  // the old offer still stands; the screen under it is another dialog
+    FileManager.default.createFile(atPath: trigger, contents: nil)
+    usleep(1_500_000)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    #expect(r.wait(15) { r.resultControl() == "ctl_1" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    #expect(keys.keys.isEmpty, "a key went onto the dialog that replaced the offered one: \(keys.keys)")
+  }
+
   // MARK: the line
 
-  @Test func anUnreadableKnownDialogAndTheBypassDisclaimerKeepTodaysLine() throws {
-    // the old hand-drawn (SYNTHETIC) trust dialog has no colours: not a dialog the reader will read. And a real bypass disclaimer.
-    for (scenario, env, text) in [
-      ("worker-trust.sh", [String: String](), "trust this folder"),
-      ("worker-real.sh", ["FAKE_REAL_START": "screen:bypass-disclaimer"], "bypass permissions"),
+  @Test func anUnreadableKnownDialogKeepsTodaysLineAndABypassDisclaimerThatIsNotReadableGetsTheNoTerminalLine() throws {
+    // the old hand-drawn (SYNTHETIC) trust dialog has no colours: not a dialog the reader will read. And a real bypass disclaimer with its last row
+    // gone (synthetic/bypass-disclaimer-partial.txt): not read either, so no card, and its line names no terminal.
+    for (scenario, env, text, line) in [
+      ("worker-trust.sh", [String: String](), "trust this folder",
+       "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer."),
+      ("worker-real.sh", ["FAKE_REAL_START": "screen:bypass-disclaimer-partial"], "bypass permissions",
+       "This thread's session is waiting on a 'bypass permissions' prompt. Talos could not put it on a card, so nothing was pressed and it still waits for your answer."),
     ] {
       let r = try WorkerRig(scenario: scenario, extraEnv: env)
       defer { r.teardown() }
@@ -793,7 +915,7 @@ struct NeedsYouTests {
       r.mgr.startTicking()
       try r.wake("trip")
       #expect(r.wait(10) { log.all.count == 1 }, "\(text): \(r.mgr.needsYou()) \(r.why("trip"))")
-      #expect(log.all.first?.text == "This thread's session is waiting on a '\(text)' prompt; open this thread in Terminals on the Mac to answer.")
+      #expect(log.all.first?.text == line)
       #expect(r.offer == nil, "\(text) was offered")
       #expect(r.typedLines.isEmpty)
     }

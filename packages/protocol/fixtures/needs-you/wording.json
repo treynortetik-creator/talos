@@ -4,14 +4,20 @@
     "trust": "Trust this folder?",
     "mcp_consent": "Allow this MCP server?",
     "login": "{thread} needs you to sign in",
-    "dev_channels": "Allow Talos's development channel?"
+    "dev_channels": "Allow Talos's development channel?",
+    "bypass": "Run with permission checks off?"
+  },
+  "titleNamed": {
+    "mcp_consent": "Use {server}?"
   },
   "sentence": {
     "trust": "{thread}'s session wants to work in this folder. Claude will be able to read, change and run files in it, and in folders inside it.",
     "mcp_consent": "{thread}'s session wants to turn on this server's tools for its folder.",
     "login": "{thread}'s session needs you to sign in to Claude on the Mac.",
-    "dev_channels": "Main session's start needs this to talk to the Talos app."
+    "dev_channels": "Main session's start needs this to talk to the Talos app.",
+    "bypass": "{thread}'s session was started with permission checks off. It will run commands and change files without asking you first. Accept only if you meant that."
   },
+  "sentenceThreadDevChannels": "{thread}'s session was started with a development channel, and Claude Code asks before it loads it.",
   "devChannels": {
     "alsoLoads": "Also loads {channels}, which Talos didn't add.",
     "launchChanged": "Main's start command changed since you last confirmed it.",

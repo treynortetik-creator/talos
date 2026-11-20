@@ -1,13 +1,25 @@
 # Changelog
 
+## The Mac app says version 0.1.7
+
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.7, the release with Check for Updates in the Talos menu (it shows what the update is doing, and Update now waits for your agent to finish its turn), signing in to Claude again in a Talos window, a check for new releases about every hour, and Main following your folder rules exactly.
+- Linking two Talos agents is now one code: run talos-app peer link on one, paste the code to the other.
+
 ## The Mac app says version 0.1.6
 
-- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.6, the release where a thread's own folder is trusted for you (no terminal prompt), a sub-thread keeps its own folder under a parent with none, and signing in to Claude again happens in a Talos window.
+- The app's version (About, the self-test, the update check) now matches the release tag: 0.1.6, the release where a thread's own folder is trusted for you (no terminal prompt), a sub-thread keeps its own folder under a parent with none, and a turn that ends on an empty reply sends your message again once (signing in to Claude in a Talos window came in 0.1.7, not this release).
 
 ## The Mac app says version 0.1.5
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.5, the release that sets itself up with no Terminal (it fetches its own Talos copy, pairs this Mac with the four words in a window of its own, and presses Esc for you once when Main's model request looks stuck).
 - Your agent can now link another Talos and manage approved devices itself, unless Lock Talos settings is on.
+## Pick how your agent asks permission
+
+- Mac settings, Session, now starts with one plain choice: Permission mode, Auto (recommended), Ask me or Bypass all. Picking one changes the flag in your saved launch command (never two) and restarts the agent for you, a cold start where you confirm the startup dialog once; if the agent is in the middle of a turn it asks first. Under Bypass all, no permission cards reach your phone. A launch command you imported shows the right choice, and an unusual combination shows "Custom (from your launch command)" and is left alone until you choose. Whenever the saved launch command is not the one the agent is running with, the Session tab says so and offers one button, Restart to apply.
+
+## Your agent can change its own permission mode when you ask
+
+- Tell your agent "switch to Ask me" (or Auto, or Bypass all) and it can now do it: the Talos app on the Mac saves the setting and restarts the agent, which then waits for you to confirm its startup dialog once (at the Mac or on the phone card); it does not run in the new mode until you do. Ask me happens straight away. Auto and Bypass all happen straight away only when you asked in that conversation and nothing from outside (an email, a web page, another agent) has reached the agent in any conversation since; otherwise you get a card, "Allow the agent to switch to Bypass all?", and only your Allow in the app changes anything. The phone is told "The agent asked to switch..." each time. If you keep Lock Talos settings on, the agent cannot change it at all. When it switches itself to Bypass all, your phone gets a plain line saying so and how to change it back, and the startup dialog on the Mac reads "Start with Bypass all?".
 
 ## Report a bug during a call
 

@@ -2,7 +2,7 @@
   "name": "talos-app",
   "private": true,
   "license": "MIT",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "description": "Talos app: an installable web app for talking to a Claude Code agent running on your own Mac.",
   "packageManager": "pnpm@10.33.0",

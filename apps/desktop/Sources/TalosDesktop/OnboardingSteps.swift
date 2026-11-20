@@ -13,6 +13,7 @@ final class ClaudeSignInModel: ObservableObject {
   init() {
     let c = ClaudeSignInCoordinator.shared
     state = c.state
+    // this window's own slot: the Sign in to Claude again card's watcher is a separate subscriber (`SignInDoneWatcher`)
     c.onChange = { [weak self] in Task { @MainActor in self?.state = ClaudeSignInCoordinator.shared.state } }
     if Self.quitObserver == nil {
       Self.quitObserver = NotificationCenter.default.addObserver(
@@ -105,7 +106,7 @@ struct FirstStartPanel: View {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         switch state {
         case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed, .stopped, .blocked, .terminalDialog: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+        case .failed, .stopped, .blocked, .terminalDialog, .signIn, .apiKeyQuestion, .safetyQuestion: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
         case .notStarted: Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
         case .warning, .waitingForBridge: ProgressView().controlSize(.small)
         }

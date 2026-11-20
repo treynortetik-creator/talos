@@ -104,8 +104,15 @@ function redactUserFlags(t: string): string {
     .join('')
 }
 
+/**
+ * A one-paste link code (`talos-link:<host>/<conn id>/<token>`, peer-link.ts) is a bearer credential for 15 minutes: it never rides in a
+ * peer message, a report, a log tail, a share or the text sealed into a phone's notification. Everything up to a space or a closing quote goes.
+ */
+export const redactLinkCodes = (text: string): string =>
+  text.replace(/talos-link:[^\s"'`<>)\]}]{1,400}/gi, 'talos-link:[redacted]')
+
 export function redact(text: string, o: RedactOptions = {}): string {
-  let t = text
+  let t = redactLinkCodes(text)
   // longest folder first, so $TALOS_APP_HOME (usually under ~) wins
   if (o.appHome) t = t.replace(new RegExp(escapeRe(o.appHome.replace(/\/+$/, '')), 'g'), '$TALOS_APP_HOME')
   if (o.userHome && o.userHome.length > 1) t = t.replace(new RegExp(escapeRe(o.userHome.replace(/\/+$/, '')), 'g'), '~')

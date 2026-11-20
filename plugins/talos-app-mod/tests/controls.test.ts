@@ -36,6 +36,7 @@ function wire(on: On, o: { commands?: Array<{ name: string; description: string;
     aborted: [] as string[],
     ran: [] as Array<{ command: string; args: string }>,
     compacted: [] as Array<string | undefined>,
+    writes: [] as Array<{ path: string; text: string }>,
     // A hook beneath the mod answers for the engine. A throw would only skip the hook, so a REFUSAL is `{ deny: reason }`
     // (the call then rejects with the reason); success is the engine's own result shape.
     abort: (_turnId: string): { deny: string } | Record<string, never> => ({}),
@@ -70,6 +71,12 @@ function wire(on: On, o: { commands?: Array<{ name: string; description: string;
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
   on('env.get', () => ({ value: '/opt/talos-home' }))
   on('fs.read', () => ({ value: `${KEY}\n` }))
+  // the kit's PreModelSwitch fallback reads the mod's ticket file (kit/hooks/mod-fallback.py): every write is recorded
+  on('fs.exists', () => ({ value: true }))
+  on('fs.write', (_$, e) => {
+    h.writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
   on('tool.check', () => ({ decision: 'allow' }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -257,6 +264,37 @@ test('a model ticket allows exactly one matching switch made while the mod runs 
   await h.clock.advance(2000)
   await until(() => h.resultFor(ID(11)) !== undefined)
   expect(h.resultFor(ID(11))).toMatchObject({ ok: true, text: 'Switched.' })
+})
+
+// A Team or Enterprise organization's security plugin passes classic.PreModelSwitch on past user plugins: the mod's own
+// /model then meets Claude Code's cache-miss confirmation at the Mac, unless the kit's settings hook allows it. It does so on
+// the ticket file the mod writes while its switch is in flight.
+test("the mod's /model writes a one-shot ticket file for the kit's PreModelSwitch hook, and blanks it when the switch ends", async ($, on) => {
+  const h = wire(on)
+  const g = gate(h)
+  await connect($, h)
+  h.queue.push([modelControl(15, 'sonnet')])
+  await h.clock.advance(2000)
+  await until(g.started)
+  const file = '/opt/talos-home/state/model-ticket.json'
+  const written = h.writes.filter((w) => w.path === file)
+  expect(written.length).toBe(1)
+  const t = JSON.parse(written[0]?.text ?? '{}') as {
+    v: number
+    to_model: string
+    exp_ms: number
+    control_id: string
+    session_id: string
+  }
+  expect(t.v).toBe(1)
+  expect(t.session_id).toBe('sess_test') // another session's /model under the same Talos home must not spend it
+  expect(t.to_model).toBe('sonnet')
+  expect(t.control_id).toBe(ID(15))
+  g.release()
+  await h.clock.advance(2000)
+  await until(() => h.resultFor(ID(15)) !== undefined)
+  await until(() => h.writes.filter((w) => w.path === file).length === 2)
+  expect(h.writes.filter((w) => w.path === file).at(-1)?.text).toBe('')
 })
 
 test('a switch to another model, or with no ticket, gets no opinion', async ($, on) => {

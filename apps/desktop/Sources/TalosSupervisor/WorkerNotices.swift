@@ -102,10 +102,10 @@ extension WorkerManager {
     // A prompt the detector sees but that has not settled yet is not "no dialog": it must not close the record a relaunch found open.
     // A dialog's flag is held through repaints: an unsettled screen (a status line that repaints faster than `dialogSettle`) never clears
     // it. It clears when the settled screen has none, or when no dialog shape has been on the pane for `dialogSettle` running.
-    let absent = found == nil && DialogMatcher.liveDialog(rows) == .none
+    let absent = found == nil && DialogMatcher.liveScreen(rows) == .none
     let gone = rt[id]?.dialogAbsence.gone(present: !absent, at: awake(), settle: options.dialogSettle) ?? false
     // Back to back: the held dialog's place taken by another whole dialog, the screen never still. It is a new dialog (its own notice).
-    let live = DialogMatcher.liveDialog(rows)
+    let live = DialogMatcher.liveScreen(rows)
     if !seen.isDialog, live.isDialog, let held = rt[id]?.needsYouPrompt, held != WorkerNotice.promptName(live) { return noteScreen(id, live, settled: false) }
     guard !seen.isDialog, let shown = rt[id]?.promptWatch.current else { return noteScreen(id, seen, settled: settled && found == nil || gone) }
     notePrompt(id, shown)

@@ -25,6 +25,8 @@ struct TalosApp: App {
   @StateObject private var web = WebController.shared
   @StateObject private var status = StatusCoordinator.shared
   @StateObject private var companion = CompanionController.shared
+  @StateObject private var updates = UpdateController.shared
+  @StateObject private var allowUpdates = CloneConfirmCenter.shared
   @AppStorage(CompanionController.Key.enabled) private var companionOn = false
   @Environment(\.openWindow) private var openWindow
   @NSApplicationDelegateAdaptor(TalosAppDelegate.self) private var appDelegate
@@ -85,6 +87,7 @@ struct TalosApp: App {
         }
       }
       .keyboardShortcut("t")
+      Button("Sign in to Claude again…") { model.showSignIn(startNow: true) }
       if web.hasRelay {
         switch web.pageState {
         case .signedIn: Button("Sign out") { Task { await web.signOut() } }
@@ -146,13 +149,26 @@ struct TalosApp: App {
       .keyboardShortcut(",")
       Button("Talos Help") { HelpRouter.open(model: model) { openWindow(id: $0) } }
       Button("Compose hotkey…") { SettingsRouter.open(.hotkeys) { openWindow(id: $0) } }
-      Button("Setup checklist…") {
-        openWindow(id: "onboarding")
+      // Only a Mac that still needs setup has the screens; an existing install never sees them again
+      if OnboardingMarker.isNeeded(configured: model.configured, pending: OnboardingMarker.isPending(home: NSHomeDirectory())) {
+        Button(OnboardingCopy.menuSetUp) {
+          openWindow(id: "onboarding")
+          NSApp.activate(ignoringOtherApps: true)
+        }
+      }
+      Button(OnboardingCopy.menuUseFolder) {
+        openWindow(id: "advanced-setup")
         NSApp.activate(ignoringOtherApps: true)
       }
       Button("Permissions…") { SettingsRouter.open(.permissions) { openWindow(id: $0) } }
       Divider()
       Button("About Talos") { TalosApp.showAbout() }
+      Button(updates.menuDot ? "\u{25CF} " + updates.menuTitle : "Check for Updates\u{2026}") {
+        updates.menuChoice()
+      }
+      if allowUpdates.pending != nil {
+        Button("Allow updates\u{2026}") { allowUpdates.showAgain() }
+      }
       Button("Open Log") { TalosApp.openLog(model: model) }
       Divider()
       if model.hostKind == .tmux {
@@ -181,7 +197,10 @@ struct TalosApp: App {
             signedIn: { WebController.shared.signedIn },
             offersSignIn: { WebController.shared.pageState.offersSignIn },
             hasRelay: { WebController.shared.hasRelay },
-            canReload: { WebController.shared.webWindowIsFront })
+            canReload: { WebController.shared.webWindowIsFront },
+            updateTitle: { UpdateController.shared.menuTitle },
+            updateDot: { UpdateController.shared.menuDot })
+          UpdateController.shared.openWindow = { openWindow(id: "updates") }
           AppMenu.shared.install()
           AppMenu.shared.keepInstalled()
           model.installQuitHooks()
@@ -224,8 +243,14 @@ struct TalosApp: App {
           status.onCompanionChange = { CompanionController.shared.inputsChanged() }
           // A menu-bar-only app has no top menu at all, so the policy follows the windows (Dock icon while one is open).
           ActivationPolicyController.shared.start()
-          if !model.configured, !UserDefaults.standard.bool(forKey: "onboardingShown") {
-            UserDefaults.standard.set(true, forKey: "onboardingShown")
+          // a hello still pending is asked for again; then the launch rule decides (configured wins; the marker only matters for a half-done setup)
+          let home = NSHomeDirectory()
+          HelloDeliveryTimer.shared.start(model: model)
+          if OnboardingLaunch.shouldOpen(
+            configured: model.configured, pending: OnboardingMarker.isPending(home: home),
+            shownThisRun: OnboardingShared.openedThisRun, dismissed: OnboardingDismissal.isSet(home: home))
+          {
+            OnboardingShared.openedThisRun = true
             openWindow(id: "onboarding")
             NSApp.activate(ignoringOtherApps: true)
           }
@@ -234,7 +259,13 @@ struct TalosApp: App {
     // The Session, Permissions and Compose hotkey windows are gone: each was a copy of a Mac settings tab, and every door now
     // opens the tab itself (`SettingsRouter`).
     Window(MacSettingsText.windowTitle, id: "settings") { SettingsView(model: model) }
-    Window("Set up Talos", id: "onboarding") { OnboardingView(model: model) }
+    Window(OnboardingCopy.windowTitle, id: "onboarding") { OnboardingWindowView(model: model) }
+      .windowStyle(.hiddenTitleBar)
+      .windowResizability(.contentSize)
+    // The Advanced route for an existing agent folder: reached from the menu, never from setup.
+    Window(OnboardingCopy.advancedTitle, id: "advanced-setup") { AdvancedSetupView(model: model) }
+    Window("Talos updates", id: "updates") { UpdateWindow(controller: UpdateController.shared) }
+      .windowResizability(.contentSize)
   }
 }
 

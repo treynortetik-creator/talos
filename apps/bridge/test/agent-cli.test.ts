@@ -120,7 +120,10 @@ const thread = (t: string) => ({ TALOS_APP_WORKER_THREAD: t, TALOS_SESSION_ROLE:
 function gate(w: World, argv: string[], o: { terminal?: boolean; raw?: Record<string, string> } = {}) {
   return agentCliRefusal(w.env, argv, { terminal: o.terminal ?? false, raw: o.raw ?? MAIN, cwd: plain() })
 }
+const CODE = 'talos-link:relay.example.com/cn_abcdefghijklmnopqrstuv/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const ALL = [
+  ['peer', 'link', 'work'],
+  ['peer', 'accept', CODE, '--name', 'home'],
   ['peer', 'create', 'work'],
   ['peer', 'add', 'work', '--url', 'https://example.com/hook/peer/cn_x'],
   ['peer', 'list'],
@@ -131,7 +134,7 @@ const ALL = [
   ['devices', 'list'],
   ['devices', 'revoke', D3],
 ]
-const GATED = ['create', 'add', 'rotate'] // plus devices revoke
+const GATED = ['link', 'accept', 'create', 'add', 'rotate'] // plus devices revoke
 
 describe('the command class', () => {
   test('peer create|add|list|remove|rotate|secret-forget and devices list|revoke are agent-unless-locked', () => {
@@ -198,6 +201,8 @@ describe('the lock and the terminal', () => {
 
 describe('(A) one rule for every agent session: nothing outside reached any thread since the owner last spoke', () => {
   const FOUR: string[][] = [
+    ['peer', 'link', 'work'],
+    ['peer', 'accept', CODE, '--name', 'home'],
     ['peer', 'create', 'work'],
     ['peer', 'add', 'work', '--url', 'https://example.com/x'],
     ['peer', 'rotate', 'work'],
@@ -389,6 +394,49 @@ describe('(B) device lock-out', () => {
   test('a terminal is unchanged', () => {
     const w = world({ devices: [{ id: D1, name: 'Phone' }], lastDevice: { id: D1, minutes: -1 } })
     expect(gate(w, ['devices', 'revoke', D1], { terminal: true })).toBeUndefined()
+  })
+})
+
+describe('link and accept: the owner pastes the code, then accept runs', () => {
+  const accept = ['peer', 'accept', CODE, '--name', 'home']
+  test("the owner's own paste as his latest words: accept and link run", () => {
+    const w = world({ owner: [{ thread: 'general', minutes: -1 }], outside: { general: -30 } })
+    expect(gate(w, accept)).toBeUndefined()
+    expect(gate(w, ['peer', 'link', 'work'])).toBeUndefined()
+  })
+  test('outside text that arrived AFTER his paste and before accept refuses it (any thread, any session)', () => {
+    for (const raw of [MAIN, thread('trip')]) {
+      const w = world({ owner: [{ thread: 'general', minutes: -10 }], outside: { general: -5 } })
+      expect(gate(w, accept, { raw })).toMatch(/outside text.*ask again in his own words/s)
+      const other = world({ owner: [{ thread: 'general', minutes: -10 }], outside: { inbox: -5 } })
+      expect(gate(other, accept, { raw })).toMatch(/outside text/)
+    }
+  })
+  test("a linked agent's message since his paste refuses accept (the peer taint)", () => {
+    const w = world({ owner: [{ thread: 'general', minutes: -10 }], taint: true })
+    expect(gate(w, accept)).toMatch(/linked agent/)
+  })
+  test('no owner words at all: refused; lock on: refused with the lock sentence; a terminal always runs', () => {
+    expect(gate(world({ outside: { general: -5 } }), accept)).toMatch(/outside text/)
+    expect(gate(world({ lock: true }), accept)).toBe(SETTINGS_LOCKED)
+    expect(gate(world({ lock: true }), ['peer', 'link', 'work'])).toBe(SETTINGS_LOCKED)
+    expect(gate(world({ lock: true, outside: { general: -5 } }), accept, { terminal: true })).toBeUndefined()
+  })
+  test('the audit line names the command and no code: not the token, not the host', () => {
+    const w = world({ owner: [{ thread: 'general', minutes: -1 }] })
+    gate(w, accept)
+    gate(w, ['peer', 'link', 'work'])
+    const raw = readFileSync(join(w.home, 'bridge.log'), 'utf8')
+    expect(raw).not.toMatch(/talos-link|relay\.example\.com|AAAAAAAAAA|cn_/)
+    const l = raw
+      .trim()
+      .split('\n')
+      .map((x) => JSON.parse(x))
+      .filter((x) => x.msg === 'agent cli')
+    expect(l.map((x) => [x.command, x.target])).toEqual([
+      ['peer accept', undefined],
+      ['peer link', 'work'],
+    ])
   })
 })
 

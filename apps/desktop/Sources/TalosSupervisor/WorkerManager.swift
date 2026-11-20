@@ -26,6 +26,8 @@ public final class WorkerManager: @unchecked Sendable {
     public var claudePath: String
     /// The owner's permission flag from desktop.json when main uses it (`--dangerously-skip-permissions`).
     public var permissionFlag: String?
+    /// `LaunchSource.held`: no spec is planned (so no update restart is queued) while the saved launch is not confirmed.
+    public var threadsHeld = false
     /// The thread sessions' PermissionRequest hook source: the app bundle's sealed copy (`WorkerHook.appSource`), never a checkout.
     /// nil = none was given, and no thread session starts (`WorkerHookStart.swift`).
     public var permissionHook: WorkerHook.BundleSource?
@@ -260,6 +262,8 @@ public final class WorkerManager: @unchecked Sendable {
     public var claudePath: String
     public var permissionFlag: String?
     public var mainArgs: [String]
+    /// The saved launch is not one Main runs with or the owner confirmed: thread sessions are held to what Main runs (`LaunchPending`).
+    public var held = false
     public init(agentDir: String, claudePath: String, permissionFlag: String?, mainArgs: [String] = []) {
       self.mainArgs = mainArgs
       self.agentDir = agentDir
@@ -279,6 +283,8 @@ public final class WorkerManager: @unchecked Sendable {
   public var postNotice: (@Sendable (_ thread: String, _ text: String) -> PostOutcome)?
   /// Brings the Terminals window to a thread (a tap on "Open on the Mac"); false when no window can be shown.
   public var openTerminals: (@Sendable (_ thread: String) -> Bool)?
+  /// A login card's button: starts Claude's sign-in inside the app (`ClaudeLoginSession`, its link and code box) and brings that window forward. No terminal.
+  public var openSignIn: (@Sendable (_ thread: String) -> Bool)?
   /// The process table the background-work look reads (WorkerBackground.swift); nil = it could not be read. Tests swap it.
   public var procTable: @Sendable () -> [BackgroundWork.Proc]? = { ProcTable.live() }
   /// One process's argv, for the first background task's command (WorkerBackground.swift).
@@ -417,6 +423,7 @@ public final class WorkerManager: @unchecked Sendable {
       o.claudePath = src.claudePath
       o.permissionFlag = src.permissionFlag
       o.mainArgs = src.mainArgs
+      o.threadsHeld = src.held
       options = o
     }
     let t = now()
@@ -663,6 +670,7 @@ public final class WorkerManager: @unchecked Sendable {
     }
     closeNoticeRecord(id)  // a new start has no dialog open
     rt[id]?.offer.declinedTrust = false  // an old answer is not this start's
+    rt[id]?.offer.declinedExit = nil
     guard let hook = installHook(id, cwd: cwd, resume: resume, now: t) else { return }  // the copy this session runs, made now; refused when it cannot be
     let base = baseEnv()
     acceptFolderTrust(id, s, cwd: cwd, base: base)
@@ -887,7 +895,7 @@ public final class WorkerManager: @unchecked Sendable {
         noteScreenChanged(id)  // a dialog on offer may have been replaced by one that reads the same
       }
       let still = awake() - (rt[id]?.screenSameSince ?? awake()) >= options.dialogSettle
-      let seen: DialogMatcher.Screen = still ? DialogMatcher.liveDialog(rows) : .none
+      let seen: DialogMatcher.Screen = still ? DialogMatcher.liveScreen(rows) : .none
       noteComputerUse(id, rows: rows)  // not held to `dialogSettle`: the spinner above it never stops while it waits
       noteUsageLimit(id, rows: rows)  // the same, and never a key
       noteScreens(id, rows: rows, seen: seen, settled: still)
@@ -915,6 +923,7 @@ public final class WorkerManager: @unchecked Sendable {
           unlink(dir(id) + "/launch.sh")
           r.entry.state = "live"
           r.offer.declinedTrust = false  // a session that runs was not ended by a "No"
+          r.offer.declinedExit = nil
           r.gaveNewId = false
           r.readyAt = t
           r.markActive(wall: t, awake: awake())

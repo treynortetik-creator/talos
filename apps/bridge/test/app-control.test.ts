@@ -3,7 +3,7 @@
 // LOW change directly and never a HIGH one; a mac row is refused either way; a thread session may propose for its own thread
 // only; every applied change names how to revert it and emits a named event. Real bridge + FakeRelay + a signing FakeApp.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type CardT, CONFIG_PROPOSE_FEATURE } from '@talos-app/protocol'
 import { Bridge } from '../src/bridge.ts'
@@ -662,7 +662,7 @@ describe('a thread session proposes for its own thread only', () => {
     ]) {
       const r = await asWorker(w, changes)
       expect(r.isError, JSON.stringify(changes)).toBe(true)
-      expect(text(r)).toMatch(/own thread/)
+      expect(text(r)).toMatch(/own thread|under it/)
     }
     // naming another thread as the place for the card is refused by the lock
     expect((await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }], { thread_id: 'garden' })).isError).toBe(
@@ -671,6 +671,36 @@ describe('a thread session proposes for its own thread only', () => {
     noCardMinted(x)
     await sleep(50)
     expect(cfg(x).threads.find((t) => t.id === 'garden')?.name).toBe('Garden')
+  })
+
+  test("a thread session's card keeps its scope through the ledger: the owner moves the sub-thread before approving, and apply refuses", async () => {
+    const { x, w } = await hubWithWorker()
+    // the Mac app checks sub-thread folders, so a sub-thread may exist
+    const file = join(x.home, 'workers.json')
+    const mac = JSON.parse(readFileSync(file, 'utf8'))
+    mac.supervisor.subthreads_supported = true
+    writeFileSync(file, JSON.stringify(mac))
+    x.bridge.ctx.config.update((c) => ({
+      ...c,
+      threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: 'trip' } : t)),
+    }))
+    const r = await asWorker(w, [{ path: 'threads.garden.topic', value: 'Plants and soil' }])
+    expect(r.isError, text(r)).toBeFalsy()
+    const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
+    await waitFor(() => cards(x).some((c) => c.id === id), 4000, 'card.create')
+    const card = cards(x).find((c) => c.id === id) as CardT
+    expect(card.payload).toMatchObject({ scope: 'trip' })
+    // the owner takes the sub-thread out from under trip meanwhile
+    x.bridge.ctx.config.update((c) => ({
+      ...c,
+      threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: undefined } : t)),
+    }))
+    await approve(x, card)
+    const upd = await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'failed', {
+      direction: 'from_bridge',
+    })
+    expect(upd.result?.text).toMatch(/can only change its own thread.*Nothing was changed/)
+    expect(cfg(x).threads.find((t) => t.id === 'garden')?.topic).not.toBe('Plants and soil')
   })
 
   test('the owner did not ask in the thread: a thread session cannot change anything itself, only show him a card', async () => {

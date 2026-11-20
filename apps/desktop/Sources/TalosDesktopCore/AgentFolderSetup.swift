@@ -17,6 +17,17 @@ public enum AgentFolderSetup {
     ["\(repo)/install.sh", "--agent-dir", dir, "--no-app", "--yes"]
   }
 
+  /// Adds Chronos (the scheduler) to the agent folder Create just made: the clone's own `install.sh` in its add-to-an-existing-agent
+  /// mode, `--with-chronos`. Chronos is fetched at the commit the kit pins (`CHRONOS_PINNED_REF` in kit/install.sh, checked out
+  /// detached and verified) and the kit registers its jobs DISABLED until the agent has finished its own setup. It is a separate run so
+  /// a Chronos that cannot be fetched (no internet, no git) never undoes the agent that was made.
+  public static func chronosArguments(repo: String, dir: String) -> [String] {
+    ["\(repo)/install.sh", "--agent-dir", dir, "--no-app", "--yes", "--with-chronos"]
+  }
+
+  /// What the owner is told when the scheduler could not be added (the agent itself is fine).
+  public static let chronosLater = "Talos couldn't add its scheduler this time. Your agent works without it."
+
   /// The kit update path for a kit 1.x folder, as a preview: it changes nothing.
   public static func upgradeArguments(repo: String, dir: String) -> [String] {
     ["\(repo)/kit/scripts/upgrade.sh", "--into", dir, "--dry-run"]
@@ -100,6 +111,18 @@ public enum AgentFolderSetup {
   ) -> String? {
     guard let record, accepted != record.clone else { return nil }
     return recordedCloneProblem(record.clone, recordFile: record.file, unsafe: unsafe, uid: uid) == nil ? record.clone : nil
+  }
+
+  /// Whether the app may count a clone it just made itself as accepted, with no click: only the app's own fixed-place clone
+  /// (`AutoSetup.cloneFolder`), named by the app's own record file (`AutoSetup.appFolder`/checkout, not the old folder's, not a
+  /// hand-written one elsewhere), and passing every check a recorded clone passes. Anything else is asked about, never assumed.
+  public static func ownCloneMayBeAccepted(
+    clone: String, record: (clone: String, file: String)?, home: String, unsafe: [String], uid: uid_t = getuid()
+  ) -> Bool {
+    guard let record, record.clone == clone, clone == AutoSetup.cloneFolder(home: home),
+      record.file == AutoSetup.appFolder(home: home) + "/checkout"
+    else { return false }
+    return recordedCloneProblem(clone, recordFile: record.file, unsafe: unsafe, uid: uid) == nil
   }
 
   /// The folders a recorded clone may not be in or around: the Talos home, the agent folder, each thread's own folder (from the
@@ -262,9 +285,18 @@ public struct KeychainCloneAcceptance: CloneAcceptance, @unchecked Sendable {
     scoped = SignerScopedItem(service: service, account: "v1", keychain: keychain, signer: signer)
   }
   public func accepted() -> String? {
+    if case .accepted(let p) = read() { return p }
+    return nil
+  }
+  /// What the Keychain said: a saved answer, nothing saved, or that it could not be read (locked, denied). The last one is not "not
+  /// accepted": the owner is not asked a question the Keychain failed to answer, and is told it could not be read.
+  public enum Read: Equatable, Sendable { case accepted(String), notFound, unreadable(OSStatus) }
+  public func read() -> Read {
     let (_, d, s) = scoped.resolve()
-    guard s == errSecSuccess, let d else { return nil }
-    return String(data: d, encoding: .utf8)
+    if s == errSecItemNotFound { return .notFound }
+    guard s == errSecSuccess else { return .unreadable(s) }
+    guard let d, let t = String(data: d, encoding: .utf8) else { return .notFound }
+    return .accepted(t)
   }
   public func accept(_ path: String) -> Bool {
     let (item, _, s) = scoped.resolve()
@@ -272,5 +304,26 @@ public struct KeychainCloneAcceptance: CloneAcceptance, @unchecked Sendable {
     if s == errSecSuccess { return item.update(data) == errSecSuccess }
     guard s == errSecItemNotFound else { return false }
     return item.add(data) == errSecSuccess
+  }
+}
+
+/// What the launch look, the poll and the updater make of the record and the Keychain: a clone to ask about, nothing, or a Keychain that
+/// could not answer (never turned into a question).
+public enum AllowUpdatesLook: Equatable, Sendable {
+  case nothing
+  case ask(clone: String)
+  case keychainUnreadable(Int32)
+
+  public static func make(
+    record: (clone: String, file: String)?, read: KeychainCloneAcceptance.Read, unsafe: [String], uid: uid_t = getuid()
+  ) -> AllowUpdatesLook {
+    guard record != nil else { return .nothing }
+    switch read {
+    case .unreadable(let s): return .keychainUnreadable(s)
+    case .accepted(let p):
+      return AgentFolderSetup.unacceptedRecordedClone(record: record, accepted: p, unsafe: unsafe, uid: uid).map { .ask(clone: $0) } ?? .nothing
+    case .notFound:
+      return AgentFolderSetup.unacceptedRecordedClone(record: record, accepted: nil, unsafe: unsafe, uid: uid).map { .ask(clone: $0) } ?? .nothing
+    }
   }
 }

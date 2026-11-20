@@ -43,7 +43,7 @@ struct OnboardingStepsTests {
     #expect(by["bun"]?.title == "bun 1.4.4" && by["bun"]?.detail == "/u/.bun/bin/bun")
     #expect(by["claude"]?.detail == "/u/.local/bin/claude" && by["tmux"]?.detail == "/opt/homebrew/bin/tmux")
     guard case .fix(let m)? = by["auth"]?.state else { Issue.record("auth should be a fix"); return }
-    #expect(m.contains("Sign in to Claude") && m.contains("claude auth login"), "a way out when the button keeps failing")
+    #expect(m.contains("Sign in to Claude") && m.contains("update Claude Code") && !m.contains("auth login"), "a way out that stays in the app")
     #expect(by["auth"]?.detail == nil, "a row that needs a fix shows no path")
   }
 
@@ -158,9 +158,9 @@ struct OnboardingStepsTests {
     #expect(ClaudeSignInPlan.check(status: 0, timedOut: true, json: Data()) == .unknown)
   }
 
-  @Test func theTerminalWayOutIsInEveryErrorThatCanRepeat() {
+  @Test func theWayOutStaysInTheAppInEveryErrorThatCanRepeat() {
     for o: ClaudeSignInPlan.Outcome in [.timedOut, .loginEndedNotSignedIn, .couldNotRun] {
-      #expect(o.message.contains("claude auth login"), "\(o)")
+      #expect(o.message.contains("update Claude Code") && !o.message.contains("Terminal"), "\(o)")
     }
   }
 

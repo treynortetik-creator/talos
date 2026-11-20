@@ -150,6 +150,12 @@ public enum SupervisorNotice {
   /// What the menu's needs-you line says about a dialog on Main's pane, by its label (`DialogMatcher.Screen.label`). A dialog that is never
   /// to be answered (`answerless`) gets the one key that is safe there, never "answer".
   public static func mainDialog(_ label: String) -> String {
+    if label == "sign in" || label == DialogMatcher.Screen.loginExpired.label {
+      return "Claude is signed out. Choose Sign in to Claude again in the menu bar item"
+    }
+    if label == "api key" { return "Claude found an API key in your environment and is asking whether to use it. Answer in the Talos popup" }
+    if label == DialogMatcher.Screen.mcpConsent.label { return "Claude is asking whether to use a project MCP server. Answer in the Talos popup" }
+    if label == DialogMatcher.Screen.bypassDisclaimer.label { return "Claude is asking whether to run with permission checks off. Answer in the Talos popup" }
     guard DialogMatcher.Screen.answerless(label: label) else { return "\(label) on screen" }
     if label == UsageLimitScreen.kind { return UsageLimitScreen.menuLine }
     return "the \(label) dialog is on Main's pane; press Esc there to close it (Esc only: Enter opens System Settings)"
@@ -224,7 +230,13 @@ public struct ThreadNotices: Equatable, Sendable {
     names[thread].flatMap { SessionSwitcher.cleanTitle($0) } ?? SessionSwitcher.cleanTitle(thread) ?? "A thread"
   }
 
+  /// The prompt names (`WorkerNotice.promptName`) whose questions come as a card and a Talos popup with buttons: no terminal in their line.
+  static let answeredOnCard: Set<String> = ["approve a project MCP server", "bypass permissions", "development channels"]
+
   public static func waitingLine(name: String, prompt: String) -> String {
+    if answeredOnCard.contains(prompt) {
+      return "\(SupervisorNotice.needsYou): the \(name) session is waiting on a '\(prompt)' prompt. Answer it on its card or in the Talos popup."
+    }
     let what = prompt.isEmpty ? "a prompt" : "a '\(prompt)' prompt"
     return "\(SupervisorNotice.needsYou): the \(name) session is waiting on \(what). Open Terminals…"
   }

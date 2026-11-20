@@ -190,6 +190,37 @@ struct NeedsYouPopupGuiTests {
     #expect(clicked == [1], "the owner's own click answers")
   }
 
+  /// The API-key question (`ApiKeyCard`): "Use this key" and "Don't use it" are answered only by a real mouse click. A scripted press
+  /// (Accessibility, AppleScript), a click another program posted and a stale event ask for nothing, for either button.
+  @Test func theApiKeyButtonsAreAnsweredOnlyByARealClick() throws {
+    _ = NSApplication.shared
+    let key = NeedsYouPopupItem(
+      thread: Supervisor.mainPopupThread, threadName: "Main",
+      dialog: DialogOffer(
+        id: idA, kind: .apiKey, subject: "ANTHROPIC_API_KEY: sk-ant-...00000000000000000000", options: ApiKeyCard.buttons, cursor: nil,
+        seen_at: "2026-11-07T10:00:00.000Z", expires_at: "2026-11-07T10:15:00.000Z"))
+    var clicked: [Int] = []
+    var event: NSEvent?
+    let panel = NeedsYouPopupController.makePanel(for: popup(key), onClick: { clicked.append($0) }, onClose: {}, currentEvent: { event })
+    let answers = buttons(in: try content(panel)).filter { $0.tag >= 0 }.sorted { $0.tag < $1.tag }
+    #expect(answers.map(\.title) == ["Use this key", "Don't use it"])
+    for b in answers {
+      event = nil
+      b.performClick(nil)  // a scripted press: no mouse event
+      click(b)
+      event = try mouse(.leftMouseUp, on: b, pid: 4242)  // posted by another program
+      click(b)
+      event = try mouse(.leftMouseUp, on: b, state: 0)  // posted from the combined session state
+      click(b)
+      event = try mouse(.leftMouseUp, on: b, age: 5)  // stale
+      click(b)
+    }
+    #expect(clicked.isEmpty, "a program answered the API-key question: \(clicked)")
+    event = try mouse(.leftMouseUp, on: answers[1])
+    click(answers[1])
+    #expect(clicked == [1], "the owner's own click answers")
+  }
+
   /// Main's development-channels popup: Accept (the one that seals the launch) is answered only by a real mouse click. A program that presses
   /// the button (Accessibility, AppleScript) sends no mouse event, and one that posts a click stamps its own process id on it, so nothing is
   /// asked, nothing is pressed, nothing is sealed.
@@ -215,11 +246,11 @@ struct NeedsYouPopupGuiTests {
     #expect(clicked == [0], "the owner's click asks")
   }
 
-  @Test func theLoginPopupHasOneButtonOpenInTerminals() throws {
+  @Test func theLoginPopupHasOneButtonSignInToClaudeAgain() throws {
     _ = NSApplication.shared
     let panel = NeedsYouPopupController.makePanel(for: popup(item(idA, kind: .login)), onClick: { _ in }, onClose: {})
     let answers = buttons(in: try content(panel)).filter { $0.tag >= 0 }
-    #expect(answers.map(\.title) == ["Open in Terminals"])
+    #expect(answers.map(\.title) == ["Sign in to Claude again"])
   }
 
   @Test func aLabelWithAHiddenCharacterIsShownMarked() throws {

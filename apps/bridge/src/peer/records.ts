@@ -13,7 +13,20 @@ export const PEERS_INBOUND_FILE = 'peers-inbound.json'
 /** How long the old secret of a rotated inbox keeps working (the relay's rule). */
 export const PEER_ROTATE_GRACE_MS = 24 * 3600_000
 export type SecretFileMark = { kind: 'create' | 'rotate'; at: number }
-export type InboundPeer = { name: string; conn_id: string; secret_file?: SecretFileMark }
+/**
+ * One-paste link state of this record. `by`: `link` (this install showed the code) or `accept` (it pasted one). `state`: `open` (the code
+ * is out), `done` (linked: the other side's url and secret are stored), `closed` (ended without a link). `until` (epoch ms): the bridge
+ * keeps asking the relay about the code until then, so a second use of it is noticed. `taken`: the owner was told someone else may hold it.
+ */
+export type LinkMark = {
+  by: 'link' | 'accept'
+  state: 'open' | 'done' | 'closed'
+  until: number
+  cap?: number
+  taken?: true
+  expired?: true
+}
+export type InboundPeer = { name: string; conn_id: string; secret_file?: SecretFileMark; link?: LinkMark }
 
 const file = (home: string): string => join(home, PEERS_INBOUND_FILE)
 
@@ -31,7 +44,22 @@ export function readInboundPeers(home: string): InboundPeer[] {
         m && (m.kind === 'create' || m.kind === 'rotate') && Number.isFinite(m.at)
           ? { kind: m.kind, at: m.at as number }
           : undefined
-      return { name: p.name, conn_id: p.conn_id, ...(mark ? { secret_file: mark } : {}) }
+      const l = (p as { link?: Partial<LinkMark> }).link
+      const link: LinkMark | undefined =
+        l &&
+        (l.by === 'link' || l.by === 'accept') &&
+        (l.state === 'open' || l.state === 'done' || l.state === 'closed') &&
+        Number.isFinite(l.until)
+          ? {
+              by: l.by,
+              state: l.state,
+              until: l.until as number,
+              ...(Number.isInteger(l.cap) ? { cap: l.cap as number } : {}),
+              ...(l.taken === true ? { taken: true as const } : {}),
+              ...(l.expired === true ? { expired: true as const } : {}),
+            }
+          : undefined
+      return { name: p.name, conn_id: p.conn_id, ...(mark ? { secret_file: mark } : {}), ...(link ? { link } : {}) }
     })
 }
 

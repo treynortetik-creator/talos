@@ -32,3 +32,14 @@ SYNTHETIC screens, not captures: each is a real capture from `../real-2.1.318` w
 - `unknown-menu-under-box.txt`: written by hand (2026-11-13), not a capture: `real-2.1.318/empty-input.txt` with two rows of a made-up menu (an
   arrow, no numbers, no footer) added under the status row. A select no reader names, under Claude's empty input box: the key guard's test that
   the pointer is never typed when anything but Claude Code's own status rows sits under the box (`KeyGuard`, KeyGuardIntegrationTests).
+- `first-start-login-success.txt`: written by hand from the owner's words for the screen after a sign-in (`Login successful. Press Enter to
+  continue…`); there is no real 2.1.322 capture of it yet (the first-start captures stop at the sign-in screens). Evidence of nothing but the
+  matcher's shape.
+- `first-start-oauth-paste.txt`: written by hand from the CLI's own two lines the Linux reader keys on (`Paste code here if prompted`,
+  `Browser didn't open? Use the url below to sign in`), for the same reason.
+- `bypass-disclaimer-{0,1}.ansi.txt` and `dev-channels-{0,1}.txt`: written by hand (2026-11-19), not captures: the real `real-2.1.318/bypass-disclaimer.txt` and
+  `real-dev-channels/dev-channels-capture.txt` with the cursor row drawn at each of its two positions (the bypass cursor row coloured as the real
+  trust and MCP dialogs colour theirs, `ESC[38;5;153m` ... `ESC[39m`). They are what `fake-claude/dialog-real.sh` (`FAKE_DLG=bypass|dev`) prints so
+  the card and popup answer paths can be driven with arrow keys on a real tmux pane.
+- `bypass-disclaimer-partial.txt`: the real bypass disclaimer with its `Yes, I accept` row removed (written by hand, 2026-11-19): a disclaimer the reader
+  must refuse, so the thread gets the no-card line and no card.

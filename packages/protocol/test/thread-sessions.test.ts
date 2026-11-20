@@ -455,7 +455,7 @@ describe('frames, errors, meta', () => {
     }
     expect(ChannelMeta.safeParse(meta).success).toBe(true)
     expect(ChannelMeta.safeParse({ ...meta, routed: 'worker' }).success).toBe(false)
-    expect(CHANNEL_KINDS).toHaveLength(17) // 15, `wake` (wake_me), and `peer_message` (linked agents), which is not a fallback kind
+    expect(CHANNEL_KINDS).toHaveLength(18) // 15, `wake` (wake_me), `peer_message` (linked agents) and `onboarding` (the setup hello, trust system): none of them is a fallback kind
   })
 
   it('session.state may say which session it describes; absent = main', () => {

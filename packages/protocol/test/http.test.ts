@@ -91,6 +91,9 @@ const SPEC_ROUTES = [
   'DELETE /api/share/tokens/:id',
   'POST /api/share',
   'POST /bridge/share/tokens',
+  'POST /bridge/peers/:name/link',
+  'GET /bridge/peers/:name/link',
+  'POST /peer-link/redeem',
   'DELETE /bridge/share/tokens/:id',
   'POST /share-target',
 ]

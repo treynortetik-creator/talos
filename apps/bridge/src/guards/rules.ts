@@ -69,6 +69,8 @@ export function buildGuardConfig(a: {
       join(real(a.home), 'owner-folders.json'),
       // phone recovery: the request file the Mac app acts on, and the saved setups a restore reads
       join(real(a.home), 'agent-request.json'),
+      // permission_mode: the request the Mac app acts on to change Main's permission mode (only the bridge writes it)
+      join(real(a.home), 'permission-mode-request.json'),
       // restart_main: the Mac app's own answer to "would Main come back?" (only the app writes it; the bridge reads it)
       join(real(a.home), 'main-restart-check.json'),
       join(real(a.home), 'last-good'),
@@ -130,6 +132,7 @@ export function denyRules(cfg: GuardConfig): string[] {
     'Bash(*talos-update.py*)',
     'Bash(*enroll-pending*)',
     'Bash(*agent-request.json*)',
+    'Bash(*permission-mode-request.json*)',
     ...SUPERVISOR_NEVER.map((f) => `Bash(*${f}*)`),
     'Bash(*main-restart-check.json*)',
     'Bash(*.claude/plugins*)',
@@ -179,6 +182,7 @@ const HOME_NEVER = [
   'tripwire.json',
   'tripwire.writing',
   'agent-request.json',
+  'permission-mode-request.json',
   'main-restart-check.json',
   ...SUPERVISOR_NEVER,
 ]
@@ -220,6 +224,7 @@ const BARE_STEMS = [
   'tripwire.writing',
   'enroll-pend',
   'agent-request.json',
+  'permission-mode-request.json',
   'main-restart-check.json',
   ...SUPERVISOR_NEVER,
   ...DIALOG_FILE_NAMES,
@@ -597,7 +602,7 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
 
   if ((BARE_STEMS.some((s) => hay.includes(s)) && !searchOnly) || mentions(names(cfg.home, HOME_NEVER)))
     return {
-      deny: "Talos guard: the guard rules, the tripwire record, enroll-pending, agent-request.json, main-restart-check.json, the supervisor's control file, the owner's Stop (supervisor-stopped), the restart proofs and the bridge's signing keys (bridge.key and its .next and .prev) belong to the app and the owner; no command may touch them. The same goes for the needs-you files (dialog-answer.json and its siblings) and the wake bookkeeping (wake-state.json, wake-written.json).",
+      deny: "Talos guard: the guard rules, the tripwire record, enroll-pending, agent-request.json, permission-mode-request.json, main-restart-check.json, the supervisor's control file, the owner's Stop (supervisor-stopped), the restart proofs and the bridge's signing keys (bridge.key and its .next and .prev) belong to the app and the owner; no command may touch them. The same goes for the needs-you files (dialog-answer.json and its siblings) and the wake bookkeeping (wake-state.json, wake-written.json).",
     }
   // a wildcard that could expand to one of them: match on the stem
   const words = expandHome(cmd, cfg.userHome).split(/[\s'"`;|&<>()=,]+/)
@@ -612,7 +617,7 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
       const reaches = rest === '' ? WRITES_STRICT.test(quiet(cmd)) : HOME_NEVER.some((n) => n.startsWith(rest))
       if (reaches)
         return {
-          deny: 'Talos guard: that wildcard can reach a file the guards protect (guards, tripwire, enroll-pending, agent-request, main-restart-check).',
+          deny: 'Talos guard: that wildcard can reach a file the guards protect (guards, tripwire, enroll-pending, agent-request, permission-mode-request, main-restart-check).',
         }
     } else if (
       !l.includes('/') &&
@@ -621,7 +626,7 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
       WRITES_STRICT.test(quiet(cmd))
     ) {
       return {
-        deny: 'Talos guard: that wildcard can reach a file the guards protect (guards, tripwire, enroll-pending, agent-request, main-restart-check).',
+        deny: 'Talos guard: that wildcard can reach a file the guards protect (guards, tripwire, enroll-pending, agent-request, permission-mode-request, main-restart-check).',
       }
     }
   }

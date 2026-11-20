@@ -74,7 +74,7 @@ struct EmbeddedTerminalGuiTests {
     let t = EmbeddedTerminal()
     t.source = facts.source
     open(t, in: NSView(frame: CGRect(x: 0, y: 0, width: 1000, height: 700)))
-    #expect(t.noteTextForTest == "Talos isn't set up yet. Menu → Setup checklist…")
+    #expect(t.noteTextForTest == "Talos isn't set up yet. Menu → Set up Talos…")
     t.close()
   }
 

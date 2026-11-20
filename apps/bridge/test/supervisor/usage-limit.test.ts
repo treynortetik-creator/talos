@@ -28,7 +28,7 @@ import {
 const INTENTS: Array<[string, KeyIntent]> = [
   ['box-empty', { type: 'box', holds: 'empty' }],
   ['box-ours', { type: 'box', holds: 'ours' }],
-  ...(['theme', 'security_notes', 'trust', 'mcp_consent', 'dev_channels'] as const).map(
+  ...(['theme', 'security_notes', 'trust', 'mcp_consent', 'dev_channels', 'bypass'] as const).map(
     (k) => [k, { type: 'dialog', kind: k }] as [string, KeyIntent],
   ),
 ]

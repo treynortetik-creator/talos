@@ -36,6 +36,7 @@ const MIDNIGHT_SLACK_MS = 30_000
 const SENDER_NAME = 'linked'
 
 export { notePeerChanges } from './changes.ts'
+export { notePeers } from './link-poll.ts'
 export type PeerFetch = (url: string, init: RequestInit) => Promise<Response>
 export type PeerServiceOptions = {
   secrets?: SecretStore

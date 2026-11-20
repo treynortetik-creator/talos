@@ -110,7 +110,7 @@ public enum SessionSwitcher {
         badge = failure == nil ? .parked : .failed
         detail = failure ?? "Main is stopped."
       case .notStarted: (badge, detail) = (.notStarted, "Main hasn't started yet. Menu bar item → Start session.")
-      case .notSetUp: (badge, detail) = (.notStarted, "Talos isn't set up yet. Window → Setup checklist…")
+      case .notSetUp: (badge, detail) = (.notStarted, "Talos isn't set up yet. Menu → Set up Talos…")
       }
     }
     return SwitcherEntry(
@@ -319,10 +319,23 @@ public enum WorkerNotice {
   public static let computerUseLine =
     "This thread's session is showing the computer-use permissions dialog, and Talos has left it on screen. To close it, press Esc in this thread's pane in Terminals; Esc is the only key to press there (Enter opens System Settings). The session carries on without screen control."
 
+  /// Signed out: the app signs in itself (the Sign in to Claude again window), so no terminal and no command.
+  public static let loginLine =
+    "This thread's session is waiting on a 'sign in' prompt: Claude Code is signed out. Choose Sign in to Claude again in the Talos menu on the Mac."
+
+  /// The line for a card-able question that got no card (the screen could not be read whole, or no bridge made one).
+  public static func noCardLine(_ screen: DialogMatcher.Screen) -> String {
+    "This thread's session is waiting on a '\(promptName(screen))' prompt. Talos could not put it on a card, so nothing was pressed and it still waits for your answer."
+  }
+
   public static func line(screen: DialogMatcher.Screen) -> String {
     switch screen {
     case .computerUsePermissions: return computerUseLine
     case .usageLimit(let u): return UsageLimitScreen.threadLine(u)
+    case .loginExpired: return loginLine
+    // the questions that have a card and a popup (MCP server, bypass disclaimer, development channel): this line is what the owner gets when
+    // no card could be made for it, and it names no terminal. The Linux supervisor's `lines.dialog` says the same
+    case .mcpConsent, .bypassDisclaimer, .devChannels: return noCardLine(screen)
     default: return "This thread's session is waiting on a '\(promptName(screen))' prompt; open this thread in Terminals on the Mac to answer."
     }
   }

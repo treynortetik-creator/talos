@@ -2,6 +2,9 @@
 # colours the real dialog is drawn with) and behaves as the real Select does (OBSERVED in those captures): the cursor starts on the row the
 # capture has it on (trust: "No, exit"; MCP consent: the LAST row), Up and Down move it and wrap at the ends, a digit does nothing, Enter on a
 # row answers. The screen is drawn from the capture of that cursor position, so what a reader sees is what Claude drew.
+#   FAKE_DLG=bypass|dev                the Bypass Permissions disclaimer (cursor on "No, exit"; Enter there exits) and the development-channels question
+#                              (cursor on "I am using this for local development"; Enter on "Exit" exits), SYNTHETIC: the real captures' text, with the cursor
+#                              row drawn at each position (../synthetic/bypass-disclaimer-N.ansi.txt, dev-channels-N.txt)
 #   FAKE_DLG=trust|mcp|mcpwrap|login   the dialog (login: the real not-logged-in screen with its input box, no select; mcpwrap: the MCP dialog with a server
 #                              name wrapped over two rows, SYNTHETIC: ../synthetic)
 #   FAKE_DLG_KEYLOG=<file>     every key the pane receives, one per line: UP, DOWN, ENTER, CHAR:<c> (the tests read what was pressed)
@@ -45,6 +48,8 @@ case "$kind" in
   trust) files=("${trust_files[@]}"); cur=0 ;;
   mcp) files=("${mcp_files[@]}"); cur=2 ;;
   mcpwrap) files=("$here/../synthetic/mcp-wrapped-a-0.ansi.txt" "$here/../synthetic/mcp-wrapped-a-1.ansi.txt" "$here/../synthetic/mcp-wrapped-a-2.ansi.txt"); cur=2; kind=mcp ;;
+  bypass) files=("$here/../synthetic/bypass-disclaimer-0.ansi.txt" "$here/../synthetic/bypass-disclaimer-1.ansi.txt"); cur=0 ;;
+  dev) files=("$here/../synthetic/dev-channels-0.txt" "$here/../synthetic/dev-channels-1.txt"); cur=0 ;;
   login) files=("$C/10-trust-after-enter.ansi.txt") ;;
   cu) files=("$here/../real-2.1.322/computer-use-permissions.txt") ;;
   ul) files=("$here/../synthetic/usage-limit.txt") ;;
@@ -99,6 +104,8 @@ while true; do
         keylog ENTER
         { [ -n "$pre" ] || [ "$kind" = login ] || [ "$kind" = cu ] || [ "$kind" = ul ] || [ -n "${FAKE_DLG_STICKY:-}" ]; } && continue
         if [ "$kind" = trust ] && [ "$cur" = 0 ]; then exit 0; fi   # "No, exit"
+        if [ "$kind" = bypass ] && [ "$cur" = 0 ]; then exit 0; fi  # "No, exit"
+        if [ "$kind" = dev ] && [ "$cur" = 1 ]; then exit 0; fi     # "Exit"
         if [ -n "$again" ]; then
           [ "$again" = same ] || files=("$here/../synthetic/mcp-wrapped-b-0.ansi.txt" "$here/../synthetic/mcp-wrapped-b-1.ansi.txt" "$here/../synthetic/mcp-wrapped-b-2.ansi.txt")
           again=; cur=2; n=3

@@ -60,11 +60,13 @@ enum AppMenuActions {
     switch a {
     case .settings: window("settings")
     case .help: HelpRouter.open(model: model, via: open)
-    case .setupChecklist: window("onboarding")
+    case .setupChecklist:
+      window(OnboardingMarker.isNeeded(configured: model.configured, pending: OnboardingMarker.isPending(home: NSHomeDirectory())) ? "onboarding" : "advanced-setup")
     case .permissions: SettingsRouter.open(.permissions, via: open)
     case .about:
       NSApp.activate(ignoringOtherApps: true)
       NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Talos", .applicationVersion: WebController.version, .version: ""])
+    case .checkForUpdates: UpdateController.shared.menuChoice()
     case .showTalos:
       if web.hasRelay {
         web.show()

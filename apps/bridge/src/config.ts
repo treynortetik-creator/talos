@@ -209,6 +209,8 @@ export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-
     media: join(home, 'media'),
     approved: join(home, 'approved'),
     enrollPending: join(home, 'enroll-pending'),
+    /** The Mac app's one-shot setup request (onboarding-hello.ts): a small file the app writes here, in a folder only this user may write. */
+    onboardingDir: join(home, 'onboarding'),
     pid: join(home, 'bridge.pid'),
     envFile: join(home, 'bridge.env'),
     /** The Talos mod's shared secret (docs/CLAUDE-CODE.md C2.3): 0600, rewritten by the live bridge, read by the mod. */

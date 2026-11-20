@@ -50,6 +50,7 @@ bash scripts/bundle-tools-test.sh
 bash scripts/release-dryrun-wanted-test.sh
 if bash scripts/release-dryrun-wanted.sh; then bash scripts/release-dryrun.sh
 else echo "release-dryrun: not run (no release script, entitlements or version changed)"; fi
+bash scripts/install-record-clone-test.sh
 bash scripts/relay-wait-test.sh
 [ ! -f scripts/review-d0-test.sh ] || bash scripts/review-d0-test.sh
 [ ! -f scripts/review-d0-recheck-test.sh ] || bash scripts/review-d0-recheck-test.sh

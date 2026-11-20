@@ -40,10 +40,13 @@ describe('review fixes on #125', () => {
     expect(section).toMatch(/never restarts/)
     expect(doc).not.toContain('**Updating.**') // one place for it
   })
-  it('the Mac app Sign in pane asks for --no-qr: it reads the link from visible rows and the QR would push it off screen', () => {
-    expect(read('apps/desktop/Sources/TalosDesktop/Pairing.swift')).toContain(
-      '"enroll", "--label", "Mac app", "--no-qr"',
-    )
+  it('every enroll the Mac app runs asks for --no-qr: it reads the link from visible rows and the program\u2019s own QR would push it off screen (the phone step draws its own)', () => {
+    const pairing = read('apps/desktop/Sources/TalosDesktop/Pairing.swift')
+    // one place builds the arguments, for both purposes, and it always has --no-qr
+    expect(pairing).toContain('["enroll", "--label", purpose.deviceName, "--no-qr"]')
+    // and the name per purpose: this Mac stays "Mac app" (the sign-in help and the revoke by name read it), the phone step is "Phone"
+    expect(pairing).toContain('var deviceName: String { self == .phone ? "Phone" : SignInHelp.label }')
+    expect(read('apps/desktop/Sources/TalosDesktopCore/SignInHelp.swift')).toContain('static let label = "Mac app"')
   })
 })
 

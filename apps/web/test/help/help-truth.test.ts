@@ -591,6 +591,15 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/lib/theme.ts', 'localStorage.getItem(SIZE_KEY)'),
     has(S, 'on this device only'),
   ],
+  // the Allow updates row: the item exists only while an answer is owed, and the window carries the same button
+  'It shows only while Talos waits for your answer.': [
+    has('apps/desktop/Sources/TalosDesktop/App.swift', 'if allowUpdates.pending != nil'),
+    has('apps/desktop/Sources/TalosDesktop/CloneConfirmCenter.swift', 'func clear()'),
+  ],
+  'The same question has an Allow updates button in the update window.': [
+    has('apps/desktop/Sources/TalosDesktop/UpdateWindow.swift', 'RealClickButton(title: AllowUpdatesCopy.allowButton'),
+    has('apps/desktop/Sources/TalosDesktopCore/UpdateStatus.swift', 'public static let allowButton = "Allow updates"'),
+  ],
   'With tmux the agent keeps running.': [has(QUIT, 'with tmux it keeps running')],
   'Without it Talos stops the agent first, waiting at most 15 seconds.': [
     has(QUIT, "On the app's own terminal the agent is stopped first"),
@@ -706,8 +715,6 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/features/settings/DeviceRow.tsx', 'Revoke'),
   ],
   'It has no rename.': [lacks(S, 'Rename device'), () => expect(rd(S)).not.toMatch(/renameDevice/i)],
-  'There is no Check for updates button.': [() => expect(ABSENT_LABELS).toContain('Check for updates')],
-  'See About below for how to update.': [() => expect(allText()).toContain('Updating.')],
   'They are two voices.': [has(VOICE, 'a different voice from the live-call voice')],
   'The live-call voice is a Settings choice; spoken replies use your Mac’s speech command.': [
     has(VOICE, 'your Mac reads it with its speech command'),
@@ -845,12 +852,14 @@ describe('Help text hygiene', () => {
     ])
   })
 
-  it('the step that creates the setup is the Agent folder row with Create, Adopt and Choose, as the Mac app itself says', () => {
+  it('first setup is Set up Talos…, and the folder you already have is its Advanced route with Create, Adopt and Choose, as the Mac app itself says', () => {
     const setup = HELP_SECTIONS.find((s) => s.id === 'setup')
     const first = setup?.blocks.find((b) => b.kind === 'steps')
-    const step = first && first.kind === 'steps' ? first.items[0] : ''
-    expect(step).toMatch(/Agent folder[\s\S]*Create[\s\S]*Adopt[\s\S]*Choose[\s\S]*no setup file exists/)
-    expect(step).toMatch(/Import[\s\S]*starts/)
+    const items = first && first.kind === 'steps' ? first.items : []
+    expect(items[0]).toMatch(/\[\[Set up Talos…\]\][\s\S]*sign in to Claude[\s\S]*phone[\s\S]*says hello/)
+    const step = items[1] ?? ''
+    expect(step).toMatch(/\[\[Use a folder I already have…\]\][\s\S]*Create[\s\S]*Adopt[\s\S]*Choose/)
+    expect(step).toMatch(/Import/)
     expect(read(join(MAC, 'TalosDesktopCore/FirstRun.swift'))).toContain('"Agent folder"')
     const panel = read(join(MAC, 'TalosDesktop/AgentFolderPanel.swift'))
     for (const b of ['Create', 'Adopt', 'Choose']) expect(hasLabel(panel, b), b).toBe(true)

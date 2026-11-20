@@ -20,11 +20,11 @@ import { workersJsonPath } from '../worker/files.ts'
 import { detectPrompt } from './dialog-reader.ts'
 import { auditPointerLook } from './enter-check.ts'
 import { NOTHING_OWED, owe, persisted, restored, typeOwedPointer, wakeTooOld } from './owed-pointer.ts'
-import { liveDialog, type Screen } from './screen.ts'
+import { liveScreen, type Screen } from './screen.ts'
 import { UpdateRestarts } from './update-restart.ts'
 import { USAGE_LIMIT_KIND } from './usage-limit.ts'
 import { WakeReader } from './wake-reader.ts'
-import { declinedTrustText, newOfferState, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
+import { declinedTrustText, forgetDeclined, newOfferState, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
 import { activeNow, monoOf, NEW_BUSY_WATCH, noteScreen, seedLastActive } from './worker-idle.ts'
 import {
   folderMoved,
@@ -41,6 +41,7 @@ import {
   wantedFolder,
 } from './worker-launch.ts'
 import { newNoticeRuntime, promptName, stateAfterSignin, WorkerNotices } from './worker-notices.ts'
+import { offerTargetOf } from './worker-offer-target.ts'
 import { type CeilingAxis, folderKey, subThreadCheck } from './worker-policy.ts'
 import { WorkerSlots } from './worker-slots.ts'
 import * as status from './worker-status.ts'
@@ -142,6 +143,7 @@ export class WorkerManager {
       now: () => d.now(),
       wallS: () => d.wallMs() / 1000,
       audit: (e, f) => d.audit(e, f),
+      signInLink: d.signInLink,
     })
   }
 
@@ -379,7 +381,7 @@ export class WorkerManager {
       return false
     }
     w.entry = { ...w.entry, state: to }
-    if (to === 'live') w.offer.declinedTrust = false // a session that runs was not ended by a "No"
+    if (to === 'live') forgetDeclined(w.offer) // a session that runs was not ended by a "No"
     this.dirty = true
     return true
   }
@@ -819,7 +821,7 @@ export class WorkerManager {
     w.rows = rows
     if (rows === null) return null
     const still = this.notices.still(w.notes, rows)
-    const seen: Screen = still ? liveDialog(rows) : { kind: 'none' }
+    const seen: Screen = still ? liveScreen(rows) : { kind: 'none' }
     const target = this.offerTarget(w)
     await this.dialogs.sync(target, host, rows, seen, still)
     await this.notices.look(w.id, w.notes, rows, seen, still, () => this.ownerTyping(host))
@@ -827,18 +829,10 @@ export class WorkerManager {
     return seen
   }
 
-  /** The worker as worker-dialogs.ts sees it: the offer lives in the entry's `dialog`, so workers.json carries it. */
   private offerTarget(w: WorkerRuntime): OfferTarget {
-    return {
-      id: w.id,
-      offer: w.offer,
-      dialog: () => w.entry.dialog,
-      setDialog: (dialog) => {
-        const { dialog: _old, ...rest } = w.entry
-        w.entry = dialog ? { ...rest, dialog } : rest
-        this.dirty = true
-      },
-    }
+    return offerTargetOf(w, () => {
+      this.dirty = true
+    })
   }
 
   /** An attached client typed within dialog_client_quiet_s (the owner's own picker, or the owner at the keys). Unread: no. */

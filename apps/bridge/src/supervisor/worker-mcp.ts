@@ -78,6 +78,15 @@ const childOf = (o: Json | undefined | null, k: string): Json | undefined => {
   return isObject(v) ? v : undefined
 }
 
+/**
+ * The server names the folder's own `.mcp.json` defines (both file shapes), for reading a name Claude Code's question wrapped over rows:
+ * the screen's two halves are only a name when they join into one of these. Nothing here approves anything.
+ */
+export function projectMcpNames(cwd: string): string[] {
+  const o = object(join(cwd, '.mcp.json'))
+  return o ? [...tableOrSelf(o).keys()] : []
+}
+
 export type McpScope = 'user' | 'local' | 'project' | 'plugin'
 /** A server and where it was defined. `unfillable`: a plugin server that names a path this supervisor cannot fill in. */
 export type McpEntry = { def: Json; scope: McpScope; unfillable: boolean }

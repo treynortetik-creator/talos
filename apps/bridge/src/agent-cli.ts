@@ -6,7 +6,7 @@
 // anything else is an agent session and is judged here from the bridge's own records. These stay terminal-only: `enroll`, `rotate`
 // (the bridge key), `trust on`, `install-guards --remove`. The guards, when installed, still deny these commands (talos.ts).
 //
-// (A) create, add, rotate and revoke are refused while outside text reached ANY thread, a lead handed main anything, or the peer taint
+// (A) link, accept, create, add, rotate and revoke are refused while outside text reached ANY thread, a lead handed main anything, or the peer taint
 //     stands, since the owner's latest words; one rule for every session (the session name is only for the audit line). (B) revoke never takes the last approved device nor the one his
 //     latest message came from. Every agent run writes one audit line to bridge.log; the CLI posts no thread row (the bridge posts
 //     the rows for what it sees change: peer/changes.ts).
@@ -82,7 +82,13 @@ function judge(
   // holds against every agent run.
   if (terminal) return undefined
   if (file.config.settings_lock === true) return SETTINGS_LOCKED
-  const gated = name === 'peer create' || name === 'peer add' || name === 'peer rotate' || name === 'devices revoke'
+  const gated =
+    name === 'peer link' ||
+    name === 'peer accept' ||
+    name === 'peer create' ||
+    name === 'peer add' ||
+    name === 'peer rotate' ||
+    name === 'devices revoke'
   if (!gated) return undefined
   // history.sqlite is where the outside text, the hand-offs and the taint are kept: without it nothing can be checked (fails closed)
   if (!existsSync(p.historyDb))

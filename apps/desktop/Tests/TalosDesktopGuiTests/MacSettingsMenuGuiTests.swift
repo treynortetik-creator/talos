@@ -319,6 +319,6 @@ struct ScreenShotTests {
       SettingsNavigator.shared.selected = tab
       try shoot(SettingsView(model: m), size: NSSize(width: 700, height: 560), to: dir + "/\(name).png")
     }
-    try shoot(OnboardingView(model: m), size: NSSize(width: 560, height: 640), to: dir + "/setup-screen.png")
+    try shoot(AdvancedSetupView(model: m), size: NSSize(width: 560, height: 640), to: dir + "/setup-screen.png")
   }
 }

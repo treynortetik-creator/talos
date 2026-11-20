@@ -96,7 +96,7 @@ describe('a waiting dialog card', () => {
 
   it('MCP consent shows all three options as read, including "all future servers"', () => {
     show(dialogCard(mcpDialog()))
-    expect(screen.getByRole('heading', { name: 'Allow this MCP server?' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Use github?' })).toBeTruthy()
     expect(screen.getByTestId('dialog-subject').textContent).toBe('github')
     expect(buttons().map((x) => x.textContent)).toEqual([
       'Use this and all future MCP servers in this project',

@@ -55,6 +55,17 @@ export interface EngineLike {
   tee?: { read(sessionId: string): Promise<string>; clear(sessionId: string): Promise<void> }
   /** docs/SUBAGENTS.md: `$.tool.call({ tool: 'TaskStop', task_id })`. Resolves with the tool's result or `{ deny }`. */
   tasks?: { stop(taskId: string): Promise<TaskStopResultLike> }
+  /**
+   * The kit's settings-hook fallback (kit/hooks/mod-fallback.py), for events Claude Code may not hand this plugin: on a machine
+   * with managed settings, and for every Team and Enterprise organization, the built-in cc-plugin-sec-default seats itself
+   * outermost and passes `classic.Stop`, `session.append` and the model-switch events on past user plugins. `stop.read`:
+   * the session's `background_tasks` as the kit's Stop hook wrote them. `ticket`: the one-shot ticket the kit's PreModelSwitch
+   * hook allows the mod's own `/model` with.
+   */
+  fallback?: {
+    stop: { read(sessionId: string): Promise<string> }
+    ticket: { write(body: string): Promise<void>; clear(): Promise<void> }
+  }
 }
 
 /** What `$.tool.call` resolves to (ToolCallResult): `{ deny }`, or `{ result, text, isError? }` from core. */

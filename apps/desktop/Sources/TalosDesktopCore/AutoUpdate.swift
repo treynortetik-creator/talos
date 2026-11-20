@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Mac app's own updater, the parts that decide (the live half is TalosSupervisor's `AutoUpdater`). On launch and every 6 hours,
+/// The Mac app's own updater, the parts that decide (the live half is TalosSupervisor's `AutoUpdater`). On launch and about every hour,
 /// while `desktop.json` `auto_update` is on: the signed manifest is fetched from the feed and checked against the pinned key
 /// (`ReleaseManifest`); a newer release's zip is downloaded and checked (its sha256 here, then install.sh `--check-only`: codesign,
 /// Gatekeeper and the Developer ID team); then it waits for quiet (`QuietWait`, `BackgroundWork`) for at most 2 hours, and hands the
@@ -10,7 +10,10 @@ public enum AutoUpdate {
   public static let defaultFeed = "https://github.com/treynortetik-creator/talos/releases/latest/download/"
   public static let manifestName = "latest.json"
   public static let sigName = "latest.json.sig"
-  public static let checkEvery: Double = 6 * 3600
+  /// How often a Mac looks for a release: every hour, so a release waits at most about an hour, not six. Each look moves by up to
+  /// `checkJitter` either way (random per check) so a fleet does not ask the feed in the same second.
+  public static let checkEvery: Double = 3600
+  public static let checkJitter: Double = 600
   /// The longest a downloaded release waits for quiet; after it, the next check tries again.
   public static let quietCap: Double = 2 * 3600
   /// A key in an attached client this recently: the owner may be typing.
@@ -53,6 +56,56 @@ public enum AutoUpdate {
   /// for it, and the line says so.
   public static func updatedLine(_ version: String) -> String {
     "Talos updated to \(oneLine(version)). The relay updates separately."
+  }
+
+  /// A build for the owner's eyes: a commit's first 7 characters, or the text itself (one line, at most 24 characters).
+  public static func shortBuild(_ build: String) -> String {
+    let b = oneLine(build).trimmingCharacters(in: .whitespaces)
+    let hex = b.count >= 7 && b.allSatisfy { $0.isHexDigit && $0.isASCII }
+    return hex ? String(b.prefix(7)) : String(b.prefix(24))
+  }
+
+  /// The relay is on an older build than the update. Both builds are named, and so is the step the owner takes: the relay does not
+  /// follow releases by itself, and nothing waits for it. `relay`: the build the relay reports; `app`: the build the update brings.
+  public static func relayBehindLine(version: String, relay: String, app: String) -> String {
+    "The relay (the server your phone talks to) is on build \(shortBuild(relay)). Talos \(oneLine(version)) is build \(shortBuild(app)). "
+      + "The update works with the older relay, but your phone may say Talos is newer than the app until the relay is redeployed. "
+      + "To fix that, redeploy the relay in Railway (open its project, then Deployments, then Redeploy) and check again. "
+      + "Talos does not wait for the relay: it installs when nothing is going on, or when you press Update now."
+  }
+
+  // The lines the update window shows for a check that could not finish. Plain words; the details are in the log.
+  public static let noKeyLine = "This copy of Talos can\u{2019}t check for updates (it is a development build)."
+  public static let badFeedLine = "Talos can\u{2019}t use the update address that is set. Clear it in the Talos settings file to use the default."
+  public static let unreachableLine = "Talos couldn\u{2019}t reach the update server. Check your internet connection and try again."
+  public static let downloadFailedLine = "The download didn\u{2019}t finish. Check your internet connection and try again."
+  public static func cloneNeedsOKLine(_ clone: String) -> String {
+    "Talos needs your OK before it can update: it has not used the Talos code folder \(oneLine(clone)) before. "
+      + "\(AllowUpdatesCopy.whereToAnswer) Allow updates only if it is the folder you installed from."
+  }
+  public static let notHealthyLine = "Talos can\u{2019}t update right now because your agent isn\u{2019}t running normally. Fix that, then try again."
+  public static let cannotRestartLine =
+    "Talos can\u{2019}t update right now because your agent might not come back after a restart. Check the Talos window, then try again."
+  public static func busyLine(_ version: String, old: String) -> String {
+    "Talos couldn\u{2019}t update to \(oneLine(version)): your agent was busy for 2 hours. Still on \(oneLine(old)). Try Update now again when it is idle."
+  }
+  public static func pausedLine(_ version: String, old: String) -> String {
+    "Talos \(oneLine(version)) didn\u{2019}t start properly on this Mac, so updates to it are paused for a week. Still on \(oneLine(old))."
+  }
+  public static func triedLine(_ version: String, old: String) -> String {
+    "Talos couldn\u{2019}t update to \(oneLine(version)) a short while ago. It tries again within a day. Still on \(oneLine(old))."
+  }
+
+  /// The commit a relay build names: a bare sha (7 to 40 hex), or the hex of a `git describe` (`tag-N-g<hex>`, maybe `-dirty`), lowercase.
+  /// Anything else (a tag, a package version) names no commit, so nothing is claimed about it.
+  public static func relayHex(_ build: String) -> String? {
+    let b = oneLine(build).trimmingCharacters(in: .whitespaces).lowercased()
+    func hex(_ s: String) -> Bool { (7...40).contains(s.count) && s.allSatisfy { $0.isASCII && $0.isHexDigit } }
+    if hex(b) { return b }
+    let core = b.hasSuffix("-dirty") ? String(b.dropLast(6)) : b
+    guard let r = core.range(of: "-g", options: .backwards) else { return nil }
+    let tail = String(core[r.upperBound...])
+    return hex(tail) ? tail : nil
   }
 
   public static func postponedLine(_ version: String) -> String {

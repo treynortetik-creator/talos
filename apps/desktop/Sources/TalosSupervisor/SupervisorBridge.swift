@@ -16,11 +16,16 @@ extension Supervisor {
   static func opensTerminal(for n: NeedsYou) -> Bool {
     switch n {
     // a dialog never to be answered (computer use: Enter opens System Settings) is not brought forward, so no stray key can reach it
-    case .dialog(let label): return !DialogMatcher.Screen.answerless(label: label)
+    // the sign-in and the API-key question have a window and a popup of their own: no terminal beside them
+    case .dialog(let label): return !DialogMatcher.Screen.answerless(label: label) && !Self.hasOwnWindow(label: label)
     case .stuck, .startStalled, .notReading, .stalled: return true
     case .confirmColdStart, .restartNotConfirmed, .bridgeNotLive, .relayUnreachable: return false
     }
   }
+
+  /// Dialog labels answered in the app's own window or popup, never in the pane.
+  static func hasOwnWindow(label: String) -> Bool { isSignIn(label: label) || label == apiKeyLabel || isSafetyLabel(label) }
+  static func isSignIn(label: String) -> Bool { label == signInLabel || label == DialogMatcher.Screen.loginExpired.label }
 
   /// This start's bridge is up: `status.json` says `live`, from a running process, stamped after the spawn and under 45 seconds old.
   func bridgeIsLive(_ l: Launch) -> Bool { liveBridgeStatus(l) != nil }

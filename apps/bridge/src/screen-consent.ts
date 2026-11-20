@@ -26,6 +26,7 @@ import {
 import type { LedgerRow } from './cards-ledger.ts'
 import { type BridgeContext, defaultThreadRef } from './context.ts'
 import { cardCreateFrame, cardUpdateFrame } from './frames-out.ts'
+import { PermissionModeConsent } from './permission-mode.ts'
 import { isDeniedScreenApp, refusalText, SCREEN_TEXT, type ScreenAnswer, screenTransport } from './screen.ts'
 import { assertFrameFits } from './transport.ts'
 
@@ -127,10 +128,16 @@ export class ScreenConsent {
   /** The Mac's name on the card (which Mac the app is allowed on). Tests give a fixed one. */
   macName: () => string = () => hostname()
 
-  constructor(private readonly ctx: BridgeContext) {}
+  constructor(private readonly ctx: BridgeContext) {
+    // the permission-mode consent card (permission-mode.ts) shares this lifecycle: it is made with it, and its relay features and
+    // restart recovery are passed on below
+    ctx.permissionModeConsent = new PermissionModeConsent(ctx)
+  }
 
   setRelayFeatures(features: readonly string[]): void {
     this.relayFeatures = features
+    // the permission-mode consent card (permission-mode.ts) is the same kind of card and shares this lifecycle
+    this.ctx.permissionModeConsent?.setRelayFeatures(features)
   }
 
   private rec(key: string): Rec | undefined {
@@ -280,6 +287,9 @@ export class ScreenConsent {
 
   /** Once per process: an Allow that was in flight when the bridge stopped is ended in words, never sent again. */
   recover(): Promise<void> {
+    void this.ctx.permissionModeConsent
+      ?.recover()
+      .catch((e) => this.ctx.log.warn('permission mode card recovery failed', { error: (e as Error).message }))
     const rows = this.ctx.ledger
       .list('resolved')
       .filter((r) => r.actor === 'bridge' && isScreenAllowCard(r.binding) && r.resolution?.action === 'primary')

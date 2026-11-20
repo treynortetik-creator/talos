@@ -113,6 +113,7 @@ extension WorkerManager {
   func dryPlanDetail(_ id: String, _ s: ThreadSessionSettings) -> DryDetail {
     guard let entry = rt[id]?.entry, let sessionId = entry.session_id else { return .refused("no conversation to resume") }
     if let mode = mainNarrowedMode() { return .refused(MainNarrowed.detail(mode)) }
+    if options.threadsHeld { return .refused("a saved launch change waits for the owner's confirmation") }
     guard let source = options.permissionHook else { return .refused(WorkerHook.noBundledHook) }
     if let why = s.sub?.refusal { return .refused(why) }
     if let why = unreadFolderRefusal(id, s) { return .refused(why) }

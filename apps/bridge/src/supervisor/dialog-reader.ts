@@ -3,7 +3,7 @@
 // their tests document where each rule came from (real 2.1.318 and 2.1.319 captures, apps/desktop/Tests/Fixtures). Pure
 // functions over rows, built on screen.ts. Columns and lengths count code points, where the Swift counts characters: the
 // captures have no combining marks, and a row that had them would only read as longer.
-import { classify, clean, isFrameRule, liveDialog, STRINGS, stripEscapes } from './screen.ts'
+import { classify, clean, isFrameRule, liveDevChannels, liveDialog, STRINGS, stripEscapes } from './screen.ts'
 
 // Swift's CharacterSet.whitespaces, .whitespacesAndNewlines and .controlCharacters, so a trim here trims what the Mac's does.
 const WS = '\\p{Zs}\\t'
@@ -19,8 +19,11 @@ const ESC = '\u001b'
 
 // ---- the known dialogs --------------------------------------------------------------------------------------------------------
 
-/** `dev_channels` is Main's own warning, published as `supervisor.main_dialog`: `readDialog` never reads it off a worker's pane. */
-export type DialogKind = 'trust' | 'mcp_consent' | 'login' | 'dev_channels'
+/**
+ * `dev_channels` is the development-channels startup question: Main's own copy is published as `supervisor.main_dialog` by the Mac;
+ * a thread session's copy is read off its pane here. `bypass` is the Bypass Permissions disclaimer (no subject).
+ */
+export type DialogKind = 'trust' | 'mcp_consent' | 'login' | 'dev_channels' | 'bypass'
 
 export type Dialog = {
   kind: DialogKind
@@ -51,7 +54,7 @@ const MAX_ROW = 62
  * same screen, the cursor row must be the coloured one, every other option plain and none dim: the Select Claude draws, not
  * text that looks like one.
  */
-export function readDialog(rows: string[], escapedRows?: string[]): Dialog | null {
+export function readDialog(rows: string[], escapedRows?: string[], mcpNames: readonly string[] = []): Dialog | null {
   if (escapedRows !== undefined) {
     const a = normalized(rows)
     const b = normalized(escapedRows)
@@ -61,15 +64,66 @@ export function readDialog(rows: string[], escapedRows?: string[]): Dialog | nul
     case 'login_expired':
       return { kind: 'login', subject: null, options: [], cursor: null }
     case 'trust':
-      return readSelect('trust', rows, escapedRows)
+      return readSelect('trust', rows, escapedRows, mcpNames)
     case 'mcp_consent':
-      return readSelect('mcp_consent', rows, escapedRows)
+      return readSelect('mcp_consent', rows, escapedRows, mcpNames)
+    case 'bypass_disclaimer':
+      return readSelect('bypass', rows, escapedRows, mcpNames)
     default:
-      return null
+      return liveDevChannels(rows) ? readDevChannels(rows, escapedRows) : null
   }
 }
 
-function readSelect(kind: 'trust' | 'mcp_consent', rows: string[], escaped: string[] | undefined): Dialog | null {
+/** The labels of the two rows the development-channels question has, in screen order (the first is the only row that loads the channel). */
+const DIM_SGR = new RegExp(`${ESC}\\[[0-9;:]*\\b2m`)
+// (a function: screen.ts and this file import each other, so STRINGS is not there yet when this module is first evaluated)
+const devOptions = (): readonly string[] => [STRINGS.devConfirm, STRINGS.devExit]
+
+/**
+ * The development-channels question, read exactly: ONE title, ONE `Channels:` line naming at least one channel (no empty entry, no
+ * control character, none cut with an ellipsis), the two numbered rows `1. I am using this for local development` and `2. Exit` and
+ * nothing else numbered, the cursor on exactly one of them. The channel list is the subject.
+ */
+function readDevChannels(rows: string[], escaped: string[] | undefined): Dialog | null {
+  const s = classify(rows)
+  if (s.kind !== 'dev_channels') return null
+  const { channels, highlighted, titleCount, channelsRowCount } = s.dev
+  if (titleCount !== 1 || channelsRowCount !== 1 || channels === null || channels.length === 0 || highlighted === null)
+    return null
+  if (channels.some((c) => c === '' || hasControl(c) || c.includes('…'))) return null
+  const DEV_OPTIONS = devOptions()
+  const cursor = DEV_OPTIONS.findIndex((o) => o === highlighted)
+  if (cursor < 0) return null
+  const cleaned = rows.map(clean)
+  const numbered = cleaned.filter((r) => /^(?:❯ )?\d+\. /.test(r))
+  if (numbered.length !== DEV_OPTIONS.length) return null
+  const wanted = DEV_OPTIONS.map((o, i) => `${i + 1}. ${o}`)
+  if (!numbered.every((r, i) => r.replace(/^❯ /, '') === wanted[i])) return null
+  const subject = channels.join(', ')
+  if (len(subject) > MAX_SUBJECT) return null
+  // no option row dim in the coloured capture (text that only looks like the question is not drawn as its rows are)
+  if (escaped !== undefined)
+    for (const r of escaped) if (/^(?:❯ )?\d+\. /.test(clean(stripEscapes(r))) && DIM_SGR.test(r)) return null
+  return { kind: 'dev_channels', subject, options: [...DEV_OPTIONS], cursor }
+}
+
+/**
+ * The server name when its question wrapped it over rows: the rows from the name to the blank row, joined with nothing between, when
+ * that is exactly one of the names the folder's own `.mcp.json` defines. Anything else is no name (a half is never offered).
+ */
+function wrappedMcpName(header: string[], h: number, first: string, known: readonly string[]): string | null {
+  const parts = [first]
+  for (let k = h + 1; k < header.length && !isBlank(header[k] as string); k++) parts.push(trimWS(header[k] as string))
+  const joined = parts.join('')
+  return known.includes(joined) ? valid(joined) : null
+}
+
+function readSelect(
+  kind: 'trust' | 'mcp_consent' | 'bypass',
+  rows: string[],
+  escaped: string[] | undefined,
+  mcpNames: readonly string[] = [],
+): Dialog | null {
   const rule = rows.findLastIndex(isFrameRule)
   if (rule < 0) return null
   const top = rule + 1
@@ -112,7 +166,12 @@ function readSelect(kind: 'trust' | 'mcp_consent', rows: string[], escaped: stri
   if (!f.startsWith('Enter to confirm') || !f.includes('Esc to cancel')) return null
   const header = block.slice(0, first)
   let subject: string | null
-  if (kind === 'trust') {
+  if (kind === 'bypass') {
+    // the disclaimer has no subject; its exact two rows, and its own title above them
+    if (!header.some((r) => trimWS(r) === STRINGS.bypass)) return null
+    if (options.length !== 2 || options[0] !== 'No, exit' || options[1] !== 'Yes, I accept') return null
+    subject = null
+  } else if (kind === 'trust') {
     const h = header.findLastIndex((r) => trimWS(r) === 'Accessing workspace:')
     if (h < 0) return null
     subject = rowAfter(header, h)
@@ -124,7 +183,10 @@ function readSelect(kind: 'trust' | 'mcp_consent', rows: string[], escaped: stri
     else if (t.startsWith(`${MCP_HEADER}: `)) {
       // the name is on this row; a wrapped one continues on the next, so the row below must be blank
       const name = trimWS(t.slice(MCP_HEADER.length + 2))
-      subject = h + 1 < header.length && isBlank(header[h + 1] as string) ? valid(name) : null
+      subject =
+        h + 1 < header.length && isBlank(header[h + 1] as string)
+          ? valid(name)
+          : wrappedMcpName(header, h, name, mcpNames)
     } else return null
   }
   if (escaped !== undefined && !intensityOK(escaped, top, first, last, c)) return null

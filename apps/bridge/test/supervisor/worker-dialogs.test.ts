@@ -21,8 +21,17 @@ import {
 } from '@talos-app/protocol'
 import { ensureDir } from '../../src/fsutil.ts'
 import { readDialog } from '../../src/supervisor/dialog-reader.ts'
+import { keyRefusal } from '../../src/supervisor/key-guard.ts'
+import { liveScreen, type Screen } from '../../src/supervisor/screen.ts'
 import { parseCapture } from '../../src/supervisor/tmux-commands.ts'
-import { newOfferState, type OfferTarget, planKeys, WorkerDialogs } from '../../src/supervisor/worker-dialogs.ts'
+import {
+  type DialogPane,
+  declinedTrustText,
+  newOfferState,
+  type OfferTarget,
+  planKeys,
+  WorkerDialogs,
+} from '../../src/supervisor/worker-dialogs.ts'
 import { workerDir } from '../../src/worker/files.ts'
 
 const FIX = resolve(import.meta.dir, '../../../desktop/Tests/Fixtures')
@@ -67,9 +76,17 @@ class FakePane {
     else if (this.at === 'top' || this.at === 'yes') this.at = this.at === 'top' ? 'yes' : 'top'
     return 'sent'
   }
+  seen(): Screen {
+    return TRUST
+  }
 }
 
-async function setup() {
+type TestPane = DialogPane & { keys: PtyDialogKey[]; clients: number[] | null; seen(): Screen }
+
+async function setup<P extends TestPane = FakePane>(
+  pane: P = new FakePane() as unknown as P,
+  mcpNames?: () => readonly string[],
+) {
   const home = mkdtempSync(join(tmpdir(), 'talos-dialogs-'))
   dirs.push(home)
   ensureDir(workerDir(home, 'trip'))
@@ -93,8 +110,8 @@ async function setup() {
     setDialog: (x) => {
       dialog = x
     },
+    ...(mcpNames ? { mcpNames } : {}),
   }
-  const pane = new FakePane()
   const dir = workerDir(home, 'trip')
   return {
     home,
@@ -110,7 +127,7 @@ async function setup() {
       wall += s * 1000
     },
     /** The look the manager makes each tick, on a screen that has held still. */
-    sync: () => d.sync(target, pane, SCREENS[pane.at].plain, TRUST, true),
+    sync: async () => d.sync(target, pane, (await pane.visibleRows()) as string[], pane.seen(), true),
     result: () =>
       existsSync(join(dir, 'dialog-result.json'))
         ? (JSON.parse(readFileSync(join(dir, 'dialog-result.json'), 'utf8')) as Record<string, unknown>)
@@ -475,5 +492,349 @@ describe('planKeys', () => {
     expect(planKeys(offered, { ...fresh, options: ['a', 'b'] }, 0)).toBeNull()
     expect(planKeys(offered, fresh, 3)).toBeNull()
     expect(planKeys(offered, null, 0)).toBeNull()
+  })
+})
+
+// ---- the safety questions: bypass disclaimer, MCP server, a thread's development channel (pane-prompts rows 2 to 4) ----
+
+const IDLE = { plain: SCREENS.idle.plain, coloured: SCREENS.idle.coloured }
+const devCap = parseCapture(readFileSync(resolve(FIX, 'real-dev-channels', 'dev-channels-capture.txt'), 'utf8'))
+const bypassCap = cap('real-2.1.318', 'bypass-disclaimer')
+const mcpCap = cap(CAP, '20-mcp-first')
+const CURSOR_ON = '\x1b[38;5;153m'
+
+/** A real capture with its option rows redrawn for a cursor row: plain, and coloured the way Claude Code draws the cursor row. */
+function selectFrames(
+  base: string[],
+  isOption: (row: string) => boolean,
+  draw: (label: string, on: boolean) => { plain: string; coloured: string },
+  labels: string[],
+) {
+  const first = base.findIndex(isOption)
+  return (cursor: number) => {
+    const plain = [...base]
+    const coloured = [...base]
+    labels.forEach((l, i) => {
+      const r = draw(l, i === cursor)
+      plain[first + i] = r.plain
+      coloured[first + i] = r.coloured
+    })
+    return { plain, coloured }
+  }
+}
+
+const BYPASS = ['No, exit', 'Yes, I accept']
+const bypassFrame = selectFrames(
+  bypassCap,
+  (r) => r.includes('No, exit'),
+  (l, on) => ({
+    plain: on ? `  ❯ ${l}` : `    ${l}`,
+    coloured: on ? `  ${CURSOR_ON}❯ ${l}\x1b[39m` : `    ${l}`,
+  }),
+  BYPASS,
+)
+const MCP = [
+  'Use this MCP server',
+  'Use this and all future MCP servers in this project',
+  'Continue without using this MCP server',
+]
+const mcpFrame = selectFrames(
+  mcpCap,
+  (r) => r === '    Use this MCP server',
+  (l, on) => ({
+    plain: on ? `  ❯ ${l}` : `    ${l}`,
+    coloured: on ? `  ${CURSOR_ON}❯ ${l}\x1b[39m` : `    ${l}`,
+  }),
+  MCP,
+)
+const DEV = ['I am using this for local development', 'Exit']
+const devFrame = selectFrames(
+  devCap,
+  (r) => r.includes('1. I am using'),
+  (l, on) => {
+    const n = DEV.indexOf(l) + 1
+    const row = on ? ` ❯ ${n}. ${l}` : `   ${n}. ${l}`
+    return { plain: row, coloured: row }
+  },
+  DEV,
+)
+
+/** A select drawn from a real capture: Up and Down move its cursor (wrapping, as the real one does), Enter closes it. */
+class SelectPane implements TestPane {
+  keys: PtyDialogKey[] = []
+  kinds: Array<string | undefined> = []
+  clients: number[] | null = []
+  gone = false
+  constructor(
+    private readonly frame: (cursor: number) => { plain: string[]; coloured: string[] },
+    private readonly n: number,
+    public cursor: number,
+  ) {}
+  /** Another screen takes its place (the owner's own Enter, a different dialog). */
+  replaced: { plain: string[]; coloured: string[] } | null = null
+  private now() {
+    return this.replaced ?? (this.gone ? IDLE : this.frame(this.cursor))
+  }
+  async visibleRows() {
+    return this.now().plain
+  }
+  async visibleRowsEscaped() {
+    return this.now().coloured
+  }
+  async clientActivities() {
+    return this.clients
+  }
+  async sendDialogKey(k: PtyDialogKey, kind?: string): Promise<PtySendResult> {
+    this.keys.push(k)
+    this.kinds.push(kind)
+    if (k === 'Enter') this.gone = true
+    else this.cursor = (this.cursor + (k === 'Down' ? 1 : this.n - 1)) % this.n
+    return 'sent'
+  }
+  seen(): Screen {
+    return this.gone ? { kind: 'none' } : liveScreen(this.now().plain)
+  }
+}
+
+describe('the bypass-permissions disclaimer on a card', () => {
+  it('a real disclaimer is offered: no subject, its two rows, the cursor on "No, exit"', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    expect(x.offer()).toMatchObject({ kind: 'bypass', subject: null, options: BYPASS, cursor: 0 })
+    expect(x.offer().id).toMatch(/^[A-Za-z0-9_-]{22}$/)
+  })
+  it('a signed "Yes, I accept": one Down, then one Enter, every key stating the bypass kind', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 1 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Down', 'Enter'])
+    expect(new Set(x.pane.kinds)).toEqual(new Set(['bypass']))
+    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 1, label: 'Yes, I accept' })
+    expect(x.target.offer.declinedExit).toBeNull()
+  })
+  it('a signed "No, exit": just Enter; the session’s exit that follows is the owner’s answer, said in its own words', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Enter'])
+    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 0, label: 'No, exit' })
+    expect(x.target.offer.declinedExit).toBe('bypass')
+    expect(declinedTrustText(x.target.offer)).toContain('permission checks off')
+    expect(declinedTrustText(x.target.offer)).toBeNull() // said once
+  })
+  it('an answer an agent could write (a forged signature, a key that is no paired device, no proof at all) presses nothing', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    // 1. signed by a device nobody paired
+    const other = await createExtractableDeviceKeyForTests()
+    await answerFor(x, { key: other.privateKey, deviceId: other.deviceId, choice: 1 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'unverified' })
+    // 2. the paired device's id with a signature that is not its own
+    const a = await answerFor(x, { control: 'dc_2', choice: 1 })
+    writeFileSync(
+      join(x.dir, 'dialog-answer.json'),
+      JSON.stringify({ ...a, proof: { ...a.proof, osig: 'A'.repeat(86) } }),
+    )
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ control_id: 'dc_2', outcome: 'nothing_pressed', reason: 'unverified' })
+    // 3. a bare answer with no proof: not an answer at all, so no result and no key
+    writeFileSync(
+      join(x.dir, 'dialog-answer.json'),
+      JSON.stringify({
+        v: 2,
+        dialog_id: x.offer().id,
+        choice: 1,
+        label: 'Yes, I accept',
+        by: 'agent',
+        at: new Date(NOW).toISOString(),
+        control_id: 'dc_3',
+      }),
+    )
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+    expect(x.result()?.control_id).toBe('dc_2')
+  })
+  it('a tap signed for a card whose rows were changed (a third row, another label) presses nothing', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { dialog: { ...x.offer(), options: ['No, exit', 'Yes, I accept', 'Always'] }, choice: 1 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'unverified' })
+  })
+  it('a different dialog in its place by the time of the tap (the screen changed under the card) presses nothing', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 1 })
+    x.pane.replaced = mcpFrame(0)
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed' })
+  })
+  it('a partial or garbled disclaimer gets no card, and one that was carded loses it after two bad looks', async () => {
+    const dropped = {
+      plain: bypassCap.filter((r) => !r.includes('Yes, I accept')),
+      coloured: bypassCap.filter((r) => !r.includes('Yes, I accept')),
+    }
+    const x = await setup(new SelectPane(() => dropped, 2, 0))
+    await x.sync()
+    expect(x.target.dialog()).toBeUndefined()
+    const y = await setup(new SelectPane(bypassFrame, 2, 0))
+    await y.sync()
+    expect(y.target.dialog()).toBeDefined()
+    y.pane.replaced = { plain: ['half a screen', '❯ No, exi'], coloured: ['half a screen', '❯ No, exi'] }
+    await y.d.sync(y.target, y.pane, ['half a screen', '❯ No, exi'], { kind: 'bypass_disclaimer' }, true)
+    await y.d.sync(y.target, y.pane, ['half a screen', '❯ No, exi'], { kind: 'bypass_disclaimer' }, true)
+    expect(y.target.dialog()).toBeUndefined()
+  })
+  it('a copy of a signed "Yes, I accept" (the same tap under another control id, or after a restart) presses nothing more: a tap is used once', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    const a = await answerFor(x, { choice: 1 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Down', 'Enter'])
+    // the same dialog is drawn again (the owner pressed Esc and Claude asked again): this is a new sighting, and the old tap is for the old id
+    x.pane.gone = false
+    x.pane.cursor = 0
+    x.target.offer.enterSentFor = null
+    writeFileSync(join(x.dir, 'dialog-answer.json'), JSON.stringify({ ...a, control_id: 'dc_copy' }))
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ control_id: 'dc_copy', outcome: 'nothing_pressed', reason: 'already_answered' })
+    expect(x.pane.keys).toEqual(['Down', 'Enter'])
+  })
+  it('an Enter whose delivery timed out is never remembered as the owner’s "No" (it may not have landed)', async () => {
+    const x = await setup(new SelectPane(bypassFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    const send = x.pane.sendDialogKey.bind(x.pane)
+    x.pane.sendDialogKey = async (k, kind) => ((await send(k, kind)) && k === 'Enter' ? 'unknown' : 'sent')
+    await x.d.answer(x.target, x.pane)
+    expect(x.target.offer.declinedExit).toBeNull()
+  })
+})
+
+describe("a thread's development-channels question on a card", () => {
+  it('a real one is offered with its channels as the subject, and "Exit" is the owner’s decline, in its own words', async () => {
+    const x = await setup(new SelectPane(devFrame, 2, 0))
+    await x.sync()
+    expect(x.offer()).toMatchObject({ kind: 'dev_channels', subject: 'server:talos-app', options: DEV, cursor: 0 })
+    await answerFor(x, { choice: 1 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Down', 'Enter'])
+    expect(new Set(x.pane.kinds)).toEqual(new Set(['dev_channels']))
+    expect(x.target.offer.declinedExit).toBe('dev_channels')
+    expect(declinedTrustText(x.target.offer)).toContain('development channel')
+  })
+  it('"I am using this for local development" is one Enter and no decline', async () => {
+    const x = await setup(new SelectPane(devFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Enter'])
+    expect(x.result()).toMatchObject({ outcome: 'pressed', label: 'I am using this for local development' })
+    expect(x.target.offer.declinedExit).toBeNull()
+  })
+  it('the same question with more channels than the card showed (the list changed) presses nothing', async () => {
+    const x = await setup(new SelectPane(devFrame, 2, 0))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    const more = (c: number) => {
+      const f = devFrame(c)
+      const swap = (r: string) => r.replace('Channels: server:talos-app', 'Channels: server:talos-app, server:other')
+      return { plain: f.plain.map(swap), coloured: f.coloured.map(swap) }
+    }
+    x.pane.replaced = more(0)
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed' })
+  })
+})
+
+describe('an MCP server question on a card', () => {
+  const wrapped = (c: number) => {
+    const f = mcpFrame(c)
+    const swap = (rs: string[]) =>
+      rs.flatMap((r) =>
+        r.includes('New MCP server found')
+          ? ['  New MCP server found in this project: a-very-long-na', '  me-that-wrapped']
+          : [r],
+      )
+    return { plain: swap(f.plain), coloured: swap(f.coloured) }
+  }
+  it('a server named on its row is offered with its name; "Continue without" is the deny and presses its row', async () => {
+    const x = await setup(new SelectPane(mcpFrame, 3, 2))
+    await x.sync()
+    expect(x.offer()).toMatchObject({ kind: 'mcp_consent', subject: 'harmless', options: MCP, cursor: 2 })
+    await answerFor(x, { choice: 2 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Enter'])
+    expect(x.result()).toMatchObject({ outcome: 'pressed', label: 'Continue without using this MCP server' })
+    expect(new Set(x.pane.kinds)).toEqual(new Set(['mcp_consent']))
+  })
+  it('"Use this MCP server": two Ups from the denying row, then Enter, each arrow read back', async () => {
+    const x = await setup(new SelectPane(mcpFrame, 3, 2))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual(['Up', 'Up', 'Enter'])
+    expect(x.result()).toMatchObject({ outcome: 'pressed', choice: 0, label: 'Use this MCP server' })
+  })
+  it('a name wrapped over two rows is a card only when .mcp.json defines exactly that name', async () => {
+    const none = await setup(new SelectPane(wrapped, 3, 2))
+    await none.sync()
+    expect(none.target.dialog()).toBeUndefined() // no names: the line is the way, never a half name
+    const wrong = await setup(new SelectPane(wrapped, 3, 2), () => ['something-else'])
+    await wrong.sync()
+    expect(wrong.target.dialog()).toBeUndefined()
+    const right = await setup(new SelectPane(wrapped, 3, 2), () => ['a-very-long-name-that-wrapped', 'other'])
+    await right.sync()
+    expect(right.offer()).toMatchObject({ kind: 'mcp_consent', subject: 'a-very-long-name-that-wrapped' })
+    // and the tap presses on the same reading
+    await answerFor(right, { choice: 2 })
+    await right.d.answer(right.target, right.pane)
+    expect(right.result()).toMatchObject({ outcome: 'pressed' })
+  })
+  it('a tap for a card whose server was another one presses nothing', async () => {
+    const x = await setup(new SelectPane(mcpFrame, 3, 2))
+    await x.sync()
+    await answerFor(x, { choice: 0 })
+    const f = (c: number) => {
+      const g = mcpFrame(c)
+      const swap = (r: string) => r.replace('project: harmless', 'project: evil')
+      return { plain: g.plain.map(swap), coloured: g.coloured.map(swap) }
+    }
+    x.pane.replaced = f(2)
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+  })
+})
+
+describe('the key gate for the safety questions (every key states its kind; the live screen must be exactly that)', () => {
+  const colour = (r: string[]) => r.map((x) => x.replace(/❯ (.*)$/, `${CURSOR_ON}❯ $1\x1b[39m`))
+  it('a bypass key goes only onto the real bypass disclaimer, whichever row the cursor is on', () => {
+    for (const c of [0, 1]) expect(keyRefusal(bypassFrame(c).coloured, { type: 'dialog', kind: 'bypass' })).toBeNull()
+    for (const [name, rows] of [
+      ['trust', colour(SCREENS.top.plain)],
+      ['mcp', mcpFrame(2).coloured],
+      ['dev', colour(devCap)],
+      ['an idle box', SCREENS.idle.coloured],
+      ['a row missing', colour(bypassCap.filter((r) => !r.includes('Yes, I accept')))],
+      ['unread', null],
+    ] as const)
+      expect(keyRefusal(rows, { type: 'dialog', kind: 'bypass' })?.why, name).toMatch(/^(not_bypass|unreadable)$/)
+  })
+  it('and the other kinds’ keys are refused on the disclaimer (a card for MCP cannot press on a bypass screen)', () => {
+    for (const kind of ['trust', 'mcp_consent', 'dev_channels'] as const)
+      expect(keyRefusal(bypassFrame(0).coloured, { type: 'dialog', kind })?.why, kind).toBe(`not_${kind}`)
+  })
+  it('a dev_channels key goes only onto the real question, and the usage-limit menu takes none of them', () => {
+    expect(keyRefusal(colour(devCap), { type: 'dialog', kind: 'dev_channels' })).toBeNull()
+    expect(keyRefusal(bypassFrame(0).coloured, { type: 'dialog', kind: 'dev_channels' })?.why).toBe('not_dev_channels')
+    const usage = cap('synthetic', 'usage-limit-cursor3')
+    for (const kind of ['bypass', 'mcp_consent', 'dev_channels'] as const)
+      expect(keyRefusal(usage, { type: 'dialog', kind })?.why, kind).toBe('usage_limit')
   })
 })

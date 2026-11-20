@@ -14,3 +14,15 @@ describe('linked-agent addresses in reports', () => {
     expect(redact('nothing here, just cn_short')).toBe('nothing here, just cn_short')
   })
 })
+
+describe('one-paste link codes', () => {
+  const code = `talos-link:relay.example.com/cn_8fK2aBcDeFgHiJkLmNoPqR/${'A'.repeat(43)}`
+  it('are hidden wherever redact runs, and in the text sealed into a push', async () => {
+    const out = redact(`here is your code: ${code} Paste it.`)
+    expect(out).toBe('here is your code: talos-link:[redacted] Paste it.')
+    expect(redact(`"${code}"`)).toBe('"talos-link:[redacted]"')
+    const { richContentFor } = await import('../src/push-rich.ts')
+    const rich = richContentFor({ kind: 'reply', text: `code ${code}` })
+    expect(rich.b).toBe('code talos-link:[redacted]')
+  })
+})

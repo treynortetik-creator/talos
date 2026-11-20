@@ -7,6 +7,7 @@ import { type BridgeContext, postSystemNotice } from './context.ts'
 import { CONFIRM_WAIT_MS, EnrollFiles, PENDING_KEEP_MS } from './enroll-files.ts'
 import { devicePinnedFrame } from './frames-out.ts'
 import { agentDirFromEnv } from './last-good.ts'
+import { pollOnboardingHello } from './onboarding-hello.ts'
 
 type Enrolled = Extract<Frame, { type: 'device.enrolled' }>
 type Revoked = Extract<Frame, { type: 'device.revoked' }>
@@ -99,6 +100,8 @@ export class Enrollment {
   /** Acts on answers, times out unanswered prompts and removes stale pending codes. Called on file changes and every 10 s. */
   async poll(): Promise<void> {
     const { ctx } = this
+    // the other request file the Mac app leaves for the bridge (a fixed hello, once): checked on the same file changes and 10 s poll
+    await pollOnboardingHello(ctx, ctx.paths.onboardingDir)
     const now = ctx.clock.now()
     for (const codeId of this.files.codeIds()) {
       const pending = this.files.readPending(codeId)

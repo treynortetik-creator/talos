@@ -1,6 +1,6 @@
 // D61: `talos-app update` against a throwaway repository (a bare origin and two clones). pnpm is a recorder; git is real.
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCli } from '../src/cli.ts'
@@ -40,7 +40,7 @@ function world() {
 }
 
 /** `bun`: what the pulled code's Bun check answers (the stand-in for running apps/bridge/src/bun-floor.ts). */
-function harness(repoDir: string, pnpmCode = 0, bun = { code: 0, out: '' }) {
+function harness(repoDir: string, pnpmCode = 0, bun = { code: 0, out: '' }, home = tempHome()) {
   const calls: string[][] = []
   const out: string[] = []
   const err: string[] = []
@@ -65,8 +65,8 @@ function harness(repoDir: string, pnpmCode = 0, bun = { code: 0, out: '' }) {
     sleep: async () => {},
     now: () => Date.now(),
   }
-  const run = () => runCli(['update'], io, { TALOS_APP_HOME: tempHome() }, deps)
-  return { calls, out, err, run }
+  const run = () => runCli(['update'], io, { TALOS_APP_HOME: home }, deps)
+  return { calls, out, err, run, home }
 }
 
 describe('talos-app update', () => {
@@ -231,5 +231,41 @@ describe('talos-app update', () => {
       now: () => 0,
     })
     expect(out.join('\n')).toContain('  update')
+  })
+
+  // The Mac app answers `auto-update/check-now.json` with a check (Sources/TalosDesktopCore/CheckNowRequest.swift): the exact shape.
+  test.if(process.platform === 'darwin')(
+    'asks the running Mac app to check for a new version: check-now.json, exact shape, 0600',
+    async () => {
+      const w = world()
+      const h = harness(w.install)
+      const before = Date.now()
+      expect(await h.run()).toBe(0)
+      const file = join(h.home, 'auto-update', 'check-now.json')
+      const body = JSON.parse(readFileSync(file, 'utf8'))
+      expect(Object.keys(body).sort()).toEqual(['action', 'ts', 'v'])
+      expect(body.v).toBe(1)
+      expect(body.action).toBe('check')
+      expect(Date.parse(body.ts)).toBeGreaterThanOrEqual(before - 1000)
+      expect(Date.parse(body.ts)).toBeLessThanOrEqual(Date.now() + 1000)
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(h.out.join('\n')).toContain('asked the Mac app to check for a new version')
+      // nothing half-written is left beside it
+      expect(existsSync(`${file}.tmp`)).toBe(false)
+    },
+  )
+
+  test.if(process.platform === 'darwin')('a folder it cannot write is said, not skipped', async () => {
+    const w = world()
+    const home = tempHome()
+    mkdirSync(join(home, 'auto-update'), { recursive: true })
+    chmodSync(join(home, 'auto-update'), 0o500)
+    const h = harness(w.install, 0, { code: 0, out: '' }, home)
+    try {
+      expect(await h.run()).toBe(0)
+      expect(h.out.join('\n')).toContain('could not ask the Mac app to check')
+    } finally {
+      chmodSync(join(home, 'auto-update'), 0o700)
+    }
   })
 })

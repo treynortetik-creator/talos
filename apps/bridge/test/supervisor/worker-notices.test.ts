@@ -160,12 +160,25 @@ describe('a dialog on a worker’s pane', () => {
     expect(x.posts).toHaveLength(1)
     expect(readNotices(x.home, 'trip')['trust this folder']?.open).toBe(true)
   })
-  it('login is a line only, naming the fix: ssh to the machine and run claude /login', async () => {
+  it('login names the Sign in to Claude again line, with the link when the sign-in has one, and never an ssh instruction', async () => {
     const x = setup()
     await hold(x, LOGIN, 7)
-    expect(x.texts()).toEqual([
-      "This thread's session is waiting on a 'sign in' prompt: Claude Code is signed out. To fix it, ssh to devbox and run `claude /login`, then run `talos-app supervise restart-thread trip`.",
-    ])
+    expect(x.texts()).toHaveLength(1)
+    const t = x.texts()[0] as string
+    expect(t).toStartWith('Sign in to Claude again')
+    expect(t).not.toMatch(/ssh|claude \/login|tmux|Terminals/i)
+  })
+  it('the no-link line promises no later line and names where to sign in', () => {
+    const t = lines.login(WHERE)
+    expect(t).not.toMatch(/comes in a new line|link comes|will send|in a moment/i)
+    expect(t).toContain(WHERE.machine)
+    expect(t).not.toMatch(/ssh|claude \/login|tmux|Terminals/i)
+  })
+  it('the line carries the sign-in link once the supervisor has it', () => {
+    const t = lines.login(WHERE, 'https://claude.ai/oauth/authorize?state=x')
+    expect(t).toContain('https://claude.ai/oauth/authorize?state=x')
+    expect(t).toStartWith('Sign in to Claude again')
+    expect(t).not.toMatch(/ssh|claude \/login|tmux|Terminals/i)
   })
   it('a line that waits for a card is not sent while it waits', async () => {
     const x = setup()

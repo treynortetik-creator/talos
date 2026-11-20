@@ -45,6 +45,29 @@ struct CloneProvisionerTests {
     #expect(log.contains("protocol.allow=never"), "\(log)")
   }
 
+  /// Only a tree this very run cloned and verified may be counted as accepted without a click (`AgentFolderFlow.ownCloneAccepted`).
+  @Test func aRunSaysWhetherItMadeTheTreeItselfAndAReusedFolderIsNeverSaidToBeMadeHere() throws {
+    let w = try AutoCloneWorld()
+    defer { w.cleanUp() }
+    let first = w.provisioner().runReportingOrigin()
+    #expect(first.result == .ok(clone: w.dest) && first.madeHere, "a fresh clone, tag verified, put in place by this run")
+    let again = w.provisioner().runReportingOrigin()
+    #expect(again.result == .ok(clone: w.dest) && !again.madeHere, "the second run reused it")
+    // a folder someone put at the fixed place before: whole, at the stamped commit, with the marker the archive route writes
+    let p = try AutoCloneWorld()
+    defer { p.cleanUp() }
+    _ = try p.git(["clone", "-q", p.remote, p.dest])
+    _ = try p.git(["-C", p.dest, "checkout", "-q", p.tagSha])
+    try Data((p.tagSha + "\n").utf8).write(to: URL(fileURLWithPath: p.dest + "/" + CloneProvisioner.commitMarker))
+    let planted = p.provisioner().runReportingOrigin()
+    #expect(planted.result == .ok(clone: p.dest) && !planted.madeHere, "it passes the checks, but this run did not make it")
+    // the tarball route reports the same
+    let a = try AutoCloneWorld()
+    defer { a.cleanUp() }
+    #expect(a.provisioner({ a.viaArchive(&$0) }).runReportingOrigin().madeHere)
+    #expect(!a.provisioner({ a.viaArchive(&$0) }).runReportingOrigin().madeHere)
+  }
+
   @Test func aSecondRunReusesTheCloneAndDoesNotCloneAgain() throws {
     let w = try AutoCloneWorld()
     defer { w.cleanUp() }

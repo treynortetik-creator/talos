@@ -68,7 +68,7 @@ extension WorkerManager {
       return .pressed(choice: choice, label: label)
     case .open:
       guard offer.kind == .login else { return .nothing(.notOffered) }
-      guard let open = openTerminals, open(id) else { return .nothing(.noWindow) }
+      guard let open = openSignIn, open(id) else { return .nothing(.noWindow) }
       rt[id]?.offer.openedFor = offer.id
       writeMacResult(id, offer, .opened)
       return .opened

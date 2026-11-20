@@ -1,6 +1,6 @@
 // `talos-app` CLI (spec 4.8). Never opens the bridge socket (4.10): everything goes over the signed HTTP API or files.
 
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -1010,11 +1010,32 @@ function kitUpdater(e: Record<string, string | undefined> = process.env): string
   return join(resolve(vendor), 'current', 'talos-kit', 'bin', 'talos-update')
 }
 
+/**
+ * Leaves `auto-update/check-now.json` for the running Mac app, which answers it with one check for a new version (the Mac app's
+ * CheckNowRequest.swift reads exactly this shape; a file that is stale or any other shape is ignored there). Written whole, then moved
+ * into place, 0600. One line says how it went; a failure is said, never skipped.
+ */
+function askMacAppToCheck(appHome: string): string {
+  const dir = join(appHome, 'auto-update')
+  const file = join(dir, 'check-now.json')
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    writeFileSync(`${file}.tmp`, `${JSON.stringify({ v: 1, action: 'check', ts: new Date().toISOString() })}\n`, {
+      mode: 0o600,
+    })
+    renameSync(`${file}.tmp`, file)
+    return 'asked the Mac app to check for a new version (open its Talos menu, Check for Updates, to see the answer)'
+  } catch (e) {
+    return `could not ask the Mac app to check for a new version (${(e as Error).message}); open its Talos menu and choose Check for Updates`
+  }
+}
+
 async function cmdUpdate(
   args: string[],
   io: CliIO,
   deps: CliDeps,
   procEnv: Record<string, string | undefined> = process.env,
+  appHome?: string,
 ) {
   parseArgs({ args, options: {}, strict: true })
   const repo = deps.update?.repoDir ?? REPO_DIR
@@ -1088,6 +1109,7 @@ async function cmdUpdate(
       ? `updated: ${before.version} -> ${after.version}`
       : `already up to date: ${after.version} (packages checked)`,
   )
+  if (appHome && ownerHost() === 'mac') io.out(askMacAppToCheck(appHome))
   io.out('')
   io.out('What is left (this command changed the code on disk only; nothing was restarted):')
   io.out(
@@ -1205,7 +1227,7 @@ export async function runCli(
         await cmdDoctor(env, rest, io, deps)
         break
       case 'update':
-        await cmdUpdate(rest, io, deps, envOverride ?? process.env)
+        await cmdUpdate(rest, io, deps, envOverride ?? process.env, env.home)
         break
       case 'restore-last-good':
         return await (await import('./last-good.ts')).restoreLastGood(rest, io, envOverride) // normally dispatched by cli.ts

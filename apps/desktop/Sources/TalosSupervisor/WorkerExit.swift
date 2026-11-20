@@ -22,6 +22,11 @@ extension WorkerManager {
       fail(id, "start_failed", Self.declinedTrustText)
       return runQueued(id, after: after, settings: settings, now: t)
     }
+    if let kind = r.offer.declinedExit {  // the same for the bypass disclaimer's "No, exit" and the development channel's "Exit"
+      rt[id]?.offer.declinedExit = nil
+      fail(id, "start_failed", Self.declinedExitText(kind))
+      return runQueued(id, after: after, settings: settings, now: t)
+    }
     if wasStarting, sessionTrouble(id, rows: rows) {
       // a start the next one mends is not a crash: nothing is counted, and what was waiting (a message, a tap) still happens
       notePark(id, why: "start_retry", bg: BackgroundWork.Found.none)

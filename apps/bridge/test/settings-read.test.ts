@@ -49,6 +49,32 @@ describe('settings_read', () => {
     expect(out).not.toContain('particular')
   })
 
+  test('a sub-thread\'s missing folder and MCP list read null (raw), never "same as <parent>"', async () => {
+    const base = loadExampleConfig('default')
+    const t = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      kind: 'agent',
+      order: 9,
+      notify: 'all',
+      voice_context: 'recent',
+      archived: false,
+      created_at: '2026-10-28T00:00:00.000Z',
+      ...extra,
+    })
+    h = await start({
+      threads: [
+        ...base.threads,
+        t('site', { session_opts: { cwd: '/home/alex/site', mcp_allow: ['github'] } }),
+        t('docs', { parent_id: 'site' }),
+      ],
+    })
+    const out = await read(h)
+    expect(out).toContain('threads.docs.session_opts.cwd: null')
+    expect(out).toContain('threads.docs.mcp_allow: null')
+    expect(out).not.toContain('same as')
+  })
+
   test("a thread session's view: its own thread's fields and cards only", async () => {
     h = await startHarness({
       relay: { relayFeatures: ['schedules/1', CONFIG_PROPOSE_FEATURE] },
@@ -66,6 +92,9 @@ describe('settings_read', () => {
     const main = settingsReadText(h.bridge.ctx)
     expect(main).toContain(`threads.${a}.name:`)
     expect(main).toContain(`threads.${b}.name:`)
+    // the fields an agent sets up a thread with are listed, the folder's dotted path included
+    for (const f of ['color', 'effort', 'model', 'mcp_allow', 'session_opts.cwd'])
+      expect(main).toContain(`threads.${a}.${f}:`)
     const mine = settingsReadText(h.bridge.ctx, a)
     expect(mine).toContain(`threads.${a}.name:`)
     expect(mine).not.toContain(`threads.${b}.`)

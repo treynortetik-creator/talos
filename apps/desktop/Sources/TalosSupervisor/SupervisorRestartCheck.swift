@@ -68,14 +68,15 @@ extension Supervisor {
     let folder = config.expandedAgentDir(home: options.home)
     let blocked: Bool = { if case .blocked = phase { return true } else { return false } }()
     let enabled = config.autoConfirmRestart
-    let expects = config.args.contains("--dangerously-load-development-channels")
+    let launchArgs = withChannelsFlag(config.args)
+    let expects = MainChannelFlag.passes(launchArgs)
     let inputs = MainRestartCheck.Inputs(
       configReadable: true, claudeFound: claude != nil,
       folderExists: FileManager.default.fileExists(atPath: folder, isDirectory: &isDir) && isDir.boolValue,
       sessionIdValid: config.session.id.map(ResumeRewrite.isUUID) ?? true, expectsDevDialog: expects,
       autoConfirm: enabled, isMain: options.name == TmuxCommands.mainSession,
-      launchedChannels: AutoConfirmGuard.channels(inArgv: config.args),
-      seal: claude.map { MainRestartCheck.seal(config, resolvedClaude: $0, trust: options.launchTrust) } ?? .launchChanged,
+      launchedChannels: AutoConfirmGuard.channels(inArgv: launchArgs),
+      seal: claude.map { MainRestartCheck.seal(config, resolvedClaude: $0, trust: options.launchTrust, args: launchArgs) } ?? .launchChanged,
       // read only when it could matter, as the guard's own input is: a tmux call
       clientsMayBeTyping: expects && enabled && clientsMayBeTyping(), coldLoop: coldLoop, now: now, takeoverHeld: blocked,
       ownerStopped: ownerStopped,
@@ -223,5 +224,33 @@ extension Supervisor {
     if DialogMatcher.classify(rows).isDialog || live != .none { return false }
     return Self.claudeIsReady(rows: rows, live: live, warningLive: DialogMatcher.liveDevChannels(rows))
       || now - l.startedAt >= timings.noticeWait
+  }
+}
+
+extension Supervisor {
+  /// The launch fingerprint and parts of `c`, over the flags as Main is launched with them (the channels flag included).
+  func launchFingerprint(_ c: DesktopConfig, _ claude: String) -> String { c.launchFingerprint(resolvedClaude: claude, args: withChannelsFlag(c.args)) }
+  func launchParts(_ c: DesktopConfig, _ claude: String) -> [String: String] { c.launchParts(resolvedClaude: claude, args: withChannelsFlag(c.args)) }
+
+  /// An install whose launch was confirmed before the channels flag was added to every launch (so over its saved flags) is sealed once more
+  /// over the flags it now launches with, with an audit row. Only when the old seal verifies; nothing is ever sealed that was not confirmed.
+  func migrateChannelsFlagSeal(claude: String) {
+    guard withChannelsFlag(config.args) != config.args else { return }
+    let now = launchFingerprint(config, claude)
+    guard !LaunchSeal.isConfirmed(config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust),
+      LaunchSeal.isConfirmed(
+        config, fingerprint: config.launchFingerprint(resolvedClaude: claude), parts: config.launchParts(resolvedClaude: claude),
+        trust: options.launchTrust)
+    else { return }
+    if LaunchSeal.confirm(&config, fingerprint: now, parts: launchParts(config, claude), trust: options.launchTrust) {
+      saveConfig()
+      audit("channels_flag_reseal", [:])
+    }
+  }
+
+  /// The arguments Main is launched with: its saved ones, plus the channels flag when the app asks for it (`Options.addsChannelsFlag`).
+  /// A thread's supervisor never gets it.
+  func withChannelsFlag(_ args: [String]) -> [String] {
+    options.name == TmuxCommands.mainSession && options.addsChannelsFlag ? MainChannelFlag.ensured(args) : args
   }
 }
