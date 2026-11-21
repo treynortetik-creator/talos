@@ -208,9 +208,9 @@ struct MainLaunchEnvTests {
 @Suite("Main running without its bridge: the owner's line")
 struct BridgeNotLiveWordingTests {
   @Test func saysItWithAndWithoutTheReason() {
-    #expect(SupervisorNotice.bridgeNotLive(nil) == "Main is running but its Talos bridge didn't start")
+    #expect(SupervisorNotice.bridgeNotLive(nil) == "Your agent is running but Talos on your Mac didn't start")
     #expect(
       SupervisorNotice.bridgeNotLive("Executable not found in $PATH: \"bun\"")
-        == "Main is running but its Talos bridge didn't start: Executable not found in $PATH: \"bun\"")
+        == "Your agent is running but Talos on your Mac didn't start: Executable not found in $PATH: \"bun\"")
   }
 }

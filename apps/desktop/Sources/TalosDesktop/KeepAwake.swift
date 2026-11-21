@@ -99,6 +99,15 @@ final class KeepAwake: ObservableObject {
   }
 
   /// The line under the switch in Settings.
+  /// General's one conditional line: nothing while it works or is off, a sentence when it can't hold the Mac awake right now.
+  static func stateNote(_ s: Status) -> String? {
+    switch s {
+    case .off, .holding: return nil
+    case .waitingForPower: return "On battery now, so Talos is not holding your Mac awake."
+    case .failed: return "macOS refused just now. Talos will try again when the power changes."
+    }
+  }
+
   static func caption(_ s: Status) -> String {
     let base = "Stops the Mac from sleeping on its own while it is plugged in. A closed lid, Sleep from the Apple menu and low battery can still put it to sleep."
     switch s {

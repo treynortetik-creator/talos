@@ -49,7 +49,7 @@ struct BlockedTextTests {
     let lines = BlockedText.lines([blocker(.telegram), blocker(.bridge), blocker(.channels)])
     #expect(lines.count == 1)
     #expect(lines[0].contains("Telegram, the Talos bridge and channels"))
-    #expect(lines[0].components(separatedBy: "Another Claude session").count == 2, "the sentence appears once")
+    #expect(lines[0].components(separatedBy: "Another Claude (pid").count == 2, "the sentence appears once")
   }
 
   @Test func twoSessionsAreTwoLines() {
@@ -59,13 +59,13 @@ struct BlockedTextTests {
   @Test func theWordsMatchTheButton() {
     let line = BlockedText.lines([blocker(.telegram)])[0]
     #expect(line.contains("\u{201C}\(BlockedText.adoptButton)\u{201D}"))
-    #expect(BlockedText.adoptButton == "Find a running session")
+    #expect(BlockedText.adoptButton == "Take over an agent that's already running")
     #expect(!line.contains("Adopt it"))
     #expect(blocker(.telegram).message.contains(BlockedText.adoptButton), "the per-holder message says it too")
   }
 
   @Test func theNoticeThatRepeatsItIsDroppedOnlyWhileBlocked() {
-    let n = "\(SupervisorNotice.blocked): Another Claude session (pid 40) holds Telegram."
+    let n = "\(SupervisorNotice.blocked): Another Claude (pid 40) is already using Telegram."
     #expect(BlockedText.notice(n, whileBlocked: true) == "")
     #expect(BlockedText.notice(n, whileBlocked: false) == n)
     #expect(BlockedText.notice("Something else", whileBlocked: true) == "Something else")
@@ -75,7 +75,7 @@ struct BlockedTextTests {
     let bs = [blocker(.telegram), blocker(.bridge), blocker(.channels)]
     let notice = "\(SupervisorNotice.blocked): \(bs[0].message)"
     let screen = ([BlockedText.notice(notice, whileBlocked: true)] + BlockedText.lines(bs)).joined(separator: "\n")
-    #expect(screen.components(separatedBy: "Another Claude session").count == 2)
+    #expect(screen.components(separatedBy: "Another Claude (pid").count == 2)
   }
 }
 
@@ -124,7 +124,7 @@ struct HelpPageTests {
     #expect(notice.contains(MacSettingsText.connectionPath), "it points at the tab that sets the relay address")
   }
 
-  @Test func theConnectionTabShowsWhyHelpSentTheOwnerThereOnlyWhileThereIsNoRelay() {
+  @Test func theAdvancedTabShowsWhyHelpSentTheOwnerThereOnlyWhileThereIsNoRelay() {
     #expect(MacSettingsText.connectionNotice(HelpPage.noRelay, hasRelay: false) == HelpPage.noRelay)
     #expect(MacSettingsText.connectionNotice(MacSettingsText.noRelayYet, hasRelay: false) == MacSettingsText.noRelayYet)
     #expect(MacSettingsText.connectionNotice(HelpPage.noRelay, hasRelay: true).isEmpty, "stale once an address is set")
@@ -132,20 +132,20 @@ struct HelpPageTests {
     #expect(MacSettingsText.connectionNotice("", hasRelay: false).isEmpty)
   }
 
-  @Test func theConnectionTabReallyDrawsThatNotice() throws {
+  @Test func theAdvancedTabReallyDrawsThatNotice() throws {
     let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-      .appendingPathComponent("Sources/TalosDesktop/SettingsView.swift")
+      .appendingPathComponent("Sources/TalosDesktop/AdvancedSettingsView.swift")
     let t = try String(contentsOf: src, encoding: .utf8)
-    let tab = try #require(t.range(of: "private var connection: some View"))
+    let tab = try #require(t.range(of: "private var serverSection: some View"))
     let body = String(t[tab.lowerBound...].prefix(900))
     #expect(body.contains("MacSettingsText.connectionNotice(model.liveNotice, hasRelay: web.hasRelay)"))
-    #expect(body.contains("Text(why)"), "the notice is drawn, not only computed")
+    #expect(body.contains("SettingsCaption(why"), "the notice is drawn, not only computed")
   }
 
   @Test func theFailureScreenCarriesTheOutageFixesBecauseHelpCannotLoadThen() {
     #expect(PageState.outageHelp.count == 3)
     let all = PageState.outageHelp.joined(separator: " ")
-    for word in ["Start session", "talos-app status", "talos-app doctor", "talos-app logs", "menu bar"] { #expect(all.contains(word), Comment(rawValue: word)) }
+    for word in ["Start your agent", "talos-app status", "talos-app doctor", "talos-app logs", "menu bar"] { #expect(all.contains(word), Comment(rawValue: word)) }
     #expect(PageState.outageHelp.allSatisfy { !$0.contains("/Users/") })
   }
 

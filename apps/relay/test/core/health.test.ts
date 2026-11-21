@@ -3,13 +3,13 @@
 // clock. Every row of "Bridge down", "Mod", "Health status" and "ntfy".
 import { createServer, type Server } from 'node:http'
 import { type HealthBeatT, HealthStatus } from '@talos-app/protocol'
-import { type FakeBridge, fakeClock, sleep, waitFor } from '@talos-app/testkit'
+import { type FakeBridge, fakeClock, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_CONFIG } from '../../src/core/default-config.ts'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { advance, kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: t(60_000) })
 
 const SUB = { endpoint: 'https://push.example.com/send/health', keys: { p256dh: 'a', auth: 'b' } }
 const START = '2026-10-29T12:00:00.000Z'
@@ -116,8 +116,8 @@ describe('V2.3 bridge rule', () => {
     expect(r.transport.sent).toHaveLength(0)
     await advance(clock, 2 * 60_000)
     await waitFor(() => bodies(r).length >= 1, 3000, 'session_stopped')
-    await sleep(150)
-    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: 10_000 })
+    await sleep(150) // timing-ok: negative window: a second "stopped" push must not follow
+    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: t(10_000) })
     expect(bodies(r)[0]).toContain('Mac session stopped')
     expect(r.transport.sent[0]?.payload.notification.navigate).toBe('/settings/health')
     // back: one mac_back
@@ -129,8 +129,8 @@ describe('V2.3 bridge rule', () => {
     await advance(clock, 30 * 60_000)
     await gone(b2)
     await advance(clock, 7 * 60_000)
-    await sleep(200)
-    await vi.waitFor(() => expect(bodies(r)).toHaveLength(2), { timeout: 10_000 })
+    await sleep(200) // timing-ok: negative window: the min gap must hold back a second "stopped"
+    await vi.waitFor(() => expect(bodies(r)).toHaveLength(2), { timeout: t(10_000) })
   })
 
   it('a "stopped" push every service refused is not heard: the Mac coming back sends no "back" (bug hunt R15)', async () => {
@@ -149,7 +149,7 @@ describe('V2.3 bridge rule', () => {
     await connectBridge()
     await waitFor(() => r.relay.services.bus.bridgeOnline(), 3000, 'the bridge back')
     await advance(clock, 30_000)
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: no "back" is sent after a refused "stopped"
     expect(tried.some((b) => b.includes('Mac is back'))).toBe(false)
   })
 
@@ -199,12 +199,12 @@ describe('V2.3 bridge rule', () => {
     await waitFor(() => app?.rec.frames.some((x) => x.raw.type === 'config.sync') ?? false, 3000, 'config')
     await gone(bridge)
     await advance(clock, 6 * 60_000) // 06:56, inside the window
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: nothing is sent inside the quiet window
     expect(r.transport.sent).toHaveLength(0)
     await advance(clock, 6 * 60_000) // 07:02, window over
     await waitFor(() => bodies(r).length === 1, 3000, 'held push')
-    await sleep(200)
-    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: 10_000 })
+    await sleep(200) // timing-ok: negative window: the held push is sent once, not twice
+    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: t(10_000) })
     expect(bodies(r)[0]).toContain('Mac session stopped')
   })
 
@@ -217,7 +217,7 @@ describe('V2.3 bridge rule', () => {
     await advance(clock, 6 * 60_000)
     await connectBridge()
     await advance(clock, 10 * 60_000)
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: nothing is sent when it was back before the window ended
     expect(r.transport.sent).toHaveLength(0)
   })
 
@@ -232,8 +232,8 @@ describe('V2.3 bridge rule', () => {
     await advance(clock, 10 * 60_000) // 22:06, inside the window
     await connectBridge()
     await advance(clock, 2 * 60_000)
-    await sleep(200)
-    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: 10_000 })
+    await sleep(200) // timing-ok: negative window: the "back" inside the quiet window must not be sent
+    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: t(10_000) })
   })
 
   it('the rule survives a redeploy: same store, new hub, one push per outage', async () => {
@@ -248,7 +248,7 @@ describe('V2.3 bridge rule', () => {
     relay = await startTestRelay({ clock: later, dir })
     relay.runtime.store.putSub(SUB)
     await advance(later, 10 * 60_000)
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: a redeployed hub must not send a second down push
     expect(relay.transport.sent).toHaveLength(0) // the flags were persisted: no second down push
   })
 })
@@ -288,8 +288,8 @@ describe('V2.3 mod rule', () => {
     await waitFor(() => bodies(r).length === 1, 5000, 'mod_quiet')
     expect(bodies(r)[0]).toContain('mod stopped reporting')
     await advance(clock, 20 * 60_000)
-    await sleep(200)
-    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: 10_000 })
+    await sleep(200) // timing-ok: negative window: a second mod_quiet push must not follow
+    await vi.waitFor(() => expect(bodies(r)).toHaveLength(1), { timeout: t(10_000) })
   })
 
   it('quiet 5 min, or a mod that is not expected, sends nothing', async () => {
@@ -299,7 +299,7 @@ describe('V2.3 mod rule', () => {
       bridge,
       beatOf({ mod: { state: 'quiet', last_seen: new Date(clock.now() - 5 * 60_000).toISOString(), expected: true } }),
     )
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: a mod quiet for 5 min sends nothing
     expect(r.transport.sent).toHaveLength(0)
     sendBeat(bridge, beatOf({ mod: { state: 'absent', last_seen: null, expected: false } }))
     await advance(clock, 30 * 60_000)
@@ -359,19 +359,19 @@ describe('V2.3 status', () => {
     sendBeat(bridge, beatOf({ permission_relay_declared: false }))
     await vi.waitFor(
       async () => expect(HealthStatus.parse((await status(r)).json).beat?.permission_relay_declared).toBe(false),
-      { timeout: 5000 },
+      { timeout: t(5000) },
     )
     sendBeat(bridge, beatOf({ permission_relay_declared: true }))
     await vi.waitFor(
       async () => expect(HealthStatus.parse((await status(r)).json).beat?.permission_relay_declared).toBe(true),
-      { timeout: 5000 },
+      { timeout: t(5000) },
     )
     bridge.send({
       type: 'health.beat',
       beat: { ...beatOf({ tts: false }), permission_relay_declared: 'maybe' } as never,
     })
     await vi.waitFor(async () => expect(HealthStatus.parse((await status(r)).json).beat?.tts).toBe(false), {
-      timeout: 5000,
+      timeout: t(5000),
     })
     expect(HealthStatus.parse((await status(r)).json).beat).not.toHaveProperty('permission_relay_declared')
   })
@@ -381,7 +381,7 @@ describe('V2.3 status', () => {
     sendBeat(bridge, beatOf({ permission_relay_declared: true }))
     await vi.waitFor(
       async () => expect(HealthStatus.parse((await status(r)).json).beat?.permission_relay_declared).toBe(true),
-      { timeout: 5000 },
+      { timeout: t(5000) },
     )
     await gone(bridge)
     expect(HealthStatus.parse((await status(r)).json).beat).not.toHaveProperty('permission_relay_declared')
@@ -391,7 +391,7 @@ describe('V2.3 status', () => {
     sendBeat(b2, beatOf({ permission_relay_declared: false }))
     await vi.waitFor(
       async () => expect(HealthStatus.parse((await status(r)).json).beat?.permission_relay_declared).toBe(false),
-      { timeout: 5000 },
+      { timeout: t(5000) },
     )
   })
 
@@ -399,7 +399,7 @@ describe('V2.3 status', () => {
     const clock = fakeClock(START)
     const { r, bridge } = await world({ clock, app: false })
     sendBeat(bridge, beatOf())
-    await sleep(100)
+    await waitFor(() => r.runtime.store.getState('health_beat') !== null, 3000, 'beat stored')
     await gone(bridge)
     clock.advance(6 * 3600_000)
     const parsed = HealthStatus.parse((await status(r)).json)
@@ -449,7 +449,7 @@ describe('V2.3 status', () => {
       bridge,
       beatOf({ mod: { state: 'quiet', last_seen: new Date(clock.now() - 11 * 60_000).toISOString(), expected: true } }),
     )
-    await sleep(100)
+    await waitFor(() => r.runtime.store.getState('health_beat') !== null, 3000, 'beat stored')
     await advance(clock, 11 * 60_000) // the spell counts from this connection's first beat
     const parsed = HealthStatus.parse((await status(r)).json)
     expect(parsed.mac_problems).toContain('mod_quiet')

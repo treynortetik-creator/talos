@@ -94,7 +94,7 @@ export function EmptyState({
       mascot = 'worried'
       break
     case 'update_relay':
-      title = 'Update Talos online to use Schedules.'
+      title = 'Update your Talos server to use Schedules.'
       mascot = 'worried'
       break
     case 'update_app':

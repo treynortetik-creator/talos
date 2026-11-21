@@ -23,35 +23,41 @@ struct SignInPanel: View {
   @ObservedObject var model: SupervisorController
   /// Runs just before the button starts the sign-in (Settings saves a half-confirmed talos-app command first).
   var beforeSignIn: () -> Void = {}
+  /// What the disabled Sign in says while there is no server address.
+  var needsServerLine = MacWords.needsServerAddress
+  /// Advanced keeps only the run-it-yourself command: signing in has one button, on Phone & Mac ("Connect this Mac\u{2026}").
+  var showButton = true
   @ObservedObject private var web = WebController.shared
   @State private var command = SignInHelp.command(resolved: nil)
   @State private var copied = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Sign this device in").font(.headline)
-      // Sign in is offered only when the page itself said the owner is signed out (audit D46): a relay that is down or a page
-      // still loading must not look like a signed-out Mac, and a second enroll would mint a code for a device already pinned.
-      switch SignInHelp.offer(hasRelay: web.hasRelay, page: web.pageState) {
-        case .needsRelay:
-          HStack {
-            Button("Sign in\u{2026}") {}.disabled(true)
-            Text("Needs a relay address first: \(MacSettingsText.connectionPath).").font(.caption).foregroundStyle(.secondary)
-          }
-        case .signedIn: Text("This Mac is signed in.").foregroundStyle(.secondary)
-        case .connecting: Text("Connecting to Talos\u{2026}").foregroundStyle(.secondary)
-        case .unreachable:
-          HStack {
-            Text(PageState.unreachableLine).foregroundStyle(.secondary)
-            Button("Try now") { web.retryNow() }
-          }
-        case .button:
-          Button("Sign in\u{2026}") {
-            beforeSignIn()
-            SignInAction.start(model: model)
-          }
-          Text("Talos runs the sign-in for you. It shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window.")
-            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      if showButton {
+        Text("Sign this device in").font(.headline)
+        // Sign in is offered only when the page itself said the owner is signed out (audit D46): a relay that is down or a page
+        // still loading must not look like a signed-out Mac, and a second enroll would mint a code for a device already pinned.
+        switch SignInHelp.offer(hasRelay: web.hasRelay, page: web.pageState) {
+          case .needsRelay:
+            HStack {
+              Button("Sign in\u{2026}") {}.disabled(true)
+              Text(needsServerLine).font(.caption).foregroundStyle(.secondary)
+            }
+          case .signedIn: Text("This Mac is signed in.").foregroundStyle(.secondary)
+          case .connecting: Text("Connecting to Talos\u{2026}").foregroundStyle(.secondary)
+          case .unreachable:
+            HStack {
+              Text(PageState.unreachableLine).foregroundStyle(.secondary)
+              Button("Try now") { web.retryNow() }
+            }
+          case .button:
+            Button("Sign in\u{2026}") {
+              beforeSignIn()
+              SignInAction.start(model: model)
+            }
+            Text("Talos runs the sign-in for you. It shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window.")
+              .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
       }
       Text("Or run it yourself in Terminal:").font(.caption).foregroundStyle(.secondary)
       HStack(alignment: .firstTextBaseline) {

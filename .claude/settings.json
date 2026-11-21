@@ -16,6 +16,7 @@
     "talos-memory-recall": "off",
     "talos-settings": "off",
     "talos-theme": "off",
-    "talos-transcript-ingest": "off"
+    "talos-transcript-ingest": "off",
+    "talos-using": "off"
   }
 }

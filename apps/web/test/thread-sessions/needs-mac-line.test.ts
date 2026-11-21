@@ -8,7 +8,7 @@ describe('needs_mac line', () => {
     expect(line).toMatch(/stopped/i)
     expect(line).toMatch(/only the Mac can answer/)
     expect(line).toMatch(/Talos Terminal/)
-    expect(line).toMatch(/Thread sessions/)
+    expect(line).toMatch(/Thread agents/)
     expect(line).not.toMatch(/is waiting/i)
   })
   it('is what a failed worker with that error shows', () => {
@@ -30,6 +30,6 @@ describe('a failure this version does not know', () => {
     const w = { thread_id: 'a', state: 'failed', error: 'unknown' } as Parameters<typeof workerLine>[0]
     expect(workerLine(w)).toBe(WORKER_ERROR_TEXT.unknown)
     expect(workerLine(w)).toMatch(/stopped/)
-    expect(workerLine(w)).toMatch(/Talos Terminal/)
+    expect(workerLine(w)).toMatch(/Show my agent’s screen/)
   })
 })

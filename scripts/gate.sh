@@ -6,6 +6,8 @@
 #   3. personal   check-no-personal on the working tree, with the maintainer's private list when this checkout or the main
 #                 checkout of the repository has one (it says so when there is none)
 #   4. size       the production file size budget (scripts/size-budget.test.ts)
+#   4a. timing    the timing lint over this change's added and changed test lines (scripts/timing-lint.ts --changed <base>): a literal
+#                 wait or timeout not scaled by the time factor, or a test whose waits outrun its timeout, refuses
 #   4b. swift     "swift build (<package>)": swift build --build-tests in each SwiftPM package a changed *.swift file or Package.swift /
 #                 Package.resolved belongs to, in the fast gate too. Not a Mac, or no swift: REFUSED (land it from a Mac)
 #   5. suites     the tests the change touches, from the changed paths against the base (see `plan_suites`), the e2e specs
@@ -16,7 +18,7 @@
 #                 (gate-push.sh); it gates with --fast, or with the full gate when given --full
 #   --base <ref>  what the change is measured against (default: the merge base with origin/main)
 #   --plan        print what it would run and exit 0, running nothing (tests and a look before a long run)
-#   --checks-only typecheck, lint, personal and size, no suites (gate-push.sh after a race whose new commits touch none of
+#   --checks-only typecheck, lint, personal, size and timing, no suites (gate-push.sh after a race whose new commits touch none of
 #                 this change's tests; CI runs everything after the merge)
 #   --fast        the checks, vitest related, and of the bridge tests only the changed ones, the ones that import a changed
 #                 file directly and the guards that read it (scripts/gate-fast.sh); no e2e or old-client step. Of the browser
@@ -267,7 +269,7 @@ fi
 if [ "$PLAN" = 1 ]; then
   # one step per line; a suite's files follow it, one per line, indented by a tab
   if [ "$ASK_FAST" = 1 ]; then if [ "$FAST" = 1 ]; then echo fast; else echo "full-gate: $FAST_WHY"; fi; fi
-  printf '%s\n' typecheck lint personal size
+  printf '%s\n' typecheck lint personal size timing
   if [ "$VIT_ALL" = 1 ]; then echo vitest-all; elif [ "${#VIT[@]}" -gt 0 ]; then echo vitest; printf '\t%s\n' "${VIT[@]}"; fi
   if [ "$VIT_ALL" = 0 ] && [ "${#VPROJ[@]}" -gt 0 ]; then echo vitest-project; printf '\t%s\n' "${VPROJ[@]}"; fi
   [ "$COREPACK" = 0 ] || echo corepack-install
@@ -439,6 +441,8 @@ if [ "$IN_LOCK" = 0 ]; then
   if [ "$FAST" = 1 ]; then step "personal (this change only: its files and commit messages)" fast_personal "$EXTRA"
   else step personal env CHECK_EXTRA_RULES="$EXTRA" bash scripts/check-no-personal.sh; fi
   step size pnpm exec vitest run --project scripts scripts/size-budget.test.ts
+  # a literal wait, or waits that outrun the test's timeout, on the lines this change adds or changes (old code blocks nobody)
+  if [ -n "$BASE" ]; then step timing pnpm -s timing-lint --changed "$BASE"; else say "timing: no base to diff against, skipped"; fi
   # a file that loses its executable bit without a commit saying so (edits over \\wsl$ did, twice: scripts/gate/exec-bits.sh)
   if [ -n "$BASE" ]; then step "exec bits" bash scripts/gate/exec-bits.sh "$BASE"; fi
   # every Swift package the change touches must build, its tests too (the fast gate as well: nothing else here compiles Swift)

@@ -4,7 +4,7 @@
 # session on this Mac passes them on: it runs `watch` as a Monitor, and each line it prints is one message to pass on.
 #
 #   scripts/ci-alerts.sh watch [--once]   print each waiting message (one line, with its id) once per watcher; every 15 s.
-#                                         A heartbeat every minute; ci-runner.sh untested and relays, lead-inbox.sh flush every 10 min.
+#                                         A heartbeat every minute; ci-runner.sh untested, relays and nightly-check, lead-inbox.sh flush every 10 min.
 #   scripts/ci-alerts.sh ack <id>...      after passing a message on: move it to alerts/sent/. Nothing else marks it sent.
 #   scripts/ci-alerts.sh list             the messages not acked yet; exit 1 when something is wrong: no heartbeat, or
 #                                         one over 5 minutes old (the watcher is not running), or a message waiting over 15 min
@@ -46,10 +46,10 @@ case "${1:-}" in
         (
           # shellcheck disable=SC2016
           perl -e '$t=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV} $SIG{ALRM}=sub{kill "TERM",-$p; sleep 5; kill "KILL",-$p; exit 142}; alarm $t; waitpid($p,0); exit($? & 127 ? 128+($? & 127) : $? >> 8)' \
-            "${TALOS_CI_CHECK_LIMIT:-300}" bash -c 'bash "$1/ci-runner.sh" untested; bash "$1/ci-runner.sh" relays' x "$HERE" >/dev/null 2>&1
+            "${TALOS_CI_CHECK_LIMIT:-300}" bash -c 'bash "$1/ci-runner.sh" untested; bash "$1/ci-runner.sh" relays; bash "$1/ci-runner.sh" nightly-check' x "$HERE" >/dev/null 2>&1
           if [ $? -eq 142 ] && { set -- "$DIR"/*-check-timeout.txt; [ ! -e "$1" ]; }; then # once, until it is acked
             t=$(date +%s)
-            mkdir -p "$DIR" && printf 'the 10-minute check (ci-runner.sh untested, relays) did not finish within %s s and was stopped; the relays check may not have run\n' "${TALOS_CI_CHECK_LIMIT:-300}" > "$DIR/.$t-check-timeout.part" &&
+            mkdir -p "$DIR" && printf 'the 10-minute check (ci-runner.sh untested, relays, nightly-check) did not finish within %s s and was stopped; the relays or nightly-check may not have run\n' "${TALOS_CI_CHECK_LIMIT:-300}" > "$DIR/.$t-check-timeout.part" &&
               mv -f "$DIR/.$t-check-timeout.part" "$DIR/$t-check-timeout.txt"
           fi
         ) &

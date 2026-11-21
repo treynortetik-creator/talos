@@ -91,26 +91,35 @@ function cut(text: string, marker: RegExp): Record<string, string> {
 }
 
 const SECTIONS_TSX = cut(read(join(WEB, 'features/settings/sections.tsx')), /\/\/ ---- (\w+) -+/g)
-const SETTINGS_VIEW = cut(read(join(MAC, 'TalosDesktop/SettingsView.swift')), /\/\/ MARK: (\w+)/g)
-const MAC_TEXT = read(join(MAC, 'TalosDesktopCore/MacSettingsText.swift'))
 
-/** Adds the words of every `MacSettingsText.x` a slice refers to, so a label kept in that table is found where it is used. */
-function withNames(slice: string): string {
-  const extra = [...slice.matchAll(/MacSettingsText\.(\w+)/g)].map(
-    (m) => new RegExp(`static let ${m[1]} = "([^"]+)"`).exec(MAC_TEXT)?.[1] ?? '',
-  )
-  return `${slice}\n${extra.map((e) => `"${e}"`).join('\n')}`
-}
+// The Mac app keeps the words it shares with the web in three string tables (MacWords, MacSettingsText, PermissionModeSetting),
+// and its views and menus say `MacWords.startAgent` where they used to say "Start session". A label that lives in a table is
+// looked for where the view uses it: the name is replaced by the table's quoted string, so `hasLabel` sees what the owner sees.
+const CONSTANTS: Record<string, string> = {}
+// raw text, not `read`: a line end is what ends a plain constant (a string joined with + is not one, and is skipped)
+for (const [owner, rel] of [
+  ['MacWords', 'TalosDesktopCore/MacWords.swift'],
+  ['MacSettingsText', 'TalosDesktopCore/MacSettingsText.swift'],
+  ['PermissionModeSetting', 'TalosDesktopCore/PermissionModeSetting.swift'],
+] as const)
+  for (const m of readFileSync(join(MAC, rel), 'utf8').matchAll(
+    /static let (\w+)\s*=\s*"([^"\n]*)"[ \t]*(?:\/\/[^\n]*)?$/gm,
+  ))
+    CONSTANTS[`${owner}.${m[1]}`] = norm(m[2] ?? '')
 
-const APP_SWIFT = read(join(MAC, 'TalosDesktop/App.swift'))
-const SESSION_VIEW = APP_SWIFT.slice(
-  APP_SWIFT.indexOf('struct SessionView'),
-  APP_SWIFT.indexOf('extension SupervisorController'),
-)
-const MENU_BAR = APP_SWIFT.slice(
-  APP_SWIFT.indexOf('MenuBarExtra {'),
-  APP_SWIFT.indexOf('Window(MacSettingsText.windowTitle'),
-)
+/** Source text with every plain table constant written out as the string the owner reads. */
+const resolve = (text: string) =>
+  text.replace(/\b(MacWords|MacSettingsText|PermissionModeSetting)\.(\w+)\b/g, (all, owner, name) => {
+    const v = CONSTANTS[`${owner}.${name}`]
+    return v === undefined ? all : `"${v}"`
+  })
+const macRead = (...rel: string[]) => resolve(corpus(mac(...rel)))
+
+const STATUS_MENU = macRead('TalosDesktop/StatusMenu.swift')
+/** The Talos icon's menu: the view that draws it, nothing else. */
+const MENU_BAR = STATUS_MENU.slice(STATUS_MENU.indexOf('struct StatusMenuContent'))
+/** The Advanced submenu of that menu, drawn by its own view. */
+const ADVANCED_MENU = macRead('TalosDesktop/AdvancedMenu.swift')
 
 /** The source of each Settings section, and of nothing else. */
 const SETTINGS_TEXT: Record<string, string> = {
@@ -128,12 +137,16 @@ const SETTINGS_TEXT: Record<string, string> = {
 
 /** The source of each tab of the Mac settings window, and of nothing else. */
 const MAC_TAB_TEXT: Record<string, string> = {
-  Session: `${withNames(SETTINGS_VIEW.Session ?? '')}\n${SESSION_VIEW}`,
-  Connection: `${withNames(SETTINGS_VIEW.Connection ?? '')}\n${corpus(mac('TalosDesktop/SignIn.swift'))}`,
-  Permissions: corpus(mac('TalosDesktop/PermissionsView.swift', 'TalosDesktopCore/PermissionsModel.swift')),
-  Hotkeys: corpus(mac('TalosDesktop/HotkeyView.swift')),
-  Companion: corpus(mac('TalosDesktop/CompanionSettingsView.swift')),
-  General: withNames(SETTINGS_VIEW.General ?? ''),
+  'Your agent': macRead('TalosDesktop/SettingsAgentTab.swift'),
+  'Phone & Mac': macRead('TalosDesktop/SettingsPhoneTab.swift'),
+  'Privacy & access': corpus(mac('TalosDesktop/PermissionsView.swift', 'TalosDesktopCore/PermissionsModel.swift')),
+  // the Companion and Quick message cards are drawn on General, from their own files
+  General: macRead(
+    'TalosDesktop/SettingsGeneralTab.swift',
+    'TalosDesktop/CompanionSettingsView.swift',
+    'TalosDesktop/HotkeyView.swift',
+  ),
+  Advanced: macRead('TalosDesktop/AdvancedSettingsView.swift', 'TalosDesktop/SignIn.swift'),
 }
 
 /** Each thread-settings label, with the one file that draws it. */
@@ -142,21 +155,21 @@ const THREAD_LABEL_FILE: Record<string, string> = {
   'Its own agent': 'thread-sessions/OwnSession.tsx',
 }
 
-const SPEC = read(join(MAC, 'TalosDesktopCore/AppMenuSpec.swift'))
+const SPEC = resolve(read(join(MAC, 'TalosDesktopCore/AppMenuSpec.swift')))
 
 /** Subcommands the CLI really has: `case 'enroll':` in its dispatcher. */
 const CLI = read(join(ROOT, 'apps/bridge/src/cli-main.ts'))
 const CLI_COMMANDS = new Set([...CLI.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]))
 
-/** The Mac settings tabs, read from the window's own tab list, with MacSettingsText names resolved. */
+/** The Mac settings tabs, read from the window's own tab enum (its cases in order, and the title each one returns). */
 function macTabs(): string[] {
-  const view = read(join(MAC, 'TalosDesktop/SettingsView.swift'))
-  const named = (id: string) => new RegExp(`static let ${id} = "([^"]+)"`).exec(MAC_TEXT)?.[1]
-  return [...view.matchAll(/\.tabItem \{ Label\(([^,]+),/g)].map((m) => {
-    const arg = (m[1] ?? '').trim()
-    const lit = /^"([^"]+)"$/.exec(arg)?.[1]
-    return lit ?? named(arg.replace('MacSettingsText.', '')) ?? `??${arg}`
-  })
+  const view = readFileSync(join(MAC, 'TalosDesktop/SettingsView.swift'), 'utf8')
+  const cases = /enum Tab: String, CaseIterable \{\s*case ([^\n]+)/.exec(view)?.[1]?.split(',') ?? []
+  const titleBlock = view.slice(view.indexOf('var title: String'), view.indexOf('var symbol: String'))
+  const title = Object.fromEntries(
+    [...resolve(titleBlock).matchAll(/case \.(\w+): return "([^"]+)"/g)].map((m) => [m[1], m[2]]),
+  )
+  return cases.map((c) => title[c.trim()] ?? `??${c.trim()}`)
 }
 
 // ---- the text, gathered -------------------------------------------------------------------------------------------------
@@ -206,12 +219,17 @@ function pathProblems(place: Place, path: string[]): string[] {
       else if (!hasLabel(read(join(WEB, 'features', file)), l)) bad.push(`"${l}" is not drawn by ${file}`)
     }
   } else if (place === 'menubar') {
-    if (!hasLabel(MENU_BAR, first ?? '')) bad.push(`the Menu bar menu has no "${first}"`)
+    const [item] = rest
+    if (first === 'Advanced' && item) {
+      // the engineer items are in the Advanced submenu, and only there
+      if (!hasLabel(ADVANCED_MENU, 'Advanced')) bad.push('the Menu bar menu has no Advanced submenu')
+      if (!hasLabel(ADVANCED_MENU, item)) bad.push(`the Menu bar Advanced submenu has no "${item}"`)
+    } else if (!hasLabel(MENU_BAR, first ?? '')) bad.push(`the Menu bar menu has no "${first}"`)
   } else if (place === 'topmenu') {
     const [menu, item] = path
     const at = SPEC.indexOf(`title: "${menu}"`)
     const block = at < 0 ? '' : SPEC.slice(at, SPEC.indexOf('public static', at))
-    if (!block.includes(`"${item}"`)) bad.push(`top menu ${menu} has no "${item}"`)
+    if (!block.includes(`"${norm(item ?? '')}"`)) bad.push(`top menu ${menu} has no "${item}"`)
   } else if (place === 'terminal') {
     const [cmd] = path
     const sub = (cmd ?? '').split(' ')[1]
@@ -268,17 +286,25 @@ describe('Help names only what exists, on the screen it says', () => {
 
   it('a location in the wrong tab is caught: Connection labels are not on the General tab, and the reverse', () => {
     // The old test read one shared file for these tabs. These would all have passed it; each must fail now.
-    expect(pathProblems('mac', ['General', 'Relay address'])).not.toEqual([])
-    expect(pathProblems('mac', ['Connection', 'Show a Dock icon'])).not.toEqual([])
-    expect(pathProblems('mac', ['Session', 'Start Talos when I log in'])).not.toEqual([])
+    expect(pathProblems('mac', ['General', 'Talos server address'])).not.toEqual([])
+    expect(pathProblems('mac', ['Phone & Mac', 'Show Talos in the Dock'])).not.toEqual([])
+    expect(pathProblems('mac', ['Your agent', 'Open Talos when I log in'])).not.toEqual([])
+    // the tabs of the old window are gone, and an engineer item is not in the everyday menu
+    expect(pathProblems('mac', ['Session', 'Agent folder'])).not.toEqual([])
+    expect(pathProblems('mac', ['Connection', 'Relay address'])).not.toEqual([])
+    expect(pathProblems('menubar', ['Show my agent’s screen…'])).not.toEqual([])
+    expect(pathProblems('menubar', ['Advanced', 'Start your agent'])).not.toEqual([])
     expect(pathProblems('settings', ['Appearance', 'Chat notifications'])).not.toEqual([])
     expect(pathProblems('settings', ['Account', 'Quiet hours'])).not.toEqual([])
     // and a short label must match whole: 'Stop' is not found inside 'Stop session'
     expect(hasLabel('<p>Stop session</p>', 'Stop')).toBe(false)
     expect(hasLabel('<Button>Stop</Button>', 'Stop')).toBe(true)
     // the real ones pass
-    expect(pathProblems('mac', ['Connection', 'Relay address'])).toEqual([])
-    expect(pathProblems('mac', ['General', 'Show a Dock icon'])).toEqual([])
+    expect(pathProblems('mac', ['Advanced', 'Talos server address'])).toEqual([])
+    expect(pathProblems('mac', ['General', 'Show Talos in the Dock'])).toEqual([])
+    expect(pathProblems('menubar', ['Advanced', 'Show my agent’s screen…'])).toEqual([])
+    // a label kept in a string table is found where the view uses it
+    expect(resolve('Button(MacWords.startAgent)')).toBe('Button("Start your agent")')
   })
 
   it('the Settings list really has the sections Help sends people to, and Help is its last row', async () => {
@@ -295,8 +321,8 @@ describe('Help names only what exists, on the screen it says', () => {
     expect(links.at(-1)).toEqual({ name: 'Help', href: HELP_PATH })
   })
 
-  it('the Mac settings tabs are the six Help names', () => {
-    expect(macTabs()).toEqual(['Session', 'Connection', 'Permissions', 'Hotkeys', 'Companion', 'General'])
+  it('the Mac settings tabs are the five Help names, then Advanced', () => {
+    expect(macTabs()).toEqual(['Your agent', 'Phone & Mac', 'Privacy & access', 'General', 'Advanced'])
   })
 })
 
@@ -438,7 +464,7 @@ describe('Help keyboard shortcuts are wired to real handlers', () => {
     expect(read(join(MAC, 'TalosDesktop/QuickCompose.swift'))).toContain('Send (⌘↩), Esc')
     const row = keyGroups()
       .flatMap((g) => g.rows)
-      .find((r) => r.what === 'Quick compose' && r.keys === '⌃⌥Space')
+      .find((r) => r.what === 'Quick message' && r.keys === '⌃⌥Space')
     expect(row, 'the from-anywhere row').toBeTruthy()
   })
 
@@ -504,7 +530,12 @@ const NOT_A_CLAIM = new Set(['Same as above.'])
 /** The sentences that carry a fact, each with what proves it. A sentence nobody listed here fails the next test. */
 const CLAIMS: Record<string, Proof[]> = {
   // Where do I change…
-  'Revoke ends that device’s access.': [has(S, 'Revoke this device?'), has(S, 'Revoking it signs you out here.')],
+  'Remove ends that device’s access.': [has(S, 'Remove this device?'), has(S, 'Removing it signs you out here.')],
+  'On the Mac, Mac settings → Phone & Mac has See and remove your devices, which opens this list.': [
+    has('apps/desktop/Sources/TalosDesktopCore/DevicesPage.swift', 'See and remove your devices'),
+    has('apps/desktop/Sources/TalosDesktopCore/DevicesPage.swift', '/settings/account#devices'),
+    has('apps/desktop/Sources/TalosDesktop/SettingsPhoneTab.swift', 'DevicesPage'),
+  ],
   'Run it on your Mac.': [has(S, 'Run <code>talos-app enroll</code> on your Mac')],
   'On a phone or computer browser, open the link it prints on that device.': [
     has(S, 'open the link on the new device'),
@@ -574,6 +605,10 @@ const CLAIMS: Record<string, Proof[]> = {
   'Stop shows only while the agent is working.': [
     has('apps/web/src/features/session/SessionPanel.tsx', "const showStop = can('stop') && state.busy === true"),
   ],
+  'Then there is also a Stop button on the line under the newest message in the thread.': [
+    has('apps/web/src/features/threads/WorkingLine.tsx', "'Stop your agent'"),
+    has('apps/web/src/features/threads/ThreadScreen.tsx', 'footer={<WorkingLine threadId={threadId} />}'),
+  ],
   'Effort changes apply from the next message.': [
     has('apps/web/src/features/session/SessionPanel.tsx', 'Applies from the next message'),
   ],
@@ -585,7 +620,7 @@ const CLAIMS: Record<string, Proof[]> = {
   ],
   // the Allow updates row: the item exists only while an answer is owed, and the window carries the same button
   'It shows only while Talos waits for your answer.': [
-    has('apps/desktop/Sources/TalosDesktop/App.swift', 'if allowUpdates.pending != nil'),
+    has('apps/desktop/Sources/TalosDesktop/StatusMenu.swift', 'if allowUpdates.pending != nil'),
     has('apps/desktop/Sources/TalosDesktop/CloneConfirmCenter.swift', 'func clear()'),
   ],
   'The same question has an Allow updates button in the update window.': [
@@ -611,28 +646,38 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/features/terminal/TerminalScreen.tsx', '!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey'),
     has('apps/web/src/features/terminal/TerminalScreen.tsx', 'if (!hasStrip) return'),
   ],
-  'Terminals… in the menu has no key: ⌘K is the command palette in the Talos window.': [
-    // the Window menu item and the Talos icon's menu item both carry no key, and ⌘K is the page's search chord
-    () => expect(rd(SPEC_F)).toContain(norm('Item(.showTerminal, "Terminals…"),')),
-    () => expect(rd(SPEC_F)).not.toMatch(/Item\(\.showTerminal, "Terminals…"[^)]*key:/),
+  'Show my agent’s screen… in the menu has no key: ⌘K is the command palette in the Talos window.': [
+    // the Window menu item and the Advanced submenu item both carry no key, and ⌘K is the page's search chord
+    () => expect(rd(SPEC_F)).toContain(norm('Item(.showTerminal, MacWords.showAgentScreen),')),
+    () => expect(rd(SPEC_F)).not.toMatch(/Item\(\.showTerminal, MacWords\.showAgentScreen[^)]*key:/),
+    () => expect(SPEC).toContain(norm('Item(.showTerminal, "Show my agent\'s screen…"),')),
     () =>
-      expect(rd('apps/desktop/Sources/TalosDesktop/App.swift')).not.toMatch(
-        /Button\("Terminals…"\)[\s\S]{0,200}keyboardShortcut/,
+      expect(rd('apps/desktop/Sources/TalosDesktop/AdvancedMenu.swift')).not.toMatch(
+        /Button\(MacWords\.showAgentScreen\)[\s\S]{0,200}keyboardShortcut/,
       ),
     has('apps/web/src/lib/keymap.ts', "code: 'KeyK'"),
   ],
   'From any app.': [has('apps/desktop/Sources/TalosDesktop/HotKeys.swift', 'RegisterEventHotKey(spec.keyCode')],
-  'This is the default; change it in Mac settings → Hotkeys.': [
+  'This is the default; change it in Mac settings → General → Change shortcut.': [
     has('apps/desktop/Sources/TalosDesktopCore/DesktopConfig.swift', 'compose: "ctrl+opt+space"'),
-    () => expect(MAC_TAB_TEXT.Hotkeys).toContain('Quick compose hotkey'),
+    () => expect(hasLabel(MAC_TAB_TEXT.General ?? '', 'Quick message')).toBe(true),
+    () => expect(hasLabel(MAC_TAB_TEXT.General ?? '', 'Change shortcut')).toBe(true),
   ],
   'In the box, ⌘↩ sends and Esc closes it.': [
     has('apps/desktop/Sources/TalosDesktop/QuickCompose.swift', 'Send (⌘↩), Esc'),
   ],
   'Shown beside the item in the Talos icon’s menu.': [() => expect(menuBarKeys().length).toBeGreaterThanOrEqual(5)],
   'The item’s name goes on to say what happens to the agent.': [
-    has('apps/desktop/Sources/TalosDesktop/App.swift', 'Button("Quit Talos (agent keeps running)")'),
-    has('apps/desktop/Sources/TalosDesktop/App.swift', 'Button("Quit Talos (stops the agent)")'),
+    has(
+      'apps/desktop/Sources/TalosDesktopCore/MacWords.swift',
+      'static let quitKeepsAgent = "Quit Talos (your agent keeps running)"',
+    ),
+    has(
+      'apps/desktop/Sources/TalosDesktopCore/MacWords.swift',
+      'static let quitStopsAgent = "Quit Talos (stops your agent)"',
+    ),
+    has('apps/desktop/Sources/TalosDesktop/StatusMenu.swift', 'Button(MacWords.quitKeepsAgent)'),
+    has('apps/desktop/Sources/TalosDesktop/StatusMenu.swift', 'Button(MacWords.quitStopsAgent)'),
   ],
   'In the Mac app only, not while typing in a box.': [
     has('apps/web/src/lib/keymap.ts', "scope: 'mac-app'"),
@@ -702,9 +747,9 @@ const CLAIMS: Record<string, Proof[]> = {
   'The server address is fixed when the iPhone app is built.': [
     has('docs/ios.md', 'It loads the relay origin fixed at build time'),
   ],
-  'The Devices list shows a device’s name and lets you end it.': [
+  'Your devices shows a device’s name and lets you remove it.': [
     has('apps/web/src/features/settings/DeviceRow.tsx', '{d.name}'),
-    has('apps/web/src/features/settings/DeviceRow.tsx', 'Revoke'),
+    has('apps/web/src/features/settings/DeviceRow.tsx', 'Remove'),
   ],
   'It has no rename.': [lacks(S, 'Rename device'), () => expect(rd(S)).not.toMatch(/renameDevice/i)],
 }
@@ -775,8 +820,8 @@ describe('Help says only true things about paths, logs, updating and uninstallin
     const page = read(join(MAC, 'TalosDesktopCore/PageState.swift'))
     const lines = page.slice(page.indexOf('outageHelp'))
     for (const m of lines.matchAll(/talos-app (\w+)/g)) expect(CLI_COMMANDS.has(m[1]), `talos-app ${m[1]}`).toBe(true)
-    for (const word of ['Start session', 'status', 'doctor', 'logs']) expect(lines).toContain(word)
-    expect(hasLabel(MENU_BAR, 'Start session')).toBe(true)
+    for (const word of ['Start your agent', 'status', 'doctor', 'logs']) expect(lines).toContain(word)
+    expect(hasLabel(MENU_BAR, 'Start your agent')).toBe(true)
     // The menu-bar icon is Talos's head: down is the head with a slash, needs you has a dot. Help may not name the old SF Symbols.
     expect(read(join(MAC, 'TalosDesktopCore/MenuBarIcon.swift'))).toContain('case .down: return "talos-down"')
     expect(lines).toContain('a head with a slash through it')
@@ -850,7 +895,7 @@ describe('Help text hygiene', () => {
     expect(read(join(MAC, 'TalosDesktopCore/FirstRun.swift'))).toContain('"Agent folder"')
     const panel = read(join(MAC, 'TalosDesktop/AgentFolderPanel.swift'))
     for (const b of ['Create', 'Adopt', 'Choose']) expect(hasLabel(panel, b), b).toBe(true)
-    expect(hasLabel(MAC_TAB_TEXT.Session ?? '', 'Import')).toBe(true)
+    expect(hasLabel(MAC_TAB_TEXT.Advanced ?? '', 'Import')).toBe(true)
   })
 
   it('holds no personal path, address or id', () => {

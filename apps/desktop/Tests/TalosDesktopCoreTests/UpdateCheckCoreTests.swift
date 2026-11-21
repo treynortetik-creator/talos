@@ -28,7 +28,7 @@ struct UpdateCheckCoreTests {
     }
     let waiting: [UpdateStatus] = [
       .ready(version: "0.1.5"), .waitingForQuiet(version: "0.1.5", why: ["main running"]),
-      .relayBehind(version: "0.1.5", relay: "aaaaaaa", app: "bbbbbbb"), .waitingForTurn(version: "0.1.5"),
+      .relayBehind(version: "0.1.5", relay: "aaaaaaa", app: "bbbbbbb"),
     ]
     for s in waiting {
       #expect(UpdateMenu.title(s) == "Update to 0.1.5\u{2026}", "\(s)")
@@ -45,14 +45,14 @@ struct UpdateCheckCoreTests {
   @Test func everyStateSaysItsOwnWords() {
     func h(_ s: UpdateStatus) -> String { s.words.headline }
     func d(_ s: UpdateStatus) -> String { s.words.detail }
-    #expect(h(.upToDate(version: "0.1.4")) == "You\u{2019}re up to date")
-    #expect(d(.upToDate(version: "0.1.4")).contains("0.1.4"))
+    #expect(h(.upToDate(version: "0.1.4")) == "Talos is up to date (0.1.4)")
+    #expect(d(.upToDate(version: "0.1.4")).contains("newest"))
     #expect(h(.downloading(version: "0.1.5")).contains("Downloading") && h(.downloading(version: "0.1.5")).contains("0.1.5"))
     #expect(h(.waitingForQuiet(version: "0.1.5", why: [])) == "Waiting for a quiet moment")
-    #expect(h(.relayBehind(version: "0.1.5", relay: "a", app: "b")) == "Waiting for the relay")
+    #expect(h(.relayBehind(version: "0.1.5", relay: "a", app: "b")) == "Waiting for the Talos server")
     #expect(h(.restarting(version: "0.1.5")) == "Restarting your agent")
     #expect(h(.waitingForTurn(version: "0.1.5")) == "Waiting for your agent to finish its turn")
-    #expect(d(.waitingForTurn(version: "0.1.5")).contains("the moment your agent\u{2019}s turn ends"))
+    #expect(d(.waitingForTurn(version: "0.1.5")).contains("the moment this is over"))
     #expect(h(.done(version: "0.1.5")) == "Done")
     #expect(d(.done(version: "0.1.5")).contains("0.1.5"))
     #expect(h(.checking).contains("Checking"))
@@ -68,7 +68,7 @@ struct UpdateCheckCoreTests {
       let text = UpdateStatus.waitingForQuiet(version: "0.1.5", why: [raw]).words.detail
       #expect(text.contains(plain), "\(raw)")
       #expect(text.contains("2 hours"))
-      #expect(text.contains("Update now does not wait"))
+      #expect(text.contains("Install does not wait"))
       #expect(!text.contains("pid"), "log words stay in the log")
     }
   }
@@ -79,11 +79,11 @@ struct UpdateCheckCoreTests {
     #expect(text.contains("1111111"), "the relay's build")
     #expect(text.contains("2222222"), "the build of the update")
     #expect(!text.contains("deadbeef"), "short builds, 7 characters")
-    #expect(text.contains("redeploy the relay in Railway"))
-    #expect(text.contains("Talos does not wait for the relay"), "the swap never waits for it")
+    #expect(text.contains("redeploy the Talos server in Railway"))
+    #expect(text.contains("Talos does not wait for the Talos server"), "the swap never waits for it")
     // a busy Mac as well: both reasons are on the screen
     let both = UpdateStatus.relayBehind(version: "0.1.5", relay: "1111111", app: "2222222", why: ["main running"]).words.detail
-    #expect(both.contains("redeploy the relay") && both.contains("also waiting for a quiet moment") && both.contains("busy"), "\(both)")
+    #expect(both.contains("redeploy the Talos server") && both.contains("also waiting for a quiet moment") && both.contains("busy"), "\(both)")
   }
 
   @Test func aFailureIsOneLinePlusWhereTheLogIs() {
@@ -199,4 +199,30 @@ struct UpdateCheckCoreTests {
   }
 
   private let flag2 = "--dangerously-load-development-channels"
+
+  // MARK: the answers
+
+  @Test func everyAnswerIsInPlainWordsWithNoJargon() {
+    let all: [UpdateStatus] = [
+      .upToDate(version: "0.1.8"), .ready(version: "0.1.9"), .available(version: "0.1.9"), .couldntCheck(.offline), .couldntCheck(.server),
+      .couldntCheck(.unverified), .couldntCheck(.timedOut), .couldntCheck(.other),
+    ]
+    for s in all {
+      let t = (s.words.headline + " " + s.words.detail).lowercased()
+      for bad in ["terminal", "bridge", "relay", "session", "token", "manifest", "signature", "http", "json"] {
+        #expect(!t.contains(bad), "\(s) says \(bad)")
+      }
+      #expect(!s.isBusy, "an answer is never a spinner: \(s)")
+    }
+    #expect(UpdateStatus.upToDate(version: "0.1.8").words.headline == "Talos is up to date (0.1.8)")
+    #expect(UpdateStatus.ready(version: "0.1.9").words.headline == "Talos 0.1.9 is ready")
+    #expect(UpdateStatus.couldntCheck(.offline).words.detail.contains("offline"))
+    #expect(UpdateStatus.couldntCheck(.server).words.detail.contains("update server"))
+    #expect(UpdateStatus.couldntCheck(.unverified).words.detail.contains("couldn\u{2019}t be verified"))
+  }
+
+  @Test func aFailedCheckNeverTurnsTheMenuIntoUpdateTo() {
+    #expect(UpdateMenu.title(.couldntCheck(.offline)) == UpdateMenu.checkTitle && !UpdateMenu.showsDot(.couldntCheck(.other)))
+    #expect(UpdateMenu.title(.available(version: "0.1.9")) == UpdateMenu.checkTitle)
+  }
 }

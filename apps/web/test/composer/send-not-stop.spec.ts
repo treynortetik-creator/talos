@@ -1,9 +1,8 @@
-// A send must never stop the agent. While the agent works, Stop sits just left of Send. Send used to go when the box emptied,
-// and Stop slid into the spot where Send was, so a second press of one Send (a double tap, a touch registered twice, a quick
-// re-tap) could land on Stop and end the turn the owner was adding to (sendGuard.ts guarded it). Since 2026-11-20 Send stays
-// in its place, dimmed: a second press lands on it and does nothing. Every project.
+// A send can never stop the agent. Stop is not in the message box at all (the owner, 2026-11-20, Option B): the only Stop is
+// the one on the working line under the newest message (stop-line.spec.ts). The box keeps + and Send, which stays in its
+// place, dimmed with nothing to send. So a second press of Send (a double tap, a touch registered twice, Enter twice) sends one
+// message and never a stop. Every project.
 import { expect, type Page, test } from '@playwright/test'
-import { SEND_GUARD_MS } from '../../src/features/composer/sendGuard.ts'
 
 test.use({ serviceWorkers: 'block', bypassCSP: true })
 
@@ -28,7 +27,10 @@ async function working(page: Page) {
     })
     t.session.patch({ busy: true, turn_id: 'turn_7' })
   })
-  await expect(page.getByTestId('composer-stop')).toBeVisible()
+  // the working line's Stop is there, and nothing in the composer is a Stop
+  await expect(page.getByRole('button', { name: 'Stop your agent', exact: true })).toBeVisible()
+  await expect(page.getByTestId('composer').getByRole('button', { name: /stop/i })).toHaveCount(0)
+  await expect(page.getByTestId('composer-stop')).toHaveCount(0)
   await box(page).fill('one more thing')
   const b = await send(page).boundingBox()
   if (!b) throw new Error('no Send')
@@ -47,13 +49,13 @@ for (const gap of [0, 80, 200, 400]) {
     const [x, y] = await working(page)
     await pressAt(page, isMobile, x, y)
     if (gap) await page.waitForTimeout(gap)
-    // Send is still in its spot, dimmed: the second press reaches it, not Stop
     const at = await page.evaluate(
       ([px, py]) => document.elementFromPoint(px, py)?.closest('button')?.getAttribute('aria-label'),
       [x, y],
     )
     expect(at).toBe('Send')
     await expect(send(page)).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByTestId('composer').getByRole('button', { name: /stop/i })).toHaveCount(0)
     await pressAt(page, isMobile, x, y)
     await page.waitForTimeout(300)
     expect(await stops(page)).toBe(0)
@@ -62,20 +64,10 @@ for (const gap of [0, 80, 200, 400]) {
   })
 }
 
-test('Stop, pressed on its own spot once the moment after the send is over, stops the turn', async ({
+test('Enter or Space twice on Send from the keyboard sends one message and does not stop the agent', async ({
   page,
   isMobile,
 }) => {
-  const [x, y] = await working(page)
-  await pressAt(page, isMobile, x, y)
-  await page.waitForTimeout(SEND_GUARD_MS + 300)
-  const b = await page.getByTestId('composer-stop').boundingBox()
-  if (!b) throw new Error('no Stop')
-  await pressAt(page, isMobile, b.x + b.width / 2, b.y + b.height / 2)
-  await expect.poll(() => stops(page)).toBe(1)
-})
-
-test('Enter or Space twice on Send from the keyboard does not stop the agent', async ({ page, isMobile }) => {
   test.skip(isMobile, 'a phone has no Tab to Send')
   await working(page)
   await send(page).focus()
@@ -84,4 +76,18 @@ test('Enter or Space twice on Send from the keyboard does not stop the agent', a
   await page.keyboard.press(' ')
   await page.waitForTimeout(300)
   expect(await stops(page)).toBe(0)
+  expect(await messages(page)).toBe(1)
+})
+
+test('Enter twice in the box sends one message and never a stop (on a phone Enter is a newline: no message, no stop)', async ({
+  page,
+  isMobile,
+}) => {
+  await working(page)
+  await box(page).focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(300)
+  expect(await stops(page)).toBe(0)
+  expect(await messages(page)).toBe(isMobile ? 0 : 1)
 })

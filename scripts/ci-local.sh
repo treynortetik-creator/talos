@@ -36,7 +36,7 @@ umask 022
 # The parts of this script live in scripts/ci-local/ beside it and are sourced below (the jobs' before any wait). All of them are checked here,
 # first: a copy of ci-local.sh without them stops before it does anything (it never half-runs).
 CI_LOCAL_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-local"
-for _ci_part in locks machine settle jobs-check jobs-mod-browser jobs-image jobs-swift; do
+for _ci_part in locks turn machine settle jobs-check jobs-mod-browser jobs-image jobs-swift; do
   [ -r "$CI_LOCAL_LIB/$_ci_part.sh" ] || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh is missing: ci-local.sh needs the scripts/ci-local/ folder beside it" >&2; exit 64; }
   # a part that does not parse would stop the run half-way through, where it is sourced: stop here instead
   bash -n "$CI_LOCAL_LIB/$_ci_part.sh" || { echo "ci-local: $CI_LOCAL_LIB/$_ci_part.sh does not parse" >&2; exit 64; }

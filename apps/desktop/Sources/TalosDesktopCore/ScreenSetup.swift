@@ -103,12 +103,12 @@ public enum ScreenSetupText {
   public static let notTested = "Not tested yet."
   public static let testing = "Testing…"
   public static let reopen =
-    "After you turn on Screen Recording, macOS needs Talos to Quit & Reopen. Your sessions keep running."
+    "After you turn on Screen Recording, macOS needs Talos to Quit & Reopen. Your agent keeps running."
   public static let emptyShot = "The test screenshot came back empty."
   /// Grant was pressed in an earlier run of Talos and macOS still says no: most often the row in System Settings belongs to an
   /// older signature of Talos (another build or signer), which macOS keeps until it is removed.
   public static let staleEntry =
-    "macOS may still hold an old Talos entry. In System Settings → Privacy & Security → Screen & System Audio Recording, select Talos, press −, then Grant here again."
+    "macOS may still hold an old Talos entry. In System Settings → Privacy & Security → Screen & System Audio Recording, select Talos, press −, then Allow here again."
 
   public static func missing(_ p: Part) -> String {
     switch p {

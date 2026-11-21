@@ -42,6 +42,8 @@ function setup() {
     TALOS_CI_CACHE: join(T, 'cache'), // the log of fast-gate fallbacks goes here, never to the real ~/.cache/talos-ci
     TALOS_CI_NESTED: '0',
     TALOS_NO_HOOKS: '0',
+    // a landing that runs this suite under `gate.sh --full` exports GATE_FULL=1: the hook must see only what each test sets
+    GATE_FULL: '',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_SYSTEM: '/dev/null',
     GIT_AUTHOR_NAME: 't',
@@ -120,7 +122,11 @@ function setup() {
     })
     return { code: r.status, err: r.stderr }
   }
-  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [])
+  // the timing lint is told the base by sha: that sha is not what these tests pin
+  const calls = () =>
+    (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []).map((c) =>
+      c.replace(/^(pnpm -s timing-lint --changed) [0-9a-f]{7,40}$/, '$1 <base>'),
+    )
   return { T, clone, origin, env, git, ok, install, change, push, calls, stub }
 }
 
@@ -128,6 +134,7 @@ function setup() {
 const TYPECHECK = 'pnpm -s typecheck'
 const LINT = 'biome check .'
 const SIZE = 'pnpm exec vitest run --project scripts scripts/size-budget.test.ts'
+const TIMING = 'pnpm -s timing-lint --changed <base>'
 
 describe('pre-push hook', () => {
   it('`pnpm install` turns it on, and a failing check stops the push', () => {
@@ -162,6 +169,7 @@ describe('pre-push hook', () => {
       TYPECHECK,
       LINT,
       SIZE,
+      TIMING,
       // the changed files that still exist, whatever their names; a deleted one is not passed on
       'pnpm exec vitest related --run apps/web/src/b.ts apps/web/src/with space.ts',
       // and the deleted one runs its app's whole project (a test may read it by path)
@@ -316,7 +324,7 @@ describe('pre-push hook', () => {
     r.change({ 'docs/a.md': 'more\n' })
     const docs = r.push()
     expect(docs.code, docs.err).toBe(0)
-    expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE])
+    expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE, TIMING])
     expect(docs.err).toContain('no test suite is touched')
 
     r.change({ 'packages/protocol/src/x.ts': 'y\n' })
@@ -325,6 +333,7 @@ describe('pre-push hook', () => {
       TYPECHECK,
       LINT,
       SIZE,
+      TIMING,
       'pnpm exec vitest related --run packages/protocol/src/x.ts',
       'bun run scripts/test-parallel.ts',
     ])
@@ -351,6 +360,7 @@ describe('pre-push hook', () => {
     r.change({ 'apps/web/src/b.ts': 'y\n' })
     r.ok(r.clone, 'update-ref', '-d', 'refs/remotes/origin/main') // no origin/main to diff against
     expect(r.push().code).toBe(0)
+    // no base to diff against: the timing lint (new and changed lines) says so and is skipped
     expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE, 'pnpm exec vitest run', 'bun run scripts/test-parallel.ts'])
   })
 
@@ -395,7 +405,7 @@ describe('pre-push hook', () => {
     r.install()
     r.change({}, ['apps/web/src/a.ts'])
     expect(r.push().code).toBe(0)
-    expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE, 'pnpm exec vitest run --project web'])
+    expect(r.calls()).toEqual([TYPECHECK, LINT, SIZE, TIMING, 'pnpm exec vitest run --project web'])
   })
 
   it("files on disk that aren't what is being pushed refuse the push", () => {

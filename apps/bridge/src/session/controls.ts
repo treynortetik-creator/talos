@@ -18,6 +18,7 @@ import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { sessionControlResultFrame } from '../frames-out.ts'
 import { RESET_REFUSAL, signedBeforeReset } from '../history-recover.ts'
 import { say } from '../owner-words.ts'
+import { noteTurnEnded } from '../router/update-resend.ts'
 
 type Of<T extends Frame['type']> = Extract<Frame, { type: T }>
 
@@ -161,6 +162,7 @@ export class SessionControls {
     const { ctx } = this
     const at = ctx.clock.now()
     ctx.seen.noteStop(at)
+    noteTurnEnded(ctx, thread) // per thread: the update's offer is not made for a turn the owner ended
     ctx.store.kvSet('last_stop_at', String(at))
     ctx.log.info('session control: stopped by owner', { thread_id: thread, at: new Date(at).toISOString() })
     postSystemNotice(ctx, 'You stopped your agent', { thread: threadRef(ctx, thread), silent: true }).catch((e) =>

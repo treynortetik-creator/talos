@@ -42,3 +42,25 @@ describe('HealthStatus.limits', () => {
     expect(MacProblem.options).toEqual(['bridge_offline', 'mod_quiet'])
   })
 })
+
+describe('relay.release (which release the relay is on)', () => {
+  it('is optional: a status from an older relay parses without it, and a newer one keeps it', () => {
+    expect(HealthStatus.parse(status).relay.release).toBeUndefined()
+    const withRelease = { ...status, relay: { ...status.relay, release: '0.1.8' } }
+    expect(HealthStatus.parse(withRelease).relay.release).toBe('0.1.8')
+  })
+  it('junk degrades that one field, never the status', () => {
+    for (const junk of [5, 'x'.repeat(200), { a: 1 }]) {
+      const parsed = HealthStatus.parse({ ...status, relay: { ...status.relay, release: junk } })
+      expect(parsed.relay.release).toBeUndefined()
+      expect(parsed.relay.version).toBe('1')
+    }
+  })
+  it('an older client (the schema before the field) still parses a status that has it', () => {
+    const before = HealthStatus.shape.relay.omit({ release: true })
+    expect(before.parse({ version: '1', up_since: status.relay.up_since, release: '0.1.8' })).toEqual({
+      version: '1',
+      up_since: status.relay.up_since,
+    })
+  })
+})

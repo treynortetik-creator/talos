@@ -1,13 +1,16 @@
 // WP-V1 acceptance, bridge part (docs/V2-FEATURES.md V2.2, V2.6): the REAL bridge (live, in process) + FakeRelay, a mod
 // scripted through the real talos_mod_hello / talos_mod_sync tools, a fake clock.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HealthBeat, type HealthBeatT } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { HealthMonitor, readFreeBytes } from '../src/health/monitor.ts'
 import { advanceSteps, eventually, fixture, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 import { helloArgs, signedSync } from './mod-sign.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(150_000))
 
 let h: Harness | undefined
 let h2: Harness | undefined
@@ -72,7 +75,6 @@ describe('V2.2 health.beat', () => {
     await waitFor(() => beats(h as Harness).length >= 1, 4000, 'first beat')
     const n = beats(h).length
     await advanceSteps(clock, 125_000, 10_000)
-    await sleep(100)
     await eventually(() => expect(beats(h as Harness).length).toBeGreaterThanOrEqual(n + 2))
   })
 
@@ -196,6 +198,7 @@ describe('Main state in the beat (the supervisor run/main-state, for the sign-in
     put(h.home, 'main=signin\n', 20_000) // left behind by a supervisor that stopped
     await waitFor(() => lastBeat(h as Harness)?.main === undefined, 4000, 'stale: no state')
     put(h.home, 'main=sleeping\n')
+    // timing-ok: negative window: a sleeping state must stay left out
     await sleep(1500)
     expect(lastBeat(h)?.main).toBeUndefined()
     put(h.home, 'main=signin\n')
@@ -206,5 +209,5 @@ describe('Main state in the beat (the supervisor run/main-state, for the sign-in
     await waitFor(() => lastBeat(h as Harness)?.main === 'signin', 4000, 'signin again')
     put(h.home, 'main=signin\n', -60_000) // a time ahead of the clock (it stepped back after sleep): not fresh
     await waitFor(() => lastBeat(h as Harness)?.main === undefined, 4000, 'future: no state')
-  }, 30_000)
+  })
 })

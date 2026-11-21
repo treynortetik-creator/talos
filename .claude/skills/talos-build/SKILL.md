@@ -141,7 +141,8 @@ Also, where the change touches them: hostile text, size limits, checks that run 
   under `apps/desktop`) counts as a failure for you. It is heavy: load checked first, one at a time (the Swift tests take
   the machine's desktop lock themselves). A builder that does not touch Swift may skip it and grep its changed files under
   `apps/desktop` for `/Users/` instead.
-- **Fast checks.** `bash scripts/gate.sh --checks-only` runs typecheck, lint, the personal check and the size budget in
+- **Fast checks.** `bash scripts/gate.sh --checks-only` runs typecheck, lint, the personal check, the size budget and the timing lint
+  (a literal wait or a test whose waits outrun its timeout, on the lines you changed: `// timing-ok: <reason>` allows one) in
   seconds. Run it after your LAST commit and after any rebase, and report its result: a formatter or size error on the
   final head is the most common refused push. `bash scripts/gate.sh --plan` prints what the full gate would run.
 

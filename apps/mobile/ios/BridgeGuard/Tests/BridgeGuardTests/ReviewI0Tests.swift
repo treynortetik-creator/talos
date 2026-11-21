@@ -3,7 +3,8 @@ import XCTest
 
 /// Regression tests for the iOS bridge guard, covering the navigation rule below.
 ///
-/// I14 (navigation): "any /media/* URL and any non-relay host opens in SFSafariViewController, never in the shell's view".
+/// I14 (navigation): "any /media/* URL and any non-relay host leaves the shell's view". (Non-relay hosts now open outside Talos
+/// through UIApplication.open, not SFSafariViewController: the owner, 2026-11-20.)
 /// NavigationGate only decides /media/ and new windows; every other top-level navigation is forwarded to Capacitor's
 /// WebViewDelegationHandler, whose test is `navURL.absoluteString.starts(with: serverURL.absoluteString)` plus a
 /// port-blind `allowNavigation` host match (Capacitor 8.5.3 WebViewDelegationHandler.swift:98-112). Both let lookalike

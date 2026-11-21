@@ -28,6 +28,8 @@
 # not be had within HEAVY_LOCK_TIMEOUT seconds (default 3600; 0 means no limit, and a push gate, HEAVY_LOCK_PUSH, which gate-push.sh
 # sets, waits up to 14400, four hours, unless HEAVY_LOCK_TIMEOUT says otherwise: a push keeps its place through a long queue); a command that itself exits
 # 75 reads the same, so a caller that must tell them apart runs one that doesn't. HEAVY_LOCK_POLL: seconds between looks (default 2).
+# With two slots or more a gate's hold and a CI run never overlap: they take turns (scripts/ci-local/turn.sh; docs/CI-LOCAL.md, "Gate and CI
+# take turns"); CI_TURN=0 turns that off.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CI_LOCAL_LIB="$HERE/ci-local"
@@ -241,6 +243,7 @@ hl_status() {
       printf '  slot %s%s: %s\n' "$k" "$([ "$k" -le "$kci" ] && echo " (CI's)")" "$(hl_holder_line "$l")"
     done
   fi
+  ci_turn_status "$LOCKS" # who holds the machine, CI's turn or the gates', and the CI runs that wait (ci_turn_*)
   # the order they go in (ci_queue_order: a jump, then CI, then the rest as they came), each with its kind
   local q="$LOCKS.queue/suites" c=0
   while IFS= read -r t; do

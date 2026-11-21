@@ -71,10 +71,10 @@ describe('StorageRecovery', () => {
     expect(text).toMatch(/pair this device again/i)
   })
 
-  it('in the Mac app, points at Forget this Mac', () => {
+  it('in the Mac app, points at Disconnect this Mac', () => {
     render(<StorageRecovery kind="storage" where="mac" onRetry={vi.fn()} />)
     const text = document.body.textContent ?? ''
-    expect(text).toMatch(/Forget this Mac/)
+    expect(text).toMatch(/Disconnect this Mac/)
     expect(text).toMatch(/revokes this Mac/i)
     expect(text).toMatch(/new setup code/i)
     expect(text).toMatch(/unsent messages, chats saved on this device and this device's key/i)

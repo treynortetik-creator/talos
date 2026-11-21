@@ -80,7 +80,7 @@ struct TakeoverCheckTests {
     #expect(b.count == 1)
     #expect(b.first?.resource == .telegram)
     #expect(b.first?.sessionPid == 40)
-    #expect(b.first?.message == "Another Claude session (pid 40, folder /other) holds Telegram. Quit it first, or press \u{201C}Find a running session\u{201D} to take it over.")
+    #expect(b.first?.message == "Another Claude (pid 40, folder /other) is already using Telegram. Quit it first, or press \u{201C}Take over an agent that's already running\u{201D} to take it over.")
   }
 
   @Test func aPollerInsideOurGroupOrTheJustExitedOneDoesNot() {

@@ -93,7 +93,7 @@ final class AddRelayFlowTests: XCTestCase {
 
     func testMinAppIsAnAdviceNeverABlock() async throws {
         let p = try await flow(.success(descriptor(minApp: "9.0.0")), version: "1.0").prepare(link: "https://relay.example.com/enroll#\(code)&fp=\(fp)").get()
-        XCTAssertEqual(p.note, "This relay asks for Talos 9.0.0 or newer. Please update the app.")
+        XCTAssertEqual(p.note, "This Talos server asks for Talos 9.0.0 or newer. Please update the app.")
     }
 
     func testSaveWritesTheOnlyRelayAndMakesItActive() async throws {
@@ -169,7 +169,7 @@ final class AddRelayFlowTests: XCTestCase {
         ]
         XCTAssertEqual(Set(all.map(\.message)).count, 6)
         for e in all { XCTAssertTrue(e.message.contains("Nothing was saved"), e.message) }
-        XCTAssertTrue(AddRelayError.macUnreachable(host: host, why: .unsupported).message.contains("update talos-app"))
+        XCTAssertTrue(AddRelayError.macUnreachable(host: host, why: .unsupported).message.contains("update Talos on your Mac"))
     }
 
     func testTheAttestRunsOnlyAfterTheDescriptorAndNeverForABadLink() async {

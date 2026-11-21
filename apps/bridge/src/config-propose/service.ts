@@ -54,6 +54,7 @@ import { MEDIA_HOLD_MS, shorteningNote } from '../media-retention.ts'
 import { cardActionNotification, systemNotification } from '../notify.ts'
 import { say } from '../owner-words.ts'
 import { isPermissionModeCard } from '../permission-mode.ts'
+import { isUpdateResendCard } from '../router/update-resend.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
 import { OWNER_SPOKE_MS, ownerAskedAt, quietSince, SETTINGS_LOCKED } from '../trust.ts'
@@ -241,7 +242,8 @@ export class ConfigProposals {
           r.actor === 'bridge' &&
           r.binding.kind === 'config' &&
           !isScreenAllowCard(r.binding) &&
-          !isPermissionModeCard(r.binding),
+          !isPermissionModeCard(r.binding) &&
+          !isUpdateResendCard(r.binding),
       )
     if (pending.length >= MAX_PENDING_CONFIG_CARDS)
       return fail(`There are already ${MAX_PENDING_CONFIG_CARDS} settings cards waiting for the owner. Wait for them.`)
@@ -421,7 +423,9 @@ export class ConfigProposals {
     const cur = ctx.config.config
     for (const row of ctx.ledger.list('resolved')) {
       if (row.actor !== 'bridge' || row.binding.kind !== 'config' || row.resolution?.action !== 'primary') continue
-      if (isScreenAllowCard(row.binding) || isPermissionModeCard(row.binding)) continue // their own recover() ends them
+      // their own recover() ends them; an offer to send a turn again is not a settings card at all
+      if (isScreenAllowCard(row.binding) || isPermissionModeCard(row.binding) || isUpdateResendCard(row.binding))
+        continue
       const p = ConfigCardPayload.safeParse(row.binding.payload)
       const fresh = (path: AgentConfigPath, want: unknown) =>
         JSON.stringify(readConfigPath(cur, path)) === JSON.stringify(want)

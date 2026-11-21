@@ -1,12 +1,12 @@
 // Durable outbox to the bridge, supersede and session-stopped alarms, push rules, derived queued status (fake clock).
 import { newId, newUlid, signChallenge } from '@talos-app/protocol'
-import { type FakeBridge, fakeClock, sleep, waitFor } from '@talos-app/testkit'
+import { type FakeBridge, fakeClock, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_CONFIG } from '../../src/core/default-config.ts'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { advance, kit, newConn, silentBridge, sub } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 20_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // the waits of one test add up past 20 s at the default budgets
 
 let relay: TestRelay | null = null
 afterEach(async () => {
@@ -180,21 +180,25 @@ describe('alarms', () => {
   const takeovers = (r: TestRelay) =>
     r.transport.sent.filter((s) => s.payload.notification.body.startsWith('Another Mac took over your Talos bridge'))
 
-  it('a replaced bridge that is still alive on another address pushes the owner at once, with the time in their zone', async () => {
-    const c = fakeClock('2026-11-10T21:07:30.000Z')
-    relay = await startTestRelay({ clock: c })
-    relay.runtime.store.putSub(sub())
-    const mine = await bridgeFrom(relay, c, '198.51.100.5')
-    await syncConfig(relay, c, mine.sock, { timezone: 'Asia/Tokyo' })
-    await bridgeFrom(relay, c, '203.0.113.9')
-    expect(mine.closes).toContain(4409)
-    await sleep(50)
-    expect(takeovers(relay)).toHaveLength(0) // a replace alone proves nothing
-    c.advance(60_000) // the time is the replace's, not the standby's
-    await bridgeFrom(relay, c, '198.51.100.5', true) // the owner's Mac, still running, asks to come back
-    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
-    expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge at 06:07')
-  })
+  it(
+    'a replaced bridge that is still alive on another address pushes the owner at once, with the time in their zone',
+    async () => {
+      const c = fakeClock('2026-11-10T21:07:30.000Z')
+      relay = await startTestRelay({ clock: c })
+      relay.runtime.store.putSub(sub())
+      const mine = await bridgeFrom(relay, c, '198.51.100.5')
+      await syncConfig(relay, c, mine.sock, { timezone: 'Asia/Tokyo' })
+      await bridgeFrom(relay, c, '203.0.113.9')
+      expect(mine.closes).toContain(4409)
+      await sleep(50)
+      expect(takeovers(relay)).toHaveLength(0) // a replace alone proves nothing
+      c.advance(60_000) // the time is the replace's, not the standby's
+      await bridgeFrom(relay, c, '198.51.100.5', true) // the owner's Mac, still running, asks to come back
+      await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
+      expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge at 06:07')
+    },
+    t(60_000),
+  )
 
   it('a Mac that redials over its own dead socket from a new address is not a takeover', async () => {
     const c = clock()
@@ -266,29 +270,33 @@ describe('alarms', () => {
     expect(takeovers(relay)[0]?.payload.notification.body).toBe('Another Mac took over your Talos bridge')
   })
 
-  it('takeover pushes come at most once in 10 minutes', async () => {
-    const c = clock()
-    relay = await startTestRelay({ clock: c })
-    relay.runtime.store.putSub(sub())
-    await bridgeFrom(relay, c, '198.51.100.5')
-    await bridgeFrom(relay, c, '203.0.113.9')
-    await bridgeFrom(relay, c, '198.51.100.5', true)
-    await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the first takeover push')
-    // the same takeover asks again every minute: told once
-    c.advance(60_000)
-    await bridgeFrom(relay, c, '198.51.100.5', true)
-    // a second takeover 5 minutes in: still within the 10
-    c.advance(4 * 60_000)
-    await bridgeFrom(relay, c, '203.0.113.9')
-    await bridgeFrom(relay, c, '198.51.100.5', true)
-    await sleep(50)
-    expect(takeovers(relay)).toHaveLength(1)
-    // another one after 10 minutes is told
-    c.advance(6 * 60_000)
-    await bridgeFrom(relay, c, '203.0.113.9')
-    await bridgeFrom(relay, c, '198.51.100.5', true)
-    await waitFor(() => takeovers(relay as TestRelay).length === 2, WAIT_MS, 'the takeover push after 10 minutes')
-  })
+  it(
+    'takeover pushes come at most once in 10 minutes',
+    async () => {
+      const c = clock()
+      relay = await startTestRelay({ clock: c })
+      relay.runtime.store.putSub(sub())
+      await bridgeFrom(relay, c, '198.51.100.5')
+      await bridgeFrom(relay, c, '203.0.113.9')
+      await bridgeFrom(relay, c, '198.51.100.5', true)
+      await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the first takeover push')
+      // the same takeover asks again every minute: told once
+      c.advance(60_000)
+      await bridgeFrom(relay, c, '198.51.100.5', true)
+      // a second takeover 5 minutes in: still within the 10
+      c.advance(4 * 60_000)
+      await bridgeFrom(relay, c, '203.0.113.9')
+      await bridgeFrom(relay, c, '198.51.100.5', true)
+      await sleep(50)
+      expect(takeovers(relay)).toHaveLength(1)
+      // another one after 10 minutes is told
+      c.advance(6 * 60_000)
+      await bridgeFrom(relay, c, '203.0.113.9')
+      await bridgeFrom(relay, c, '198.51.100.5', true)
+      await waitFor(() => takeovers(relay as TestRelay).length === 2, WAIT_MS, 'the takeover push after 10 minutes')
+    },
+    t(90_000),
+  )
 
   it('a takeover push is heard even with notifications switched off', async () => {
     const c = clock()
@@ -302,24 +310,28 @@ describe('alarms', () => {
     await waitFor(() => takeovers(relay as TestRelay).length === 1, WAIT_MS, 'the takeover push')
   })
 
-  it('supersedes three times in an hour raise one push intent', async () => {
-    const c = clock()
-    relay = await startTestRelay({ clock: c })
-    relay.runtime.store.putSub(sub())
-    const k = kit(relay)
-    const bridges = []
-    for (let i = 0; i < 5; i++) {
-      bridges.push(await k.bridge().connect())
-      await sleep(30)
-    }
-    const keyAlarms = () =>
-      (relay as TestRelay).transport.sent.filter(
-        (s) => s.payload.notification.body === 'Your bridge key may be in use somewhere else',
-      )
-    await waitFor(() => keyAlarms().length >= 1, WAIT_MS, 'key alarm')
-    await sleep(50) // room for a wrong second alarm to show up
-    expect(keyAlarms()).toHaveLength(1)
-  })
+  it(
+    'supersedes three times in an hour raise one push intent',
+    async () => {
+      const c = clock()
+      relay = await startTestRelay({ clock: c })
+      relay.runtime.store.putSub(sub())
+      const k = kit(relay)
+      const bridges = []
+      for (let i = 0; i < 5; i++) {
+        bridges.push(await k.bridge().connect())
+        await sleep(30)
+      }
+      const keyAlarms = () =>
+        (relay as TestRelay).transport.sent.filter(
+          (s) => s.payload.notification.body === 'Your bridge key may be in use somewhere else',
+        )
+      await waitFor(() => keyAlarms().length >= 1, WAIT_MS, 'key alarm')
+      await sleep(50) // room for a wrong second alarm to show up
+      expect(keyAlarms()).toHaveLength(1)
+    },
+    t(60_000),
+  )
 
   it('no bridge for 5 minutes raises one "session stopped" push; a return raises "back"; a new outage inside the min gap is silent (V2.3)', async () => {
     const c = clock()
@@ -391,21 +403,26 @@ describe('push rules', () => {
     expect(JSON.stringify((relay as TestRelay).transport.sent)).not.toContain('hunter2')
   })
 
-  it('stays silent while an app socket is visible, and sends again once it is hidden', async () => {
-    const { app, bridge } = await setup()
-    app.send({ type: 'visibility', state: 'visible' })
-    await waitFor(() => (relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'visible')
-    bridge.reply('general', 'one')
-    await app.expectFrame('reply', (f) => f.message.text === 'one')
-    await sleep(60)
-    expect(bodies()).toEqual([])
-    app.send({ type: 'visibility', state: 'hidden' })
-    await waitFor(() => !(relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'hidden')
-    bridge.reply('general', 'two')
-    await app.expectFrame('reply', (f) => f.message.text === 'two')
-    await pushes(1)
-    expect(bodies()).toEqual(['New reply in General'])
-  })
+  it(
+    'stays silent while an app socket is visible, and sends again once it is hidden',
+    async () => {
+      const { app, bridge } = await setup()
+      app.send({ type: 'visibility', state: 'visible' })
+      await waitFor(() => (relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'visible')
+      bridge.reply('general', 'one')
+      await app.expectFrame('reply', (f) => f.message.text === 'one')
+      // timing-ok: negative window: no push while an app socket is visible
+      await sleep(t(150))
+      expect(bodies()).toEqual([])
+      app.send({ type: 'visibility', state: 'hidden' })
+      await waitFor(() => !(relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'hidden')
+      bridge.reply('general', 'two')
+      await app.expectFrame('reply', (f) => f.message.text === 'two')
+      await pushes(1)
+      expect(bodies()).toEqual(['New reply in General'])
+    },
+    t(90_000),
+  )
 
   describe('a visible screen only mutes pushes while someone is there', () => {
     const isPresent = () => (relay as TestRelay).runtime.hub.anyVisible()
@@ -425,7 +442,8 @@ describe('push rules', () => {
       expect(isPresent()).toBe(true)
       bridge.reply('general', 'one')
       await app.expectFrame('reply', (f) => f.message.text === 'one')
-      await sleep(60)
+      // timing-ok: negative window: no push for a reply that just arrived
+      await sleep(t(150))
       expect(bodies()).toEqual([]) // just arrived: someone is there
       await advance(c, 61_000, 20_000)
       expect(isPresent()).toBe(false)
@@ -446,7 +464,8 @@ describe('push rules', () => {
       }
       bridge.reply('general', 'still here')
       await app.expectFrame('reply', (f) => f.message.text === 'still here')
-      await sleep(60)
+      // timing-ok: negative window: no push while someone is present
+      await sleep(t(150))
       expect(bodies()).toEqual([])
     })
 
@@ -472,7 +491,8 @@ describe('push rules', () => {
       await advance(c, 30_000, 10_000)
       bridge.reply('general', 'thirty seconds later')
       await app.expectFrame('reply', (f) => f.message.text === 'thirty seconds later')
-      await sleep(60)
+      // timing-ok: negative window: no push thirty seconds on
+      await sleep(t(150))
       expect(bodies()).toEqual([])
     })
 
@@ -488,7 +508,8 @@ describe('push rules', () => {
     c.set(Date.parse('2026-10-28T23:30:00Z'))
     bridge.reply('general', 'late')
     await app.expectFrame('reply', (f) => f.message.text === 'late')
-    await sleep(60)
+    // timing-ok: negative window: no push inside quiet hours
+    await sleep(t(150))
     expect(bodies()).toEqual([])
     c.set(Date.parse('2026-10-29T07:30:00Z'))
     bridge.reply('general', 'morning')
@@ -505,7 +526,8 @@ describe('push rules', () => {
     await app.expectFrame('config.sync')
     bridge.reply('general', 'chatter')
     await app.expectFrame('reply')
-    await sleep(60)
+    // timing-ok: negative window: needs_you threads push nothing for a plain reply
+    await sleep(t(150))
     expect(bodies()).toEqual([]) // needs_you threads ignore plain replies
     const card = bridge.createCard({ thread_id: 'general', title: 'Approve it' })
     await app.expectFrame('card.create', (f) => f.card.id === card.id)
@@ -524,7 +546,8 @@ describe('push rules', () => {
     await app.expectFrame('config.sync', (f) => f.rev === 2)
     bridge.createCard({ thread_id: 'general', title: 'Another' })
     await app.expectFrame('card.create', (f) => f.card.title === 'Another')
-    await sleep(60) // the master switch is off: nothing more may arrive
+    // timing-ok: negative window: the master switch is off, nothing more arrives
+    await sleep(t(150)) // the master switch is off: nothing more may arrive
     expect(bodies()).toEqual(['Needs you in General'])
   })
 

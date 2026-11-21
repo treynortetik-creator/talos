@@ -17,11 +17,11 @@ enum TrustWords {
         switch reason {
         case .checking: return "Checking…"
         case .network: return "\(host) did not answer."
-        case .macOffline: return "Your Mac is not connected to the relay."
-        case .unsupported: return "Your Mac's Talos is too old to be checked: update talos-app on your Mac."
+        case .macOffline: return "Your Mac is not connected to the Talos server."
+        case .unsupported: return "Your Mac's Talos is too old to be checked: update Talos on your Mac."
         case .macTimeout: return "Your Mac did not answer in time."
-        case .rateLimited: return "The relay is busy."
-        case .badAnswer: return "The relay gave an answer Talos does not understand."
+        case .rateLimited: return "The Talos server is busy."
+        case .badAnswer: return "The Talos server gave an answer Talos does not understand."
         case .keyChanged: return "Your Mac's key changed and you have not accepted the new one."
         case .saveFailed: return "Talos could not save your Mac's new key on this phone."
         }
@@ -30,25 +30,25 @@ enum TrustWords {
     /// The banner over the read-only page.
     static func banner(lastVerified: Date?, reason: UnverifiedReason, host: String, now: Date) -> String {
         // Not "camera off": a file input that opens the system camera is not a WebKit permission the app is asked about.
-        "Can't confirm this is your Mac. The page's camera and microphone access, sharing and native features are off until it answers. "
+        "Can't confirm this is your Mac. Sharing and some phone features are off until it answers. "
             + "\(why(reason, host: host)) Last confirmed \(lastConfirmed(lastVerified, now: now))."
     }
 
     static let failTitle = "This is not your Mac"
     static func failBody(host: String) -> String {
         "\(host) answered with a key that is not the one your Mac gave you when you paired. Talos loaded nothing from it. "
-            + "Remove this relay and pair again, only if you trust the address."
+            + "Remove this Talos server and pair again, only if you trust the address."
     }
 
     static let blockTitle = "Can't confirm your Mac"
     static func blockBody(lastVerified: Date?, host: String, now: Date) -> String {
         "Your Mac has not answered through \(host) for over 24 hours (last confirmed \(lastConfirmed(lastVerified, now: now))), "
-            + "so Talos is closed until it does. Try again, or remove this relay and pair again."
+            + "so Talos is closed until it does. Try again, or remove this Talos server and pair again."
     }
 
     static func repinTitle(host: String) -> String { "Your Mac's key changed" }
     static func repinMessage(host: String) -> String {
-        "The Mac behind \(host) is now using a new key. If you ran talos-app rotate, continue. If you did not, remove this relay."
+        "The Mac behind \(host) is now using a new key. If you ran talos-app rotate, continue. If you did not, remove this Talos server."
     }
 }
 
@@ -104,7 +104,7 @@ final class TrustBannerView: UIView {
     required init?(coder: NSCoder) { fatalError("not built from a storyboard") }
 }
 
-/// The full-screen native screen for `.failed` and `.hardBlock`: it loads no page. A fail offers only "Remove this relay and pair again";
+/// The full-screen native screen for `.failed` and `.hardBlock`: it loads no page. A fail offers only "Remove this Talos server and pair again";
 /// a hard block also offers Retry.
 final class TrustBlockView: UIView {
     let titleLabel = UILabel()
@@ -128,7 +128,7 @@ final class TrustBlockView: UIView {
         body.textAlignment = .center
         var views: [UIView] = [titleLabel, body]
         if let onRetry { views.append(makeButton("Retry", id: "trust.retry", primary: true, onRetry)) }
-        views.append(makeButton("Remove this relay and pair again", id: "trust.remove", primary: onRetry == nil, onRemove))
+        views.append(makeButton("Remove this Talos server and pair again", id: "trust.remove", primary: onRetry == nil, onRemove))
         let stack = UIStackView(arrangedSubviews: views)
         stack.axis = .vertical
         stack.spacing = 16
@@ -173,7 +173,7 @@ final class RepinPrompt {
         alert.view.accessibilityIdentifier = "trust.repin"
         alert.addAction(UIAlertAction(title: "Continue", style: .default) { [weak self] _ in self?.finish(.accept) })
         alert.addAction(UIAlertAction(title: "Not now", style: .cancel) { [weak self] _ in self?.finish(.decline) })
-        alert.addAction(UIAlertAction(title: "Remove this relay", style: .destructive) { [weak self] _ in self?.finish(.remove) })
+        alert.addAction(UIAlertAction(title: "Remove this Talos server", style: .destructive) { [weak self] _ in self?.finish(.remove) })
         self.alert = alert
         presenter().present(alert, animated: true)
         // An alert that never reached the screen is answered "no", so the question cannot hang for ever (or block the next one).

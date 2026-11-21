@@ -1,5 +1,6 @@
 // The working indicator in the real app (fake mode), on phones, in both themes: a thin line on the message box that takes
-// no layout height at all, Stop in the message box's buttons, and the floating buttons never on the newest message.
+// no layout height at all, silent for screen readers (the working line says "is working"; Stop is there, see stop-line.spec.ts),
+// and the floating buttons never on the newest message.
 import { expect, type Locator, type Page, test } from '@playwright/test'
 
 // The service worker stamps a strict style CSP on precached HTML; the harness may need to inject CSS (see call-error.spec.ts).
@@ -11,8 +12,6 @@ type Fake = {
   session: { patch(p: Record<string, unknown>): void }
 }
 const fake = <T>(page: Page, fn: (t: Fake) => T) => page.evaluate(`(${fn.toString()})(window.__talos)`) as Promise<T>
-
-const tabReachesButtons = (project: string) => project !== 'iphone'
 
 async function open(page: Page) {
   await page.goto('/t/general')
@@ -27,7 +26,7 @@ async function setWorking(page: Page) {
     })
     t.session.patch({ busy: true, turn_id: 'turn_7' })
   })
-  await expect(page.getByTestId('composer-stop')).toBeVisible()
+  await expect(page.getByTestId('stop-line')).toBeVisible()
 }
 const box = async (loc: Locator) => {
   const b = await loc.boundingBox()
@@ -62,7 +61,7 @@ for (const size of sizes) {
           const before = await box(page.getByTestId('timeline'))
           await setWorking(page)
           const row = page.getByTestId('working-row')
-          await expect(row).toHaveAttribute('role', 'status')
+          await expect(row).toHaveAttribute('aria-hidden', 'true')
           expect((await box(row)).height).toBeLessThanOrEqual(0.5)
           const after = await box(page.getByTestId('timeline'))
           expect(after.height, 'the timeline gave up room for the bar').toBeCloseTo(before.height, 0)
@@ -78,38 +77,9 @@ for (const size of sizes) {
           expect(Math.abs(l.y + l.height - c.y), 'the line is not on the message box edge').toBeLessThanOrEqual(4)
           // it never takes a tap
           expect(await line.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
-          // screen readers still hear it
-          await expect(row).toContainText('is working')
-        })
-
-        test('Stop is in the message box, nothing covers it, and it sends a stop', async ({ page }, info) => {
-          await open(page)
-          await setWorking(page)
-          const stop = page.getByTestId('composer-stop')
-          await expect(stop).toBeEnabled()
-          await expect(page.getByTestId('composer').getByRole('button', { name: 'Stop' })).toBeVisible()
-          const s = await box(stop)
-          const c = await box(page.getByTestId('composer'))
-          expect(s.y).toBeGreaterThanOrEqual(c.y)
-          expect(s.y + s.height).toBeLessThanOrEqual(c.y + c.height + 0.5)
-          const top = await stop.evaluate((el) => {
-            const b = el.getBoundingClientRect()
-            // the icon inside the button counts as the button itself
-            const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
-            return hit !== null && el.contains(hit)
-          })
-          expect(top, 'something covers Stop').toBe(true)
-          if (tabReachesButtons(info.project.name)) {
-            await page.locator('.composer-box').focus()
-            let reached = false
-            for (let i = 0; i < 12 && !reached; i++) {
-              await page.keyboard.press('Tab')
-              reached = await stop.evaluate((el) => el === document.activeElement)
-            }
-            expect(reached, 'Tab never reached Stop').toBe(true)
-          }
-          await stop.click()
-          await expect.poll(() => fake(page, (t) => t.sent.filter((f) => f.action === 'stop').length)).toBe(1)
+          // screen readers hear it once, from the working line (a status), not from the bar
+          await expect(row).toHaveText('')
+          await expect(page.getByTestId('stop-line').getByRole('status')).toContainText('is working')
         })
 
         test('the bug button (in the message box) and jump-to-latest, when shown, stay off the newest message at the bottom', async ({

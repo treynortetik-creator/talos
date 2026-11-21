@@ -83,7 +83,7 @@ function repo() {
   return { T, git, put, commit, gate, plan, base }
 }
 
-const CHECKS = ['typecheck', 'lint', 'personal', 'size']
+const CHECKS = ['typecheck', 'lint', 'personal', 'size', 'timing']
 
 describe('gate.sh picks the suites from the changed paths', () => {
   it('every gate runs the four checks; a docs-only change runs no suite', () => {

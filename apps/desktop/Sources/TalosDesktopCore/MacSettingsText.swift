@@ -5,18 +5,21 @@ import Foundation
 /// the Talos window, "Companion" is the character.
 public enum MacSettingsText {
   public static let windowTitle = "Mac settings"
-  public static let connectionTab = "Connection"
   public static let companionName = "Companion"
-  /// Where the relay address, sign-in and talos-app command live. Every notice that points there uses this.
-  public static let connectionPath = "Mac settings \u{2192} Connection"
-  public static let sessionPath = "Mac settings \u{2192} Session"
-  public static let companionPath = "Mac settings \u{2192} Companion"
-  public static let generalPath = "Mac settings \u{2192} General"
-  public static let permissionsPath = "Mac settings \u{2192} Permissions"
+  /// Where the Talos server address and the talos-app command live now: Advanced. Every notice that points there uses this.
+  public static let connectionPath = MacWords.path(MacWords.tabAdvanced)
+  /// Where importing a start-up command and taking over a running agent live.
+  public static let sessionPath = MacWords.path(MacWords.tabAdvanced)
+  public static let agentPath = MacWords.path(MacWords.tabAgent)
+  public static let phonePath = MacWords.path(MacWords.tabPhone)
+  /// The Companion has no tab of its own any more: it is a card on General.
+  public static let companionPath = MacWords.path(MacWords.tabGeneral)
+  public static let generalPath = MacWords.path(MacWords.tabGeneral)
+  public static let permissionsPath = MacWords.path(MacWords.tabAccess)
 
-  public static let autoUpdateTitle = "Update Talos automatically"
+  public static let autoUpdateTitle = "Update Talos by itself"
   public static let autoUpdateHelp =
-    "Installs each new signed release by itself, only while no session is working, and says so in your default thread. Off: Talos never looks for one."
+    "Installs each new release by itself, only while your agent is not working, and says so in your default thread. Off: Talos never looks for one."
 
   public static let unstickHelp =
     "When the agent's model request looks stuck on your message, Talos presses Esc once in its window and sends the message again, then says so in your thread. Only once per message, and never while you are typing there or a question is on screen. Off: Talos only tells you."
@@ -54,21 +57,29 @@ public enum MacSettingsText {
     }
   }
 
+  // MARK: the Your agent tab (one line per setting, one caption per section)
+
+  public static let changesApply = "Changes apply the next time your agent starts."
+  public static let restartNow = "Restart now"
+  public static let keepWorkingTitle = "Keep it working when I quit Talos"
+  public static let restartIfStopsTitle = "Restart it if it stops by itself"
+  public static let problemsInTitle = "Tell me about problems in"
+
   // MARK: wording fixes (M22 to M30)
 
   /// M22. The old label read as if Talos asked you to confirm; on means Talos presses Enter for you.
-  public static let autoConfirmTitle = "Press Enter for me on the development-channel dialog"
+  public static let autoConfirmTitle = "Answer Claude's start-up question for me"
   public static let autoConfirmHelp =
     "Every time the agent starts, Talos presses Enter on the development-channel dialog for you, but only when it is exactly the dialog for the channel Talos launched with. Anything else waits for you."
 
   /// M26. Off still joins an agent that is already running; it only stops Talos starting a new one.
-  public static let startOnOpenTitle = "Start the agent when Talos opens"
+  public static let startOnOpenTitle = "Start my agent when Talos opens"
   public static let startOnOpenHelp =
     "Off still reconnects to an agent that is already running. It only stops Talos from starting a new one."
 
   /// M23/M24. The relay box shows nothing for the generic placeholder, so its hint is true.
   public static let relayHint = "auto (from bridge.env)"
-  public static let noRelayYet = "No relay address yet. Set one in \(connectionPath)."
+  public static let noRelayYet = "Talos can't find your Talos server yet. Add its address in \(connectionPath)."
   /// The reason shown at the top of the Connection tab when a door (Help, Show Talos) sent the owner there for want of a relay
   /// address. Only those two notices, and only while there is still no address: any other notice belongs to other screens.
   public static func connectionNotice(_ notice: String, hasRelay: Bool) -> String {
@@ -80,7 +91,7 @@ public enum MacSettingsText {
     return c.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == RelayConfig.placeholder || c == "auto" ? "" : configured
   }
   public static func relayUsing(_ url: String?) -> String {
-    url.map { "Using \($0)" } ?? "No relay address yet. Type one here, or run talos-app init --relay-url."
+    url.map { "Using \($0)" } ?? "No address yet. Type one here, or run talos-app init --relay-url."
   }
 
   /// M29. The menu entry that ends a snooze says so.
@@ -113,16 +124,16 @@ public enum MacAbout {
 /// What Import and Adopt say (U6, U7).
 public enum SetupText {
   public static let importSaved =
-    "Saved. Your launch command is now your setup. Starting the session; if Claude asks you to confirm anything, answer it in Terminals… in the menu bar item."
+    "Saved. Your launch command is now your setup. Starting the session; if Claude asks you to confirm anything, answer it in \(MacWords.agentScreenPath)."
   /// Import that did not start the session (it was refused, see the menu bar item).
   public static let importSavedNotStarted =
-    "Saved. Your launch command is now your setup. Nothing has started yet: choose Start session in the menu bar item when you are ready."
+    "Saved. Your launch command is now your setup. Nothing has started yet: choose Start your agent in the menu bar item when you are ready."
   /// Import while a session is up: the running agent keeps the command it started with.
   public static let importSavedRunning =
-    "Saved. The session that is running keeps its old command; the new one applies the next time it starts (Restart session in the menu bar item)."
+    "Saved. The session that is running keeps its old command; the new one applies the next time it starts (Restart your agent in the menu bar item)."
   public static func importNotSaved(path: String) -> String {
     "Couldn't save the setup file (\(path)). Check that the folder exists and that you can write to it."
   }
   public static let launchNeedsSetup =
-    "There is no launch command to edit yet. Paste your whole command under Import below, or use Find a running session and Adopt."
+    "Nothing is set up yet. \(MacWords.finishSetup)"
 }

@@ -417,7 +417,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     writeFileSync(
       fakeLocal,
       `#!/bin/bash
-{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY CI_HOSTILE CI_SETTLE; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
+{ echo "args: $*"; echo "bun: $(bun --version) ($(command -v bun))"; for v in CI_REPO CI_STATUS_WHERE CI_WT_BASE TALOS_CI_CACHE CI_STATUS_URL TALOS_CI_FORCE_DESKTOP TALOS_CI_FORCE_MOBILE TALOS_FUZZ_MS CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_WORKERS; do echo "$v=\${!v}"; done; } > "$CALLS"\n`,
     )
     // `gh` answers the one question a run asks (is the PR still open); never the real GitHub.
     const b = bin({
@@ -522,9 +522,9 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     expect(readFileSync(s.calls, 'utf8')).toContain('CI_NIGHTLY=1\n')
   })
 
-  // A scheduled run (the nightly) must never get in the way of the pushes that matter, or test a commit that is no longer main's:
-  // it skips itself, with a "skipped:" line, no status posted (neither red nor green), when its sha is not main's head, when a push
-  // run of the workflow is queued or in progress, or in the daytime (TALOS_CI_SCHEDULE_QUIET_HOURS, local time, 07:00-22:00).
+  // A scheduled run (the nightly) must never get in the way of the pushes that matter: it skips itself, with a "skipped:" line,
+  // no status posted (neither red nor green), only when it was DISPATCHED in the daytime (TALOS_CI_SCHEDULE_QUIET_HOURS, local time, 07:00-22:00). A push run never makes it skip: it
+  // yields to the push run(s) already going when it was dispatched, for a bounded time, and then goes.
   describe('a scheduled run skips itself', () => {
     const pad = (n: number) => String(n).padStart(2, '0')
     const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
@@ -539,16 +539,39 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       const b = new Date(Date.now() + 5 * 3_600_000)
       return `${hhmm(a)}-${hhmm(b)}`
     }
-    // gh answers the run list a push run is looked for in: $GH_PUSH_RUNS runs of the workflow, queued or going (a number)
-    const tools = () =>
+    // gh answers what a scheduled run asks of GitHub, as JSON that the real `jq` filters with the script's own --jq (so a wrong filter
+    // fails here). $GH_INPROGRESS: the ids of the push runs of ci-runner.yml in progress now (space separated; a run of another
+    // workflow, 999, is in the list too); $GH_STARTED_<id>: when that run's jobs started (default long ago; after the dispatch is a
+    // run that came later); its Lemnos job ("local-ci on ci-runner") is in_progress for its first $GH_DONE_AFTER polls (default 0),
+    // each poll written to "$CALLS.polls"; GH_FAIL_POLL=1: a poll that fails; $GH_CREATED_AT: this run's created_at; GH_FAIL=1: GitHub
+    // unreadable.
+    const fakeGh = `[ -z "$GH_FAIL" ] || exit 1
+expr=; prev=; for a in "$@"; do [ "$prev" = --jq ] && expr=$a; prev=$a; done
+emit() { if [ -n "$expr" ]; then jq -r "$expr"; else cat; fi; }
+case "$*" in
+  *status=in_progress*) { printf '{"workflow_runs":[{"id":999,"path":".github/workflows/other.yml"}'; for i in $GH_INPROGRESS; do printf ',{"id":%s,"path":".github/workflows/ci-runner.yml"}' "$i"; done; printf ']}'; } | emit ;;
+  */jobs*) id=$(echo "$*" | sed -n 's|.*actions/runs/\\([0-9]*\\)/jobs.*|\\1|p'); st="\${GH_JOB_ST:-in_progress}"
+    case "$*" in *"local-ci on ci-runner"*) [ -z "$GH_FAIL_POLL" ] || exit 1; echo "$id" >> "$CALLS.polls"; n=$(grep -c "^$id$" "$CALLS.polls"); [ "$n" -le "\${GH_DONE_AFTER:-0}" ] || st=completed ;; esac
+    eval "started=\\\${GH_STARTED_$id:-2000-01-01T00:00:00Z}"
+    printf '{"jobs":[{"name":"plan","status":"completed","started_at":"%s"},{"name":"local-ci on ci-runner","status":"%s","started_at":"%s"}]}' "$started" "$st" "$started" | emit ;;
+  *actions/runs/[0-9]*) printf '{"created_at":"%s"}' "$GH_CREATED_AT" | emit ;;
+  *) echo open ;;
+esac`
+    const tools = (more: Record<string, string> = {}) =>
       bin({
         caffeinate: 'exit 0',
-        gh: 'case "$*" in *actions/runs*) echo "${GH_PUSH_RUNS:-0}" ;; *) echo open ;; esac',
+        gh: fakeGh,
         bun: `echo ${/bun-version: ([\d.]+)/.exec(ciYml)?.[1]}`,
+        ...more,
       })
-    const nightly = (s: ReturnType<typeof setup>, extra: Record<string, string> = {}) =>
+    const nightly = (
+      s: ReturnType<typeof setup>,
+      extra: Record<string, string> = {},
+      more: Record<string, string> = {},
+      sub = 'run',
+    ) =>
       run(
-        'run',
+        sub,
         {
           GITHUB_EVENT_NAME: 'schedule',
           GITHUB_REPOSITORY: 'owner/talos-app',
@@ -561,7 +584,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
           TALOS_CI_SCHEDULE_QUIET_HOURS: elsewhere(),
           ...extra,
         },
-        tools(),
+        tools(more),
         s.copy,
       )
 
@@ -597,37 +620,320 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       expect(code('nonsense', '12:00')).toBe('1') // not a window: no rule, it runs
     })
 
-    it('on a sha that is not main’s head it skips (it would test a commit that is no longer main’s)', () => {
+    // main's head is judged as of the DISPATCH: pushes land every ~20 min overnight, so a nightly that skipped because main moved
+    // while it waited for a runner or yielded never ran (2026-11-20). It tests the commit main had when it was dispatched.
+    it('main having moved on since the dispatch is no reason to skip: it tests the commit main had then, and says so', () => {
       const s = setup()
       const r = nightly(s, { GITHUB_SHA: 'b'.repeat(40) })
       expect(r.code, r.err).toBe(0)
-      expect(r.out).toContain("is not main's head")
-      expect(r.out).toContain('skipped')
-      expect(existsSync(s.calls)).toBe(false)
+      expect(r.out).not.toContain('skipped')
+      expect(r.out).toContain(
+        `main has moved on (b${'b'.repeat(6)} was main's head when this run was created, ${s.real.slice(0, 7)} is now)`,
+      )
+      expect(readFileSync(s.calls, 'utf8')).toContain(`args: --ref ${'b'.repeat(40)} --full`)
     })
 
-    it('while a push run is queued or in progress it skips', () => {
-      const s = setup()
-      const r = nightly(s, { GH_PUSH_RUNS: '1' })
-      expect(r.code, r.err).toBe(0)
-      expect(r.out).toContain('skipped: a push run is queued or in progress')
-      expect(existsSync(s.calls)).toBe(false)
+    // Rule 1 (bounded yield): a push run never makes a scheduled run skip. It waits only for the push run(s) that were going when it
+    // was dispatched, then goes; a push run still queued then, or one that came later, is not waited for; a cap ends the wait.
+    describe('a push run never makes it skip: it yields, for a bounded time, to the ones already going when it was dispatched', () => {
+      const poll = { CI_SCHEDULE_YIELD_POLL_S: '0' }
+      // the workflow's own step yields, then the run step goes on from what it decided (`run` and the fallback never yield)
+      const viaStep = (s: ReturnType<typeof setup>, extra: Record<string, string> = {}) => {
+        const e = { HOME: home(), GITHUB_RUN_ID: '9001', ...extra }
+        const step = nightly(s, e, {}, 'schedule-yield')
+        const r = nightly(s, e)
+        return { code: r.code, err: r.err, out: step.out + r.out }
+      }
+      const polls = (s: ReturnType<typeof setup>) =>
+        existsSync(`${s.calls}.polls`) ? readFileSync(`${s.calls}.polls`, 'utf8').trim().split('\n').length : 0
+
+      it('waits for the push run going at the dispatch until it completes, then runs (not skipped)', () => {
+        const s = setup()
+        const r = viaStep(s, { ...poll, GH_INPROGRESS: '111', GH_DONE_AFTER: '2' })
+        expect(r.code, r.err).toBe(0)
+        expect(r.out).toContain('yielding to the push run(s) going when this run was dispatched (111)') // not 999, another workflow's
+        expect(r.out).toContain('this run goes next')
+        expect(r.out).not.toContain('skipped')
+        expect(polls(s)).toBe(3) // in progress twice, completed the third time
+        expect(readFileSync(s.calls, 'utf8')).toContain(`args: --ref ${s.real} --full`)
+      })
+
+      it('waits for every push run going at the dispatch', () => {
+        const s = setup()
+        const r = viaStep(s, { ...poll, GH_INPROGRESS: '111 222', GH_DONE_AFTER: '1' })
+        expect(r.out).toContain('(111 222)')
+        expect(polls(s)).toBe(4) // two runs, two polls each
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('does not wait for a push run that was still queued at the dispatch, nor one that came after it', () => {
+        const s = setup()
+        // nothing in progress (the run queued or pending in main's concurrency group is not "in progress"): no wait at all
+        const queued = viaStep(s, { ...poll, GH_INPROGRESS: '' })
+        expect(queued.out).not.toContain('yielding')
+        expect(queued.out).not.toContain('skipped')
+        // in progress now, but none of its jobs had started by the dispatch: it is a later arrival
+        const later = viaStep(s, { ...poll, GH_INPROGRESS: '333', GH_STARTED_333: '2999-01-01T00:00:00Z' })
+        expect(later.out).not.toContain('yielding')
+        expect(later.out).not.toContain('skipped')
+        expect(polls(s)).toBe(0)
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('the line is the dispatch time: a run whose jobs started just before it is waited for, one that started just after is not', () => {
+        const s = setup()
+        const e = Math.floor(Date.now() / 1000) - 3600
+        const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
+        const r = viaStep(s, {
+          ...poll,
+          CI_SCHEDULE_DISPATCHED_AT: String(e),
+          GH_INPROGRESS: '111 222',
+          GH_STARTED_111: iso(e - 60),
+          GH_STARTED_222: iso(e + 60),
+          GH_DONE_AFTER: '1',
+        })
+        expect(r.out).toContain('dispatched (111), for at most')
+        expect(r.out).not.toContain('222')
+      })
+
+      it('a poll GitHub cannot answer does not end the wait: it goes on until the cap', () => {
+        const s = setup()
+        const r = viaStep(s, {
+          CI_SCHEDULE_YIELD_POLL_S: '1',
+          CI_SCHEDULE_YIELD_MAX_S: '1',
+          GH_INPROGRESS: '111',
+          GH_FAIL_POLL: '1',
+        })
+        expect(r.out).toContain('yielded for 1 s (CI_SCHEDULE_YIELD_MAX_S) and the push run(s) 111 still go')
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('stops waiting at the cap (CI_SCHEDULE_YIELD_MAX_S) and runs anyway', () => {
+        const s = setup()
+        const r = viaStep(s, {
+          CI_SCHEDULE_YIELD_POLL_S: '1',
+          CI_SCHEDULE_YIELD_MAX_S: '1',
+          GH_INPROGRESS: '111',
+          GH_DONE_AFTER: '1000',
+        })
+        expect(r.code, r.err).toBe(0)
+        expect(r.out).toContain(
+          'yielded for 1 s (CI_SCHEDULE_YIELD_MAX_S) and the push run(s) 111 still go; this run goes now',
+        )
+        expect(r.out).not.toContain('skipped')
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('a push run whose Lemnos job is still queued for a runner is still ahead: the wait goes on until the cap', () => {
+        const s = setup()
+        const r = viaStep(s, {
+          CI_SCHEDULE_YIELD_POLL_S: '1',
+          CI_SCHEDULE_YIELD_MAX_S: '1',
+          GH_INPROGRESS: '111',
+          GH_JOB_ST: 'queued',
+          GH_DONE_AFTER: '1000',
+        })
+        expect(r.out).toContain('yielded for 1 s (CI_SCHEDULE_YIELD_MAX_S) and the push run(s) 111 still go')
+      })
+
+      it('only the yield step waits: a run (or fallback) step that finds no decision goes on without yielding', () => {
+        const s = setup()
+        const r = nightly(s, { ...poll, GITHUB_RUN_ID: '9002', GH_INPROGRESS: '111', GH_DONE_AFTER: '5' })
+        expect(r.out).not.toContain('yielding')
+        expect(polls(s)).toBe(0)
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('the fake gh needs the real jq (it applies the script’s own --jq filters)', () => {
+        expect(spawnSync('jq', ['--version']).status, 'install jq: these tests filter GitHub’s JSON with it').toBe(0)
+      })
+
+      it('the cap is 90 minutes unless set', () => {
+        expect(readFileSync(join(here, 'ci-runner', 'schedule.sh'), 'utf8')).toContain('CI_SCHEDULE_YIELD_MAX_S:-5400')
+      })
+
+      it('GitHub unreadable is no reason to wait or to skip', () => {
+        const s = setup()
+        const r = viaStep(s, { ...poll, GH_FAIL: '1', GH_INPROGRESS: '111' })
+        expect(r.code, r.err).toBe(0)
+        expect(r.out).not.toContain('yielding')
+        expect(existsSync(s.calls)).toBe(true)
+      })
+
+      it('the hostile nightly yields the same way', () => {
+        const s = setup()
+        const r = viaStep(s, { ...poll, CI_HOSTILE: '1', GH_INPROGRESS: '111', GH_DONE_AFTER: '1' })
+        expect(r.out).toContain('yielding to the push run(s) going when this run was dispatched (111)')
+        expect(readFileSync(s.calls, 'utf8')).toContain('CI_HOSTILE=1')
+      })
+
+      it('what a run decided is kept for its fallback step: a main that moved on while it yielded does not turn "ran" into a skip', () => {
+        const s = setup()
+        const h = home()
+        // the workflow's own step before the run step decides (and yields); `run` and the fallback then take what it said
+        const step = nightly(
+          s,
+          { ...poll, HOME: h, GITHUB_RUN_ID: '4242', GH_INPROGRESS: '111', GH_DONE_AFTER: '1' },
+          {},
+          'schedule-yield',
+        )
+        expect(step.code, step.err).toBe(0)
+        expect(step.out).toContain('yielding')
+        expect(existsSync(s.calls)).toBe(false) // it tests nothing itself
+        expect(polls(s)).toBe(2)
+        const first = nightly(s, { ...poll, HOME: h, GITHUB_RUN_ID: '4242', GH_INPROGRESS: '111', GH_DONE_AFTER: '1' })
+        expect(first.out).not.toContain('yielding') // not again
+        expect(first.out).not.toContain('skipped')
+        expect(polls(s)).toBe(2)
+        rmSync(s.calls)
+        const again = nightly(s, { HOME: h, GITHUB_RUN_ID: '4242', TALOS_CI_SCHEDULE_QUIET_HOURS: around() }) // now it is daytime
+        expect(again.out).not.toContain('skipped')
+        expect(existsSync(s.calls)).toBe(true)
+        // and a skip is kept as well: said again, the same way
+        const skipped = nightly(s, { HOME: h, GITHUB_RUN_ID: '4243', TALOS_CI_SCHEDULE_QUIET_HOURS: around() })
+        const skippedAgain = nightly(s, { HOME: h, GITHUB_RUN_ID: '4243' })
+        expect(skipped.out).toContain('skipped: it is daytime')
+        expect(skippedAgain.out).toContain('skipped: it is daytime')
+      })
+
+      it('a day with a dispatched run already started: the yield step and the run step say it once, and it is no skipped night', () => {
+        const s = setup()
+        const h = home()
+        const env = { HOME: h, GITHUB_RUN_ID: '8001' }
+        const dir = join(h, '.cache/talos-ci/nightly-dispatch')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, `nightly-${execFileSync('date', ['+%F'], { encoding: 'utf8' }).trim()}`), '')
+        const step = nightly(s, env, {}, 'schedule-yield')
+        const r = nightly(s, env)
+        const day = `${step.out}${r.out}`
+        expect(day).toContain('a dispatched nightly run already started today')
+        expect(day).not.toContain('two nights in a row')
+        expect(existsSync(join(h, '.cache/talos-ci/alerts'))).toBe(false)
+        expect(existsSync(s.calls)).toBe(false)
+      })
     })
 
-    it('the hostile nightly runs on whatever main is: a sha that is not main’s head is no reason for it to skip', () => {
+    // Rule 2: the daytime is judged when the run was DISPATCHED, not when it gets a runner.
+    describe('a run dispatched at night is never skipped for the quiet hours, however late it starts', () => {
+      const nowS = () => Math.floor(Date.now() / 1000)
+      const iso = (s: number) => new Date(s * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
+
+      it('an explicit dispatch time inside the night: it runs although it starts in the daytime', () => {
+        const s = setup()
+        const r = nightly(s, {
+          TALOS_CI_SCHEDULE_QUIET_HOURS: around(),
+          CI_SCHEDULE_DISPATCHED_AT: String(nowS() - 5 * 3600),
+        })
+        expect(r.code, r.err).toBe(0)
+        expect(r.out).not.toContain('skipped')
+        expect(readFileSync(s.calls, 'utf8')).toContain(`args: --ref ${s.real} --full`)
+      })
+
+      it('an explicit dispatch time inside the daytime: it skips, and says when it was dispatched', () => {
+        const s = setup()
+        const r = nightly(s, {
+          TALOS_CI_SCHEDULE_QUIET_HOURS: around(),
+          CI_SCHEDULE_DISPATCHED_AT: String(nowS() - 1800),
+        })
+        expect(r.out).toMatch(
+          /skipped: it is daytime \(.*; dispatched at \d\d:\d\d\), and a scheduled run waits for the night/,
+        )
+        expect(existsSync(s.calls)).toBe(false)
+      })
+
+      it('the run’s own created_at is its dispatch time (GitHub says it)', () => {
+        const s = setup()
+        const day = { TALOS_CI_SCHEDULE_QUIET_HOURS: around(), GITHUB_RUN_ID: '555' }
+        const night = nightly(s, { ...day, GH_CREATED_AT: iso(nowS() - 5 * 3600) })
+        expect(night.out).not.toContain('skipped')
+        expect(existsSync(s.calls)).toBe(true)
+        rmSync(s.calls)
+        const noon = nightly(s, { ...day, GH_CREATED_AT: iso(nowS() - 600), HOME: home() })
+        expect(noon.out).toContain('skipped: it is daytime')
+        expect(existsSync(s.calls)).toBe(false)
+      })
+
+      it('a dispatch time that cannot be had is the time it starts: in the daytime it skips', () => {
+        const s = setup()
+        const r = nightly(s, { TALOS_CI_SCHEDULE_QUIET_HOURS: around(), GITHUB_RUN_ID: '555', GH_FAIL: '1' })
+        expect(r.out).toContain('skipped: it is daytime')
+        expect(existsSync(s.calls)).toBe(false)
+      })
+
+      // the owner's weekday 08:00-14:00 rule: CI_WORKERS=5 (com.talos.cpu-window sets it in a runner's .env, which a runner reads at start)
+      describe('a run that goes ahead inside the owner’s weekday window runs with the daytime worker cap', () => {
+        const clock = (dow: string, hhmm: string) =>
+          ({
+            date: `case "$*" in "+%u") echo ${dow} ;; "+%H:%M") echo ${hhmm} ;; *) exec /bin/date "$@" ;; esac`,
+          }) as Record<string, string>
+        const at = (s: ReturnType<typeof setup>, dow: string, hhmm: string, extra: Record<string, string> = {}) =>
+          nightly(
+            s,
+            { TALOS_CI_SCHEDULE_QUIET_HOURS: 'off', CI_SCHEDULE_DISPATCHED_AT: String(nowS() - 5 * 3600), ...extra },
+            clock(dow, hhmm),
+          )
+
+        it('at 09:30 on a Wednesday: CI_WORKERS=5, said, and ci-local.sh gets it', () => {
+          const s = setup()
+          const r = at(s, '3', '09:30')
+          expect(r.code, r.err).toBe(0)
+          expect(r.out).toContain('CI_WORKERS=5')
+          expect(readFileSync(s.calls, 'utf8')).toContain('CI_WORKERS=5\n')
+        })
+
+        it('a lower setting of its own stays; a higher one is cut to 5', () => {
+          const s = setup()
+          at(s, '3', '09:30', { CI_WORKERS: '3' })
+          expect(readFileSync(s.calls, 'utf8')).toContain('CI_WORKERS=3\n')
+          at(s, '3', '09:30', { CI_WORKERS: '12' })
+          expect(readFileSync(s.calls, 'utf8')).toContain('CI_WORKERS=5\n')
+        })
+
+        it('outside the window or at the weekend it is the machine’s default (not set here)', () => {
+          const s = setup()
+          for (const [dow, hhmm] of [
+            ['6', '09:30'],
+            ['7', '09:30'],
+            ['3', '14:00'],
+            ['3', '07:59'],
+            ['3', '02:30'],
+          ]) {
+            const r = at(s, dow, hhmm)
+            expect(r.out, `${dow} ${hhmm}`).not.toContain('CI_WORKERS=5')
+            expect(readFileSync(s.calls, 'utf8'), `${dow} ${hhmm}`).toContain('CI_WORKERS=\n')
+          }
+        })
+
+        it('the window is 08:00 up to 14:00, Monday to Friday', () => {
+          const sets = (dow: string, hhmm: string) =>
+            sh(
+              `. "${join(here, 'ci-runner', 'schedule.sh')}"; ci_day_workers >/dev/null; echo "\${CI_WORKERS-unset}"`,
+              {},
+              tools(clock(dow, hhmm)),
+            ).out.trim()
+          expect(sets('1', '08:00')).toBe('5')
+          expect(sets('5', '13:59')).toBe('5')
+          expect(sets('5', '14:00')).toBe('unset')
+          expect(sets('1', '07:59')).toBe('unset')
+          expect(sets('6', '10:00')).toBe('unset')
+        })
+      })
+    })
+
+    it('the hostile nightly runs on whatever main is: a sha that is not main’s head is no reason for it to skip, and says nothing of it', () => {
       const s = setup()
       const r = nightly(s, { GITHUB_SHA: 'b'.repeat(40), CI_HOSTILE: '1' })
       expect(r.code, r.err).toBe(0)
       expect(r.out).not.toContain('skipped')
+      expect(r.out).not.toContain('has moved on')
       expect(readFileSync(s.calls, 'utf8')).toContain(`--ref ${'b'.repeat(40)} --full`)
     })
 
-    it('the hostile nightly still skips in the daytime and while a push run goes', () => {
+    it('the hostile nightly still skips when it was dispatched in the daytime', () => {
       const s = setup()
       expect(nightly(s, { CI_HOSTILE: '1', TALOS_CI_SCHEDULE_QUIET_HOURS: around() }).out).toContain(
         'skipped: it is daytime',
       )
-      expect(nightly(s, { CI_HOSTILE: '1', GH_PUSH_RUNS: '1' }).out).toContain('skipped: a push run is queued')
     })
 
     // A dispatch with nightly=<kind> is that nightly by hand: the same path as the schedule of that kind.
@@ -652,14 +958,15 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
         expect(called(s)).toContain('CI_HOSTILE=1')
       })
 
-      it('the daytime, a stale sha and a running push run skip it, as they skip the schedule', () => {
+      it('the daytime skips it, as it skips the schedule; a main that moved on does not', () => {
         const s = setup()
         expect(dispatched('nightly', s, { TALOS_CI_SCHEDULE_QUIET_HOURS: around() }).out).toContain(
           'skipped: it is daytime',
         )
-        expect(dispatched('nightly', s, { GH_PUSH_RUNS: '1' }).out).toContain('skipped: a push run is queued')
-        expect(dispatched('nightly', s, { GITHUB_SHA: 'b'.repeat(40) }).out).toContain("is not main's head")
         expect(existsSync(s.calls)).toBe(false)
+        const moved = dispatched('nightly', s, { GITHUB_SHA: 'b'.repeat(40) })
+        expect(moved.out).not.toContain('skipped')
+        expect(existsSync(s.calls)).toBe(true)
       })
 
       it('a ref other than main is refused, as for a schedule', () => {
@@ -720,7 +1027,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       it('a dispatched nightly that skips itself leaves no marker, so the schedule still runs', () => {
         const s = setup()
         const h = home()
-        dispatched('nightly', s, { HOME: h, GH_PUSH_RUNS: '1' })
+        dispatched('nightly', s, { HOME: h, TALOS_CI_SCHEDULE_QUIET_HOURS: around() })
         expect(nightly(s, { HOME: h }).out).not.toContain('skipped')
       })
     })
@@ -729,11 +1036,12 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
       const s = setup()
       const h = home()
       const alerts = join(h, '.cache/talos-ci/alerts')
-      const first = nightly(s, { HOME: h, GH_PUSH_RUNS: '1' })
-      expect(first.out).toContain('skipped: a push run')
+      const day = { TALOS_CI_SCHEDULE_QUIET_HOURS: around() }
+      const first = nightly(s, { HOME: h, ...day })
+      expect(first.out).toContain('skipped: it is daytime')
       expect(first.out).not.toContain('two nights in a row') // one skip is a skip
       expect(existsSync(alerts)).toBe(false)
-      const second = nightly(s, { HOME: h, GH_PUSH_RUNS: '2' })
+      const second = nightly(s, { HOME: h, ...day })
       expect(second.out).toContain('ci-runner: warning: the nightly run has skipped two nights in a row')
       const files = readdirSync(alerts).filter((f) => f.endsWith('-schedule-skipped.txt'))
       expect(files).toHaveLength(1)
@@ -743,11 +1051,12 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
     it('a night it ran in between, or the hostile one skipping, makes no such warning for the nightly', () => {
       const s = setup()
       const h = home()
-      nightly(s, { HOME: h, GH_PUSH_RUNS: '1' }) // skipped
+      const day = { TALOS_CI_SCHEDULE_QUIET_HOURS: around() }
+      nightly(s, { HOME: h, ...day }) // skipped
       expect(nightly(s, { HOME: h }).code).toBe(0) // ran
-      const again = nightly(s, { HOME: h, GH_PUSH_RUNS: '1' }) // skipped, but not two in a row
+      const again = nightly(s, { HOME: h, ...day }) // skipped, but not two in a row
       expect(again.out).not.toContain('two nights in a row')
-      const hostile = nightly(s, { HOME: h, GH_PUSH_RUNS: '1', CI_HOSTILE: '1' }) // another kind: its own count
+      const hostile = nightly(s, { HOME: h, ...day, CI_HOSTILE: '1' }) // another kind: its own count
       expect(hostile.out).not.toContain('two nights in a row')
     })
 
@@ -764,7 +1073,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
           CALLS: s.calls,
           CI_LOCAL_SCRIPT: s.fakeLocal,
           TALOS_CI_SCHEDULE_QUIET_HOURS: around(),
-          GH_PUSH_RUNS: '3',
+          GH_INPROGRESS: '3', // a push, a PR and a dispatch never look at the push runs
         },
         tools(),
         s.copy,
@@ -775,7 +1084,7 @@ describe('ci-runner.sh run: the call into ci-local.sh', () => {
 
     it('GitHub unreadable is no reason to skip: the nightly runs', () => {
       const s = setup()
-      const r = nightly(s, { GH_PUSH_RUNS: 'unreadable' })
+      const r = nightly(s, { GH_FAIL: '1' })
       expect(r.code, r.err).toBe(0)
       expect(readFileSync(s.calls, 'utf8')).toContain('--full')
     })
@@ -2092,15 +2401,15 @@ describe('the workflows', () => {
   })
 
   itRunnerYml(
-    'only the steps that talk to GitHub get the token: superseded, dispatch-wait, run, fallback, alert, sweep, close, green, relays and inbox',
+    'only the steps that talk to GitHub get the token: superseded, dispatch-wait, schedule-yield, run, fallback, alert, sweep, close, green, relays and inbox',
     () => {
       const withToken = runnerYml.split('\n      - ').filter((s) => s.includes('GH_TOKEN'))
       // run and sweep in ci and in each of the six remote jobs, ci's superseded, dispatch-wait, fallback, alert, e2e-shadow,
-      // check-shadow and both pairs, close, green, relays, and inbox
-      expect(withToken).toHaveLength(26)
+      // check-shadow and both pairs, schedule-yield, close, green, relays, and inbox
+      expect(withToken).toHaveLength(27)
       for (const step of withToken)
         expect(step).toMatch(
-          /scripts\/ci-pair\.sh part|ci-runner\.sh e2e-shadow|ci-runner\.sh check-shadow|scripts\/ci-runner\.sh run|ci-runner\.sh superseded|ci-runner\.sh dispatch-wait|ci-runner\.sh fallback|ci-runner\.sh alert|ci-runner\.sh sweep|ci-runner\.sh green|ci-runner\.sh relays|lead-inbox\.sh flush|Cancel the run/,
+          /scripts\/ci-pair\.sh part|ci-runner\.sh e2e-shadow|ci-runner\.sh check-shadow|scripts\/ci-runner\.sh run|ci-runner\.sh superseded|ci-runner\.sh dispatch-wait|ci-runner\.sh schedule-yield|ci-runner\.sh fallback|ci-runner\.sh alert|ci-runner\.sh sweep|ci-runner\.sh green|ci-runner\.sh relays|lead-inbox\.sh flush|Cancel the run/,
         )
     },
   )
@@ -2286,6 +2595,26 @@ describe('the workflows', () => {
       // the ci job's limit leaves room for both steps
       const mins = (st: unknown) => Number((st as { 'timeout-minutes': number })['timeout-minutes'])
       expect(mins(j.ci)).toBeGreaterThan(mins(ci.steps[runAt]) + mins(ci.steps[fb]))
+    },
+  )
+
+  itRunnerYml(
+    'a scheduled run yields in a step of its own before the run step, so the yield never uses up the run step’s time',
+    () => {
+      const ci = jobs().ci as { steps: { name?: string; run?: string; if?: string; 'continue-on-error'?: boolean }[] }
+      const y = ci.steps.findIndex((st) => st.run === 'bash scripts/ci-runner.sh schedule-yield')
+      const runAt = ci.steps.findIndex((st) => st.run === 'exec bash scripts/ci-runner.sh run')
+      expect(y).toBeGreaterThan(-1)
+      expect(y).toBeLessThan(runAt)
+      expect(ci.steps[y]?.['continue-on-error']).toBe(true) // no decision kept: the run step decides
+      const cond = String(ci.steps[y]?.if)
+      expect(cond).toContain("github.event_name == 'schedule'")
+      expect(cond).toContain("inputs.nightly == 'nightly'")
+      expect(cond).toContain("inputs.nightly == 'hostile'")
+      expect(cond).toContain("steps.dispatch.outputs.superseded != 'true'")
+      const mins = (st: unknown) => Number((st as { 'timeout-minutes': number })['timeout-minutes'])
+      expect(mins(ci.steps[y])).toBeGreaterThan(5400 / 60) // the cap CI_SCHEDULE_YIELD_MAX_S is 90 minutes
+      expect(mins(jobs().ci)).toBeGreaterThan(mins(ci.steps[y]) + mins(ci.steps[runAt]))
     },
   )
 

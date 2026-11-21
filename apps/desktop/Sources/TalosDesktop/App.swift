@@ -18,7 +18,7 @@ enum Entry {
   }
 }
 
-/// The menu bar item, and the windows: Mac settings (Session, Connection, Permissions, Hotkeys, Companion, General) and the setup
+/// The menu bar item, and the windows: Mac settings (Your agent, Phone & Mac, Privacy & access, General, Advanced) and the setup
 /// checklist. Help is not a window: it is a page in the Talos window (`HelpRouter`).
 struct TalosApp: App {
   @StateObject private var model: SupervisorController
@@ -64,119 +64,9 @@ struct TalosApp: App {
 
   var body: some Scene {
     MenuBarExtra {
-      if model.configured {
-        ForEach(Array(status.summary.lines.enumerated()), id: \.offset) { _, l in Text(l) }
-      } else {
-        Text(model.statusLine)
-      }
-      if !model.liveNotice.isEmpty { Text(model.liveNotice) }
-      // a thread session's line, apart from Main's: it shows while that thread still waits or is still failed
-      if !model.threadNotice.isEmpty { Text(model.threadNotice) }
-      Divider()
-      Button("Show Talos") {
-        if web.hasRelay {
-          web.show()
-        } else {
-          model.notice = MacSettingsText.noRelayYet
-          SettingsRouter.open(.connection) { openWindow(id: $0) }
-        }
-      }
-      .keyboardShortcut("t")
-      Button("Sign in to Claude again…") { model.showSignIn(startNow: true) }
-      if web.hasRelay {
-        switch web.pageState {
-        case .signedIn: Button("Sign out") { Task { await web.signOut() } }
-        case .signedOut:
-          Button("Sign in…") {
-            TerminalWindowController.shared.attach(model: model)
-            PairingController.shared.start(config: model.supervisor.currentConfig(), web: web)
-          }
-        case .unreachable:
-          Text(PageState.unreachableLine)
-          Button("Try now") { web.retryNow() }
-        case .loading: Text("Connecting to Talos…")
-        }
-        Button("Forget this Mac…") { web.forgetThisMac(config: model.supervisor.currentConfig()) }
-      }
-      Button("Quick compose…") { QuickCompose.shared.show(anchor: QuickCompose.shared.anchorProvider?()) }
-        .keyboardShortcut("n")
-      Toggle("Show Companion", isOn: $companionOn)
-      if companionOn {
-        // The keyboard path to everything in the tray (spec 4.2). The menu redraws when `trayRevision` bumps.
-        Menu("Companion: status") {
-          let tray = companion.trayContent()
-          if let h = tray.headline { Text(h) }
-          ForEach(Array(tray.rows.enumerated()), id: \.offset) { _, r in
-            Button("\(r.title): \(r.word)") { companion.openRow(r) }
-          }
-          if tray.more > 0 { Button("+\(tray.more) more") { companion.openHome() } }
-          if let f = tray.footer { Text(f) }
-          if tray.offersOpenTalos { Button("Open Talos") { companion.openTalosFromMenu() } }
-        }
-      }
-      if let until = companion.snoozedUntil {
-        Button(MacSettingsText.snoozeEntry(until: until.formatted(date: .omitted, time: .shortened))) { companion.endSnooze() }
-      }
-      Button("Terminals…") {
-        TerminalWindowController.shared.attach(model: model)
-        TerminalWindowController.shared.show()
-      }
-      Divider()
-      if model.sessionIsUp {
-        Button("Stop session") { model.stop() }.disabled(!model.configured || !model.supervisor.holdsSessionLock)
-      } else {
-        if !model.retryCannotWork {
-          Button(model.failedStop ? "Try again" : "Start session") { model.start() }.disabled(!model.configured)
-        }
-        if model.failedStop { Button("Start a new conversation") { model.startNewConversation() } }
-      }
-      Button("Restart session") { model.restart() }.disabled(!model.configured || (model.sessionIsUp && !model.supervisor.holdsSessionLock))
-      Button("Copy Terminal command") { model.copyTerminalCommand() }.disabled(!model.configured)
-      Button("Find a running session…") {
-        SettingsRouter.openAdopt(model: model) { openWindow(id: $0) }
-      }
-      if model.hostKind == .tmux { Button("Copy tmux attach command") { model.copyAttachCommand() } }
-      Divider()
-      Button("Settings…") {
-        openWindow(id: "settings")
-        NSApp.activate(ignoringOtherApps: true)
-      }
-      .keyboardShortcut(",")
-      Button("Talos Help") { HelpRouter.open(model: model) { openWindow(id: $0) } }
-      Button("Compose hotkey…") { SettingsRouter.open(.hotkeys) { openWindow(id: $0) } }
-      // Only a Mac that still needs setup has the screens; an existing install never sees them again
-      if OnboardingMarker.isNeeded(configured: model.configured, pending: OnboardingMarker.isPending(home: NSHomeDirectory())) {
-        Button(OnboardingCopy.menuSetUp) {
-          openWindow(id: "onboarding")
-          NSApp.activate(ignoringOtherApps: true)
-        }
-      }
-      Button(OnboardingCopy.menuUseFolder) {
-        openWindow(id: "advanced-setup")
-        NSApp.activate(ignoringOtherApps: true)
-      }
-      Button("Permissions…") { SettingsRouter.open(.permissions) { openWindow(id: $0) } }
-      Divider()
-      Button("About Talos") {
-        openWindow(id: "about")
-        NSApp.activate(ignoringOtherApps: true)
-      }
-      Button(updates.menuDot ? "\u{25CF} " + updates.menuTitle : "Check for Updates\u{2026}") {
-        updates.menuChoice()
-      }
-      if allowUpdates.pending != nil {
-        Button("Allow updates\u{2026}") { allowUpdates.showAgain() }
-      }
-      Button("Open Log") { TalosApp.openLog(model: model) }
-      Divider()
-      if model.hostKind == .tmux {
-        Button("Quit Talos (agent keeps running)") { model.quitFromMenu() }
-        .keyboardShortcut("q")
-        Button("Quit and stop the agent") { model.stopThenQuit() }.disabled(model.sessionIsUp && !model.supervisor.holdsSessionLock)
-      } else {
-        Button("Quit Talos (stops the agent)") { model.stopThenQuit() }
-        .keyboardShortcut("q")
-      }
+      StatusMenuContent(
+        model: model, web: web, status: status, companion: companion, updates: updates, allowUpdates: allowUpdates,
+        companionOn: $companionOn)
     } label: {
       Group {
         if let image = status.menuBarImage {
@@ -211,7 +101,7 @@ struct TalosApp: App {
                   WebController.shared.show()
                 } else {
                   model.notice = MacSettingsText.noRelayYet
-                  SettingsRouter.open(.connection) { openWindow(id: $0) }
+                  SettingsRouter.open(.advanced) { openWindow(id: $0) }
                 }
               },
               openSettings: {
@@ -224,7 +114,7 @@ struct TalosApp: App {
                 // `web.show()`, then the navigation; it waits for the page if it is still loading.
                 guard WebController.shared.hasRelay else {
                   model.notice = MacSettingsText.noRelayYet
-                  SettingsRouter.open(.connection) { openWindow(id: $0) }
+                  SettingsRouter.open(.advanced) { openWindow(id: $0) }
                   return
                 }
                 WebController.shared.show()
@@ -264,81 +154,29 @@ struct TalosApp: App {
     Window(OnboardingCopy.advancedTitle, id: "advanced-setup") { AdvancedSetupView(model: model) }
     Window("About Talos", id: "about") { AboutView(controller: UpdateController.shared) }
       .windowResizability(.contentSize)
+      .commands { TalosAppCommands() }
     Window("Talos updates", id: "updates") { UpdateWindow(controller: UpdateController.shared) }
       .windowResizability(.contentSize)
   }
 }
 
-struct SessionView: View {
-  @ObservedObject var model: SupervisorController
-  @State private var command = ""
-  @State private var importError: String?
+/// The Talos menu's own first two items, from SwiftUI's side: About opens OUR About window (never the stock panel) and Check for Updates
+/// sits right below it. `AppMenu` (the menus built from `AppMenuSpec`) takes over the whole bar once the app is up; this is what the
+/// bar shows before that, and what stands if it is ever swapped back, so the stock About panel cannot appear at any moment.
+struct TalosAppCommands: Commands {
+  @Environment(\.openWindow) private var openWindow
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text(model.statusLine).font(.headline)
-      let blockers: [TakeoverCheck.Blocker] = { if case .blocked(let b) = model.status.phase { return b } else { return [] } }()
-      // The Blocked screen says who holds the channels once; the notice that repeats it is dropped.
-      let notice = BlockedText.notice(model.liveNotice, whileBlocked: !blockers.isEmpty)
-      if !notice.isEmpty { Text(notice).foregroundStyle(.orange) }
-      if !model.threadNotice.isEmpty {
-        Text(model.threadNotice).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+  var body: some Commands {
+    CommandGroup(replacing: .appInfo) {
+      Button("About Talos") {
+        openWindow(id: "about")
+        NSApp.activate(ignoringOtherApps: true)
       }
-      ForEach(Array(BlockedText.lines(blockers).enumerated()), id: \.offset) { _, line in
-        Text(line).fixedSize(horizontal: false, vertical: true)
+      Button(UpdateMenu.checkTitle) {
+        UpdateController.shared.openWindow = { openWindow(id: "updates") }
+        UpdateController.shared.menuChoice()
       }
-      if BlockedText.offersStartAnyway(blockers) {
-        Text(BlockedText.startAnywayWarning).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        Button(BlockedText.startAnywayButton) { model.startAnyway() }
-      }
-      // Always there, not only after a start was blocked: first run has no blocked state to hang it on (audit D44).
-      Button(BlockedText.adoptButton) { model.findSessionToAdopt() }.disabled(model.adoptLooking)
-      if model.failedStop {
-        HStack {
-          if !model.retryCannotWork { Button("Try again") { model.start() } }
-          Button("Start a new conversation") { model.startNewConversation() }
-        }
-      }
-      if let plan = model.adopt {
-        GroupBox("Adopt pid \(plan.pid)") {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Folder: \(plan.agentDir)")
-            Text("Args: \(plan.args.joined(separator: " "))").lineLimit(3)
-            Text("Session: \(plan.sessionId ?? "none found")")
-            Text(model.adoptNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button("Continue") { model.continueAdopt() }
-          }
-        }
-      } else if !model.adoptNote.isEmpty {
-        Text(model.adoptNote).foregroundStyle(.secondary)
-      }
-      Divider()
-      Text("Import your launch command").font(.subheadline)
-      Text("cd <folder> && [VAR=value …] claude <args…>. Talos runs it without a shell.")
-        .font(.caption).foregroundStyle(.secondary)
-      TextField("cd ~/agent && claude --dangerously-skip-permissions …", text: $command)
-      HStack {
-        Button("Import") { importError = model.importCommand(command, thenStart: true) }
-        if let e = importError { Text(e).foregroundStyle(.red) }
-      }
-      if importError == nil, !model.importNote.isEmpty {
-        Text(model.importNote).font(.callout).foregroundStyle(.green).fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("import-saved")
-      }
-      Divider()
-      HStack {
-        Button("Copy Terminal command") { model.copyTerminalCommand() }
-        if model.hostKind == .tmux { Button("Copy tmux attach command") { model.copyAttachCommand() } }
-      }
-      Text(
-        model.hostKind == .tmux
-          ? "The agent runs in tmux and keeps running when Talos quits."
-          : "tmux 3.2+ not found: the agent stops when Talos quits."
-      )
-      .font(.caption).foregroundStyle(.secondary)
     }
-    .padding()
-    .frame(minWidth: 560, minHeight: 420, alignment: .topLeading)
   }
 }
 

@@ -1,13 +1,12 @@
 // D15: the working indicator. The bar is a thin line on the top edge of the message box that takes no room (a zero-height
-// element, so nothing is pushed or covered); Stop is in the message box's buttons (useWorkingStop, ComposerToolbar).
+// element, so nothing is pushed or covered). Stop is on the working line under the newest message (WorkingLine, 2026-11-20,
+// Option B), which also says "is working" to screen readers: the bar is silent.
 import { ownValue, type ThreadStatusT, threadSessionMode } from '@talos-app/protocol'
-import { useEffect, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { useThreadStatus } from '../../lib/threadStatus.ts'
 import { useSessionController } from '../session/store.ts'
 import { useModBusy } from '../session/useModBusy.ts'
-import { useAgentName } from './useThreads.ts'
 
 /** A thread with its own worker session: main's `busy` and turn say nothing about it. */
 function useDedicated(threadId: string): boolean {
@@ -31,9 +30,10 @@ export function useThreadState(threadId: string): ThreadStatusT['state'] | undef
 }
 
 /**
- * What the message box needs to offer Stop: the same rule as SessionPanel (the mod is online and can stop, a turn is
+ * What the working line needs to offer Stop: the same rule as SessionPanel (the mod is online and can stop, a turn is
  * running, and we know which one). A dedicated thread's worker is a different session, so Stop there would hit main's turn
- * and is not offered. The panel is closed when Stop is tapped here, so a refusal or a timeout is returned for the box to show.
+ * and is not offered. The panel is closed when Stop is tapped here, so a refusal or a timeout is returned for the line to show.
+ * stop() resolves to the outcome, so the caller can tell a stop that went through from one that did not.
  */
 export function useWorkingStop(threadId: string) {
   const state = useThreadState(threadId)
@@ -50,37 +50,22 @@ export function useWorkingStop(threadId: string) {
   )
   const working = state === 'working'
   const showStop = canStop && !dedicated && working
-  const [stopError, setStopError] = useState<string | null>(null)
-  const alive = useRef(true)
-  useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-    }
-  }, [])
-  useEffect(() => {
-    if (!showStop) setStopError(null)
-  }, [showStop])
-  const stop = async () => {
-    setStopError(null)
-    const o = await ctl.stopTurn(threadId)
-    if (alive.current && o.kind === 'error') setStopError(o.text)
-  }
-  return { working, showStop, busy, stop, stopError }
+  // The outcome goes to the caller: WorkingLine shows an error above the message box, where it outlives the turn.
+  const stop = () => ctl.stopTurn(threadId)
+  return { working, showStop, busy, stop }
 }
 
 export type WorkingStop = ReturnType<typeof useWorkingStop>
 
 /**
  * The bar: no height, margin, padding or border of its own, so it costs the screen nothing. Its line is drawn over the
- * message box's top edge (3 px, never takes a tap); the text is for screen readers only.
+ * message box's top edge (3 px, never takes a tap). Purely visual: the working line is the live status for screen readers.
  */
 export function WorkingRow({ threadId }: { threadId: string }) {
-  const agent = useAgentName()
   const state = useThreadState(threadId)
   if (state !== 'working') return null
   return (
-    <div data-testid="working-row" role="status" className="relative h-0 shrink-0">
+    <div data-testid="working-row" aria-hidden="true" className="relative h-0 shrink-0">
       <div
         data-testid="working-line"
         className="pointer-events-none absolute inset-x-0 -top-px h-[3px] overflow-hidden"
@@ -88,7 +73,6 @@ export function WorkingRow({ threadId }: { threadId: string }) {
       >
         <div data-testid="working-line-fill" className="working-line-fill h-full" />
       </div>
-      <span className="sr-only">{agent} is working…</span>
     </div>
   )
 }

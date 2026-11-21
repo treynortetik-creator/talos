@@ -86,7 +86,10 @@ describe('D49: launch screen and background are Talos, not Capacitor', () => {
     expect(swiftBody(vc, 'override func viewDidLoad')).toMatch(
       /view\.addSubview\(launchSpinner\)[\s\S]*launchSpinner\.startAnimating\(\)/,
     )
-    expect(swiftBody(vc, 'func pageDidFinish')).toMatch(/^\s*launchSpinner\.stopAnimating\(\)/)
+    // an earlier navigation's finish returns before the spinner stops (RelayTrustControllerTests); the relay's own finish stops it
+    expect(swiftBody(vc, 'func pageDidFinish')).toMatch(
+      /^\s*let isRelayLoad[\s\S]*?return \}\s*launchSpinner\.stopAnimating\(\)/,
+    )
     // the stall limit is BridgeGuard's (ShellPolicyTests); the timer must use it and then show the bundled offline page
     const dog = swiftBody(vc, 'private func startLaunchWatchdog')
     expect(dog).toMatch(/withTimeInterval: BridgeGuard\.launchLimit\(relayPageCommitted: relayPageCommitted\)/)
@@ -100,8 +103,10 @@ describe('D49: launch screen and background are Talos, not Capacitor', () => {
   it('a committed relay page gets the longer limit (slow bundle is not a stall)', () => {
     const vc = read(`${APP}/TalosBridgeViewController.swift`) + read(`${APP}/WebViewGuards.swift`)
     expect(vc).toContain('BridgeGuard.launchLimit(relayPageCommitted: relayPageCommitted)')
-    expect(vc).toContain('didCommit: { [weak self] in self?.pageDidCommit() }')
-    expect(vc).toMatch(/didCommit\(\)\n\s+\(inner as\? WKNavigationDelegate\)\?\.webView\?\(webView, didCommit/)
+    expect(vc).toContain('didCommit: { [weak self] nav in self?.pageDidCommit(nav) }')
+    expect(vc).toMatch(
+      /didCommit\(navigation\)\n\s+\(inner as\? WKNavigationDelegate\)\?\.webView\?\(webView, didCommit/,
+    )
   })
 })
 

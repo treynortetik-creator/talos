@@ -18,10 +18,10 @@ export const BUG_SETTINGS_TEXT = {
   webhookHint:
     'An https address that gets a signed note for each new report (Standard Webhooks). The address is kept on your Talos server and never shown again here.',
   on: (host: string) => `New reports go to ${host}.`,
-  off: 'Off: reports go to your Mac (through Talos online) and nowhere else.',
+  off: 'Off: reports go to your Mac (through your Talos server) and nowhere else.',
   team: 'New reports go to the Talos team, with the screenshot. This was set when your Talos server was set up; an address of your own here takes its place.',
   unused: (host: string) =>
-    `Off: an address (${host}) is saved, but your Talos server does not send to it (it has no signing secret, or it refuses the address). Reports go to your Mac (through Talos online) and nowhere else.`,
+    `Off: an address (${host}) is saved, but your Talos server does not send to it (it has no signing secret, or it refuses the address). Reports go to your Mac (through your Talos server) and nowhere else.`,
   save: 'Save address',
   replace: 'Replace address',
   turnOff: 'Turn off',

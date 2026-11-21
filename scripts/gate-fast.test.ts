@@ -45,7 +45,7 @@ const env = gateTestEnv({
   GIT_COMMITTER_EMAIL: 't@example.com',
 })
 
-const CHECKS = ['typecheck', 'lint', 'personal', 'size']
+const CHECKS = ['typecheck', 'lint', 'personal', 'size', 'timing']
 
 function repo() {
   const T = mkdtempSync(join(tmpdir(), 'gate-fast-'))

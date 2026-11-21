@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { b64urlDecode, bridgeKeyId, parseBridgeAuthHeader, verifyRotation } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { Bridge, type Bridge as BridgeT } from '../src/bridge.ts'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
@@ -12,6 +12,9 @@ import { createLogger, nullLogger } from '../src/log.ts'
 import { problemDirs } from '../src/problems/store.ts'
 import { backoffMs } from '../src/relay-client.ts'
 import { advanceSteps, type Harness, sleep, startHarness, tempHome, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, advanceSteps) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(40_000))
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -80,6 +83,7 @@ describe('reconnect', () => {
     h.relay.kickBridge(4409)
     await h.waitNotes(1)
     log.error('something broke after the takeover', { error: 'x' })
+    // timing-ok: negative window: no problem report may appear after the takeover
     await sleep(100)
     expect(existsSync(problemDirs(h.home).open)).toBe(false)
   })
@@ -180,6 +184,7 @@ describe('single bridge (PID file)', () => {
       const real = (await import('../src/lifecycle.ts')).psInfo(victim.pid)
       writeFileSync(p.pid, JSON.stringify({ pid: victim.pid, started_at: real?.lstart ?? '', instance: 'x' }))
       expect(await takeOver(p, nullLogger, { selfPid: 1 })).toBe('left_alone') // right start time, wrong command
+      // timing-ok: negative window: the wrong-command process must not be signalled
       await sleep(100)
       expect(victim.killed).toBe(false)
       expect(victim.exitCode).toBeNull()
@@ -193,8 +198,13 @@ describe('single bridge (PID file)', () => {
     const p = paths(home)
     const proc = Bun.spawn(['bun', '-e', 'setInterval(() => {}, 1000)', '--', `/opt/talos-app/${BRIDGE_ENTRY}`])
     try {
-      await sleep(150)
-      const info = (await import('../src/lifecycle.ts')).psInfo(proc.pid)
+      const { psInfo } = await import('../src/lifecycle.ts')
+      await waitFor(
+        () => psInfo(proc.pid)?.command.includes(BRIDGE_ENTRY) === true,
+        3000,
+        'ps to show the spawned bridge command',
+      )
+      const info = psInfo(proc.pid)
       expect(info?.command).toContain(BRIDGE_ENTRY)
       writeFileSync(p.pid, JSON.stringify({ pid: proc.pid, started_at: info?.lstart, instance: 'x' }))
       expect(await takeOver(p, nullLogger, { selfPid: 1 })).toBe('stopped')

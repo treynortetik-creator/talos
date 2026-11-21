@@ -16,6 +16,7 @@ import type { BridgeContext } from '../context.ts'
 import { say } from '../owner-words.ts'
 import { type WorkersReader, wakeCapTimes, writeControl } from '../worker/files.ts'
 import { allowsStart, governorNow } from './governor.ts'
+import { noteTurnEnded } from './update-resend.ts'
 
 type SessionControlAction = 'park' | 'resume' | 'restart' | 'fresh'
 
@@ -38,7 +39,7 @@ const TEXT = {
 } as const
 
 export function controlThreadSession(
-  ctx: Pick<BridgeContext, 'config' | 'clock' | 'paths' | 'log' | 'mod' | 'usage'>,
+  ctx: Pick<BridgeContext, 'config' | 'clock' | 'paths' | 'log' | 'mod' | 'usage' | 'store'>,
   req: { thread_id: string; action: SessionControlAction; by: 'owner' | 'main' },
   workers: WorkersReader,
 ): SessionControlResult {
@@ -109,6 +110,8 @@ export function controlThreadSession(
       }),
     }
   }
+  // a restart or a fresh start ends the turn the owner was waiting on: an update's offer is not made for it (update-resend.ts)
+  if (req.action === 'restart' || req.action === 'fresh') noteTurnEnded(ctx, req.thread_id)
   // trust mode lets a start through the "limits are close" band, and says so
   const warn = starts && reading.state === 'paused' ? ' Plan limits are close, so this may run out sooner.' : ''
   return { ok: true, text: `${TEXT[req.action]}${warn}` }

@@ -2,7 +2,7 @@
 // signed reads on their own queue, the driving send path, the two config rules, the share notification shapes with the
 // zero-tap filing (review rev 2 note A), the silent voice follow-up (note B), feature flags, refs and the id-keyed pages.
 // Real bridge (live, in process) + FakeRelay + FakeApp, as the other bridge suites do.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -15,10 +15,13 @@ import {
   newUlid,
   parseFrame,
 } from '@talos-app/protocol'
-import { mkFrame } from '@talos-app/testkit'
+import { mkFrame, t } from '@talos-app/testkit'
 import { HistoryStore, openHistory } from '../src/history-store.ts'
 import { ReadError } from '../src/v2-seams.ts'
 import { eventually, fixture, type Harness, sleep, startHarness, tempHome, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(40_000))
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -173,6 +176,7 @@ describe('signed reads', () => {
     expect((await h.app.expectFrame('error', (x) => x.ref === g.id, { direction: 'in' })).code).toBe('bad_query')
     // a replay of the same frame id is not answered twice
     h.relay.sendToBridge(f, { durable: false })
+    // timing-ok: negative window: a replayed frame id is not answered twice
     await sleep(150)
     await eventually(() => expect(calls).toBe(2))
   })
@@ -187,6 +191,7 @@ describe('signed reads', () => {
     h.relay.sendToBridge(f, { durable: false })
     const err = await h.relay.expectFrame('error', (x) => x.ref === f.id, { direction: 'from_bridge' })
     expect(err.code).toBe('sig_invalid')
+    // timing-ok: negative window: a bad signature must not produce results
     await sleep(100)
     expect(fromBridge(h, 'search.results')).toHaveLength(0)
   })
@@ -199,9 +204,13 @@ describe('signed reads', () => {
     }
     // block the main inbound queue: an owner message whose notification hangs
     let release = () => {}
-    h.bridge.setEmit(() => new Promise<void>((r) => (release = r)))
+    let busy = false
+    h.bridge.setEmit(() => {
+      busy = true
+      return new Promise<void>((r) => (release = r))
+    })
     await h.app.sendMessage('general', 'this one keeps the chat queue busy')
-    await sleep(100)
+    await waitFor(() => busy, 3000, 'the chat queue to be busy')
     const f = await h.app.sign(searchQuery())
     h.app.send(f)
     await h.app.expectFrame('search.results', (x) => x.request_id === f.request_id, {
@@ -308,7 +317,7 @@ describe('driving mode', () => {
     const spoken = new TextDecoder().decode(h.relay.media.get(att?.media_id as string)?.bytes)
     expect(spoken).toBe('FAKE-AUDIO:Done\nThree sections are ready.')
     for (const ch of ['#', '|', '`', EXTERNAL_START, EXTERNAL_END]) expect(spoken).not.toContain(ch)
-  }, 20_000)
+  })
 
   test('a reply that is mostly code is spoken as "Details are in the thread."', async () => {
     h = await startHarness({ env: FAST_TTS, config: driving('when_voice') as never })
@@ -323,7 +332,7 @@ describe('driving mode', () => {
     expect(new TextDecoder().decode(h.relay.media.get(att?.media_id as string)?.bytes)).toBe(
       'FAKE-AUDIO:Details are in the thread.',
     )
-  }, 20_000)
+  })
 
   test('outside driving mode the voice still rides on the reply itself (today), spoken as plain text', async () => {
     h = await startHarness({ env: FAST_TTS, config: driving('always', -60_000) as never })
@@ -497,6 +506,7 @@ describe('share.item (Shortcut token path)', () => {
     h.relay.sendToBridge(f, { durable: true })
     await h.waitNotes(1)
     h.relay.sendToBridge({ ...f, id: newUlid() }, { durable: true }) // same share, new frame id
+    // timing-ok: negative window: a replayed share must not be notified again
     await sleep(300)
     await eventually(() => expect((h as Harness).notes.filter((n) => n.meta.kind === 'share')).toHaveLength(1))
     const filed = h.notes[0]?.meta.shared_file as string

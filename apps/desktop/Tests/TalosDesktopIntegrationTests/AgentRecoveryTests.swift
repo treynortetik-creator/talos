@@ -817,7 +817,7 @@ struct AgentAutoRestoreIntegrationTests {
     try r.bridgeGoesDown()
     #expect(r.tickUntil { r.recoveredTexts.count == 1 }, "audit: \(r.audit)")
     let text = r.recoveredTexts.first ?? ""
-    #expect(text.hasPrefix("The bridge stayed down, so Talos put back the last good setup"), "\(text)")
+    #expect(text.hasPrefix("Talos on your Mac stayed down, so Talos put back the last good setup"), "\(text)")
     #expect(text.contains(".mcp.json, .claude/settings.json"), "\(text)")
     #expect(text.contains("2026-11-02 17:02 UTC"), "\(text)")
   }
@@ -848,7 +848,7 @@ struct AgentAutoRestoreIntegrationTests {
     r.startPlain()
     try r.bridgeGoesDown()
     #expect(r.tickUntil { r.recoveredTexts.count == 1 }, "audit: \(r.audit)")
-    #expect(r.recoveredTexts == ["The bridge stayed down, so Talos put back the last good setup and restarted"], "\(r.recoveredTexts)")
+    #expect(r.recoveredTexts == ["Talos on your Mac stayed down, so Talos put back the last good setup and restarted"], "\(r.recoveredTexts)")
   }
 
   // The phone is told too: the same line the menu shows, built from the same strictly parsed result
@@ -888,7 +888,7 @@ struct AgentAutoRestoreIntegrationTests {
     try r.bridgeGoesDown()
     #expect(r.tickUntil { r.restorePosts.count == 1 }, "posts: \(r.posts), audit: \(r.audit)")
     #expect(
-      r.restorePosts == ["post general The bridge stayed down, so Talos put back the last good setup and restarted"],
+      r.restorePosts == ["post general Talos on your Mac stayed down, so Talos put back the last good setup and restarted"],
       "\(r.restorePosts)")
   }
 

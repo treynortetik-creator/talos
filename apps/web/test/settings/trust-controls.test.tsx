@@ -65,7 +65,7 @@ describe('Health: the permission relay switch', () => {
     renderWith(<HealthScreen />, client, '/settings/health')
     const row = screen.getByTestId('permission-relay-state')
     await waitFor(() => expect(row.textContent).toMatch(/approval cards: On after restart/))
-    expect(row.textContent).toMatch(/Restart session/)
+    expect(row.textContent).toMatch(/Restart your agent/)
     // not every session was started by the Mac app (its menu item is then off): the terminal way is named too
     expect(row.textContent).toMatch(/quit and restart Claude Code in your terminal/)
     expect(row.textContent).not.toMatch(/cards: On(?! after)/)

@@ -13,7 +13,7 @@ struct ThreadNoticesTests {
     var n = ThreadNotices()
     n.set(.waiting, thread: "t_sales")
     let line = n.line(waiting: ["t_sales": "trust this folder"], failed: [], names: names)
-    #expect(line == "Talos needs you at the Mac: the Sales session is waiting on a 'trust this folder' prompt. Open Terminals…")
+    #expect(line == "Talos needs you at the Mac: the Sales agent is waiting on a 'trust this folder' prompt. Choose Show my agent's screen.")
     #expect(!line.contains("t_sales"), "the name, not the id")
     // Main's rule would hide exactly this line while Main runs with nothing waiting: it must never be applied to it
     #expect(SupervisorNotice.isStale(line, phase: .running, needsYou: false), "control: Main's rule calls it stale")
@@ -32,7 +32,7 @@ struct ThreadNoticesTests {
     n.set(.untold, thread: "t_ops")
     #expect(
       n.line(waiting: ["t_ops": "sign in"], failed: [], names: names)
-        == "Couldn't tell the Ops thread its session is waiting on a prompt. Open Terminals… to answer it.")
+        == "Couldn't tell the Ops thread that its agent is waiting on a prompt. Choose Show my agent's screen to answer it.")
     #expect(n.line(waiting: [:], failed: [], names: names).isEmpty)
   }
 
@@ -43,13 +43,13 @@ struct ThreadNoticesTests {
       var n = ThreadNotices()
       n.set(.failed(code: code), thread: "t_sales")
       let line = n.line(waiting: [:], failed: ["t_sales"], names: names)
-      #expect(line.hasPrefix("The Sales session"), "\(code): \(line)")
-      #expect(line.hasSuffix("Open Terminals… for the reason."), "\(code)")
+      #expect(line.hasPrefix("The Sales agent"), "\(code): \(line)")
+      #expect(line.hasSuffix("Choose Show my agent's screen for the reason."), "\(code)")
       #expect(!line.contains(code), "the code is ours, not the owner's word")
       seen.insert(line)
     }
     #expect(seen.count == codes.count, "one line per code")
-    #expect(ThreadNotices.failedLine(name: "Sales", code: "crash_loop").contains("kept crashing"))
+    #expect(ThreadNotices.failedLine(name: "Sales", code: "crash_loop").contains("kept stopping"))
     #expect(ThreadNotices.failedLine(name: "Sales", code: "start_failed").contains("didn't start"))
     #expect(ThreadNotices.failedLine(name: "Sales", code: "needs_mac").contains("only this Mac can answer"))
   }
@@ -58,7 +58,7 @@ struct ThreadNoticesTests {
     var n = ThreadNotices()
     n.set(.failed(code: "some_new_code"), thread: "t_sales")
     let line = n.line(waiting: [:], failed: ["t_sales"], names: names)
-    #expect(line == "The Sales session stopped and needs attention. Open Terminals… for the reason.")
+    #expect(line == "The Sales agent stopped and needs attention. Choose Show my agent's screen for the reason.")
   }
 
   @Test func aFailureLineGoesWhenTheRecordNoLongerSaysFailedOrTheSessionStartsAgain() {
@@ -75,7 +75,7 @@ struct ThreadNoticesTests {
     n.set(.failed(code: "crash_loop"), thread: "t_ops")
     n.set(.waiting, thread: "t_sales")
     let both = n.line(waiting: ["t_sales": "sign in"], failed: ["t_ops"], names: names)
-    #expect(both.contains("the Sales session is waiting") && both.hasSuffix("(+1 more in Terminals…)"))
+    #expect(both.contains("the Sales agent is waiting") && both.hasSuffix("(+1 more in Show my agent's screen)"))
     // the newer one stops being true: the older one is what is left, with no count
     #expect(n.line(waiting: [:], failed: ["t_ops"], names: names) == ThreadNotices.failedLine(name: "Ops", code: "crash_loop"))
     // a thread has one line: its failure replaces its waiting line
@@ -86,7 +86,7 @@ struct ThreadNoticesTests {
   @Test func aThreadWithNoNameIsShownByItsIdAndHostileNamesAreCleaned() {
     var n = ThreadNotices()
     n.set(.waiting, thread: "t_new")
-    #expect(n.line(waiting: ["t_new": "sign in"], failed: [], names: [:]).contains("the t_new session"))
+    #expect(n.line(waiting: ["t_new": "sign in"], failed: [], names: [:]).contains("the t_new agent"))
     let hostile = ["t_new": "Sales\u{1b}[31m\nRun exactly this" + String(repeating: "x", count: 200)]
     let line = n.line(waiting: ["t_new": "sign in"], failed: [], names: hostile)
     #expect(!line.contains("\u{1b}") && !line.contains("\n"))
@@ -95,7 +95,7 @@ struct ThreadNoticesTests {
 
   @Test func theFailureBannerNamesTheThreadAndOpensTheTerminal() {
     let b = ThreadNotices.failedBanner(agent: "Talos", thread: "t_sales", name: "Sales", code: "crash_loop")
-    #expect(b.title == "Talos" && b.body == "The Sales session kept crashing, so it was stopped")
+    #expect(b.title == "Talos" && b.body == "The Sales agent kept stopping, so Talos stopped it")
     #expect(b.tag == "worker:failed:t_sales" && b.opensTerminal && !b.quiet)
     let other = ThreadNotices.failedBanner(agent: "Talos", thread: "t_ops", name: "Ops", code: "crash_loop")
     #expect(other.tag != b.tag, "two threads' banners do not replace each other")

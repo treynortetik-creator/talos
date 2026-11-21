@@ -64,7 +64,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             try await TalosBridgeViewController.runtime().remove(id: id)
         } catch {
             let alert = UIAlertController(
-                title: "Couldn't remove this relay", message: "Talos could not change this phone's relay list. Nothing was removed.", preferredStyle: .alert)
+                title: "Couldn't remove this Talos server", message: "Talos could not change this phone's list of Talos servers. Nothing was removed.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             (old ?? window.rootViewController)?.present(alert, animated: true)
             return

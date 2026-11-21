@@ -181,7 +181,8 @@ struct AutoUpdaterTests {
     /// for real; otherwise the swap runs to its end inside the spawn. `healthy`: what this app says of its own health.
     func updater(
       version: String = "1.4.0", wallOffset: Double = 0, look: (@Sendable () -> [String])? = nil, healthy: Bool = false,
-      realSwap: Bool = false, appPath: String? = nil, jitter: Double = 0, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil
+      realSwap: Bool = false, appPath: String? = nil, jitter: Double = 0, quietPoll: Double? = nil,
+      options tweakOptions: (@Sendable (inout AutoUpdater.Options) -> Void)? = nil, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil
     ) -> AutoUpdater {
       var o = AutoUpdater.Options(
         talosHome: home, appPath: appPath ?? dest + "/Talos.app", appVersion: version, keys: ReleaseTrust.testKeys)
@@ -191,6 +192,8 @@ struct AutoUpdaterTests {
       o.applyScript = AutoUpdaterTests.repo() + "/apps/desktop/scripts/auto-update-apply.sh"
       o.auditLogPath = root + "/audit.log"
       o.healthWait = 2
+      if let quietPoll { o.quietPoll = quietPoll }
+      tweakOptions?(&o)
       let feedURL = URL(fileURLWithPath: feed, isDirectory: true).absoluteString
       var h = AutoUpdater.Hooks(
         settings: { [on] in (on.get(), feedURL) }, checkout: { [checkout] in checkout },
@@ -268,8 +271,8 @@ struct AutoUpdaterTests {
     var swapRunning: Bool { procs.get().contains { $0.isRunning } }
 
     /// The new version's app while the swap waits for its report: ticks until the swap has ended (at most 30 s), then once more.
-    func runNewApp(healthy: Bool) -> AutoUpdater {
-      let app = updater(version: "1.5.0", healthy: healthy, realSwap: true)
+    func runNewApp(healthy: Bool, hooks tweak: (@Sendable (inout AutoUpdater.Hooks) -> Void)? = nil) -> AutoUpdater {
+      let app = updater(version: "1.5.0", healthy: healthy, realSwap: true, hooks: tweak)
       _ = waitUntil(timeout: 30, poll: 0.2) {
         app.tick()
         return !swapRunning

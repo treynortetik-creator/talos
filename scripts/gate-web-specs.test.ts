@@ -29,7 +29,7 @@ const env = gateTestEnv({
   GIT_COMMITTER_NAME: 't',
   GIT_COMMITTER_EMAIL: 't@example.com',
 })
-const CHECKS = ['typecheck', 'lint', 'personal', 'size']
+const CHECKS = ['typecheck', 'lint', 'personal', 'size', 'timing']
 const SPEC = 'apps/web/test/threads/x.spec.ts'
 
 function repo() {

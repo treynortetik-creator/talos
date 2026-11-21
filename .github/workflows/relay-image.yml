@@ -1,0 +1,203 @@
+name: Relay image
+run-name: "Relay image for ${{ github.event.release.tag_name || github.event.inputs.version }}"
+
+# Each Talos release publishes a relay image, so an online relay can follow releases (docs/deploy-railway.md, "Release images").
+# It runs ONLY on the public repository (the one the Mac app clones, where `gh release create mac-v<X.Y.Z>` makes the release; a
+# release made with the workflow's own token would start no workflow, and this one is made with the owner's login). In the private
+# repository the job's `if:` is false and nothing runs.
+#
+#   release published  mac-v<X.Y.Z> (strict semver; a draft, a prerelease or any other tag says so and exits 0, nothing pushed)
+#   workflow_dispatch  version=<X.Y.Z>: rebuild one release; the tag must exist and is checked out (never a branch), from main only
+#
+# It builds apps/relay/Dockerfile from the tag's clean checkout with --build-arg TALOS_RELEASE=<X.Y.Z>, exports the image's
+# filesystem and scans its /app folder (scripts/relay-image-scan.sh: secret files, keys, tokens, .git, the personal-data rules) BEFORE it logs in
+# or pushes anything, then pushes ghcr.io/<owner>/talos-relay:<X.Y.Z> (never overwritten: an existing tag fails the job) and moves
+# :stable to the same digest unless a newer release exists. There is no :latest. The only token is the job's own, with packages:
+# write on this one job. Event values go through env, never into a run block; the tag is checked against a regex in bash first.
+# linux/amd64 only (Railway). The package must be made public once, by hand, after the first push (docs/deploy-railway.md).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to rebuild, X.Y.Z (the tag mac-vX.Y.Z must exist)"
+        required: true
+        type: string
+
+permissions: {}
+
+# One at a time, so a :stable move is never racing another.
+concurrency:
+  group: relay-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.repository == 'treynortetik-creator/talos' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read # check out the tag, read the release list
+      packages: write # push the image to ghcr.io: this job only
+    steps:
+      - name: Which version is this
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          DRAFT: ${{ github.event.release.draft }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          re='^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+          skip() { echo "not published: $1; no image is built or pushed"; echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ "$EVENT_NAME" = release ]; then
+            [ "$DRAFT" = false ] || skip "this is a draft"
+            [ "$PRERELEASE" = false ] || skip "this is a prerelease"
+            case "$TAG" in mac-v*) ;; *) skip "the tag is not a mac-v release tag" ;; esac
+            VERSION="${TAG#mac-v}"
+            [[ "$VERSION" =~ $re ]] || skip "the tag is not mac-v<X.Y.Z>"
+          else
+            VERSION="$INPUT_VERSION"
+            [[ "$VERSION" =~ $re ]] || { echo "the version input is not a plain X.Y.Z"; exit 1; }
+            # A tag alone is not a release: look the release up. A draft is not returned by this call (it fails, so nothing is built).
+            state="$(gh api "repos/$REPO/releases/tags/mac-v$VERSION" --jq '"\(.draft) \(.prerelease)"')" || { echo "no published release for the tag mac-v$VERSION"; exit 1; }
+            case "$state" in
+              "false false") ;;
+              "true false" | "false true" | "true true") skip "that release is a draft or a prerelease" ;;
+              *) echo "could not read the release's state"; exit 1 ;;
+            esac
+          fi
+          { echo "publish=true"; echo "version=$VERSION"; echo "tag=mac-v$VERSION"; } >> "$GITHUB_OUTPUT"
+          echo "building the relay image for release $VERSION"
+
+      - name: Check out the release tag
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+          persist-credentials: false
+
+      - name: The checkout is clean and is the tag
+        if: steps.version.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # The image may hold tracked files only: nothing untracked or ignored in the build context.
+          [ -z "$(git status --porcelain --untracked-files=all --ignored)" ] || { echo "the checkout has untracked or changed files"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")" ] || { echo "HEAD is not the tag's commit"; exit 1; }
+          echo "IMAGE=ghcr.io/${OWNER,,}/talos-relay" >> "$GITHUB_ENV"
+
+      - name: Build the image
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          docker build -f apps/relay/Dockerfile \
+            --build-arg TALOS_RELEASE="$VERSION" \
+            --build-arg APP_VERSION="${SHA:0:7}" \
+            --build-arg RAILWAY_GIT_COMMIT_SHA="$SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$REPO" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$SHA" \
+            -t talos-relay:build .
+
+      - name: Scan the built image's filesystem
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          mkdir "$work/image"
+          cid="$(docker create talos-relay:build)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+          docker export "$cid" | tar -x -C "$work/image" --no-same-owner --no-same-permissions --exclude='dev/*'
+          bash scripts/relay-image-scan.sh "$work/image"
+
+      - name: Is this the newest release
+        id: newest
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags="$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
+          versions="$(printf '%s\n' "$tags" | sed -nE 's/^mac-v((0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5}))$/\1/p')"
+          [ -n "$versions" ] || { echo "no published mac release was listed; refusing to guess"; exit 1; }
+          newest="$(printf '%s\n' "$versions" | sort -V | tail -n 1)"
+          # :stable moves only when this release is itself published and is the newest published one. A rebuild of an older
+          # release, or of a version that is not in the list, leaves it where it is.
+          if [ "$VERSION" = "$newest" ]; then
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "release $VERSION is not the newest published release, so :stable stays where it is"
+          fi
+
+      - name: Log in to ghcr.io
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Refuse a version tag that already exists
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if out="$(docker manifest inspect "$IMAGE:$VERSION" 2>&1)"; then
+            echo "$IMAGE:$VERSION already exists; a version tag is never overwritten"
+            exit 1
+          elif printf '%s' "$out" | grep -qiE 'no such manifest|manifest unknown|name unknown|not found'; then
+            echo "$IMAGE:$VERSION is free"
+          else
+            echo "could not tell whether $IMAGE:$VERSION exists; refusing to push"
+            exit 1
+          fi
+
+      - name: Push the version tag
+        id: push
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag talos-relay:build "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION" | tee push.log
+          digest="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' push.log | tail -n 1)"
+          [ -n "$digest" ] || { echo "no digest in the push output"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Move :stable to the same digest
+        if: steps.version.outputs.publish == 'true' && steps.newest.outputs.stable == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker tag talos-relay:build "$IMAGE:stable"
+          docker push "$IMAGE:stable" | tee push-stable.log
+          grep -q "digest: $DIGEST" push-stable.log || { echo ":stable did not land on the version's digest"; exit 1; }
+
+      - name: Summary
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          STABLE: ${{ steps.newest.outputs.stable }}
+        run: |
+          set -euo pipefail
+          line="relay image $IMAGE:$VERSION $DIGEST; :stable moved: $STABLE"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"

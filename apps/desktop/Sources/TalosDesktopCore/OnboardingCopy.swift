@@ -17,6 +17,7 @@ public enum OnboardingCopy {
   public static let readyTitle = "Getting Talos ready"
   public static let readyBody = "Talos is downloading what it needs. You don't have to do anything."
   public static let readyDownloading = "Downloading Talos's tools"
+  public static let readyDownloaded = "100% \u{B7} downloaded"
   public static let readyHome = "Your agent's home is made"
   public static let readyChecking = "Checking everything works"
   public static let readyFooter = "It goes on by itself; Continue lights up when it's done."
@@ -152,7 +153,7 @@ public enum OnboardingCopy {
   /// Everything above that a screen can show, for the guard.
   public static var all: [String] {
     var s: [String] = [
-      windowTitle, welcomeTitle, welcomeBody, getStarted, robotAlt, readyTitle, readyBody, readyDownloading, readyHome, readyChecking,
+      windowTitle, welcomeTitle, welcomeBody, getStarted, robotAlt, readyTitle, readyBody, readyDownloading, readyDownloaded, readyHome, readyChecking,
       readyFooter, continueButton, appleTitle, appleAsking, appleClick, appleClickRest, appleNoWindow, appleInstalling,
       appleInstallingLabel, appleWorking, appleWindowTitle, appleWindowText, appleWindowAgree, appleFooter, appleClosed, tryAgain, spaceTitle, spaceBody(have: 19_160_000_000), spaceHow, spaceAnyway, spaceFooter, signInTitle, signInBody,
       details, signInButton, signInNotYet, signInCouldNot, signInCodeSend, signInWaiting, signInNoBrowser, signInFooter, back, phoneTitle, phoneBody, phoneYes, phoneYesBody, phoneNo,

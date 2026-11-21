@@ -108,14 +108,14 @@ struct MacAuditPackageFCoreTests {
       Issue.record("nothing to attach to says why")
       return
     }
-    #expect(m.contains("Start session"))
+    #expect(m.contains("Start your agent"))
   }
 
   // MARK: D44
 
   @Test func theNotSetUpLineNamesOnlyRealControls() {
     #expect(!SupervisorNotice.notSetUp.contains("Session… →"), "there is no menu item called Session…")
-    #expect(SupervisorNotice.notSetUp.contains("Find a running session"))
+    #expect(SupervisorNotice.notSetUp.contains("Set up Talos…") && SupervisorNotice.notSetUp.contains("Mac settings → Advanced"))
   }
 
   // MARK: D45

@@ -42,6 +42,7 @@ import {
 import { ownerHost } from './platform.ts'
 import { redact } from './redact.ts'
 import { RelayHttp, RelayHttpError } from './relay-http.ts'
+import { feedDeps, relayReleaseReport } from './release-feed.ts'
 import { runCommand } from './run-command.ts'
 import { cmdSchedules } from './schedules/cli.ts'
 import { type BridgeLiveness, bridgeLiveness, runningBridge } from './status-file.ts'
@@ -449,6 +450,7 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
   let reachable = 'no relay URL'
   let reachableBool: boolean | null = null
   let relayVersion: string | undefined
+  let relayRelease: string | undefined
   if (env.relayUrl) {
     try {
       const h = await new RelayHttp(env.relayUrl, () => {
@@ -457,6 +459,7 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
       reachable = h.ok ? `yes (${h.version ?? 'unknown version'})` : 'answered, but not ok'
       reachableBool = h.ok
       relayVersion = h.version
+      relayRelease = typeof h.release === 'string' ? h.release : undefined
     } catch (e) {
       reachable = `no (${(e as Error).message})`
       reachableBool = false
@@ -466,6 +469,14 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
   const auth = reachableBool ? await probeRelayAuth(env, io.now()) : undefined
   const live = bridgeLiveness(p.status, io.now(), deps.alive)
   const cr = commitReport(runningBridge(live), BRIDGE_COMMIT)
+  // only a relay that answered is asked about: an unreachable one costs no request
+  const rr = reachableBool
+    ? await relayReleaseReport(
+        feedDeps(env, io.now),
+        { release: relayRelease, version: relayVersion },
+        { connected: (await import('./relay/doctor.ts')).isConnected(env.home) },
+      )
+    : undefined
   if (values.json) {
     // DESKTOP-SPEC 6.2: the status.json fields as the live bridge wrote them, plus what only the CLI can know.
     const base = live.state === 'none' ? { v: 1 } : live.status
@@ -482,6 +493,7 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
           needs_restart: cr.note !== undefined,
           relay_version: relayVersion ?? null,
           version_skew: versionSkew(cr.commit, relayVersion)?.level === 'warn',
+          relay_release: rr?.json ?? { state: 'unknown' },
         },
         null,
         2,
@@ -499,6 +511,7 @@ async function cmdStatus(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
     s.close()
   }
   io.out(`relay reachable: ${reachable}`)
+  if (rr) io.out(`relay release: ${rr.text}`)
   io.out(
     say({
       mac: `relay accepts this Mac: ${auth ? (auth.ok ? 'yes' : `NO. ${auth.message}`) : reachableBool === false ? 'unknown (relay not reachable)' : 'unknown'}`,
@@ -535,6 +548,8 @@ export type CliDeps = {
   sign?: (input: string, output: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** `peer ...`: the key store (default this machine's); tests inject one. */
   peer?: import('./peer/cli.ts').PeerCliDeps
+  /** `relay ...`: the key store (default this machine's); tests inject one. */
+  relay?: import('./relay/cli.ts').RelayCliDeps
   /** `apps ...` (MCP apps): the status source, Keychain, connector and so on; tests inject all of them. */
   apps?: import('./apps/cli.ts').AppsCliDeps
   /** `update`: the checkout to update (default: the one this CLI runs from) and how to run a command there; tests inject both. */
@@ -1256,6 +1271,8 @@ export async function runCli(
           ...deps.peer,
           agent: io.isTerminal === false,
         })
+      case 'relay':
+        return (await import('./relay/cli.ts')).cmdRelay(env, rest, io, deps.relay)
       case 'theme':
         return cmdTheme(env, rest, io)
       case 'lead':

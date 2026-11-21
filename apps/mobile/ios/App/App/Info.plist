@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Talos uses the camera to scan your relay's setup code and when you take a photo to attach to a message.</string>
+	<string>Talos uses the camera to scan the setup code your Mac shows, and when you take a photo to attach to a message.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Talos saves images to your photo library when you choose Save to Photos.</string>
 	<key>TalosKeychainGroup</key>

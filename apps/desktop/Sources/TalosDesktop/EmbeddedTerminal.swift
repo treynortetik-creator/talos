@@ -58,7 +58,7 @@ final class EmbeddedTerminal: NSObject, LocalProcessTerminalViewDelegate {
   }
 
   static let noTmuxNote =
-    "This Mac has no tmux 3.2 or newer, so the agent runs in a pty Talos owns and can't be shown here. Menu → Terminals… mirrors it."
+    "This Mac has no tmux 3.2 or newer, so the agent runs in a pty Talos owns and can't be shown here. \(MacWords.agentScreenPath) mirrors it."
 
   /// The smallest room the view is shown in: `TerminalViewRect.minColumns` by `minRows` cells of the viewer's own font, plus its
   /// scroller. Smaller, and the page's own text stays showing. The agent's screen takes the size of the last viewer and keeps it.

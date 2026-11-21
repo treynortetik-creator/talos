@@ -22,7 +22,9 @@ import { say } from './owner-words.ts'
 import { linkedAgentsCheck } from './peer/relink.ts'
 import { askRuleFiles, askRulesIn, DEFAULT_ASK_RULES, normalizeRule, settingsPath } from './permission/ask-rules.ts'
 import { findOtherChannels } from './permission/doctor.ts'
+import { isConnected, relayConnectRow } from './relay/doctor.ts'
 import { RelayHttp } from './relay-http.ts'
+import { feedDeps, relayReleaseReport } from './release-feed.ts'
 import { probeFts5 } from './search/schema.ts'
 import { bridgeLiveness, runningBridge } from './status-file.ts'
 import { BRIDGE_COMMIT, commitReport, versionSkew } from './version.ts'
@@ -221,6 +223,17 @@ export async function runDoctorChecks(
       }).healthz()
       reachable = h.ok
       add(h.ok ? 'ok' : 'FAIL', 'relay /healthz', h.version ?? 'ok')
+      if (h.ok) {
+        const connected = isConnected(env.home)
+        const rr = await relayReleaseReport(
+          feedDeps(env, io.now),
+          { release: h.release, version: h.version },
+          { connected },
+        )
+        add(rr.level, 'relay release', rr.text)
+        const cr = await relayConnectRow(env, deps.relay?.secrets)
+        if (cr) add(cr.level, 'relay connect', cr.detail)
+      }
       const skew = versionSkew(doctorCommit.commit, h.version)
       if (h.ok && skew) add(skew.level, 'bridge and relay versions', skew.text)
     } catch (e) {

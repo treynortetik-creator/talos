@@ -33,10 +33,10 @@ public enum NotificationPolicy {
         title: name, body: "\(name) needs you at the Mac", navigate: nil, tag: "sup:needs_you", quiet: false, opensTerminal: true)
     case .restartedAfterCrash:
       return NativeNotice(
-        title: name, body: "\(name) restarted after a crash and resumed", navigate: nil, tag: "sup:restarted", quiet: true)
+        title: name, body: "\(name) stopped and was restarted. It carried on.", navigate: nil, tag: "sup:restarted", quiet: true)
     case .stoppedRestarting:
       return NativeNotice(
-        title: name, body: "\(name) stopped restarting (crash loop)", navigate: nil, tag: "sup:crash_loop", quiet: false,
+        title: name, body: "\(name) keeps stopping, so Talos paused it. Open Talos to look.", navigate: nil, tag: "sup:crash_loop", quiet: false,
         opensTerminal: true)
     case .resumeFailed:
       return NativeNotice(
@@ -47,7 +47,7 @@ public enum NotificationPolicy {
         opensTerminal: true)
     case .blocked:
       return NativeNotice(
-        title: name, body: "Another session is holding \(name)'s channels", navigate: nil, tag: "sup:blocked", quiet: false)
+        title: name, body: "Another agent is already using this account, so \(name) did not start", navigate: nil, tag: "sup:blocked", quiet: false)
     case .couldNotStart:
       return NativeNotice(
         title: name, body: "\(name) couldn't start", navigate: nil, tag: "sup:start_failed", quiet: false, opensTerminal: true)

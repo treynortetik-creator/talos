@@ -328,6 +328,29 @@ struct OnboardingFlowTests {
     #expect(OnboardingFlow.readyLines(pct: 100, done: true) == [.done, .done, .done])
   }
 
+  @Test func theBarReadsCompleteOnceTheDownloadLineIsTicked() {
+    // 88%: the download line turns green (readyLines), so the bar must not still say "88% · about 1 minute left" beside the tick
+    for pct in [88, 90, 99] {
+      let lines = OnboardingFlow.readyLines(pct: pct, done: false)
+      #expect(lines[1] == .done)
+      let bar = OnboardingFlow.readyBar(pct: pct, done: false, elapsed: 120)
+      #expect(bar.complete && bar.pct == 100, "\(pct)")
+      #expect(!bar.detail.contains("left") && bar.detail == OnboardingCopy.readyDownloaded)
+    }
+    let done = OnboardingFlow.readyBar(pct: 100, done: true, elapsed: 300)
+    #expect(done.complete && done.pct == 100)
+    // before that the bar is the real figure with its honest estimate
+    let mid = OnboardingFlow.readyBar(pct: 62, done: false, elapsed: 60)
+    #expect(!mid.complete && mid.pct == 62 && mid.detail.hasPrefix("62%") && mid.detail.contains("left"))
+    // every state in which no line is still downloading reads complete
+    for pct in 0...100 {
+      for d in [false, true] {
+        let b = OnboardingFlow.readyBar(pct: pct, done: d, elapsed: 90)
+        if OnboardingFlow.readyLines(pct: pct, done: d)[1] == .done { #expect(b.complete && b.pct == 100) }
+      }
+    }
+  }
+
   @Test func timeLeftIsOnlyShownWhenItIsHonest() {
     #expect(OnboardingCopy.secondsLeft(pct: 5, elapsed: 60) == nil)
     #expect(OnboardingCopy.secondsLeft(pct: 50, elapsed: 2) == nil)

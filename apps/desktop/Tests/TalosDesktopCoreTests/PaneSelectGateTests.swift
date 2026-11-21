@@ -126,7 +126,7 @@ struct PaneSelectGateTests {
     let multi = try #require(PromptDetector.detect(try RealScreens.rows("askuser-multi", in: "synthetic")))
     #expect(SupervisorNotice.workerPromptLine(prompt: multi) == "This thread's session is asking several questions at once, which Talos cannot put on a card. Answer them at the Mac.")
     #expect(SupervisorNotice.mainPromptLine(agentName: "A", prompt: multi) == "A is asking several questions at once, which Talos cannot put on a card. Answer them at the Mac.")
-    #expect(ThreadNotices.waitingLine(name: "Garden", prompt: "Bash command") == "\(SupervisorNotice.needsYou): the Garden session is waiting on a 'Bash command' prompt. Answer it on its card, or at the Mac.")
+    #expect(ThreadNotices.waitingLine(name: "Garden", prompt: "Bash command") == "\(SupervisorNotice.needsYou): the Garden agent is waiting on a 'Bash command' prompt. Answer it on its card, or at the Mac.")
   }
 
   /// A command or a question is text an agent writes. One with a control, hidden or direction-changing character (a right-to-left override that makes

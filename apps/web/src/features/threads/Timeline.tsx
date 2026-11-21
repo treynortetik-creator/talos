@@ -1,6 +1,6 @@
 import type { AttachmentRefT, CardT, InboxItemT, MessageT } from '@talos-app/protocol'
 import { cardExpiryMs, ownValue } from '@talos-app/protocol'
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { dayLabel } from '../../lib/format.ts'
 import { editingInside } from '../../lib/keyboardViewport.ts'
@@ -107,11 +107,18 @@ export function Timeline({
   highlightCard,
   onOpenItem,
   scrollRef,
+  footer,
 }: {
   threadId: string
   highlightCard?: string | undefined
   onOpenItem: (i: InboxItemT) => void
   scrollRef: React.RefObject<HTMLDivElement | null>
+  /**
+   * Shown after the last row, inside the scroll area (the working line). It is not a row: rows, their keys and the follow
+   * logic above know nothing of it. Growth from it is followed by the MutationObserver like a streaming reply: at the end the
+   * view stays at the end, a few lines up it does not move.
+   */
+  footer?: ReactNode
 }) {
   const client = useTalosClient()
   const agent = useAgentName()
@@ -593,7 +600,8 @@ export function Timeline({
               </Fragment>
             )
           })}
-          <div ref={live} className="sr-only" aria-live="polite" role="log">
+          {footer}
+          <div ref={live} className="sr-only [overflow-anchor:none]" aria-live="polite" role="log">
             {lastAgent?.text ? `${agent}: ${lastAgent.text.slice(0, 200)}` : ''}
           </div>
         </ScrollRegion>

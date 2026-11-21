@@ -4,6 +4,7 @@
 import { AGENT_PATH_FORMS, type AgentConfigPath, ConfigCardPayload, readConfigPath } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { isPermissionModeCard } from '../permission-mode.ts'
+import { isUpdateResendCard } from '../router/update-resend.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 
 const MAX_VALUE = 120
@@ -41,7 +42,8 @@ export function settingsReadText(ctx: BridgeContext, scope?: string): string {
         r.actor === 'bridge' &&
         r.binding.kind === 'config' &&
         !isScreenAllowCard(r.binding) &&
-        !isPermissionModeCard(r.binding),
+        !isPermissionModeCard(r.binding) &&
+        !isUpdateResendCard(r.binding),
     )
     .filter((r) => scope === undefined || r.thread_id === scope)
   if (!pending.length) lines.push('Pending settings cards: none')

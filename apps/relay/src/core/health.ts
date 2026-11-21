@@ -21,7 +21,7 @@ import {
 import { bridgeAuthRefusedAt } from '../auth/contract.ts'
 import type { RelayEnv } from '../env.ts'
 import type { Bus, Clock, Logger } from '../services.ts'
-import { VERSION } from '../version.ts'
+import { RELEASE, VERSION } from '../version.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
 import { isBridgeSuperseded, registerRelayFeature } from './features.ts'
 import type { CorePush } from './push.ts'
@@ -320,7 +320,11 @@ export class HealthWatch {
       at: new Date(now).toISOString(),
       relay_ok: relayProblems.length === 0,
       relay_problems: relayProblems,
-      relay: { version: VERSION, up_since: new Date(this.upSince).toISOString() },
+      relay: {
+        version: VERSION,
+        ...(RELEASE ? { release: RELEASE } : {}),
+        up_since: new Date(this.upSince).toISOString(),
+      },
       mac_problems: macProblems,
       bridge: {
         online,

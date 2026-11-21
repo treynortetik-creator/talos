@@ -453,7 +453,7 @@ not that it then ran well for a day.
   found to need it, but are not verified either.
 - **It never writes to the data folder** (history, keys, devices, media).
 
-Then restart the agent (stop it, `talos-app start --agent-dir <your agent folder>`; or menu bar, **Restart session**). To go
+Then restart the agent (stop it, `talos-app start --agent-dir <your agent folder>`; or menu bar, **Restart your agent**). To go
 forward again: `git switch <your branch>`, `pnpm install --frozen-lockfile`, then `talos-app update`. The folder is on a
 detached HEAD in between, so a commit made there belongs to no branch: `git switch -c <name>` first if you want to keep it.
 The relay, the Mac app and the iPhone app are not rolled back.

@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ChannelMeta, ORIGINAL_TS_FEATURE, parseFrame, sha256Hex } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(60_000))
 
 /** A high surrogate with no low one after it, or a low one with no high one before it. */
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
@@ -105,7 +109,7 @@ describe('inbound messages', () => {
     // same client_msg_id, signed again as a different frame
     const again = await h.app.buildMessage('general', 'once only', { client_msg_id: first.client_msg_id })
     h.app.sendRaw(JSON.stringify(again))
-    await sleep(150)
+    await sleep(150) // timing-ok: negative window: the re-delivered message must not be notified a second time
     await eventually(() => expect(h.notes).toHaveLength(1))
   })
 

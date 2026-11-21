@@ -233,7 +233,7 @@ struct MainThreadAndNoticesGuiTests {
     #expect(failedBanners == ["t_sales|Sales|crash_loop"])
     // Main's own events do not touch it, and it does not touch Main's
     w.model.handle(.needsYou(.dialog("folder trust")))
-    #expect(w.model.notice.contains("folder trust") && w.model.threadNotice.contains("kept crashing"))
+    #expect(w.model.notice.contains("folder trust") && w.model.threadNotice.contains("kept stopping"))
 
     // the session starts again
     w.model.handleWorker(.started(thread: "t_sales", resume: true))
@@ -243,7 +243,7 @@ struct MainThreadAndNoticesGuiTests {
   @Test func theMenuShowsTheThreadLineAndTheBannersAreWired() throws {
     let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Sources/TalosDesktop")
-    let app = try String(contentsOf: dir.appendingPathComponent("App.swift"), encoding: .utf8)
+    let app = try String(contentsOf: dir.appendingPathComponent("StatusMenu.swift"), encoding: .utf8)
     #expect(app.contains("if !model.threadNotice.isEmpty { Text(model.threadNotice) }"))
     let status = try String(contentsOf: dir.appendingPathComponent("StatusCoordinator.swift"), encoding: .utf8)
     #expect(status.contains("model.onThreadNeedsYou = ") && status.contains("model.onThreadFailed = "))

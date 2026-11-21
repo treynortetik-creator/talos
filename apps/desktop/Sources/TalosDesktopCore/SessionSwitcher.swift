@@ -109,7 +109,7 @@ public enum SessionSwitcher {
       case .stopped(let failure):
         badge = failure == nil ? .parked : .failed
         detail = failure ?? "Main is stopped."
-      case .notStarted: (badge, detail) = (.notStarted, "Main hasn't started yet. Menu bar item → Start session.")
+      case .notStarted: (badge, detail) = (.notStarted, "Main hasn't started yet. Menu bar item → Start your agent.")
       case .notSetUp: (badge, detail) = (.notStarted, "Talos isn't set up yet. Menu → Set up Talos…")
       }
     }

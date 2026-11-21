@@ -39,6 +39,10 @@ public final class AutoUpdater: @unchecked Sendable {
     public var checkJitter: Double = AutoUpdate.checkJitter
     public var quietPoll: Double = AutoUpdate.quietPoll
     public var quietCap: Double = AutoUpdate.quietCap
+    /// An Update now waits this long (from the press) for busy thread agents; Main's turn is always waited for.
+    public var threadWait: Double = AutoUpdate.threadWait
+    /// The automatic path stops waiting on Main's unsent text once it has been unchanged this long.
+    public var draftStaleAfter: Double = AutoUpdate.draftStaleAfter
     public var noticeFor: Double = AutoUpdate.noticeFor
     public var postponeFor: Double = AutoUpdate.postponeFor
     public var fetchTimeout: Double = 30
@@ -75,6 +79,12 @@ public final class AutoUpdater: @unchecked Sendable {
     public var offerClone: @Sendable (_ clone: String, _ version: String) -> Void = { _, _ in }
     /// Why the Mac is not quiet now (empty: quiet): sessions and background work.
     public var look: @Sendable () -> [String]
+    /// A fingerprint of the unsent text in Main's box as it reads now (never the text); nil when unreadable. Same fingerprint, same text.
+    public var draftFingerprint: @Sendable () -> String? = { nil }
+    /// The text in Main's box may be only part of the draft (scrolled out of sight), so a copy would not be whole.
+    public var draftPartial: @Sendable () -> Bool = { false }
+    /// A thread's display name for the update window (its id when it has none).
+    public var threadName: @Sendable (_ id: String) -> String = { $0 }
     /// One line into the default thread.
     public var post: @Sendable (String) -> Void
     /// The environment the scripts run with (the login shell's PATH).
@@ -96,6 +106,14 @@ public final class AutoUpdater: @unchecked Sendable {
     public var restartMainOnto: @Sendable (_ commit: String) -> AutoUpdate.MainRestart = { _ in .notNeeded }
     /// Before a swap: Main can be restarted onto the release afterwards (`Supervisor.mainCanRestartForUpdate`).
     public var mainCanRestart: @Sendable () -> Bool = { true }
+    /// What an Update now would do with the unsent text in Main's box, asked while it waits (nothing is saved).
+    public var draftPlan: @Sendable () -> UpdateStatus.DraftPlan = { .none }
+    /// Saves the unsent text in Main's box for the update, right before the swap; the app puts it back after the restart. `.keep`
+    /// when saved, `.cannotKeep` when it could not be, `.none` when there was nothing.
+    public var keepDraft: @Sendable (_ version: String) -> UpdateStatus.DraftPlan = { _ in .none }
+    /// An update this app recorded has ended: the saved copy of the draft is shown to the owner (it happened, or it started and failed:
+    /// Main may have been restarted), or deleted (the swap never started).
+    public var draftSettled: @Sendable (_ version: String, _ outcome: DraftOutcome) -> Void = { _, _ in }
     /// Every step the update window shows (`UpdateStatus`), on the updater's queue: the receiver hops to its own thread.
     public var onStatus: @Sendable (UpdateStatus) -> Void = { _ in }
     /// The build the relay reports on its /healthz now (nil: no relay set, or it did not answer).
@@ -109,6 +127,8 @@ public final class AutoUpdater: @unchecked Sendable {
     public var fetch: @Sendable (_ url: URL, _ max: Int, _ timeout: Double) -> Data? = CappedFetch.data
     /// `url` saved to `path`, at most `max` bytes; false on any failure.
     public var download: @Sendable (_ url: URL, _ path: String, _ max: Int, _ timeout: Double) -> Bool = CappedFetch.file
+    /// Asked only after a fetch failed: the Mac has no internet connection at all (so the answer is "offline", not "the server").
+    public var offline: @Sendable () -> Bool = { false }
     /// 0 up to 1, for the check's jitter.
     public var random: @Sendable () -> Double = { Double.random(in: 0..<1) }
     public var awake: @Sendable () -> Double = { Double(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1e9 }
@@ -167,9 +187,16 @@ public final class AutoUpdater: @unchecked Sendable {
   /// What the update window shows now.
   public var status: UpdateStatus { statusLock.withLock { _status } }
   /// The owner pressed Update now: the quiet rule and the 2-minute notice are skipped for this update, the health gate is not.
-  private var forced = false
-  private var forcedWait = QuietWait()
-  private var forcedOwner: String?
+  var forced = false
+  var forcedWait = QuietWait()
+  var forcedOwner: String?
+  var forcedThreads = ForcedThreads()
+  var draftWatch = DraftWatch()
+  /// The reasons last logged while an Update now waits: logged again only when they change.
+  var forcedWhySaid: String?
+  /// Looks for an Update now when the updater's own timer is not running (Talos not set up, or its timer never started): without it the
+  /// press would wait for a look nobody makes.
+  var forcedTimer: DispatchSourceTimer?
   /// A check the owner asked for is queued or running: another ask while it runs is the same ask.
   private let manualBusy = NSLock()
   private var manualPending = false
@@ -230,6 +257,8 @@ public final class AutoUpdater: @unchecked Sendable {
 
   public func stop() {
     queue.sync {
+      forcedTimer?.cancel()
+      forcedTimer = nil
       timer?.cancel()
       timer = nil
     }
@@ -271,7 +300,7 @@ public final class AutoUpdater: @unchecked Sendable {
   /// Where the owner finds the details of a failure (the app's log, in the owner's words: the home folder as ~).
   var logPathForOwner: String { ((options.auditLogPath ?? dir + "/apply.log") as NSString).abbreviatingWithTildeInPath }
 
-  private func fail(_ line: String) { setStatus(.failed(line: line, logPath: logPathForOwner)) }
+  func fail(_ line: String) { setStatus(.failed(line: line, logPath: logPathForOwner)) }
 
   /// "Check for Updates": one check now, whatever the clock says. A second ask while one is queued or running is the same ask.
   public func checkNow() {
@@ -297,45 +326,38 @@ public final class AutoUpdater: @unchecked Sendable {
   public func updateNow() {
     queue.async {
       switch self.phase {
+      case .waiting where self.forced:
+        return  // already asked: a second press (the window's Install again) never restarts the thread wait
       case .waiting(let r, _, _), .notice(let r, _, _):
         let now = self.hooks.awake()
         self.forced = true
+        self.forcedThreads.pressedAt = now
+        self.forcedThreads.skip = false
+        self.forcedThreads.busy = []
         self.forcedWait = QuietWait(since: now)
         self.forcedOwner = self.hooks.ownerActivity()
+        self.forcedWhySaid = nil
         try? FileManager.default.createDirectory(atPath: self.dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? Data().write(to: URL(fileURLWithPath: self.ownerAskedPath))
         self.audit("update_now", ["version": r.manifest.version])
         self.phase = .waiting(r, QuietWait(since: r.readyAt), notBefore: now)  // a notice that was out is withdrawn: nothing has moved
         self.setStatus(.waitingForTurn(version: r.manifest.version))
       case .final:
-        self.forced = true  // the automatic path already moved the folder: it goes on with its own looks
+        if !self.forced {  // the automatic path already moved the folder: it goes on with its own looks (a second press changes nothing)
+          self.forced = true
+          self.forcedThreads = ForcedThreads(pressedAt: self.hooks.awake())
+        }
       default:
         return
       }
+      if self.timer == nil, self.forcedTimer == nil {
+        let t = DispatchSource.makeTimerSource(queue: self.queue)
+        t.schedule(deadline: .now() + self.options.quietPoll, repeating: self.options.quietPoll)
+        t.setEventHandler { [weak self] in self?.forcedTimerTick() }
+        self.forcedTimer = t
+        t.resume()
+      }
       self.tickLocked()
-    }
-  }
-
-  /// One look of a forced update while it waits (nothing has moved): a turn, a draft or background work, or a message of the owner's since
-  /// the last look, is not quiet. `quietLooks` quiet looks in a row, then the prepare. 2 hours after the press it gives up.
-  private func forcedLook(_ ready: Ready, now: Double) {
-    let why = hooks.look()
-    let ownerNow = hooks.ownerActivity()
-    var quiet = why.isEmpty
-    if let ownerNow, ownerNow != forcedOwner {
-      quiet = false
-      forcedOwner = ownerNow
-    }
-    switch forcedWait.look(quiet: quiet, now: now, cap: options.quietCap) {
-    case .go:
-      prepare(ready, owner: ownerNow)
-    case .wait:
-      setStatus(.waitingForTurn(version: ready.manifest.version))
-    case .gaveUp:
-      audit("gave_up_waiting", ["version": ready.manifest.version, "why": "Update now: " + why.joined(separator: "; ")])
-      forced = false
-      fail(AutoUpdate.busyLine(ready.manifest.version, old: options.appVersion ?? "this version"))
-      phase = .waiting(ready, QuietWait(since: ready.readyAt), notBefore: now + options.postponeFor)
     }
   }
 
@@ -381,7 +403,7 @@ public final class AutoUpdater: @unchecked Sendable {
     }
   }
 
-  private func tickLocked() {
+  func tickLocked() {
     reportHealthIfDue()
     if !ownsPending { guard settlePending() else { return } }
     let s = hooks.settings()
@@ -413,10 +435,11 @@ public final class AutoUpdater: @unchecked Sendable {
     case .waiting(let ready, var wait, let notBefore):
       if forced { return forcedLook(ready, now: now) }
       guard now >= notBefore else { return }
-      let why = hooks.look()
+      let raw = hooks.look()
+      let why = autoDraftFilter(raw, now: now)
       let first = wait.looked == 0
       publishWaiting(ready, why: why, looked: wait.looked + 1)
-      switch wait.look(quiet: why.isEmpty, now: now, cap: options.quietCap) {
+      switch wait.look(quiet: why.isEmpty, now: now, cap: autoWaitCap(raw, since: wait.since, notBefore: notBefore, quiet: why.isEmpty)) {
       case .go:
         // the notice, and the owner's activity as it is now: any change in the next 2 minutes postpones
         let owner = hooks.ownerActivity()
@@ -427,7 +450,8 @@ public final class AutoUpdater: @unchecked Sendable {
         if first, !why.isEmpty { audit("waiting", ["version": ready.manifest.version, "why": why.joined(separator: "; ")]) }
         phase = .waiting(ready, wait, notBefore: notBefore)
       case .gaveUp:
-        audit("gave_up_waiting", ["version": ready.manifest.version, "why": why.joined(separator: "; ")])
+        audit("gave_up_waiting", ["version": ready.manifest.version, "why": why.isEmpty ? "not quiet" : why.joined(separator: "; ")])
+        draftWatch = DraftWatch()
         dropDownload(ready)
         phase = .idle(next: nextCheck(hooks.awake()))  // from now: the wait is longer than an interval, so not from the check
       }
@@ -461,6 +485,10 @@ public final class AutoUpdater: @unchecked Sendable {
           restore(ready, ref: ref)
           if forced { fail(AutoUpdate.cannotRestartLine) }
           return postpone(ready, why: "Main would not come back from a restart", say: false)
+        }
+        guard keepBeforeSwap(ready) else {
+          restore(ready, ref: ref)
+          return postponeForDraftCopy(ready)
         }
         swap(ready, ref: ref)
       } else {
@@ -512,7 +540,9 @@ public final class AutoUpdater: @unchecked Sendable {
   private func interrupted(owner: String?) -> String? {
     let nowOwner = hooks.ownerActivity()
     if nowOwner != owner, nowOwner != nil { return "the owner wrote" }
-    let why = hooks.look()
+    var why = hooks.look()
+    if forced { why = forcedSplit(why, now: hooks.awake()).hold }  // an Update now keeps the draft, and waits on threads only so long
+    else { why = autoDraftFilter(why, now: hooks.awake()) }
     return why.isEmpty ? nil : why.joined(separator: "; ")
   }
 
@@ -659,6 +689,7 @@ public final class AutoUpdater: @unchecked Sendable {
     // the 2 hours count from here, the moment it could have gone
     let at = hooks.awake()
     let ready = Ready(manifest: m, zip: zip, checkout: co, dest: dest, checkedAt: now, readyAt: at)
+    draftWatch = DraftWatch()  // a new release starts its own count
     phase = .waiting(ready, QuietWait(since: at), notBefore: at)
     lastRelayLook = -.infinity
     publishWaiting(ready, why: hooks.look(), looked: 0)
@@ -774,7 +805,7 @@ public final class AutoUpdater: @unchecked Sendable {
   // MARK: the prepare, the last look and the swap
 
   /// After the notice: the checkout moves to the release's commit and its packages install (the app waits), then the last look.
-  private func prepare(_ r: Ready, owner: String?) {
+  func prepare(_ r: Ready, owner: String?) {
     let m = r.manifest
     phase = .idle(next: nextCheck(r.checkedAt))
     setStatus(.preparing(version: m.version))
@@ -821,6 +852,7 @@ public final class AutoUpdater: @unchecked Sendable {
     guard var p = readPending(), let pid = hooks.spawn(argv, scriptEnv(), dir + "/apply.log") else {
       restore(r, ref: ref)
       removePending()
+      hooks.draftSettled(m.version, .neverStarted)  // nothing quit: the text is still in Main's box
       phase = .idle(next: nextCheck(r.checkedAt))
       return refuseApply(m, .install)
     }
@@ -897,6 +929,7 @@ public final class AutoUpdater: @unchecked Sendable {
       alive = now - (stopAskedAt ?? now) < 120
     }
     let healthy = FileManager.default.fileExists(atPath: healthPath(p.version))
+    var failedVersion: String?
     switch AutoUpdate.settle(pending: p, result: result, running: options.appVersion, helperAlive: alive, healthy: healthy) {
     case .waiting:
       setStatus(.restarting(version: p.version))
@@ -904,8 +937,10 @@ public final class AutoUpdater: @unchecked Sendable {
     case .updated:
       audit("updated", ["version": p.version, "from": p.old_version])
       hooks.post(AutoUpdate.updatedLine(p.version))
+      hooks.draftSettled(p.version, .updated)
       setStatus(.done(version: p.version))
     case .failed(let why, let restore):
+      failedVersion = p.version
       if restore { restoreCheckout(p) }
       audit("failed", ["version": p.version, "why": why.rawValue, "result": result == nil ? "none" : "read"])
       noteFailed(p.version)
@@ -941,6 +976,8 @@ public final class AutoUpdater: @unchecked Sendable {
         sayOnce(p.version + "|" + why.rawValue, line)
       }
     }
+    // after any rollback restart of Main above: a swap that started and failed may have restarted Main, so the copy is OFFERED, not dropped
+    if let v = failedVersion { hooks.draftSettled(v, .triedAndFailed) }
     for f in [pendingPath, resultPath, preparePath, scriptPath, dir + "/" + p.version, healthPath(p.version)] {
       try? FileManager.default.removeItem(atPath: f)
     }

@@ -543,11 +543,11 @@ struct NotificationsRowTests {
   @Test func deniedNeverReadsAsSilentSuccess() {
     let r = row(.denied)
     let note = r.stateNote ?? ""
-    #expect(note.hasPrefix("Denied."))
+    #expect(note.hasPrefix("You said no"))
     #expect(note.contains("blocks every Talos banner"))
-    #expect(note.contains("crash and health banners"))
+    #expect(note.contains("including warnings"))
     #expect(r.needsAttention)
-    #expect(PermissionsModel.summary([r]).contains("1 to review"))
+    #expect(PermissionsModel.summary([r]) == "1 thing you can still allow")
     #expect(r.button == .openSettings(PermissionsModel.notificationsURL))
     // a status macOS adds later reads as denied, not as granted
     #expect(NotifyPermission(authorizationStatusRaw: 99) == .denied)
@@ -555,9 +555,7 @@ struct NotificationsRowTests {
 
   @Test func theTextSaysWhichBannersObeyWhichRules() {
     let t = PermissionsModel.notificationsWhy
-    #expect(t.contains("notification switch") && t.contains("quiet hours") && t.contains("thread"))
-    #expect(t.contains("Health and crash banners") && t.contains("pass that switch"), "R3: the Mac matches the relay")
-    #expect(t.contains("health alarms"))
+    #expect(t == "Replies and when your agent needs you", "the mock's one line; the rules live in the Talos page")
   }
 
   @Test func notAskedAndUnknownAreWordedApart() {
@@ -570,11 +568,11 @@ struct NotificationsRowTests {
     let mic = rows.first { $0.kind == .microphone }!
     #expect(mic.action == .none)
     #expect(mic.button == .openSettings(PermissionsModel.settingsBase + "Privacy_Microphone"))
-    #expect(mic.stateNote?.hasPrefix("Denied.") == true, "M28: denied is not 'asked on first use'")
+    #expect(mic.stateNote?.hasPrefix("You said no.") == true, "M28: denied is not 'asked on first use'")
     let cam = rows.first { $0.kind == .camera }!
     #expect(cam.button == .none && cam.stateNote?.contains("macOS asks the first time") == true)
     let auto = rows.first { $0.kind == .automation }!
-    #expect(auto.stateNote?.contains("Can't be checked from here") == true, "Automation can never turn green, and says so")
+    #expect(auto.stateNote?.contains("can't check this one") == true, "Automation can never turn green, and says so")
   }
 }
 
@@ -619,16 +617,16 @@ struct FirstRunHomesTests {
     #expect(FirstRun.trust(setupDone: true, confirmedAt: "2026-11-01T10:00:00Z") == true)
     let rows = FirstRun.rows(.init(agentDirTrusted: FirstRun.trust(setupDone: true, confirmedAt: nil), home: home, setupDone: true))
     guard case .fix(let fix)? = rows.first(where: { $0.id == "trust" })?.state else { Issue.record("fix row reachable"); return }
-    #expect(fix.contains("Talos popup") && fix.contains("Start session"), "it names the real controls: \(fix)")
+    #expect(fix.contains("Talos popup") && fix.contains("Start your agent"), "it names the real controls: \(fix)")
     let before = FirstRun.rows(.init(home: home, setupDone: false)).first { $0.id == "trust" }
     if case .unknown(let m)? = before?.state { #expect(m.contains("first step above")) } else { Issue.record("waits for setup") }
   }
 
   @Test func importSaysItSavedAndThatItIsStarting() {
     #expect(SetupText.importSaved.hasPrefix("Saved."))
-    #expect(SetupText.importSaved.contains("Starting") && SetupText.importSaved.contains("Terminals…"))
+    #expect(SetupText.importSaved.contains("Starting") && SetupText.importSaved.contains("Show my agent's screen"))
     #expect(!SetupText.importSaved.contains("Nothing has started"))
-    #expect(SetupText.importSavedNotStarted.contains("Nothing has started") && SetupText.importSavedNotStarted.contains("Start session"))
+    #expect(SetupText.importSavedNotStarted.contains("Nothing has started") && SetupText.importSavedNotStarted.contains("Start your agent"))
     #expect(SetupText.importNotSaved(path: "/home/alex/x/desktop.json").contains("Couldn't save"))
   }
 }
@@ -660,10 +658,10 @@ struct WordingTests {
       HelpPage.noRelay, TalosAppLocator.notFoundMessage, FirstRun.setupStep, SupervisorNotice.notSetUp, MacSettingsText.noRelayYet,
     ]
     for t in texts { #expect(!t.contains("→ Window") && !t.contains("\u{2192} Window"), "\(t)") }
-    #expect(HelpPage.noRelay.contains("Mac settings \u{2192} Connection"))
+    #expect(HelpPage.noRelay.contains("Mac settings \u{2192} Advanced"))
     let bad = FirstRun.rows(.init(home: home, talosAppFound: false)).first { $0.id == "talosapp" }
-    if case .fix(let m)? = bad?.state { #expect(m.contains("Connection")) } else { Issue.record("fix row") }
-    #expect(MacSettingsText.noRelayYet.contains("Connection"))
+    if case .fix(let m)? = bad?.state { #expect(m.contains("Advanced")) } else { Issue.record("fix row") }
+    #expect(MacSettingsText.noRelayYet.contains("Advanced"))
   }
 
   @Test func theCharacterIsTheCompanionAndTheWindowIsMacSettings() {
@@ -683,7 +681,7 @@ struct WordingTests {
   }
 
   @Test func theReConfirmLabelNoLongerReadsBackwards() {
-    #expect(MacSettingsText.autoConfirmTitle == "Press Enter for me on the development-channel dialog")
+    #expect(MacSettingsText.autoConfirmTitle == "Answer Claude's start-up question for me")
     #expect(MacSettingsText.autoConfirmHelp.contains("exactly the dialog for the channel Talos launched with"))
     for (p, t) in sources() { #expect(!t.contains("Re-confirm the development-channel dialog"), "\(p)") }
   }
@@ -697,7 +695,7 @@ struct WordingTests {
     #expect(MacSettingsText.relayDraft("https://relay.example.com/") == "")
     #expect(MacSettingsText.relayDraft("auto") == "")
     #expect(MacSettingsText.relayDraft("https://relay.alex.example") == "https://relay.alex.example")
-    #expect(MacSettingsText.relayUsing(nil).contains("No relay address yet"))
+    #expect(MacSettingsText.relayUsing(nil).contains("No address yet"))
     #expect(MacSettingsText.relayUsing("https://x.example") == "Using https://x.example")
     #expect(MacSettingsText.noRelayYet.contains("Mac settings") && !MacSettingsText.noRelayYet.contains("desktop.json"), "M24")
   }
@@ -757,16 +755,18 @@ struct AppliesTests {
     #expect(MacSettingsText.applies(.host).contains("next time Talos opens"))
   }
 
-  @Test func everyCaseIsShownByTheScreenThatOwnsIt() throws {
+  /// The 17 "Applies the next time..." captions are gone (one caption a section, owner-approved 2026-11-20): no screen draws an
+  /// `AppliesNote`, and Your agent carries the single "Changes apply the next time your agent starts." line.
+  @Test func theSeventeenCaptionsAreGoneAndOneCaptionRemains() throws {
     let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Sources/TalosDesktop")
     var all = ""
     for f in try FileManager.default.contentsOfDirectory(atPath: dir.path) where f.hasSuffix(".swift") {
       all += (try? String(contentsOfFile: dir.appendingPathComponent(f).path, encoding: .utf8)) ?? ""
     }
-    for s in MacSettingsText.Setting.allCases {
-      #expect(all.contains("AppliesNote(setting: .\(s.rawValue))"), "\(s) has no note on screen")
-    }
+    #expect(!all.contains("AppliesNote("), "no per-setting caption is drawn")
+    #expect(all.components(separatedBy: "SettingsCaption(MacSettingsText.changesApply)").count - 1 == 1, "one caption on Your agent")
+    #expect(MacSettingsText.changesApply == "Changes apply the next time your agent starts.")
   }
 }
 

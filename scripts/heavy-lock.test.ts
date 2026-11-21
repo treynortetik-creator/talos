@@ -714,9 +714,10 @@ describe('the gate and the Swift suites take the heavy lock', () => {
     mkdirSync(join(T, 'scripts/ci-local'), { recursive: true })
     cpSync(join(here, 'heavy-lock.sh'), join(T, 'scripts/heavy-lock.sh'))
     cpSync(join(here, 'ci-local/locks.sh'), join(T, 'scripts/ci-local/locks.sh'))
+    cpSync(join(here, 'ci-local/turn.sh'), join(T, 'scripts/ci-local/turn.sh'))
   }
 
-  it('gate.sh: typecheck, lint, personal and size run outside the lock, the suites inside it, and wait for it', async () => {
+  it('gate.sh: typecheck, lint, personal, size and timing run outside the lock, the suites inside it, and wait for it', async () => {
     const T = tmp()
     const cache = tmp()
     const git = (...a: string[]) => spawnSync('git', a, { cwd: T, env, encoding: 'utf8' })
@@ -755,7 +756,7 @@ describe('the gate and the Swift suites take the heavy lock', () => {
     expect(g.status, g.stderr).toBe(0)
     const log = readFileSync(join(T, 'pnpm.log'), 'utf8').trim().split('\n')
     expect(log.filter((l) => l.startsWith('held'))).toEqual([expect.stringMatching(/^held exec vitest related --run /)])
-    expect(log.filter((l) => l.startsWith('free')).map((l) => l.split(' ')[1])).toEqual(['-s', 'exec'])
+    expect(log.filter((l) => l.startsWith('free')).map((l) => l.split(' ')[1])).toEqual(['-s', 'exec', '-s']) // typecheck, size, timing
     // another holder: the light steps still run, the suites wait for it, and give up at the timeout with the gate refused
     const h = spawn('bash', [join(T, 'scripts/heavy-lock.sh'), 'run', 'ci', '--', 'sleep', '300'], { env: genv })
     kids.push(h)
@@ -1078,6 +1079,7 @@ describe('the desktop mutex: one Swift desktop suite on the machine at a time', 
     mkdirSync(join(T, 'scripts/ci-local'), { recursive: true })
     cpSync(join(here, 'heavy-lock.sh'), join(T, 'scripts/heavy-lock.sh'))
     cpSync(join(here, 'ci-local/locks.sh'), join(T, 'scripts/ci-local/locks.sh'))
+    cpSync(join(here, 'ci-local/turn.sh'), join(T, 'scripts/ci-local/turn.sh'))
     mkdirSync(join(T, 'apps/desktop/scripts'), { recursive: true })
     cpSync(join(here, '../apps/desktop/scripts/test.sh'), join(T, 'apps/desktop/scripts/test.sh'))
     const bin = join(T, 'bin')

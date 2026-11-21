@@ -52,9 +52,9 @@ struct MenuNoticeFollowsTests {
 
   @Test func otherNoticesAreNotRewritten() {
     let others = [
-      "\(SupervisorNotice.needsYou): the Sales session is waiting on a 'Bash command' prompt. Open Terminals…",  // a thread session's
+      "\(SupervisorNotice.needsYou): the Sales agent is waiting on a 'Bash command' prompt. Choose Show my agent's screen.",  // a thread session's
       SupervisorNotice.restarted, SupervisorNotice.stoppedRestarting, SupervisorNotice.resumeFailed,
-      "\(SupervisorNotice.blocked): Another Claude session holds Telegram.", SupervisorNotice.confirmFailed,
+      "\(SupervisorNotice.blocked): Another Claude is already using Telegram.", SupervisorNotice.confirmFailed,
       SupervisorNotice.couldNotStart, SupervisorNotice.crashedNoRestart, SupervisorNotice.recovery(.restartedOnRequest),
     ]
     let event = eventNotice(.dialog("folder trust"))
@@ -66,7 +66,7 @@ struct MenuNoticeFollowsTests {
 
   @Test func aThreadSessionsLineThatIsTheSameWordsAsNothingStaysPut() {
     // no supervisor event has set a line yet: a needs-you line is a thread session's, and it is left as it is
-    let thread = "\(SupervisorNotice.needsYou): the Sales session is waiting on a 'Bash command' prompt. Open Terminals…"
+    let thread = "\(SupervisorNotice.needsYou): the Sales agent is waiting on a 'Bash command' prompt. Choose Show my agent's screen."
     #expect(shown(thread, sentBy: nil, now: .stuck) == thread)
   }
 }

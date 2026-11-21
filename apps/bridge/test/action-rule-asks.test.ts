@@ -1,7 +1,7 @@
 // The kit's "ask first" rules on the phone (audit item 28). The review question: can anything but the owner's signed tap on the
 // "Allow once" card (or a kind he always allows) make an approval? Each way it must not is a test here. Real live bridge, the hub
 // socket, FakeRelay and a signing FakeApp; the last block runs the REAL kit/hooks/action-rules.py the way Claude Code does.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { spawn, spawnSync } from 'node:child_process'
 import {
   copyFileSync,
@@ -17,6 +17,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type CardT, CONFIG_PROPOSE_FEATURE } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import {
   ActionRuleAsks,
   inspectRuleFile,
@@ -28,6 +29,9 @@ import {
 } from '../src/action-rule-asks.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// the waits of one test (a card, the owner's tap, the hook's reply) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 const HOOK = resolve(import.meta.dir, '..', '..', '..', 'kit', 'hooks', 'action-rules.py')
 const NONCE = 'test-nonce-0123456789abcdef'
@@ -243,8 +247,14 @@ describe('the "Allow once" card', () => {
     const card = await nextCard(x, 0)
     expect((await ask.result)?.reason).toBe('waiting')
     const gone = rawCall(x.home, askLine())
-    await sleep(100)
+    const waiting = () =>
+      [...(x.bridge.ctx.actionRuleAsks as unknown as { waiters: Map<string, Set<unknown>> }).waiters.values()].reduce(
+        (n, v) => n + v.size,
+        0,
+      )
+    await waitFor(() => waiting() === 1, t(5000), 'the second asker to be registered')
     gone.close()
+    // timing-ok: negative window: the hang-up closes nothing, the card stays pending
     await sleep(100)
     expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
     expect(ruleCards(x)).toHaveLength(1) // asking again for the same call waits on the same card
@@ -299,7 +309,7 @@ describe('the "Allow once" card', () => {
       return row
     }
     const promptly = async (p: Promise<Answer | null>) =>
-      await Promise.race([p, sleep(3000).then(() => 'timed out' as const)])
+      await Promise.race([p, sleep(t(3000)).then(() => 'timed out' as const)])
     const waiterSizes = (x: Harness) =>
       [...(x.bridge.ctx.actionRuleAsks as unknown as { waiters: Map<string, Set<unknown>> }).waiters.values()].map(
         (v) => v.size,
@@ -375,36 +385,40 @@ describe('the "Allow once" card', () => {
 
     // "Always allow" records the kind and syncs the setting before it closes the card. That sync can take many seconds, and the
     // asker must not wait for it.
-    test('(f) Always allow while the config sync is held: the asker hears allow at once, and the kind is still recorded', async () => {
-      const x = await start()
-      const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
-      const real = t.sendDurable
-      let held = false
-      let release: () => void = () => {}
-      t.sendDurable = function (this: unknown, f: unknown) {
-        if ((f as { type?: string })?.type !== 'config.sync' || held) return real.call(this, f)
-        held = true
-        return new Promise((res, rej) => {
-          release = () => real.call(this, f).then(res, rej)
-        })
-      }
-      try {
-        const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
-        const card = await nextCard(x, 0)
-        await x.app.resolveCard(card, 'primary', card.payload_hash, { always: true })
-        await waitFor(() => held, 4000, 'held config.sync')
-        expect(await promptly(ask.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
-        release()
-        await waitFor(
-          () => (x.bridge.ctx.config.config.always_allow ?? []).some((e) => e.kind === 'deploy'),
-          4000,
-          'always_allow',
-        )
-        await eventually(() => expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('done'))
-      } finally {
-        t.sendDurable = real
-      }
-    })
+    test(
+      '(f) Always allow while the config sync is held: the asker hears allow at once, and the kind is still recorded',
+      async () => {
+        const x = await start()
+        const t = x.bridge.ctx.transport as unknown as { sendDurable: (f: unknown) => Promise<unknown> }
+        const real = t.sendDurable
+        let held = false
+        let release: () => void = () => {}
+        t.sendDurable = function (this: unknown, f: unknown) {
+          if ((f as { type?: string })?.type !== 'config.sync' || held) return real.call(this, f)
+          held = true
+          return new Promise((res, rej) => {
+            release = () => real.call(this, f).then(res, rej)
+          })
+        }
+        try {
+          const ask = rawCall(x.home, askLine({ wait_ms: LONG }))
+          const card = await nextCard(x, 0)
+          await x.app.resolveCard(card, 'primary', card.payload_hash, { always: true })
+          await waitFor(() => held, 4000, 'held config.sync')
+          expect(await promptly(ask.result)).toMatchObject({ decision: 'allow', reason: 'owner' })
+          release()
+          await waitFor(
+            () => (x.bridge.ctx.config.config.always_allow ?? []).some((e) => e.kind === 'deploy'),
+            4000,
+            'always_allow',
+          )
+          await eventually(() => expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('done'))
+        } finally {
+          t.sendDurable = real
+        }
+      },
+      t(60_000),
+    )
 
     test('(e) the asker disconnects during the send: gone, and the card stays pending', async () => {
       const x = await start()
@@ -420,7 +434,7 @@ describe('the "Allow once" card', () => {
         await hold.sent()
         const id = pendingRow(x).id
         ctl.abort()
-        expect(await Promise.race([answer, sleep(3000).then(() => 'timed out')])).toEqual({
+        expect(await Promise.race([answer, sleep(t(3000)).then(() => 'timed out')])).toEqual({
           decision: 'none',
           reason: 'gone',
         })
@@ -462,7 +476,7 @@ describe('the "Allow once" card', () => {
       return { old, two, card }
     }
     const stillWaiting = async (p: Promise<Answer | null>) =>
-      expect(await Promise.race([p, sleep(300).then(() => 'waiting')])).toBe('waiting')
+      expect(await Promise.race([p, sleep(300).then(() => 'waiting')])).toBe('waiting') // timing-ok: negative window: the card's asker is still waiting
 
     test("an old card's send failing late leaves the newer card for the same call alone", async () => {
       const x = await start()
@@ -470,6 +484,7 @@ describe('the "Allow once" card', () => {
       try {
         const { two, card } = await oldCardThenNew(x, hold)
         hold.fail()
+        // timing-ok: negative window: the older card's failure does not answer the newer card's asker
         await sleep(100)
         await stillWaiting(two.result)
         await x.app.resolveCard(card, 'primary', card.payload_hash)
@@ -581,6 +596,7 @@ describe('who asked', () => {
     expect((await rawCall(x.home, askLine({ ...proof, nonce: 'x'.repeat(26) })).result)?.decision).toBe('none')
     expect((await rawCall(x.home, askLine({ nonce: NONCE })).result)?.reason).toBe('bad_frame')
     expect(await take(x, { ...proof, nonce: 'y'.repeat(26) })).toBe('none')
+    // timing-ok: negative window: no card appears for the refused request
     await sleep(100)
     expect(ruleCards(x)).toHaveLength(0)
   })
@@ -673,7 +689,7 @@ describe('Always allow, per kind', () => {
     expect(hit(crafted)).toBe(false)
     const ms = performance.now() - t0
     console.log(`crafted line matched in ${ms.toFixed(0)} ms`)
-    expect(ms).toBeLessThan(1000)
+    expect(ms).toBeLessThan(t(1000))
     expect(new RegExp(SHIPPED_ASK_RULES.find((r) => r.id === 'push-to-main')?.command ?? '').test(crafted)).toBe(true)
     // read-only shared-drive tools are not destructive; share_file still is
     const destructive = new RegExp(`^(?:${SHIPPED_ASK_RULES.find((r) => r.id === 'destructive-via-connector')?.tool})$`)
@@ -731,6 +747,7 @@ describe('Always allow, per kind', () => {
     expect(c4.kind).toBe('generic')
     // Always allow on a generic card adds nothing
     await x.app.resolveCard(c4, 'primary', c4.payload_hash, { always: true })
+    // timing-ok: negative window: an Always allow on a generic card adds nothing
     await sleep(100)
     expect((x.bridge.ctx.config.config.always_allow ?? []).map((e) => e.kind)).toEqual(['email'])
     // a mail connector send IS email, and goes through
@@ -960,6 +977,7 @@ describe('the notice that a rule file cannot be read', () => {
       writeFileSync(agent.shipped, BAD)
       expect((await rawCall(x.home, noticeLine({ file: 'shipped' })).result)?.reason).toBe('told')
       await waitFor(() => replies(x).length === 3, 4000, 'three notices')
+      // timing-ok: negative window: exactly three notices, no fourth
       await sleep(150)
       expect(replies(x).length).toBe(3)
     }))
@@ -972,6 +990,7 @@ describe('the notice that a rule file cannot be read', () => {
       // no user file at all is fine too
       rmSync(agent.user)
       expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('fine')
+      // timing-ok: negative window: no notice for a fine file
       await sleep(150)
       expect(replies(x).length).toBe(0)
     }))
@@ -985,6 +1004,7 @@ describe('the notice that a rule file cannot be read', () => {
       writeFileSync(agent.user, 'rules:\n  not a rule 4\n')
       expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('capped')
       await waitFor(() => replies(x).length === 3, 4000, 'three notices')
+      // timing-ok: negative window: exactly three notices, no fourth
       await sleep(150)
       expect(replies(x).length).toBe(3)
     }))
@@ -1072,6 +1092,7 @@ describe('the notice that a rule file cannot be read', () => {
     try {
       const x = await start()
       expect((await rawCall(x.home, noticeLine()).result)?.reason).toBe('unknown')
+      // timing-ok: negative window: an unknown agent folder posts no notice
       await sleep(100)
       expect(replies(x).length).toBe(0)
     } finally {
@@ -1104,6 +1125,7 @@ describe('the notice that a rule file cannot be read', () => {
       expect((await rawCall(x.home, noticeLine({ hash: 'short' })).result)?.t).toBe('refused')
       expect((await rawCall(x.home, noticeLine({ line: 0 })).result)?.t).toBe('refused')
       expect((await rawCall(x.home, noticeLine({ nonce: 'x'.repeat(20) })).result)?.reason).toBe('bad_frame')
+      // timing-ok: negative window: the refused lines post no notice
       await sleep(150)
       expect(replies(x).length).toBe(0)
       // a thread session that proves itself is told, like main
@@ -1112,85 +1134,94 @@ describe('the notice that a rule file cannot be read', () => {
 })
 
 describe('the real kit hook', () => {
-  test('a rule file it cannot read: it asks, and the owner is told once, until the file changes', async () => {
-    const agent = useAgentFolder()
-    afterRealHook = agent.restore
-    const x = await start()
-    writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))
-    const state = mkdtempSync(join(tmpdir(), 'ar-state-'))
-    const rules = agent.user // the file the bridge checks for itself is the one the hook reads
-    writeFileSync(rules, 'rules:\n  this is not a rule\n')
-    const env = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
-      HOME: process.env.HOME ?? '/',
-      TALOS_APP_HOME: x.home,
-      XDG_STATE_HOME: state,
-      XDG_CONFIG_HOME: agent.cfg,
-      CLAUDE_PID: String(process.pid),
-      TALOS_TEST_SANDBOX: process.env.TALOS_TEST_SANDBOX ?? '',
-      PYTHONDONTWRITEBYTECODE: '1',
-    }
-    const run = (stdin: string) =>
-      new Promise<string>((done) => {
-        const p = spawn('python3', [HOOK, 'check'], { env })
-        let out = ''
-        p.stdout.on('data', (d) => {
-          out += d
+  test(
+    'a rule file it cannot read: it asks, and the owner is told once, until the file changes',
+    async () => {
+      const agent = useAgentFolder()
+      afterRealHook = agent.restore
+      const x = await start()
+      writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))
+      const state = mkdtempSync(join(tmpdir(), 'ar-state-'))
+      const rules = agent.user // the file the bridge checks for itself is the one the hook reads
+      writeFileSync(rules, 'rules:\n  this is not a rule\n')
+      const env = {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        HOME: process.env.HOME ?? '/',
+        TALOS_APP_HOME: x.home,
+        XDG_STATE_HOME: state,
+        XDG_CONFIG_HOME: agent.cfg,
+        CLAUDE_PID: String(process.pid),
+        TALOS_TEST_SANDBOX: process.env.TALOS_TEST_SANDBOX ?? '',
+        PYTHONDONTWRITEBYTECODE: '1',
+      }
+      const run = (stdin: string) =>
+        new Promise<string>((done) => {
+          const p = spawn('python3', [HOOK, 'check'], { env })
+          let out = ''
+          p.stdout.on('data', (d) => {
+            out += d
+          })
+          p.on('close', () => done(out))
+          p.stdin.end(stdin)
         })
-        p.on('close', () => done(out))
-        p.stdin.end(stdin)
-      })
-    const call = JSON.stringify({ tool_name: 'Bash', cwd: '/srv/app', tool_input: { command: 'ls' } })
-    expect(await run(call)).toContain('"ask"')
-    await waitFor(() => replies(x).length === 1, 4000, 'notice')
-    expect(replies(x)[0]?.message.text).toBe(
-      ruleFileNotice({ file: 'user', line: 2, unattended: false, offPath: agent.off }),
-    )
-    expect(await run(call)).toContain('"ask"')
-    await sleep(200)
-    expect(replies(x).length).toBe(1)
-    writeFileSync(rules, 'rules:\n  still not a rule\n')
-    expect(await run(call)).toContain('"ask"')
-    await waitFor(() => replies(x).length === 2, 4000, 'notice after the file changed')
-  }, 30_000)
+      const call = JSON.stringify({ tool_name: 'Bash', cwd: '/srv/app', tool_input: { command: 'ls' } })
+      expect(await run(call)).toContain('"ask"')
+      await waitFor(() => replies(x).length === 1, 4000, 'notice')
+      expect(replies(x)[0]?.message.text).toBe(
+        ruleFileNotice({ file: 'user', line: 2, unattended: false, offPath: agent.off }),
+      )
+      expect(await run(call)).toContain('"ask"')
+      // timing-ok: negative window: the same file is told once
+      await sleep(200)
+      expect(replies(x).length).toBe(1)
+      writeFileSync(rules, 'rules:\n  still not a rule\n')
+      expect(await run(call)).toContain('"ask"')
+      await waitFor(() => replies(x).length === 2, 4000, 'notice after the file changed')
+    },
+    t(30_000),
+  )
 
-  test('check stops it, approve puts it on the phone, the tap lets exactly that call through once', async () => {
-    const x = await start()
-    writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))
-    const state = mkdtempSync(join(tmpdir(), 'ar-state-'))
-    const env = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
-      HOME: process.env.HOME ?? '/',
-      TALOS_APP_HOME: x.home,
-      XDG_STATE_HOME: state,
-      XDG_CONFIG_HOME: join(state, 'cfg'),
-      CLAUDE_PID: String(process.pid),
-      TALOS_TEST_SANDBOX: process.env.TALOS_TEST_SANDBOX ?? '',
-      PYTHONDONTWRITEBYTECODE: '1',
-    }
-    const run = (args: string[], stdin = '') =>
-      new Promise<{ code: number; out: string }>((done) => {
-        const p = spawn('python3', [HOOK, ...args], { env })
-        let out = ''
-        p.stdout.on('data', (d) => {
-          out += d
+  test(
+    'check stops it, approve puts it on the phone, the tap lets exactly that call through once',
+    async () => {
+      const x = await start()
+      writeFileSync(join(x.home, 'config.json'), JSON.stringify(x.bridge.ctx.config.config))
+      const state = mkdtempSync(join(tmpdir(), 'ar-state-'))
+      const env = {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        HOME: process.env.HOME ?? '/',
+        TALOS_APP_HOME: x.home,
+        XDG_STATE_HOME: state,
+        XDG_CONFIG_HOME: join(state, 'cfg'),
+        CLAUDE_PID: String(process.pid),
+        TALOS_TEST_SANDBOX: process.env.TALOS_TEST_SANDBOX ?? '',
+        PYTHONDONTWRITEBYTECODE: '1',
+      }
+      const run = (args: string[], stdin = '') =>
+        new Promise<{ code: number; out: string }>((done) => {
+          const p = spawn('python3', [HOOK, ...args], { env })
+          let out = ''
+          p.stdout.on('data', (d) => {
+            out += d
+          })
+          p.on('close', (code) => done({ code: code ?? -1, out }))
+          p.stdin.end(stdin)
         })
-        p.on('close', (code) => done({ code: code ?? -1, out }))
-        p.stdin.end(stdin)
-      })
-    const call = JSON.stringify({ tool_name: 'Bash', cwd: '/srv/app', tool_input: { command: 'npm publish' } })
-    const first = await run(['check'], call)
-    expect(first.out).toContain('"ask"')
-    expect(first.out).toContain('approve deploy-or-publish')
-    const approving = run(['approve', 'deploy-or-publish'])
-    const card = await nextCard(x, 0)
-    expect(card.body).toBe('npm publish')
-    expect(await run(['check'], call)).toMatchObject({ out: expect.stringContaining('"ask"') }) // not before the tap
-    await x.app.resolveCard(card, 'primary', card.payload_hash)
-    const approved = await approving
-    expect(approved.code).toBe(0)
-    expect(approved.out).toContain('approved by the owner')
-    expect((await run(['check'], call)).out.trim()).toBe('{}')
-    expect((await run(['check'], call)).out).toContain('"ask"')
-  }, 30_000)
+      const call = JSON.stringify({ tool_name: 'Bash', cwd: '/srv/app', tool_input: { command: 'npm publish' } })
+      const first = await run(['check'], call)
+      expect(first.out).toContain('"ask"')
+      expect(first.out).toContain('approve deploy-or-publish')
+      const approving = run(['approve', 'deploy-or-publish'])
+      const card = await nextCard(x, 0)
+      expect(card.body).toBe('npm publish')
+      expect(await run(['check'], call)).toMatchObject({ out: expect.stringContaining('"ask"') }) // not before the tap
+      await x.app.resolveCard(card, 'primary', card.payload_hash)
+      const approved = await approving
+      expect(approved.code).toBe(0)
+      expect(approved.out).toContain('approved by the owner')
+      expect((await run(['check'], call)).out.trim()).toBe('{}')
+      expect((await run(['check'], call)).out).toContain('"ask"')
+    },
+    t(30_000),
+  )
 })

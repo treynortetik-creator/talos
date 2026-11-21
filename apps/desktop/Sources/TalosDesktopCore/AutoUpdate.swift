@@ -21,6 +21,24 @@ public enum AutoUpdate {
   /// Quiet must be seen this many looks in a row (a look every `quietPoll` seconds) before anything moves.
   public static let quietLooks = 2
   public static let quietPoll: Double = 30
+  /// The quiet look's words for unsent text in Main's box. An automatic update waits on it; an Update now does not.
+  public static let mainDraftReason = "main has a draft"
+  /// An automatic update that waits on unsent text in Main's box goes anyway once the text has been the same this long (a copy is saved).
+  public static let draftStaleAfter: Double = 2 * 3600
+  /// How long an Update now waits for the thread agents (not Main's turn) before it goes anyway, counted from the press.
+  public static let threadWait: Double = 300
+  /// The quiet look's words for background work under a thread's session (`thread <id> busy` names a busy thread).
+  public static let threadBackgroundReason = "thread background work"
+  /// A reason of the quiet look that belongs to the thread agents (never to Main): an Update now gives these a limited wait.
+  public static func isThreadReason(_ why: String) -> Bool {
+    why.hasPrefix("thread ") || why == "a thread restart is under way"
+  }
+  /// The thread id a reason names (`thread <id> busy`); nil for the ones that name none.
+  public static func threadId(in why: String) -> String? {
+    guard why.hasPrefix("thread "), !why.hasPrefix(threadBackgroundReason) else { return nil }
+    let id = why.dropFirst("thread ".count).prefix { $0 != " " }
+    return id.isEmpty ? nil : String(id)
+  }
   /// The folder under the Talos home where the updater keeps its downloads and records (0700).
   public static let folder = "auto-update"
   /// The owner's warning before Talos quits for an update; a message from the owner in it postpones the update.
@@ -68,13 +86,14 @@ public enum AutoUpdate {
   /// The relay is on an older build than the update. Both builds are named, and so is the step the owner takes: the relay does not
   /// follow releases by itself, and nothing waits for it. `relay`: the build the relay reports; `app`: the build the update brings.
   public static func relayBehindLine(version: String, relay: String, app: String) -> String {
-    "The relay (the server your phone talks to) is on build \(shortBuild(relay)). Talos \(oneLine(version)) is build \(shortBuild(app)). "
-      + "The update works with the older relay, but your phone may say Talos is newer than the app until the relay is redeployed. "
-      + "To fix that, redeploy the relay in Railway (open its project, then Deployments, then Redeploy) and check again. "
-      + "Talos does not wait for the relay: it installs when nothing is going on, or when you press Update now."
+    "The Talos server (the one your phone talks to) is on build \(shortBuild(relay)). Talos \(oneLine(version)) is build \(shortBuild(app)). "
+      + "The update works with the older Talos server, but your phone may say Talos is newer than the app until the Talos server is redeployed. "
+      + "To fix that, redeploy the Talos server in Railway (open its project, then Deployments, then Redeploy) and check again. "
+      + "Talos does not wait for the Talos server: it installs when nothing is going on, or when you press Update now."
   }
 
   // The lines the update window shows for a check that could not finish. Plain words; the details are in the log.
+  public static let draftLostLine = "Talos couldn\u{2019}t keep your unsent text in the main chat while it updated, so it is gone. Sorry."
   public static let noKeyLine = "This copy of Talos can\u{2019}t check for updates (it is a development build)."
   public static let badFeedLine = "Talos can\u{2019}t use the update address that is set. Clear it in the Talos settings file to use the default."
   public static let unreachableLine = "Talos couldn\u{2019}t reach the update server. Check your internet connection and try again."

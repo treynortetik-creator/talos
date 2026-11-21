@@ -1,13 +1,13 @@
 // MCP Apps AP2, the frame routes at the real relay: FakeApp in front, FakeBridge behind (spec M3.4, M4.6, M6.3).
 import { createDeviceKey, newId, newUlid, signBridgeHttp, signOwnerFrame, verifyOwnerFrame } from '@talos-app/protocol'
-import { FakeApp, type FakeBridge, type fakeClock, mkFrame, sleep, waitFor } from '@talos-app/testkit'
+import { FakeApp, type FakeBridge, type fakeClock, mkFrame, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ORIGIN, startTestRelay, type TestRelay } from '../core/harness.ts'
 import { kit } from '../core/helpers.ts'
 import { testAppHeaders } from '../helpers/test-auth.ts'
 import { fixture } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // the waits of one test add up past 30 s at the default budgets
 let relay: TestRelay | null = null
 const open: Array<{ close(): Promise<void> }> = []
 afterEach(async () => {
@@ -92,24 +92,36 @@ describe('app.request: app -> relay -> bridge', () => {
     await bridge.expectFrame('app.request', (x) => x.id === f.id, { direction: 'in' })
   })
 
-  it('is not stored: no event, no outbox row, not in a fresh app catch-up', async () => {
-    const { relay: r, app, bridge, k } = await world()
-    const f = await app.sign(toolsCall())
-    app.send(f)
-    await bridge.expectFrame('app.request', (x) => x.id === f.id, { direction: 'in' })
-    bridge.send(response(f.request_id) as never)
-    await app.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
-    expect(eventTypes(r).filter((t) => t.startsWith('app.'))).toEqual([])
-    expect(r.runtime.store.getEventByFrameId(f.id)).toBeFalsy()
-    expect(r.runtime.store.outboxAll().filter((x) => x.type.startsWith('app.'))).toEqual([])
-    const fresh = await k.connectedApp()
-    open.push(fresh)
-    fresh.send({ type: 'catchup.request', since_seq: 0 })
-    await sleep(300)
-    const seen = JSON.stringify(inFrames(fresh))
-    expect(seen).not.toContain('app.request')
-    expect(seen).not.toContain('app.response')
-  })
+  it(
+    'is not stored: no event, no outbox row, not in a fresh app catch-up',
+    async () => {
+      const { relay: r, app, bridge, k } = await world()
+      const f = await app.sign(toolsCall())
+      app.send(f)
+      await bridge.expectFrame('app.request', (x) => x.id === f.id, { direction: 'in' })
+      bridge.send(response(f.request_id) as never)
+      await app.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
+      expect(eventTypes(r).filter((t) => t.startsWith('app.'))).toEqual([])
+      expect(r.runtime.store.getEventByFrameId(f.id)).toBeFalsy()
+      expect(r.runtime.store.outboxAll().filter((x) => x.type.startsWith('app.'))).toEqual([])
+      const fresh = await k.connectedApp()
+      open.push(fresh)
+      fresh.send({ type: 'catchup.request', since_seq: 0 })
+      // the relay answers one socket's frames in order: its pong means the catch-up has been answered (or has nothing to send)
+      fresh.send({ type: 'ping', nonce: 'after-catchup' })
+      await waitFor(
+        () => inFrames(fresh).some((x) => x.type === 'pong'),
+        t(10_000),
+        'the pong after the catch-up request',
+      )
+      // timing-ok: negative window: a catch-up replays no app.request to a new socket
+      await sleep(300)
+      const seen = JSON.stringify(inFrames(fresh))
+      expect(seen).not.toContain('app.request')
+      expect(seen).not.toContain('app.response')
+    },
+    t(60_000),
+  )
 
   it('a signed request from a different device than the session is refused before it is forwarded', async () => {
     relay = await startTestRelay()
@@ -124,6 +136,7 @@ describe('app.request: app -> relay -> bridge', () => {
     app.send(f)
     const err = await app.expectFrame('error', (x) => x.ref === f.id, { direction: 'in' })
     expect(err.code).toBe('unauthorized')
+    // timing-ok: negative window: an unauthorized frame never reaches the bridge
     await sleep(150)
     expect(bridgeIn(bridge).some((x) => x.id === f.id)).toBe(false)
     const ok = await app.sign(toolsCall()) // control: the session's own device is forwarded
@@ -137,6 +150,7 @@ describe('app.request: app -> relay -> bridge', () => {
     app.send(f)
     const err = await app.expectFrame('error', (x) => x.ref === f.id, { direction: 'in' })
     expect(err.code).toBe('bad_frame')
+    // timing-ok: negative window: a bad frame never reaches the bridge
     await sleep(150)
     expect(bridgeIn(bridge).some((x) => x.id === f.id)).toBe(false)
   })
@@ -149,6 +163,7 @@ describe('app.request: app -> relay -> bridge', () => {
     app.send(odd)
     expect((await app.expectFrame('error', (x) => x.ref === big.id, { direction: 'in' })).code).toBe('bad_frame')
     expect((await app.expectFrame('error', (x) => x.ref === odd.id, { direction: 'in' })).code).toBe('bad_frame')
+    // timing-ok: negative window: refused frames never reach the bridge
     await sleep(100)
     expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toEqual([])
   })
@@ -161,10 +176,12 @@ describe('app.request: app -> relay -> bridge', () => {
     app.send(a)
     app.send(b)
     await bridge.expectFrame('app.request', (x) => x.id === a.id, { direction: 'in' })
+    // timing-ok: negative window: exactly one app.request reaches the bridge
     await sleep(200)
     expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(1)
     bridge.send(response(id) as never)
     await app.expectFrame('app.response', (x) => x.request_id === id, { direction: 'in' })
+    // timing-ok: negative window: exactly one response reaches the app, no error
     await sleep(100)
     expect(inFrames(app).filter((x) => x.type === 'app.response')).toHaveLength(1)
     expect(inFrames(app).filter((x) => x.type === 'error')).toEqual([]) // a resend is absorbed, not an error
@@ -178,6 +195,7 @@ describe('mac_offline', () => {
     app.send(f)
     const res = await app.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
     expect(res).toMatchObject({ state: 'failed', view_id: VIEW, error: { code: 'mac_offline' } })
+    // timing-ok: negative window: the other app gets no response
     await sleep(150)
     expect(inFrames(other).some((x) => x.type === 'app.response')).toBe(false)
     expect(eventTypes(r).filter((t) => t.startsWith('app.'))).toEqual([])
@@ -210,6 +228,7 @@ describe('mac_offline', () => {
       'route dropped',
     )
     bridge.send(response(f.request_id) as never)
+    // timing-ok: negative window: the other app gets no response
     await sleep(200)
     expect(inFrames(other).some((x) => x.type === 'app.response')).toBe(false)
     expect(r.relay.services.bus.bridgeOnline()).toBe(true) // the relay did not choke on it
@@ -231,6 +250,7 @@ describe('app.response: bridge -> relay -> the requesting socket only', () => {
     const gotB = await other.expectFrame('app.response', undefined, { direction: 'in' })
     expect(JSON.stringify(gotA)).toContain('for app')
     expect(JSON.stringify(gotB)).toContain('for other')
+    // timing-ok: negative window: exactly one response each
     await sleep(150)
     expect(inFrames(app).filter((x) => x.type === 'app.response')).toHaveLength(1)
     expect(inFrames(other).filter((x) => x.type === 'app.response')).toHaveLength(1)
@@ -246,6 +266,7 @@ describe('app.response: bridge -> relay -> the requesting socket only', () => {
     other.send(theirs)
     const err = await other.expectFrame('error', (x) => x.ref === theirs.id, { direction: 'in' })
     expect(err.code).toBe('bad_frame')
+    // timing-ok: negative window: the refused frame never reaches the bridge
     await sleep(100)
     expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(1)
     bridge.send(response(id) as never)
@@ -282,11 +303,13 @@ describe('app.response: bridge -> relay -> the requesting socket only', () => {
     app.send(f)
     await bridge.expectFrame('app.request', (x) => x.id === f.id, { direction: 'in' })
     bridge.send(response(f.request_id, { view_id: 'av_01JBF3V7Q8K2M4N6P8R0S2T43Z' }) as never)
+    // timing-ok: negative window: a response for another view reaches nobody
     await sleep(150)
     expect(inFrames(app).some((x) => x.type === 'app.response')).toBe(false)
     bridge.send(response(f.request_id) as never)
     await app.expectFrame('app.response', undefined, { direction: 'in' })
     bridge.send(response(f.request_id) as never)
+    // timing-ok: negative window: a second response is absorbed
     await sleep(150)
     expect(inFrames(app).filter((x) => x.type === 'app.response')).toHaveLength(1)
     expect(inFrames(other).some((x) => x.type === 'app.response')).toBe(false)
@@ -327,6 +350,7 @@ describe('app.response: bridge -> relay -> the requesting socket only', () => {
     const bad = bridge.send({ type: 'app.response', view_id: VIEW, request_id: f.request_id, state: 'failed' })
     const err = await bridge.expectFrame('error', (x) => x.ref === bad.id, { direction: 'in' })
     expect(err.code).toBe('bad_frame')
+    // timing-ok: negative window: a refused response reaches no app
     await sleep(100)
     expect(inFrames(app).some((x) => x.type === 'app.response')).toBe(false)
   })
@@ -342,12 +366,14 @@ describe('an older bridge', () => {
     bridge.send({ type: 'error', ref: f.id, code: 'bad_frame', message: 'unknown frame type app.request' })
     const res = await app.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
     expect(res).toMatchObject({ state: 'failed', view_id: VIEW })
+    // timing-ok: negative window: the relay adds no further event
     await sleep(150)
     expect(eventTypes(r).length).toBe(before)
     expect(JSON.stringify(inFrames(app))).not.toContain('An action was rejected')
     expect(JSON.stringify(inFrames(other))).not.toContain('An action was rejected')
     // the route is gone: a late answer is dropped
     bridge.send(response(f.request_id) as never)
+    // timing-ok: negative window: a late answer is dropped
     await sleep(100)
     expect(inFrames(app).filter((x) => x.type === 'app.response')).toHaveLength(1)
   })
@@ -399,6 +425,7 @@ describe('app.update: durable', () => {
     bridge.send(strip(u))
     bridge.send(strip(u))
     await app.expectFrame('app.update', (x) => x.id === u.id, { direction: 'in' })
+    // timing-ok: negative window: exactly one app.update event
     await sleep(150)
     expect(eventTypes(r).filter((t) => t === 'app.update')).toHaveLength(1)
   })
@@ -432,6 +459,7 @@ describe('app.update: durable', () => {
     const resp = { ...mkFrame('app.response'), ...response(rid()) }
     app.send(resp)
     expect((await app.expectFrame('error', (x) => x.ref === resp.id, { direction: 'in' })).code).toBe('bad_frame')
+    // timing-ok: negative window: no app.* event is recorded
     await sleep(100)
     expect(eventTypes(r).filter((t) => t.startsWith('app.'))).toEqual([])
     expect(inFrames(other).some((x) => x.type === 'app.update' || x.type === 'app.response')).toBe(false)
@@ -450,6 +478,7 @@ describe('what an app socket may not say', () => {
       app.send(f)
       expect((await app.expectFrame('error', (x) => x.ref === f.id, { direction: 'in' })).code).toBe('bad_frame')
     }
+    // timing-ok: negative window: no reply event is recorded
     await sleep(100)
     expect(eventTypes(r).filter((t) => t === 'reply')).toEqual([])
     expect(inFrames(other).some((x) => x.type === 'reply')).toBe(false)
@@ -468,37 +497,43 @@ describe('what an app socket may not say', () => {
     const sent = bridge.send(f)
     const err = await bridge.expectFrame('error', (x) => x.ref === sent.id, { direction: 'in' })
     expect(err.code).toBe('bad_frame')
+    // timing-ok: negative window: no app.request reaches the app
     await sleep(100)
     expect(inFrames(app).some((x) => x.type === 'app.request')).toBe(false)
   })
 })
 
 describe('app.request rate limit: 60 per minute per socket (M4.6)', () => {
-  it('the 61st is rate_limited to its sender, the first 60 reached the bridge, another socket shares the budget', async () => {
-    const { app, other, bridge } = await world()
-    const ids: string[] = []
-    for (let i = 0; i < 61; i++) {
-      const f = await app.sign(toolsCall())
-      ids.push(f.request_id)
-      app.send(f)
-    }
-    const limited = await app.expectFrame('app.response', (x) => x.request_id === ids[60], {
-      direction: 'in',
-      timeoutMs: 10_000,
-    })
-    expect(limited).toMatchObject({ state: 'failed', error: { code: 'rate_limited' } })
-    await waitFor(() => bridgeIn(bridge).filter((x) => x.type === 'app.request').length >= 60, 10_000, '60 forwarded')
-    await sleep(150)
-    expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(60)
-    expect(
-      inFrames(app).filter(
-        (x) => x.type === 'app.response' && (x.error as { code: string } | undefined)?.code === 'rate_limited',
-      ),
-    ).toHaveLength(1)
-    const f = await other.sign(toolsCall())
-    other.send(f)
-    const shared = await other.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
-    expect(shared).toMatchObject({ error: { code: 'rate_limited' } })
-    expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(60)
-  })
+  it(
+    'the 61st is rate_limited to its sender, the first 60 reached the bridge, another socket shares the budget',
+    async () => {
+      const { app, other, bridge } = await world()
+      const ids: string[] = []
+      for (let i = 0; i < 61; i++) {
+        const f = await app.sign(toolsCall())
+        ids.push(f.request_id)
+        app.send(f)
+      }
+      const limited = await app.expectFrame('app.response', (x) => x.request_id === ids[60], {
+        direction: 'in',
+        timeoutMs: 10_000,
+      })
+      expect(limited).toMatchObject({ state: 'failed', error: { code: 'rate_limited' } })
+      await waitFor(() => bridgeIn(bridge).filter((x) => x.type === 'app.request').length >= 60, 10_000, '60 forwarded')
+      // timing-ok: negative window: exactly 60 requests reach the bridge
+      await sleep(150)
+      expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(60)
+      expect(
+        inFrames(app).filter(
+          (x) => x.type === 'app.response' && (x.error as { code: string } | undefined)?.code === 'rate_limited',
+        ),
+      ).toHaveLength(1)
+      const f = await other.sign(toolsCall())
+      other.send(f)
+      const shared = await other.expectFrame('app.response', (x) => x.request_id === f.request_id, { direction: 'in' })
+      expect(shared).toMatchObject({ error: { code: 'rate_limited' } })
+      expect(bridgeIn(bridge).filter((x) => x.type === 'app.request')).toHaveLength(60)
+    },
+    t(60_000),
+  )
 })

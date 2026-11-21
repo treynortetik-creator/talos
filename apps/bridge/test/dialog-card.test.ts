@@ -2,7 +2,7 @@
 // it in workers.json; the bridge makes a card, the owner taps, the bridge writes the answer file for the Mac, the Mac reports
 // what it did. Real bridge + FakeRelay + a signing FakeApp; the Mac is played by the test writing the files it writes.
 
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -24,9 +24,12 @@ import {
   verifyDialogAnswer,
   type WorkerDialogT,
 } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { DialogCards } from '../src/dialog-card.ts'
 import { advanceSteps, type Harness, pushCardResolvePastRelay, sleep, startHarness, waitFor } from './helpers.ts'
+
+// the waits of one test (the harness, ticks, answers) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -200,6 +203,7 @@ describe('making the card', () => {
       writeWorkers(x, { trip: trust(x) })
       x.bridge.optionCTick()
     }
+    // timing-ok: negative window: still exactly one dialog card after the repeated ticks
     await sleep(200)
     expect(dialogCards(x)).toHaveLength(1)
   })
@@ -212,6 +216,7 @@ describe('making the card', () => {
     again.setRelayFeatures(FLAGGED.relayFeatures)
     writeWorkers(x, { trip: trust(x) })
     again.tick()
+    // timing-ok: negative window: still exactly one dialog card after the other bridge's tick
     await sleep(200)
     again.stop()
     expect(dialogCards(x)).toHaveLength(1)
@@ -232,6 +237,7 @@ describe('making the card', () => {
     const x = h as Harness
     writeWorkers(x, { trip: trust(x) })
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card appears
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
     expect(existsSync(file(x, 'trip', 'dialog-card.json'))).toBe(false)
@@ -246,6 +252,7 @@ describe('making the card', () => {
       garden: { ...trust(x), id: 'Gq5Lm8ZtRx3Cv9PkNa2HdB', options: Array.from({ length: 7 }, (_, i) => `o${i}`) },
     })
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card appears
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
     expect(existsSync(file(x, 'trip', 'dialog-card.json'))).toBe(false)
@@ -258,6 +265,7 @@ describe('making the card', () => {
     x.bridge.optionCTick()
     writeWorkers(x, { garden: trust(x, { id: 'Oq5Lm8ZtRx3Cv9PkNa2HdB', expires_at: iso(now(x) - 1000) }) })
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card appears
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
   })
@@ -270,6 +278,7 @@ describe('making the card', () => {
     w.threads.ghost = { ...w.threads.trip, tmux: 't-ghost', dialog: trust(x, { id: 'Pq5Lm8ZtRx3Cv9PkNa2HdB' }) }
     writeFileSync(join(x.home, 'workers.json'), JSON.stringify(w))
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card appears
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
   })
@@ -411,31 +420,35 @@ describe('a stop between the tap and the answer file', () => {
 })
 
 describe('the restart sweep of the schedule service', () => {
-  test('a dialog card that was tapped and waits for the Mac is not failed by a sweep that runs late', async () => {
-    await start()
-    const x = h as Harness
-    const card = await show(x, trust(x))
-    await tap(x, card, 1)
-    await waitFor(() => existsSync(file(x, 'trip', 'dialog-answer.json')), 4000, 'the answer file')
-    await waitFor(() => lastUpdate(x, card.id)?.state === 'resolved', 4000, 'card.update resolved')
-    // start() runs this sweep after its first awaits, so on a slow machine it can land after a tap; here it is run by hand, after
-    await (x.bridge.ctx.schedules as unknown as { failStuckCards(): Promise<void> }).failStuckCards()
-    expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
-    expect(lastUpdate(x, card.id)?.state).toBe('resolved')
-    // and the card still ends the way the Mac reports
-    writeMacFile(x, 'trip', 'dialog-result.json', {
-      v: 1,
-      dialog_id: TRIP_ID,
-      control_id: answerOf(x).control_id,
-      source: 'card',
-      outcome: 'pressed',
-      choice: 1,
-      label: 'Yes, I trust this folder',
-      at: iso(now(x)),
-    })
-    x.bridge.optionCTick()
-    await waitFor(() => lastUpdate(x, card.id)?.state === 'done', 4000, 'done')
-  })
+  test(
+    'a dialog card that was tapped and waits for the Mac is not failed by a sweep that runs late',
+    async () => {
+      await start()
+      const x = h as Harness
+      const card = await show(x, trust(x))
+      await tap(x, card, 1)
+      await waitFor(() => existsSync(file(x, 'trip', 'dialog-answer.json')), 4000, 'the answer file')
+      await waitFor(() => lastUpdate(x, card.id)?.state === 'resolved', 4000, 'card.update resolved')
+      // start() runs this sweep after its first awaits, so on a slow machine it can land after a tap; here it is run by hand, after
+      await (x.bridge.ctx.schedules as unknown as { failStuckCards(): Promise<void> }).failStuckCards()
+      expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
+      expect(lastUpdate(x, card.id)?.state).toBe('resolved')
+      // and the card still ends the way the Mac reports
+      writeMacFile(x, 'trip', 'dialog-result.json', {
+        v: 1,
+        dialog_id: TRIP_ID,
+        control_id: answerOf(x).control_id,
+        source: 'card',
+        outcome: 'pressed',
+        choice: 1,
+        label: 'Yes, I trust this folder',
+        at: iso(now(x)),
+      })
+      x.bridge.optionCTick()
+      await waitFor(() => lastUpdate(x, card.id)?.state === 'done', 4000, 'done')
+    },
+    t(60_000),
+  )
 })
 
 describe('what the Mac reports', () => {
@@ -588,6 +601,7 @@ describe('what the Mac reports', () => {
     ]) {
       report(x, a, rep)
       x.bridge.optionCTick()
+      // timing-ok: negative window: the card stays resolved after a further report
       await sleep(120)
       expect(lastUpdate(x, card.id)?.state).toBe('resolved')
     }
@@ -607,6 +621,7 @@ describe('what the Mac reports', () => {
       extra: 1,
     })
     x.bridge.optionCTick()
+    // timing-ok: negative window: the card stays resolved after a further report
     await sleep(150)
     expect(lastUpdate(x, card.id)?.state).toBe('resolved')
   })
@@ -617,6 +632,7 @@ describe('what the Mac reports', () => {
     const { card, a } = await answered(x, trust(x), 1)
     writeWorkers(x, {})
     x.bridge.optionCTick()
+    // timing-ok: negative window: the card stays resolved after the dialog is gone
     await sleep(200)
     expect(lastUpdate(x, card.id)?.state).toBe('resolved')
     report(x, a, YES)
@@ -714,6 +730,7 @@ describe('a workers.json that cannot be read does not close a card', () => {
     const card = await show(x, trust(x))
     writeFileSync(join(x.home, 'workers.json'), '{"v":1,"supervisor":{"pid":1,')
     x.bridge.optionCTick()
+    // timing-ok: negative window: a corrupt workers file changes nothing
     await sleep(150)
     expect(lastUpdate(x, card.id)).toBeUndefined()
     await tap(x, card, 1)
@@ -754,6 +771,7 @@ describe('links are refused', () => {
     )
     symlinkSync(elsewhere, file(x, 'trip', 'dialog-result.json'))
     x.bridge.optionCTick()
+    // timing-ok: negative window: the card is resolved once; nothing is written through the link
     await sleep(200)
     expect(lastUpdate(x, card.id)?.state).toBe('resolved')
     expect(existsSync(elsewhere)).toBe(true)
@@ -767,6 +785,7 @@ describe('links are refused', () => {
     mkdirSync(join(x.home, 'workers'), { recursive: true })
     symlinkSync(target, join(x.home, 'workers', 'trip'))
     const card = await show(x, trust(x))
+    // timing-ok: negative window: no card file is written through the link
     await sleep(150)
     expect(readdirSync(target)).toEqual([]) // no card file was written through the link
     expect(statSync(target).mode & 0o777).toBe(0o755)
@@ -783,6 +802,7 @@ describe('links are refused', () => {
     mkdirSync(target, { mode: 0o755 })
     symlinkSync(target, join(x.home, 'workers'))
     await show(x, trust(x))
+    // timing-ok: negative window: nothing is written through the link
     await sleep(150)
     expect(readdirSync(target)).toEqual([])
     expect(statSync(target).mode & 0o777).toBe(0o755)
@@ -889,6 +909,7 @@ describe('first sighting plus 15 minutes', () => {
       x.bridge.optionCTick()
     }
     await advanceSteps(clock, 120_000)
+    // timing-ok: negative window: exactly one notice
     await sleep(100)
     expect(notices(x).filter((m) => m.text === line)).toHaveLength(1)
     await cardFile(x, { status: 'expired' })
@@ -905,6 +926,7 @@ describe('first sighting plus 15 minutes', () => {
     x.bridge.optionCTick()
     await waitFor(() => lastUpdate(x, card.id)?.state === 'superseded', 4000, 'closed')
     await advanceSteps(clock, 901_000)
+    // timing-ok: negative window: no waiting notice after the card closed
     await sleep(100)
     expect(notices(x).filter((m) => m.text.includes('is waiting on a'))).toHaveLength(0)
   })
@@ -929,6 +951,7 @@ describe('the owner answered on the Mac popup', () => {
     const card = await show(x, trust(x))
     popup(x)
     x.bridge.optionCTick()
+    // timing-ok: negative window: a popup report changes nothing
     await sleep(200)
     expect(lastUpdate(x, card.id)).toBeUndefined()
     expect(x.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
@@ -965,6 +988,7 @@ describe('the owner answered on the Mac popup', () => {
     ]) {
       popup(x, bad)
       x.bridge.optionCTick()
+      // timing-ok: negative window: a malformed popup report changes nothing
       await sleep(60)
     }
     writeWorkers(x, {})
@@ -981,6 +1005,7 @@ describe('the owner answered on the Mac popup', () => {
     const a = DialogAnswer.parse(answerOf(x))
     popup(x) // the popup got there first
     x.bridge.optionCTick()
+    // timing-ok: negative window: a popup report is only noted, no result file
     await sleep(100)
     expect(existsSync(file(x, 'trip', 'dialog-result.json'))).toBe(false) // a popup report is only noted
     writeMacFile(x, 'trip', 'dialog-result.json', {
@@ -1066,6 +1091,7 @@ describe("Main's development-channels dialog", () => {
       writeMain(x, dev(x))
       x.bridge.optionCTick()
     }
+    // timing-ok: negative window: still exactly one dialog card
     await sleep(200)
     expect(dialogCards(x)).toHaveLength(1)
   })
@@ -1148,6 +1174,7 @@ describe("Main's development-channels dialog", () => {
     const x = h as Harness
     writeMain(x, dev(x), { stale: true })
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card for a stale file
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
   })
@@ -1157,6 +1184,7 @@ describe("Main's development-channels dialog", () => {
     const x = h as Harness
     writeMain(x, trust(x, { id: 'Fw5Qm8ZtRx3Cw9PkNa2HdB' }))
     x.bridge.optionCTick()
+    // timing-ok: negative window: no dialog card for a bad id
     await sleep(300)
     expect(dialogCards(x)).toHaveLength(0)
   })
@@ -1238,6 +1266,7 @@ describe('the safety questions on a card (pane-prompts rows 2 and 4)', () => {
     const card = await show(x, bypass(x))
     const r = await pushCardResolvePastRelay(x, card, card.payload_hash, 'primary', { choice: 2 })
     await waitFor(() => errors(x).some((e) => e.ref === r.id), 4000, 'the refusal')
+    // timing-ok: negative window: a refused answer writes no answer file
     await sleep(200)
     expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(false)
   })

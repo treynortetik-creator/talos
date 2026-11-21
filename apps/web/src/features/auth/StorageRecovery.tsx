@@ -46,7 +46,7 @@ function clearSteps(where: Where): string[] {
   if (where === 'iphone') return ['Delete the Talos app from your iPhone, then install it again.', DELETES]
   if (where === 'mac')
     return [
-      'In the Talos menu bar app, choose Forget this Mac. It also revokes this Mac, so you need a new setup code afterwards.',
+      'In the Talos menu bar app, choose Disconnect this Mac. It also revokes this Mac, so you need a new setup code afterwards.',
       DELETES,
     ]
   return [

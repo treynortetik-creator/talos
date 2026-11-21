@@ -6,7 +6,7 @@
 // Not built yet (a later package): the rebinding screen, the per-device overrides file, and the named event `keymap:changed` that
 // the screen will emit when a binding changes. Nothing emits it today.
 //
-// Cmd+N is not here on purpose: browsers keep it for a new window and the Mac app's menu already gives it to Quick compose, so
+// Cmd+N is not here on purpose: browsers keep it for a new window and the Mac app's menu already gives it to Quick message, so
 // "New thread" has no chord and lives in the palette. Cmd+[ and Cmd+] are Mac-app-only (in a browser they stay Back and Forward).
 
 export type Chord = {

@@ -75,6 +75,12 @@ export function buildGuardConfig(a: {
       join(real(a.home), 'main-restart-check.json'),
       join(real(a.home), 'last-good'),
       join(real(a.home), 'config-history'),
+      // relay updates: which service is redeployed, the auto-update switch, the attempt being followed, and the two files the
+      // bridge and the Mac app pass between them (docs/deploy-railway.md); only the bridge, the app and the owner's command write them
+      join(real(a.home), 'relay-connect.json'),
+      join(real(a.home), 'relay-auto.json'),
+      join(real(a.home), 'relay-redeploy-request.json'),
+      join(real(a.home), 'relay-redeploy-result.json'),
       // the Linux supervisor's own files (a session runs as the same user, so these rules are the only thing in its way): what it
       // is told to do (supervisor-control: start or stop Main, past every restart check), the owner's Stop, the launch, the
       // launch scripts, and the owner's restart proofs already used
@@ -135,6 +141,8 @@ export function denyRules(cfg: GuardConfig): string[] {
     'Bash(*permission-mode-request.json*)',
     ...SUPERVISOR_NEVER.map((f) => `Bash(*${f}*)`),
     'Bash(*main-restart-check.json*)',
+    'Bash(*relay-redeploy-request.json*)',
+    'Bash(*relay-redeploy-result.json*)',
     'Bash(*.claude/plugins*)',
     'Bash(*.claude/dev-mods*)',
   ]
@@ -184,6 +192,9 @@ const HOME_NEVER = [
   'agent-request.json',
   'permission-mode-request.json',
   'main-restart-check.json',
+  // the relay update request and the Mac app's answer: the bridge and the app are the only writers (relay/files.ts)
+  'relay-redeploy-request.json',
+  'relay-redeploy-result.json',
   ...SUPERVISOR_NEVER,
 ]
 /**
@@ -212,6 +223,9 @@ const HOME_READ_ONLY = [
   'devices.json',
   'config.json',
   'owner-folders.json',
+  // which relay service is redeployed, the auto-update switch and the one attempt being followed (no secret in either)
+  'relay-connect.json',
+  'relay-auto.json',
   'last-good',
   'config-history',
   'screen',
@@ -226,6 +240,8 @@ const BARE_STEMS = [
   'agent-request.json',
   'permission-mode-request.json',
   'main-restart-check.json',
+  'relay-redeploy-request.json',
+  'relay-redeploy-result.json',
   ...SUPERVISOR_NEVER,
   ...DIALOG_FILE_NAMES,
 ]

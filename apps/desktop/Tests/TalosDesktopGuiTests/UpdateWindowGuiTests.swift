@@ -51,7 +51,7 @@ struct UpdateWindowGuiTests {
     c.apply(.ready(version: "0.1.5"))  // the pending state: the window offers Update now
     let (w, root) = host(c)
     let all = buttons(root)
-    let update = try! #require(all.first { $0.title == "Update now" })
+    let update = try! #require(all.first { $0.title == "Install" })
     #expect(update.keyEquivalent.isEmpty && w.defaultButtonCell == nil, "no default button on the window")
     #expect(all.allSatisfy { $0.keyEquivalent != "\r" })
     #expect(!w.performKeyEquivalent(with: returnKey(w)), "Return is not taken by anything")
@@ -68,6 +68,22 @@ struct UpdateWindowGuiTests {
     c.orderFront = { _ in }
     c.apply(.upToDate(version: "0.1.4"))
     let (_, root) = host(c)
-    #expect(!buttons(root).contains { $0.title == "Update now" })
+    #expect(!buttons(root).contains { $0.title == "Install" })
+  }
+
+  @Test func theThreadWaitLineHasUpdateNowAnywayAndMainsTurnHasNoSuchButton() {
+    _ = NSApplication.shared
+    let c = UpdateController()
+    c.orderFront = { _ in }
+    c.apply(.waitingForTurn(version: "1.5.0", threads: UpdateStatus.ThreadWait(names: ["Trip"])))
+    let (_, root) = host(c)
+    let all = buttons(root)
+    let skip = try! #require(all.first { $0.title == UpdateStatus.skipThreadWaitButton }, "the waiting line offers it")
+    #expect(skip.keyEquivalent.isEmpty, "a real click only, like Install")
+    #expect(!all.contains { $0.title == "Install" }, "Install is pressed already")
+    // Main's own turn: the button is not shown at all (it would skip nothing it is allowed to skip)
+    c.apply(.waitingForTurn(version: "1.5.0", why: ["main running"]))
+    let (_, root2) = host(c)
+    #expect(!buttons(root2).contains { $0.title == UpdateStatus.skipThreadWaitButton })
   }
 }

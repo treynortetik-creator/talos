@@ -31,7 +31,7 @@ describe('the default table', () => {
     }
     for (const [id, code] of Object.entries(want)) expect(byId(id)?.chord?.code, id).toBe(code)
   })
-  it('gives New thread no chord (Cmd+N is the browser’s, and the Mac app’s Quick compose)', () => {
+  it('gives New thread no chord (Cmd+N is the browser’s, and the Mac app’s Quick message)', () => {
     expect(byId('newThread')?.chord).toBeNull()
   })
   it('keeps Cmd+[ and Cmd+] for the Mac app only', () => {

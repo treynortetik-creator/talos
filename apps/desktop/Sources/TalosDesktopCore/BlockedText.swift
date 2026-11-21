@@ -5,16 +5,16 @@ import Foundation
 /// (first real Mac run, 2026-11-01).
 public enum BlockedText {
   /// The button that starts Adopt, worded exactly as the screen shows it.
-  public static let adoptButton = "Find a running session"
+  public static let adoptButton = "Take over an agent that's already running"
 
   /// Settings' line while nothing is set up yet; it names the button by its own constant.
   public static let notSetUpLine =
-    "Not set up yet. Import your command or press \u{201C}\(adoptButton)\u{201D} to create your setup. Nothing starts before then, and changes you make here are kept until you do."
+    "Not set up yet. \(MacWords.finishSetup) Nothing starts before then, and changes you make here are kept until you do."
 
   /// The one-shot button on the Blocked screen, and what it risks.
   public static let startAnywayButton = "Start anyway"
   public static let startAnywayWarning =
-    "Starting anyway runs a second session beside it. Both may answer the same messages, and the Talos bridge can end up on the wrong one."
+    "Starting anyway runs a second agent beside it. Both may answer the same messages, and the wrong one may end up connected."
 
   /// Whether the Blocked screen offers "Start anyway": only when something blocks, and never when Telegram is a holder (that
   /// ban stands: two pollers on one bot is what breaks the live chat).
@@ -36,7 +36,7 @@ public enum BlockedText {
     }
     return order.map { pid in
       let f = folder[pid].map { ", folder \($0)" } ?? ""
-      return "Another Claude session (pid \(pid)\(f)) holds \(join(held[pid] ?? [])). Quit it first, or press \u{201C}\(adoptButton)\u{201D} to take it over."
+      return "Another Claude (pid \(pid)\(f)) is already using \(join(held[pid] ?? [])). Quit it first, or press \u{201C}\(adoptButton)\u{201D} to take it over."
     }
   }
 

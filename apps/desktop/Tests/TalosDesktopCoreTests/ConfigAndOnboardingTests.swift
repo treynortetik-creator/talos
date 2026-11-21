@@ -82,8 +82,8 @@ struct PermissionsModelTests {
     #expect(rows.first { $0.kind == .fullDiskAccess }?.action == .openSettings(PermissionsModel.settingsBase + "Privacy_AllFiles"))
     #expect(rows.first { $0.kind == .screenRecording }?.action == .grant(PermissionsModel.settingsBase + "Privacy_ScreenCapture"))
     #expect(rows.first { $0.kind == .desktopFolder }?.action == .triggerPrompt)
-    #expect(PermissionsModel.summary(rows) == "Permissions: 1 to review (warnings only)")
-    #expect(PermissionsModel.summary(PermissionsModel.rows { _ in .granted }).hasPrefix("Permissions: nothing missing"))
+    #expect(PermissionsModel.summary(rows) == "1 thing you can still allow")
+    #expect(PermissionsModel.summary(PermissionsModel.rows { _ in .granted }).hasPrefix("Nothing is missing"))
   }
 }
 

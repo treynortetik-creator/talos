@@ -25,6 +25,7 @@ import { CLOCK_OFF_MESSAGE, type Item, type Of, oneLine } from './inbound-shared
 import { cardActionNotification } from './notify.ts'
 import { say } from './owner-words.ts'
 import { isPermissionModeCard } from './permission-mode.ts'
+import { isUpdateResendCard } from './router/update-resend.ts'
 import { isScreenAllowCard } from './screen-consent.ts'
 
 export const cardsFrames = {
@@ -89,6 +90,8 @@ export const cardsFrames = {
     if (row?.binding.risk === 'high')
       return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'high_risk')
     // a permission-mode change is allowed from the card in the app only: its Allow is the owner's signed card.resolve
+    if (row && isUpdateResendCard(row.binding))
+      return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'update_resend_card')
     if (row && isPermissionModeCard(row.binding))
       return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'permission_mode_card')
     // Approvals bind what was shown. The words the notification displayed are rebuilt here from THIS Mac's copy of the
@@ -218,6 +221,15 @@ export const cardsFrames = {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       await (ctx.screenConsent?.onResolved(row, f.action, it.raw) ?? Promise.resolve()).catch((e) =>
         ctx.log.warn('screen consent card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    } else if (row.actor === 'bridge' && isUpdateResendCard(row.binding)) {
+      // "Talos updated while <thread> was working": the BRIDGE sends the message again, only on the owner's own signed tap in the app
+      // (router/update-resend.ts). The agent is never told about the card.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.updateResend?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('update resend card not applied', { card: f.card_id, error: (e as Error).message }),
       )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)

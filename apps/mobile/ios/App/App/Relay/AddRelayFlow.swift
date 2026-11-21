@@ -28,16 +28,16 @@ enum AddRelayError: Error, Equatable {
         switch self {
         case .link(.badLink): return "That isn't a Talos setup link. Show the code again on your Mac and scan it."
         case .link(.noCode): return "This setup link has no pairing code. Show the code again on your Mac and scan it."
-        case .link(.badFp): return "This setup link's security fingerprint is damaged. Show the code again on your Mac and scan it."
-        case .link(.dupFp): return "This setup link is not valid (it repeats the fingerprint). Show the code again on your Mac."
+        case .link(.badFp): return "This setup link is damaged. Show the code again on your Mac and scan it."
+        case .link(.dupFp): return "This setup link is not valid. Show the code again on your Mac."
         case .noFp: return "This setup link is from an older Talos. Update Talos on your Mac and show the code again."
         case let .unreachable(host): return "Couldn't reach \(host). Check that your Mac is online, then scan again."
-        case let .notARelay(host): return "\(host) did not answer like a Talos relay. Nothing was saved."
+        case let .notARelay(host): return "\(host) did not answer like a Talos server. Nothing was saved."
         case let .macUnreachable(host, why):
             let reason: String
             switch why {
             case .macOffline: reason = "Your Mac is not connected to it."
-            case .unsupported: reason = "Your Mac's Talos is too old: update talos-app on your Mac."
+            case .unsupported: reason = "Your Mac's Talos is too old: update Talos on your Mac."
             case .macTimeout: reason = "Your Mac did not answer in time."
             case .rateLimited: reason = "It is busy."
             case .network, .badAnswer: reason = "It did not answer the check."

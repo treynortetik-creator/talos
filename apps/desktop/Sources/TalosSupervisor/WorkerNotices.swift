@@ -175,6 +175,9 @@ extension WorkerManager {
     sendNotice(id, \.dlg, kind: "prompt: \(p.hash)", text: SupervisorNotice.workerPromptLine(prompt: p))
   }
 
+  /// The thread's name for the update window (the same name the Needs-you popup shows); its id when config.json has none.
+  public func displayName(ofThread id: String) -> String { threadName(id) }
+
   /// The thread's name for the Mac's own windows (the Needs-you popup). Never for a line posted into a thread (`WorkerNotice`).
   func threadName(_ id: String) -> String {
     let names = SessionSwitcher.names(fromConfig: FileManager.default.contents(atPath: configJson))

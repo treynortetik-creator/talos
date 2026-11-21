@@ -60,6 +60,8 @@ function judge(
   terminal: boolean,
   now: number,
 ): string | undefined {
+  // turning the relay's auto-update off only ever does less: always allowed
+  if (name === 'relay auto' && argv[2] === 'off') return undefined
   const p = paths(env.home)
   const file = new ConfigFile(p.configJson, { log: { warn: () => {} } })
   try {
@@ -80,7 +82,9 @@ function judge(
     name === 'peer create' ||
     name === 'peer add' ||
     name === 'peer rotate' ||
-    name === 'devices revoke'
+    name === 'devices revoke' ||
+    name === 'relay update' ||
+    name === 'relay auto'
   if (!gated) return undefined
   // history.sqlite is where the outside text, the hand-offs and the taint are kept: without it nothing can be checked (fails closed)
   if (!existsSync(p.historyDb))

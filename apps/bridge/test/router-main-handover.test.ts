@@ -1,14 +1,18 @@
 // BSUP-4: a route the router claimed for main and was handing over when the bridge stopped must reach main on the next start,
 // once. Real hub bridge for the context and the store; two routers over the same store play "before" and "after" a restart.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { t } from '@talos-app/testkit'
 import { pgidOf } from '../src/hub/server.ts'
 import type { Notification } from '../src/notify.ts'
 import { ThreadRouter } from '../src/router/router.ts'
 import { BridgeStopping } from '../src/stopping.ts'
 import { readInbound, workerStoreOf } from '../src/tools/read-inbound.ts'
 import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// the waits of one test (the harness, a restart's hand-over) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -100,10 +104,12 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     await waitFor(() => after.got.length === 1, 4000, 'main got it after the restart')
     expect(after.got[0]?.meta).toMatchObject({ message_id: 'm-a', routed: 'fallback', reason: 'worker_unavailable' })
     b.resume()
+    // timing-ok: negative window: the hand-over is never made twice
     await sleep(100)
     expect(after.got).toHaveLength(1) // never twice, and a third start does not either
     const c = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     c.resume()
+    // timing-ok: negative window: a third start does not hand it over again
     await sleep(100)
     expect(after.got).toHaveLength(1)
     for (const r of [a, b, c]) r.close()
@@ -124,6 +130,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const after = recorder()
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     b.resume()
+    // timing-ok: negative window: main already got it, so nothing is handed over
     await sleep(150)
     expect(after.got).toHaveLength(0)
     b.close()
@@ -143,6 +150,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     b.resume() // re-armed, past its deadline: falls back once
     await waitFor(() => after.got.length === 1, 4000, 'fell back')
+    // timing-ok: negative window: the fallback happens once
     await sleep(100)
     expect(after.got).toHaveLength(1)
     b.close()
@@ -173,6 +181,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     })
     b.resume()
     b.resume()
+    // timing-ok: negative window: a decision is never replayed to main
     await sleep(150)
     expect(after.got).toHaveLength(0) // a decision is never replayed to main
     expect(ended).toEqual(['card-d'])
@@ -200,6 +209,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const after = recorder()
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store, onCardUndelivered: (id) => ended.push(id) })
     b.resume()
+    // timing-ok: negative window: a decision main cannot be told about is not redelivered
     await sleep(150)
     expect(after.got).toHaveLength(0)
     expect(store.pendingMainHandovers()).toHaveLength(0)
@@ -235,6 +245,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const after = recorder()
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     b.resume()
+    // timing-ok: negative window: nothing is handed over
     await sleep(150)
     expect(after.got).toHaveLength(0)
     b.close()
@@ -267,6 +278,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     b.resume()
     await waitFor(() => after.got.length === 1, 4000, 'the restart handed it over')
     await b.route(n) // the relay replays the frame the bridge never finished: main holds it
+    // timing-ok: negative window: the replayed frame is held, main gets it once
     await sleep(100)
     expect(after.got).toHaveLength(1)
     b.close()
@@ -329,6 +341,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const after = recorder()
     const c = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     c.resume()
+    // timing-ok: negative window: a repeat given up on is not handed over
     await sleep(150)
     expect(after.got).toHaveLength(0)
     expect(tries).toBe(3)
@@ -344,6 +357,7 @@ describe('BSUP-4: a fallback to main that a restart cut short', () => {
     const b = new ThreadRouter(hh.bridge.ctx, after.emit, { store })
     b.resume()
     await waitFor(() => after.got.length >= 1, 4000, 'main got it')
+    // timing-ok: negative window: main gets it exactly once
     await sleep(200)
     expect(after.got).toHaveLength(1)
     expect(store.pendingMainHandovers()).toHaveLength(0)
@@ -424,6 +438,7 @@ describe('BSUP-3: a message the relay sent twice is handled once', () => {
     await waitFor(() => main.got.length === 1, 4000, 'the deadline path delivered')
     await waitFor(() => store.pendingMainHandovers().length === 0, 4000, 'recorded')
     await r.route(n)
+    // timing-ok: negative window: the replay does not hand it over a second time
     await sleep(100)
     expect(main.got).toHaveLength(1)
     r.close()
@@ -448,6 +463,7 @@ describe('BSUP-3: a message the relay sent twice is handled once', () => {
     b.resume() // the row left behind: main gets it
     await waitFor(() => after.got.length === 1, 4000, 'main got it after the restart')
     await b.route(n) // the relay replays the frame the bridge never finished: main holds it, nothing more
+    // timing-ok: negative window: the replayed frame reaches main once, nothing more
     await sleep(100)
     expect(after.got).toHaveLength(1)
     expect(readInbound(hh.bridge.ctx, 'trip').messages).toHaveLength(0)
@@ -470,6 +486,7 @@ describe('BSUP-3: a message the relay sent twice is handled once', () => {
     await waitFor(() => after.got.length === 1, 4000, 'resume delivered it')
     await b.route(n)
     b.resume()
+    // timing-ok: negative window: a further replay delivers nothing
     await sleep(100)
     expect(after.got).toHaveLength(1)
     expect(readInbound(hh.bridge.ctx, 'trip').messages).toHaveLength(0)
@@ -496,6 +513,7 @@ describe('BSUP-3: a message the relay sent twice is handled once', () => {
     b.resume()
     await b.route(n) // the relay replays: routed to the worker
     const read = readInbound(hh.bridge.ctx, 'trip')
+    // timing-ok: negative window: the worker gets it and main does not
     await sleep(100)
     expect(read.messages).toHaveLength(1) // the worker gets it
     expect(after.got).toHaveLength(0) // and main does not
@@ -517,6 +535,7 @@ describe('BSUP-3: a message the relay sent twice is handled once', () => {
     b.resume()
     await waitFor(() => after.got.length === 1, 4000, 'resume delivered it')
     b.resume()
+    // timing-ok: negative window: a second resume delivers nothing more
     await sleep(100)
     expect(after.got).toHaveLength(1)
     b.close()

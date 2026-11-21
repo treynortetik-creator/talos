@@ -77,7 +77,7 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
     func showScanner() {
         handled = false
         pending = nil
-        reset(title: "Add your relay")
+        reset(title: "Add your Talos server")
         content.addArrangedSubview(label("On your Mac, open Terminal and run talos-app enroll --label phone. Then scan the QR code it prints.", style: .body, color: .secondaryLabel))
         cameraBox.backgroundColor = .secondarySystemBackground
         cameraBox.layer.cornerRadius = 16
@@ -100,23 +100,23 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
 
     private func showConfirm(_ p: PendingRelay) {
         pending = p
-        reset(title: "Add this relay?")
+        reset(title: "Add this Talos server?")
         let host = label(p.host, style: .largeTitle, weight: .bold)
         host.accessibilityIdentifier = "addrelay.host"
         host.adjustsFontSizeToFitWidth = true
         host.minimumScaleFactor = 0.5
         host.numberOfLines = 2
         content.addArrangedSubview(host)
-        content.addArrangedSubview(label("Check this address. It must be your own Mac or relay. If it looks even slightly different, cancel.", style: .callout, color: .secondaryLabel))
-        let kind = p.profile.kind == .hosted ? "Hosted relay" : "Your own relay"
-        content.addArrangedSubview(label("\(kind)\nRelay ID: \(p.profile.id)", style: .footnote, color: .secondaryLabel))
+        content.addArrangedSubview(label("Check this address. It must be the address you set up for Talos. If it looks even slightly different, cancel.", style: .callout, color: .secondaryLabel))
+        let kind = p.profile.kind == .hosted ? "Hosted Talos server" : "Your own Talos server"
+        content.addArrangedSubview(label("\(kind)\nServer ID: \(p.profile.id)", style: .footnote, color: .secondaryLabel))
         if let note = p.note { content.addArrangedSubview(label(note, style: .callout, color: .systemOrange)) }
-        content.addArrangedSubview(button("Add relay", primary: true) { [weak self] in self?.save() })
+        content.addArrangedSubview(button("Add this Talos server", primary: true) { [weak self] in self?.save() })
         content.addArrangedSubview(button("Cancel", primary: false) { [weak self] in self?.dismiss(animated: true) })
     }
 
     private func showSaved(_ p: PendingRelay) {
-        reset(title: "Relay added")
+        reset(title: "Talos server added")
         // Only Done closes it, so a saved relay is always followed by the switch to it.
         isModalInPresentation = true
         let host = label(p.host, style: .largeTitle, weight: .bold)
@@ -130,7 +130,7 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
 
     private func showError(_ message: String, settings: Bool = false) {
         stopCamera()
-        reset(title: "Couldn't add the relay")
+        reset(title: "Couldn't add the Talos server")
         let l = label(message, style: .body)
         l.accessibilityIdentifier = "addrelay.error"
         content.addArrangedSubview(l)
@@ -162,11 +162,11 @@ final class AddRelayViewController: UIViewController, AVCaptureMetadataOutputObj
     private func save() {
         guard let p = pending else { return }
         do {
-            guard runtime.store() != nil else { return showError("Talos can't save to this phone's Keychain in this build.") }
+            guard runtime.store() != nil else { return showError("Talos can't save this on your phone. Update the Talos app.") }
             try runtime.save(p)
             showSaved(p)
         } catch {
-            showError("Couldn't save the relay on this phone. Nothing was added.")
+            showError("Couldn't save the Talos server on this phone. Nothing was added.")
         }
     }
 

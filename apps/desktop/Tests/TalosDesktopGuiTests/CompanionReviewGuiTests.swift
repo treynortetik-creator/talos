@@ -525,13 +525,4 @@ struct CompanionReviewGuiTests {
     #expect(sc.companionInputsNow.collected == sc.collected)
     #expect(sc.companionInputsNow.quietWindow == q)
   }
-
-  /// The SwiftUI button itself can't be pressed from a test (a hosting view builds no accessibility tree without a client); the
-  /// button calls this, and the smoke step presses the real one.
-  @Test func theHotkeysLinkActionSwitchesToTheHotkeysTab() {
-    SettingsNavigator.shared.selected = .companion
-    CompanionSettingsView.showHotkeys()
-    #expect(SettingsNavigator.shared.selected == .hotkeys)
-    SettingsNavigator.shared.selected = .session
-  }
 }

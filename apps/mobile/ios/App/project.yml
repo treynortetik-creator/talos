@@ -122,7 +122,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIViewControllerBasedStatusBarAppearance: true
         # Composer "Take photo" (<input capture>) opens the camera; iOS kills the app without this key.
-        NSCameraUsageDescription: Talos uses the camera to scan your relay's setup code and when you take a photo to attach to a message.
+        NSCameraUsageDescription: Talos uses the camera to scan the setup code your Mac shows, and when you take a photo to attach to a message.
         # Long-press "Save to Photos" on an image.
         TalosKeychainGroup: $(AppIdentifierPrefix)app.talos.shared
         NSPhotoLibraryAddUsageDescription: Talos saves images to your photo library when you choose Save to Photos.

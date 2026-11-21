@@ -1,56 +1,64 @@
 import SwiftUI
 import TalosDesktopCore
 
-/// Mac settings, Companion (spec 3.6). Every control takes effect at once, no relaunch. Failures show here as lines.
-struct CompanionSettingsView: View {
+/// The Companion card on Mac settings → General (it used to have a tab of its own). Every control takes effect at once, no relaunch.
+/// Failures show here as lines. "Also show reply banners" is in Advanced.
+struct CompanionCard: View {
   @ObservedObject private var companion = CompanionController.shared
   @AppStorage(CompanionController.Key.enabled) private var enabled = false
   @AppStorage(CompanionController.Key.size) private var size = "standard"
   @AppStorage(CompanionController.Key.moments) private var moments = true
   @AppStorage(CompanionController.Key.replyBubbles) private var replyBubbles = true
-  @AppStorage(CompanionController.Key.replyBanners) private var replyBanners = false
-  @ObservedObject private var hotkeys = HotkeyController.shared
-
-  static func showHotkeys() { SettingsNavigator.shared.selected = .hotkeys }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Toggle("Show Companion", isOn: $enabled)
-      Text("A small character that shows what your agent is doing. Off until you turn it on; no sound, ever.")
-        .font(.caption).foregroundStyle(.secondary)
-      AppliesNote(setting: .companion)
-      Picker("Size", selection: $size) {
-        Text("Standard").tag("standard")
-        Text("Mini").tag("mini")
+    SettingsCard {
+      HStack(spacing: 12) {
+        Text(MacSettingsText.companionName).font(OB.body(15, .semibold)).foregroundStyle(SP.ink)
+          .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
+        Toggle("Show the Companion", isOn: $enabled).toggleStyle(SettingsSwitchStyle()).labelsHidden()
       }
-      .pickerStyle(.segmented)
-      .frame(maxWidth: 260)
-      Toggle("Rounds and little moments", isOn: $moments)
-      Text("Now and then he walks a short patrol or thinks for a moment. Off keeps him still except when you poke him.")
-        .font(.caption).foregroundStyle(.secondary)
-      Toggle("Mini Talos delivers thread replies", isOn: $replyBubbles)
-      Text("A new reply comes in his bubble with the thread and its first line, and Open and Later. Off gives the short \u{201C}New reply in\u{201D} bubble.")
-        .font(.caption).foregroundStyle(.secondary)
-      Toggle("Also show reply banners", isOn: $replyBanners)
-      Text("When Talos is in the background and he can show a reply himself, his bubble replaces the \u{201C}New reply\u{201D} banner. Turn this on to get both. It does nothing while you work in the Talos window.")
-        .font(.caption).foregroundStyle(.secondary)
+      .padding(.horizontal, 18).padding(.vertical, 12)
+      SettingsDivider()
+      SettingsRow(title: "Size") {
+        HStack(spacing: 0) {
+          sizeChoice("Standard", tag: "standard")
+          sizeChoice("Small", tag: "mini")
+        }
+        .overlay(Capsule().stroke(SP.line, lineWidth: 1))
+        .clipShape(Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Companion size")
+      }
+      SettingsDivider()
+      SettingsSwitchRow(title: "Let it wander now and then", isOn: $moments)
+      SettingsDivider()
+      SettingsSwitchRow(title: "It brings me new replies", isOn: $replyBubbles)
       if let until = companion.snoozedUntil {
-        HStack {
-          Text("Snoozed until \(until.formatted(date: .omitted, time: .shortened))")
-          Button("End snooze") { companion.endSnooze() }
+        SettingsDivider()
+        SettingsRow(title: "Snoozed until \(until.formatted(date: .omitted, time: .shortened))", size: 13) {
+          Button("End snooze") { companion.endSnooze() }.buttonStyle(SettingsPillStyle())
         }
       }
-      if let p = companion.artProblem { Text(p).foregroundStyle(.orange).font(.callout) }
-      if let m = companion.micLine { Text(m).foregroundStyle(.orange).font(.callout) }
-      Divider()
-      HStack(spacing: 4) {
-        Text("Quick compose still opens with \(hotkeys.spec?.display ?? "its hotkey").")
-          .font(.caption).foregroundStyle(.secondary)
-        Button("Change it in the Hotkeys tab") { Self.showHotkeys() }
-          .buttonStyle(.link).font(.caption)
-      }
-      Spacer()
+      if let p = companion.artProblem { problem(p) }
+      if let m = companion.micLine { problem(m) }
     }
-    .padding()
+  }
+
+  private func sizeChoice(_ title: String, tag: String) -> some View {
+    let on = size == tag
+    return Button { size = tag } label: {
+      Text(title).font(OB.body(13)).foregroundStyle(on ? SP.cream : SP.ink)
+        .padding(.horizontal, 14).padding(.vertical, 6).background(on ? SP.ink : Color.clear)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+  }
+
+  private func problem(_ text: String) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      SettingsDivider()
+      SettingsCaption(text, color: SP.orange, size: 12).padding(.horizontal, 18).padding(.vertical, 10)
+    }
   }
 }

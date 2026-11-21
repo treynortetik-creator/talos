@@ -55,7 +55,7 @@ import {
   verifyBridgeHttpHash,
 } from '../auth/contract.ts'
 import type { AppEnv, RelayServices } from '../services.ts'
-import { VERSION } from '../version.ts'
+import { RELEASE, VERSION } from '../version.ts'
 import { aasaDocument } from './aasa.ts'
 import { bodyTimeout, idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
 import { registerBugReports } from './bug-reports.ts'
@@ -129,7 +129,12 @@ routes.use('/media/*', async (c, next) => {
 // relay's logs. Two fixed times and a boolean: nothing about any thread, wait or person.
 routes.get('/healthz', (c) => {
   const sw = findRuntime(c.get('services'))?.sessionWait.health()
-  return c.json({ ok: true as const, version: VERSION, ...(sw ? { session_wait: sw } : {}) })
+  return c.json({
+    ok: true as const,
+    version: VERSION,
+    ...(RELEASE ? { release: RELEASE } : {}),
+    ...(sw ? { session_wait: sw } : {}),
+  })
 })
 
 // ---- Apple App Site Association (IOS-SPEC WP-I6) ----------------------------------------------------------------

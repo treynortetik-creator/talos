@@ -115,6 +115,7 @@ describe('gate.sh: the plan and its second count take every name, whatever core.
       'lint',
       'personal',
       'size',
+      'timing',
       'vitest',
       `\t${ACCENT_WEB}`,
       `\t${TAB_WEB}`,

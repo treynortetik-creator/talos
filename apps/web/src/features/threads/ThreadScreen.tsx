@@ -26,9 +26,11 @@ import { Banners } from './Banners.tsx'
 import { ItemSheet } from './ItemSheet.tsx'
 import { NeedsYouChip } from './NeedsYouChip.tsx'
 import { StatusWord } from './StatusPill.tsx'
+import { StoppedStrip } from './StoppedStrip.tsx'
 import { ThreadSettings } from './ThreadSettings.tsx'
 import { Timeline } from './Timeline.tsx'
 import { useAgentName } from './useThreads.ts'
+import { WorkingLine } from './WorkingLine.tsx'
 import { useThreadState, WorkingRow } from './WorkingRow.tsx'
 
 /** Narrower than this, the header's pane buttons move into the thread menu. */
@@ -161,11 +163,23 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
               <InboxScreen />
             </Suspense>
           </ScrollRegion>
-          <Timeline threadId={threadId} onOpenItem={setItem} scrollRef={scrollRef} />
+          <Timeline
+            threadId={threadId}
+            onOpenItem={setItem}
+            scrollRef={scrollRef}
+            footer={<WorkingLine threadId={threadId} />}
+          />
         </>
       ) : (
-        <Timeline threadId={threadId} highlightCard={highlightCard} onOpenItem={setItem} scrollRef={scrollRef} />
+        <Timeline
+          threadId={threadId}
+          highlightCard={highlightCard}
+          onOpenItem={setItem}
+          scrollRef={scrollRef}
+          footer={<WorkingLine threadId={threadId} />}
+        />
       )}
+      <StoppedStrip threadId={threadId} />
       <WorkingRow threadId={threadId} />
       <Composer threadId={threadId} placeholder={isInbox ? 'Ask about your inbox' : `Message ${agent}`} />
       <UndoStrip floating />

@@ -72,10 +72,16 @@ final class UpdateController: ObservableObject {
   /// "Check for Updates…" (or "Update to x…" when one is waiting): the window opens, and a check runs unless one is already waiting.
   func menuChoice() {
     show()
-    if status.pendingVersion == nil, !status.isBusy { updater?.checkNow() }
+    if status.pendingVersion == nil, !status.isBusy {
+      if status.allowClone != nil { updater?.checkNow() } else { startCheck() }
+    }
   }
 
-  func checkAgain() { updater?.checkNow() }
+  /// The update window's Check again / Try again: one check that always ends in an answer (`startCheck`).
+  func checkAgain() { startCheck() }
+
+  /// The updater's own full check, for after the owner has allowed the Talos code folder (the question is answered, the release waits).
+  func recheckAfterAllow() { updater?.checkNow() }
 
   /// How many checks the About window's button really started.
   private(set) var aboutChecks = 0
@@ -86,7 +92,80 @@ final class UpdateController: ObservableObject {
   func checkFromAbout() {
     guard !status.isBusy, status.pendingVersion == nil, status.allowClone == nil else { return }
     aboutChecks += 1
-    if let f = checkOverride { f() } else { updater?.checkNow() }
+    if let f = checkOverride { f() } else { startCheck() }
+  }
+
+  // MARK: a check that always answers
+
+  /// A look at the release feed that needs no agent, no Talos code folder and no sign-in (`AutoUpdater.probe`); runs off the main thread.
+  /// The app sets it when the updater is built; nil here means there is nothing to look with, which is said, not hidden.
+  var probe: (@Sendable () -> UpdateProbeResult)?
+  /// Whether Talos installs updates by itself (desktop.json). A newer version found while it is off is said, not downloaded.
+  var updatesAreOn: () -> Bool = { true }
+  /// Whether Talos is set up (an agent folder exists). Before that a newer version is only announced.
+  var isSetUp: () -> Bool = { true }
+  /// How long a check may take before it says it could not check.
+  var checkTimeout: Double = 15
+  /// How many checks `startCheck` really began.
+  private(set) var checksStarted = 0
+  private var checkGen = 0
+  private var watchdog: Task<Void, Never>?
+
+  /// Check for Updates and Check again: "Checking...", then ONE of: up to date, an update (ready, or downloading), or a plain reason it
+  /// could not check with Try again. Nothing here waits on a session, the bridge or the clone question; a stalled look ends after
+  /// `checkTimeout` seconds.
+  func startCheck() {
+    guard !status.isBusy, status.pendingVersion == nil, status.allowClone == nil else { return }
+    checkGen += 1
+    checksStarted += 1
+    let gen = checkGen
+    apply(.checking)
+    watchdog?.cancel()
+    let limit = checkTimeout
+    watchdog = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+      guard !Task.isCancelled else { return }
+      self?.checkTimedOut(gen)
+    }
+    guard let look = probe else { return finishCheck(gen, .problem(.other)) }
+    Task.detached {
+      let r = look()
+      await MainActor.run { self.finishCheck(gen, r) }
+    }
+  }
+
+  private func checkTimedOut(_ gen: Int) {
+    // only a check still "Checking" is cut off; one that moved on to downloading is already answering
+    guard gen == checkGen, status == .checking else { return }
+    checkGen += 1
+    apply(.couldntCheck(.timedOut))
+  }
+
+  private func finishCheck(_ gen: Int, _ r: UpdateProbeResult) {
+    guard gen == checkGen, status == .checking else { return }
+    switch r {
+    case .upToDate(let v):
+      watchdog?.cancel()
+      apply(.upToDate(version: v))
+    case .problem(let p):
+      watchdog?.cancel()
+      apply(.couldntCheck(p))
+    case .newer(let v):
+      watchdog?.cancel()
+      if !updatesAreOn() {
+        apply(.available(version: v))
+      } else if !isSetUp() {
+        // before setup there is no Talos code folder to update: said, with nothing to press, and installed after setup
+        apply(.availableAfterSetup(version: v))
+      } else if let u = updater {
+        // the existing path: fetch, verify, "ready" with Install (or its own plain reason). No timeout watches it now: the fetch of the
+        // release can take longer than the look did, and the updater has its own limits. "Getting Talos x" stands until it speaks.
+        apply(.fetching(version: v))
+        u.checkNow()
+      } else {
+        apply(.available(version: v))
+      }
+    }
   }
 
   /// Reached only from `RealClickButton`.
@@ -94,6 +173,11 @@ final class UpdateController: ObservableObject {
     updateNowPresses += 1
     dismissBanner()
     updater?.updateNow()
+  }
+
+  /// Reached only from `RealClickButton`: skips the rest of the thread agents' wait (never Main's running turn).
+  func skipThreadWait() {
+    updater?.skipThreadWait()
   }
 
   func later() {
@@ -279,16 +363,20 @@ struct UpdateWindow: View {
     if let clone = s.allowClone {
       Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction).buttonStyle(PillStyle(kind: .outline, padding: 22, size: 14))
       PillRealClickButton(title: AllowUpdatesCopy.allowButton, primary: true, width: 150) { allow.allowFromWindow(clone: clone) }
+    } else if s.offersSkipThreadWait {
+      // only thread agents are left: their wait is the line above; Main's own turn never gets this button
+      Button("Later") { controller.later() }.keyboardShortcut(.cancelAction)
+      RealClickButton(title: UpdateStatus.skipThreadWaitButton, accent: true) { controller.skipThreadWait() }.frame(width: 170)
     } else if s.pendingVersion != nil {
       Button("Later") { controller.later() }.keyboardShortcut(.cancelAction)
-      RealClickButton(title: "Update now", accent: true) { controller.updateNow() }.frame(width: 110)
+      RealClickButton(title: AboutCopy.installButton, accent: true) { controller.updateNow() }.frame(width: 110)
     } else if s.isBusy {
       Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction)
     } else {
       Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction)
       if case .done = s {
       } else {
-        Button("Check again") { controller.checkAgain() }
+        Button(AboutCopy.checkButtonTitle(s) == AboutCopy.checkButton ? "Check again" : AboutCopy.tryAgainButton) { controller.checkAgain() }
       }
     }
   }

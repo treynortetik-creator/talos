@@ -1,12 +1,15 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ChannelMeta, createDeviceKey, newId, parseFrame, verifyOwnerFrame } from '@talos-app/protocol'
-import { FakeApp, fakeClock } from '@talos-app/testkit'
+import { FakeApp, fakeClock, t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { nullLogger } from '../src/log.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(100_000))
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -129,6 +132,7 @@ describe('owner signatures', () => {
     await waitFor(
       () => h.relay.frames.filter((r) => r.direction === 'from_bridge' && r.frame.type === 'error').length >= 9,
     )
+    // timing-ok: negative window: the flood may not raise the agent notices above the limit
     await sleep(100)
     await eventually(() => expect(h.notes.length).toBe(5))
     await rogue.close()
@@ -149,7 +153,7 @@ describe('owner signatures', () => {
     await h.relay
       .expectFrame('ready', () => true, { direction: 'to_bridge', since: h.relay.frames.length - 1 })
       .catch(() => {})
-    await sleep(100)
+    await waitFor(() => h.relay.bridgeConnected, 3000, 'restarted bridge up') // before the replayed frame
     h.relay.sendToBridge({ ...frame, relay: { seq: 99, received_at: new Date().toISOString() } }, { durable: true })
     await waitFor(
       () =>
@@ -206,6 +210,7 @@ describe('owner signatures', () => {
         10_000,
         'the consumed ack',
       )
+      // timing-ok: negative window: a second copy of a replayed message
       await sleep(100) // a second copy, if the bridge made one, would be here by now
       expect(ours()).toHaveLength(2)
       expect(ours()[0]).toContain('stuck before the agent')
@@ -349,6 +354,7 @@ describe('untrusted content', () => {
     }
     expect(markers.size).toBe(corpus.length) // a new random marker per notification
     expect(h.notes[0]?.content).toContain('[[MARKER_REMOVED]]')
+    // timing-ok: negative window: the hostile corpus must not make the bridge send anything
     await sleep(150)
     const out = h.relay.frames.filter((r) => r.direction === 'from_bridge').map((r) => r.frame.type)
     for (const t of ['reply', 'card.create', 'status', 'inbox.update', 'thread.upsert']) expect(out).not.toContain(t)
@@ -362,6 +368,7 @@ describe('untrusted content', () => {
     expect(h.notes[0]?.content).toContain('Link: https://example.com/pr/1')
     // a javascript: url fails the protocol schema, so the frame never becomes a notification
     h.relay.sendToBridge(hookEvent('bad', { url: 'javascript:alert(1)' }))
+    // timing-ok: negative window: the javascript: frame must not become a notification
     await sleep(150)
     await eventually(() => expect(h.notes).toHaveLength(1))
   })
@@ -399,6 +406,7 @@ describe('headless mode', () => {
     expect(b.live).toBe(false)
     const res = await b.callTool('reply', { thread_id: 'general', text: 'from a scheduled job' })
     expect(res.isError).toBeFalsy()
+    // timing-ok: negative window: a headless bridge must not open a socket
     await sleep(100)
     expect(h.relay.bridgeConnected).toBe(false)
     const post = h.relay.http.find((r) => r.path === '/bridge/post')

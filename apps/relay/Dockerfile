@@ -36,14 +36,21 @@ ARG VITE_BRAND
 COPY scripts/version.mjs scripts/version.mjs
 RUN export APP_VERSION="$(node scripts/version.mjs)" VITE_APP_VERSION="$(node scripts/version.mjs)" ${VITE_BRAND:+VITE_BRAND="$VITE_BRAND"} \
  && pnpm --filter @talos-app/web build && pnpm --filter @talos-app/relay build
-# A self-contained folder with only the relay's production dependencies (native module included).
-RUN pnpm --filter @talos-app/relay deploy --legacy --prod /out
+# A self-contained folder with only the relay's production dependencies (native module included). The workspace packages
+# (@talos-app/*) are bundled into dist/index.js (apps/relay/scripts/build.mjs), so the runtime never reads their copies here: they
+# are removed, link and --legacy copy, which also keeps their test folders and test keys out of the image.
+RUN pnpm --filter @talos-app/relay deploy --legacy --prod /out \
+ && rm -rf /out/node_modules/@talos-app /out/node_modules/.pnpm/@talos-app+*
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     DATA_DIR=/data \
     PORT=8080 \
     TALOS_WEB_DIR=/app/web
+# The release this image is built from (X.Y.Z), passed only by the release image build (--build-arg TALOS_RELEASE=0.1.8). Empty
+# for a build from main: the relay then reports no release (/healthz, /api/me, the health report). Read once at start.
+ARG TALOS_RELEASE=
+ENV TALOS_RELEASE=${TALOS_RELEASE}
 WORKDIR /app
 COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /out/package.json ./package.json

@@ -15,7 +15,7 @@
 #      waiter that began first, so a machine that just let it go queues behind the ones already waiting.
 #   4. Under the lease: fetches. When the branch moved since the gate, rebases and looks at what the new commits brought:
 #      when it is words only (docs/, a top-level .md), none of it is this change's, and this change plans no scripts test
-#      (those read the tree), only typecheck, lint, personal and size run again, under the lease (CI runs every suite after
+#      (those read the tree), only typecheck, lint, personal, size and timing run again, under the lease (CI runs every suite after
 #      the merge); otherwise the lease is let go, the whole touched set runs again without it, and the machine queues again
 #      with the place it had. Then pushes the gated commit by its sha (a commit made while the gate ran
 #      refuses the push). A push still rejected because the branch moved goes round again: at most 3 tries; a rebase that
@@ -536,7 +536,7 @@ changed_names() {
 
 # race_mode <old> <new>: how to treat this change when main moved from <old> to <new> under its gate. Prints "full: <why>"
 # or "cheap: <why>", the why naming the commit that decided it. cheap: its passing run stands and only typecheck, lint,
-# personal and size run again, under the lease. full: the touched set runs again, without the lease. Any doubt is full.
+# personal, size and timing run again, under the lease. full: the touched set runs again, without the lease. Any doubt is full.
 race_mode() {
   local old="$1" new="$2" f mine plan theirs n suites
   plan="$(plan_of "$new")" && [ -n "$plan" ] || { echo "full: no plan for this change (main moved to $(first_touch "$old" "$new"))"; return; }
@@ -561,7 +561,7 @@ race_mode() {
     return
   fi
   # a change that ran any suite: the new commits may reach it (tests read and import across the tree), so it runs again
-  suites="$(grep -Ev $'^(typecheck|lint|personal|size|swift build \\(.*|swift parse \\(.*|\t.*)$' <<<"$plan" | paste -sd, -)"
+  suites="$(grep -Ev $'^(typecheck|lint|personal|size|timing|swift build \\(.*|swift parse \\(.*|\t.*)$' <<<"$plan" | paste -sd, -)"
   if [ -n "$suites" ]; then
     echo "full: $n new commit(s), first $(first_touch "$old" "$new"), and this change ran ${suites}"
     return
@@ -961,9 +961,9 @@ while :; do
     if [ "$mode" = pass ]; then
       commits="$(git log --abbrev=7 --format=%h "$old..$new" 2>/dev/null | paste -sd, -)"
       SKIPPED_OVER="${SKIPPED_OVER:+$SKIPPED_OVER,}$commits"
-      say "rebase-clean pass: $clean; only typecheck, lint, personal and size run again, and it pushes without a new full gate over: $commits"
+      say "rebase-clean pass: $clean; only typecheck, lint, personal, size and timing run again, and it pushes without a new full gate over: $commits"
     else
-      say "the branch moved, but its passing run stands (${why#cheap: }): only typecheck, lint, personal and size run again"
+      say "the branch moved, but its passing run stands (${why#cheap: }): only typecheck, lint, personal, size and timing run again"
     fi
     renewer_start
     gate_and_stamp "$base" cheap "$sha"

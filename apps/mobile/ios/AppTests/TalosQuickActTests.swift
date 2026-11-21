@@ -85,7 +85,7 @@ final class TalosQuickActTests: XCTestCase {
                           userText: "on my way", env: rig.env(), done: { rig.finished += 1 })
     }
 
-    private let anotherRelay = "That notification is from another relay. Open Talos."
+    private let anotherRelay = "That notification is from another Talos server. Open Talos."
 
     func testAPressOnTheActivePairingsOwnNotificationIsSignedAndSentToItsRelay() throws {
         let rig = Rig()

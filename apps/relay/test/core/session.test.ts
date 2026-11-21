@@ -3,12 +3,12 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AGENT_LIMITS, newUlid, USAGE_AS_OF_FEATURE } from '@talos-app/protocol'
-import { sleep } from '@talos-app/testkit'
+import { t } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { kit, silentBridge } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 20_000 })
+vi.setConfig({ testTimeout: t(30_000) })
 
 let relay: TestRelay | null = null
 afterEach(async () => {
@@ -32,13 +32,11 @@ describe('session frames through the relay', () => {
     const a = await k.connectedApp()
     const b = await silentBridge(relay, relay.bridgeKey)
     const sent = await a.sendSessionControl('general', { action: 'compact' })
-    await sleep(80)
-    await vi.waitFor(() => expect(b.count('session.control', sent.id as string)).toBe(1), { timeout: 10_000 })
+    await vi.waitFor(() => expect(b.count('session.control', sent.id as string)).toBe(1), { timeout: t(10_000) })
     b.ack(sent.id as string, 'delivered')
     await b.close()
     const again = await silentBridge(relay, relay.bridgeKey)
-    await sleep(80)
-    await vi.waitFor(() => expect(again.count('session.control', sent.id as string)).toBe(1), { timeout: 10_000 }) // delivered is not consumed
+    await vi.waitFor(() => expect(again.count('session.control', sent.id as string)).toBe(1), { timeout: t(10_000) }) // delivered is not consumed
     again.ack(sent.id as string, 'consumed')
     await again.sync() // the relay has handled the ack before the socket goes
     await again.close()
@@ -53,15 +51,13 @@ describe('session frames through the relay', () => {
     const a = await k.connectedApp()
     const b = await silentBridge(relay, relay.bridgeKey)
     b.send({ type: 'session.state', state })
-    await sleep(80)
-    await vi.waitFor(() => expect(a.rec.of('session.state', 'in')).toHaveLength(1), { timeout: 10_000 })
+    await vi.waitFor(() => expect(a.rec.of('session.state', 'in')).toHaveLength(1), { timeout: t(10_000) })
     const controlId = newUlid()
     const res = { type: 'session.control.result', control_id: controlId, ok: true, text: 'Stopped.', at: state.at }
     b.send(res)
-    await sleep(80)
     await vi.waitFor(
       () => expect(a.rec.of('session.control.result', 'in')[0]).toMatchObject({ control_id: controlId, ok: true }),
-      { timeout: 10_000 },
+      { timeout: t(10_000) },
     )
     expect(b.received.some((f) => f.type === 'ack')).toBe(true)
     const late = await k.connectedApp()
@@ -82,7 +78,7 @@ describe('session frames through the relay', () => {
       { kind: 'a_kind_from_later', percent: 2, as_of: asOf },
     ]
     b.send({ type: 'session.state', state: { ...state, rate_limits: rows } })
-    await vi.waitFor(() => expect(a.rec.of('session.state', 'in')).toHaveLength(1), { timeout: 10_000 })
+    await vi.waitFor(() => expect(a.rec.of('session.state', 'in')).toHaveLength(1), { timeout: t(10_000) })
     expect(a.rec.of('session.state', 'in')[0]?.state.rate_limits).toEqual(rows)
     const late = await k.connectedApp()
     expect(late.rec.of('ready', 'in')[0]?.session_state?.rate_limits).toEqual(rows)
@@ -112,8 +108,7 @@ describe('session frames through the relay', () => {
       at: state.at,
     }
     b.send({ type: 'session.agents', agents })
-    await sleep(80)
-    await vi.waitFor(() => expect(a.rec.of('session.agents', 'in')).toHaveLength(1), { timeout: 10_000 })
+    await vi.waitFor(() => expect(a.rec.of('session.agents', 'in')).toHaveLength(1), { timeout: t(10_000) })
     expect(a.rec.of('session.agents', 'in')[0]?.relay).toBeUndefined() // no seq: not durable
     const late = await k.connectedApp()
     expect(late.rec.of('ready', 'in')[0]?.session_agents).toMatchObject({ session_id: 'sess_1', rows: [{ id: 'a1' }] })
@@ -164,9 +159,8 @@ describe('session frames through the relay', () => {
     }
     expect(JSON.stringify(agents).length).toBeGreaterThan(AGENT_LIMITS.frameBytes)
     b.send({ type: 'session.agents', agents })
-    await sleep(120)
     await vi.waitFor(() => expect(b.received.some((f) => f.type === 'error' && f.code === 'bad_frame')).toBe(true), {
-      timeout: 10_000,
+      timeout: t(10_000),
     })
     expect(a.rec.of('session.agents', 'in')).toHaveLength(0)
   })
@@ -175,10 +169,9 @@ describe('session frames through the relay', () => {
     relay = await startTestRelay()
     const a = await kit(relay).connectedApp()
     const sent = await a.sendSessionControl('general', { action: 'compact' })
-    await sleep(80)
     await vi.waitFor(
       () => expect(a.rec.of('error', 'in').some((e) => e.ref === sent.id && e.code === 'mac_offline')).toBe(true),
-      { timeout: 10_000 },
+      { timeout: t(10_000) },
     )
   })
 })

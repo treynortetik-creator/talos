@@ -273,7 +273,7 @@ apps/desktop/scripts/install.sh --rollback
 4. **Sign in**: menu, **Sign in...** pairs the Talos window with your relay as another device. It runs
    `talos-app enroll --label "Mac app"`, shows four words, and you type `y` in the small terminal pane when they match
    (the same check as [`SETUP.md`](SETUP.md) step 5).
-5. Quit the Terminal session, then Start session in Talos. The pane shows the development-channel warning;
+5. Quit the Terminal session, then Start your agent in Talos. The pane shows the development-channel warning;
    Talos presses Enter for you, every time, when it is exactly the warning for the one channel Talos adds, `server:talos-app`. Anything
    else stays on screen and the menu says Talos needs you, and the warning comes up as a **Needs-you popup on the Mac**: "Allow Talos's development channel?" with the screen's own two buttons,
    "I am using this for local development" and "Exit". When the start came from your phone, from a recovery or from a crash restart (you are probably away), the phone gets one plain line per start ("Main is waiting at your Mac: answer the Talos popup there"); a start you make yourself at the Mac gets none. Main's own bridge cannot run while Main sits on this warning (it is Main's child), so no card can be posted
@@ -358,7 +358,7 @@ The first lines of the menu spell it out: `Session: busy`, `Bridge: ...`, `Relay
 The Bridge line is read from `$TALOS_APP_HOME/status.json`, which the live bridge rewrites every 15 seconds and whenever
 its connection changes (see [`bridge.md`](bridge.md), "status.json"). It says healthy only if the file is under 45 seconds
 old, the process in it is still running, it is the live bridge, and it is connected to the relay. **A bridge that was
-already running before you updated never wrote that file: restart the agent once** (Quit and stop the agent, Start session)
+already running before you updated never wrote that file: restart the agent once** (Quit and stop the agent, Start your agent)
 and the Bridge line leaves "unknown". `talos-app status` and `talos-app status --json` show the same facts from a terminal.
 
 ## Everyday use
@@ -371,7 +371,7 @@ and the Bridge line leaves "unknown". `talos-app status` and `talos-app status -
 | See the agent or a thread's session in the Talos window        | Sidebar, **Terminal** (Mac app only), then the tabs across the top (below). Leaving it ends only the view.       |
 | Send a quick message from any app                              | The compose hotkey, type or dictate, Command-Return. Esc closes without sending. Change it in Hotkeys.           |
 | See a thread's own session, or answer a question it stopped on | Menu, **Terminals…**, then pick the thread in the sidebar (below).                                               |
-| Stop or restart the agent                                      | Menu, **Stop session** / **Restart session**. **Quit and stop the agent** also ends the session.                 |
+| Stop or restart the agent                                      | Menu, **Stop your agent** / **Restart your agent**. **Quit and stop the agent** also ends the session.           |
 | Start Talos when I log in                                      | Settings, General. Off by default.                                                                               |
 | Turn the companion on                                          | Settings, **Talos on screen**, or the menu.                                                                      |
 | Update Talos                                                   | Build again and run `install.sh`; a tmux agent keeps running through it.                                         |

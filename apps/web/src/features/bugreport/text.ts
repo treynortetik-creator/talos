@@ -33,11 +33,11 @@ export const BUG_TEXT = {
     'Keys, sign-in codes and your home folder are removed. Blur anything else on the screenshot. Nothing leaves this Mac until you press Send.',
   /** Where the report goes, as the relay says (`null` while it has not said, or could not). */
   goesTo: (d: BugReportDestinationT | null): string => {
-    if (d === null) return 'Goes to: Talos online and your Mac. Talos has not said whether it passes reports on.'
+    if (d === null) return 'Goes to: your Talos server and your Mac. Talos has not said whether it passes reports on.'
     if (d.to === 'relay')
-      return 'Goes to: Talos online and your Mac, with the screenshot. It is not sent anywhere else.'
-    if (d.to === 'team') return 'Goes to: Talos online and your Mac, then the Talos team, with the screenshot.'
-    return `Goes to: Talos online and your Mac, then ${d.host} (the words and details, not the screenshot).`
+      return 'Goes to: your Talos server and your Mac, with the screenshot. It is not sent anywhere else.'
+    if (d.to === 'team') return 'Goes to: your Talos server and your Mac, then the Talos team, with the screenshot.'
+    return `Goes to: your Talos server and your Mac, then ${d.host} (the words and details, not the screenshot).`
   },
   close: 'Close',
   done: 'Done',

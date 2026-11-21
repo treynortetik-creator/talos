@@ -34,7 +34,7 @@ public enum HostChoice {
   /// the next launch would then open on the other one with that agent still alive and nothing in charge of it. nil = go ahead.
   public static func startBlock(saved: DesktopConfig.Host, runningTmux: Bool, tmuxUsable: Bool) -> String? {
     guard usesTmux(choice: saved, tmuxUsable: tmuxUsable) != runningTmux else { return nil }
-    return "You changed the terminal host. It applies when Talos next opens, so quit and reopen Talos before starting the session."
+    return "You changed where your agent runs. It applies when Talos next opens, so quit and reopen Talos before starting your agent."
   }
 
   /// What the running app is actually using, in plain words.

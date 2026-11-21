@@ -166,9 +166,9 @@ struct AdvancedSetupView: View {
       Divider()
       HStack {
         Button("Check again") { ob.refresh(config: model.supervisor.currentConfig(), setupDone: model.configured) }.disabled(ob.checking)
-        Button("Find a running session…") { SettingsRouter.openAdopt(model: model) { openWindow(id: $0) } }
-        Button("Permissions…") { SettingsRouter.open(.permissions) { openWindow(id: $0) } }
-        Button("Settings…") { SettingsRouter.open(.session) { openWindow(id: $0) } }
+        Button(MacWords.takeOver) { SettingsRouter.openAdopt(model: model) { openWindow(id: $0) } }
+        Button(MacWords.privacyAndAccess) { SettingsRouter.open(.access) { openWindow(id: $0) } }
+        Button("Settings…") { SettingsRouter.open(.agent) { openWindow(id: $0) } }
         Button("Help") { HelpRouter.open(model: model) { openWindow(id: $0) } }
       }
     }

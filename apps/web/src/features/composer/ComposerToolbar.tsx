@@ -4,16 +4,15 @@
 // is one row again: the column's width (a container query), not the window's, so a narrow column beside the panes or the
 // sidebar on a desktop gets the roomy layout too. Only the visual order changes (CSS order): the DOM, so the tab order
 // and what a screen reader reads, stays plus, bug button, box, send.
+// Stop is not here (the owner, 2026-11-20, Option B): it is on the working line under the newest message (WorkingLine).
 // Voice input (Dictate, the mic, the live call) was archived on 2026-11-19. Send is always shown (2026-11-20), so the row keeps
 // its height on a phone and the box does not change width as the first letter is typed.
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, RefObject } from 'react'
 import { cn } from '../../ui/cn.ts'
-import { IconCamera, IconFile, IconImage, IconPlus, IconSend, IconStop } from '../../ui/icons.tsx'
+import { IconCamera, IconFile, IconImage, IconPlus, IconSend } from '../../ui/icons.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/index.ts'
 import { BugThreadButton } from '../bugreport/BugButton.tsx'
 import type { useSlashPicker } from '../session/SlashPicker.tsx'
-import type { WorkingStop } from '../threads/WorkingRow.tsx'
-import { useSendGuard } from './sendGuard.ts'
 
 type Which = 'photos' | 'camera' | 'files'
 
@@ -41,12 +40,9 @@ export function ComposerToolbar(p: {
   /** An attachment is still uploading: Send waits for it, and a tap says so. */
   waiting: boolean
   tooLong: boolean
-  /** Stop for the turn that is running (hidden when there is none to stop). */
-  working: WorkingStop
   onSend: () => void
 }) {
   const { text, picker } = p
-  const sendGuard = useSendGuard(p.canSend)
   return (
     <div data-testid="composer-row" className="flex flex-wrap items-end gap-x-2 gap-y-1.5 @min-[36rem]:flex-nowrap">
       <input
@@ -160,23 +156,6 @@ export function ComposerToolbar(p: {
 
       {/* Send's slot: as wide and as high as Send, whether or not there is anything to send, so nothing moves. */}
       <div className="order-4 ms-auto flex min-h-[min(2.75rem,52px)] min-w-[min(2.75rem,52px)] items-end gap-2 @min-[36rem]:order-none @min-[36rem]:ms-0">
-        {p.working.showStop && (
-          // Stop sits left of Send, which stays put; the guard still swallows a press there in the moment after a send (sendGuard.ts)
-          <div className="contents" {...sendGuard.handlers}>
-            <button
-              type="button"
-              aria-label="Stop"
-              data-testid="composer-stop"
-              disabled={p.working.busy}
-              // keeps the keyboard up: a tap must not pull focus off the box
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void p.working.stop()}
-              className="grid size-[min(2.75rem,52px)] shrink-0 place-items-center rounded-pill border border-danger text-danger disabled:opacity-40"
-            >
-              <IconStop fill="currentColor" />
-            </button>
-          </div>
-        )}
         {/* Send is always here (the owner, 2026-11-20: "there's no button to hit Send"). With nothing to send, or an upload
             still running, it is dimmed and does nothing; typing turns it on where it already is. */}
         <button
@@ -192,7 +171,6 @@ export function ComposerToolbar(p: {
               if (p.waiting) p.onSend() // sends nothing: the box says it is waiting for the upload
               return
             }
-            sendGuard.sent(e)
             p.onSend()
             // From the keyboard (Enter or Space on Send: detail 0) focus goes back to the box, so a second Enter or Space lands
             // in the box

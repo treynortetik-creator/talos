@@ -1,7 +1,7 @@
 // Settings sections owned by WP6: Account, Notifications, Appearance (8.5). Connection moved into Health.
 import type { RouteRes } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { deleteDeviceKey } from '../../lib/deviceKey.ts'
 import { createHttp, HttpError } from '../../lib/http.ts'
@@ -42,9 +42,9 @@ const Row = ({ children }: { children: React.ReactNode }) => (
 // Revoking a device ends its device key and its sessions. A passkey is a separate thing: when another device signs in with the
 // same one (a synced keychain), it stays valid for everyone who can unlock it.
 const SHARED_PASSKEY_BEFORE =
-  'This device shares its passkey with another device of yours. Revoking the device does not remove that passkey: it keeps working for the other device, and for anyone who can unlock it. To remove the passkey, revoke every device that uses it, then set them up again.'
+  'This device shares its passkey with another device of yours. Removing the device does not remove that passkey: it keeps working for the other device, and for anyone who can unlock it. To remove the passkey, remove every device that uses it, then set them up again.'
 const SHARED_PASSKEY_AFTER =
-  'Revoked. Its passkey is shared with another device and still works. To remove the passkey, revoke every device that uses it, then set them up again.'
+  'Removed. Its passkey is shared with another device and still works. To remove the passkey, remove every device that uses it, then set them up again.'
 
 // ---- Account ------------------------------------------------------------------------------------------------------
 export function AccountSection(_p: SectionProps) {
@@ -86,6 +86,23 @@ export function AccountSection(_p: SectionProps) {
     }
   }, [])
   useEffect(() => void load(), [load])
+  // A link to /settings/account#devices lands on the list: once per link, after it has loaded (or failed), not on every refresh.
+  const { hash } = useLocation()
+  const devicesBlock = useRef<HTMLDivElement | null>(null)
+  // After another device is removed its row loses its button, so focus goes to the list's heading instead of the page body.
+  const devicesHeading = useRef<HTMLHeadingElement | null>(null)
+  const scrolled = useRef(false)
+  const settled = devices !== null || err !== null
+  useEffect(() => {
+    if (hash !== '#devices') {
+      scrolled.current = false // a later #devices link lands again
+      return
+    }
+    if (!settled || scrolled.current) return
+    scrolled.current = true
+    const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+    devicesBlock.current?.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' })
+  }, [hash, settled])
 
   /** This device is signed out for good: stop the client, empty what it cached, go to the sign-in page (audit D21). */
   const leaveThisDevice = async (opts: { dropDeviceKey: boolean }) => {
@@ -103,19 +120,22 @@ export function AccountSection(_p: SectionProps) {
   }
   const revoke = async (d: Device) => {
     setErr(null)
+    // The sheet closing hands focus back to the opener; the removed row loses that button, so it goes to the heading.
+    if (d.id !== selfId) opener.current = devicesHeading.current
     setConfirm(null)
     setSharedNotice(false)
     try {
       // nothing else to confirm (owner ruling 2026-11-14): the sheet above is the check for this device or a shared one
       await http.json('POST', `/api/devices/${d.id}/revoke`, {})
     } catch {
-      setErr("Couldn't revoke that device.")
+      setErr("Couldn't remove that device.")
       return
     }
     // Revoking this very device ends its session at the relay: leave, and drop the key the relay will never accept again.
     if (d.id === selfId) return void (await leaveThisDevice({ dropDeviceKey: true }))
     setSharedNotice(d.shared_passkey === true)
     await load()
+    devicesHeading.current?.focus()
   }
   // An already-ended session (401) is what sign-out wants anyway; any other failure means the relay still has it.
   const signOut = async (path: '/api/auth/logout' | '/api/auth/logout-all') => {
@@ -145,8 +165,10 @@ export function AccountSection(_p: SectionProps) {
       <H>
         <span id="acct">Account</span>
       </H>
-      <div>
-        <h3 className="m-0 mb-1 text-base font-medium">Devices</h3>
+      <div id="devices" ref={devicesBlock} className="scroll-mt-4">
+        <h3 ref={devicesHeading} tabIndex={-1} className="m-0 mb-1 text-base font-medium focus:outline-none">
+          Your devices
+        </h3>
         {devices === null && !err && <p className="m-0 text-text-2">Loading…</p>}
         {err && (
           <p role="alert" className="m-0 text-danger">
@@ -213,9 +235,9 @@ export function AccountSection(_p: SectionProps) {
         >
           <DialogTitle className="text-lg font-medium text-text">
             {confirm?.kind === 'revoke-self'
-              ? 'Revoke this device?'
+              ? 'Remove this device?'
               : confirm?.kind === 'revoke-other'
-                ? `Revoke ${confirm.device.name}?`
+                ? `Remove ${confirm.device.name}?`
                 : confirm?.kind === 'sign-out-here'
                   ? 'Sign out of this device?'
                   : 'Sign out everywhere?'}
@@ -231,7 +253,7 @@ export function AccountSection(_p: SectionProps) {
               </>
             ) : confirm?.kind === 'revoke-self' ? (
               <>
-                <span className="block">You are on this device right now. Revoking it signs you out here.</span>
+                <span className="block">You are on this device right now. Removing it signs you out here.</span>
                 {confirm.device.shared_passkey && <span className="block">{SHARED_PASSKEY_BEFORE}</span>}
                 <span className="block">
                   To use it again, run <code>talos-app enroll</code> on your Mac and open the new link here.
@@ -274,8 +296,8 @@ export function AccountSection(_p: SectionProps) {
                 : confirm?.kind === 'sign-out-here'
                   ? 'Sign out'
                   : confirm?.kind === 'revoke-other'
-                    ? `Revoke ${confirm.device.name}`
-                    : 'Revoke this device'}
+                    ? `Remove ${confirm.device.name}`
+                    : 'Remove this device'}
             </Button>
           </div>
         </DialogContent>

@@ -95,6 +95,20 @@ struct MacAuditPackageFGuiTests {
     #expect(spy.opened.isEmpty, "the browser got a link that answers 401: \(spy.opened)")
   }
 
+  @Test func theWebsOpenExternalMessageSendsAnotherHostToTheBrowserAndNeverLoadsItHere() async throws {
+    let relay = try FakeRelay { _ in .init(body: "<html>app</html>") }
+    defer { relay.stop() }
+    let spy = Spy()
+    let c = controller(relay, saveTo: nil, spy)
+    #expect(await pumpUntil(3) { relay.saw("/") })
+    let other = URL(string: "https://example.org/docs")!
+    c.nativeMessage(.openExternal(other))
+    #expect(spy.opened == [other], "\(spy.opened)")
+    c.routeExternal(URL(string: "javascript:alert(1)")!)  // never reaches the browser
+    c.routeExternal(URL(string: "file:///etc/passwd")!)
+    #expect(spy.opened == [other])
+  }
+
   @Test func aRefusedAttachmentIsSaidAndNothingIsWritten() async throws {
     let relay = try FakeRelay { r in
       r.path == "/media/m_01GONE" ? .init(status: 401, body: "{\"error\":\"unauthorized\"}") : .init(body: "<html>app</html>")
@@ -151,11 +165,11 @@ struct MacAuditPackageFGuiTests {
     defer { w.close() }
     w.model.configured = true
     w.model.status.phase = .stopped(.startFailed("start failed: claude was not found (claude_path auto)"))
-    #expect(w.model.statusLine == "Session stopped. The agent couldn't start: claude was not found (claude_path auto).")
+    #expect(w.model.statusLine == "Agent stopped. The agent couldn't start: claude was not found (claude_path auto).")
     #expect(w.model.failedStop, "Try again and Start a new conversation are offered")
     w.model.status.phase = .stopped(.user)
     #expect(!w.model.failedStop)
-    #expect(w.model.statusLine == "Session: stopped")
+    #expect(w.model.statusLine == "Agent: stopped")
   }
 
   // MARK: review round

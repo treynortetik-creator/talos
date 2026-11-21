@@ -28,6 +28,10 @@
 #                        (CI_RELAY_HAND_DEPLOYS); else ::error::, an alert, exit 1. Every error and warning is an alert too. Main-tracking
 #                        relays are only reported. Needs gh; with no GH_TOKEN, the repository owner's login (CI_GH_USER names
 #                        another), never gh's active account (scripts/ci-runner/relays.sh)
+#   ci-runner.sh schedule-yield  a scheduled run's own step before `run`: its skips and its yield to a push run that was going when it
+#                        was dispatched (scripts/ci-runner/schedule.sh); the decision is kept for `run`. Always exit 0
+#   ci-runner.sh nightly-check  from 07:00: tonight's nightly or hostile dispatch (logs/ci-nightly.log, exit 0) that posted no result: ONE alert
+#                        per kind and morning (scripts/ci-runner/schedule.sh). ci-alerts.sh watch runs it every 10 min
 #
 # Input is environment only (the workflow passes the event's fields as env, never spliced into a command line):
 #   GITHUB_EVENT_NAME, GITHUB_REPOSITORY, GITHUB_REF and GITHUB_SHA (push, schedule), PR_NUMBER, PR_HEAD_SHA, PR_HEAD_REPO, PR_DRAFT, INPUT_REF, INPUT_JOBS (dispatch only), GH_TOKEN, CI_STATUS_URL, CI_SHA_FILE, CI_LOGS_OUT
@@ -454,7 +458,7 @@ ci_run() {
   local cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" args sha
   unset CI_SETTLE # asked for below, by a main push run alone
   ci_guard || return 1
-  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh)
+  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && CI_SCHEDULE_NO_YIELD=1 ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh); only the yield step waits
   ci_split_checks run || return 1
   # No run splits browser with the browser-mac part any more (phase C revised): so never with CI_BROWSER_E2E_PART either, which
   # ci-local.sh refuses. The e2e part's knobs are Lemnos's own run's (plan), its workers the part's.
@@ -551,7 +555,7 @@ ci_exec_local() {
 ci_fallback() {
   local spec m list j st final take="" declined="" waiting started deadline now cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" jobs sha
   local notes="" why
-  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh)
+  if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && CI_SCHEDULE_NO_YIELD=1 ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh); only the yield step waits
   [ -n "${CI_FALLBACK:-}" ] || { echo "ci-runner: fallback: nothing was handed to another machine"; return 0; }
   [ "$(ci_settled)" != superseded=true ] || { echo "ci-runner: fallback: this run stood aside for a newer push (settle); nothing is taken over"; return 0; }
   for spec in $CI_FALLBACK; do
@@ -973,6 +977,8 @@ case "${1:-}" in
   superseded) . "$HERE/ci-runner/main-queue.sh" && ci_superseded_mark ;;
   dispatch-wait) . "$HERE/ci-runner/main-queue.sh" && ci_dispatch_wait ;;
   green) . "$HERE/ci-runner/green.sh" && ci_green ;;
+  schedule-yield) ci_guard >/dev/null 2>&1 || exit 0; . "$HERE/ci-runner/schedule.sh" && ci_schedule_skip; exit 0 ;; # the guard refuses, `run` says why
+  nightly-check) . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/schedule.sh" && ci_gh_session nightly-check && ci_nightly_unreported ;;
   relays) . "$HERE/ci-runner/green.sh" && . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/relays.sh" && ci_relays ;;
-  *) sed -n '2,41p' "$0"; exit 64 ;;
+  *) sed -n '2,45p' "$0"; exit 64 ;;
 esac

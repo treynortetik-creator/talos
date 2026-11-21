@@ -4,7 +4,7 @@
 #   1. The personal-data check of what is being PUSHED: every commit in the range (the files it changes, as committed) and its
 #      message, with the maintainer's private list from the main checkout when there is one (it says so when there is none).
 #      A hit stops the push; there is no warning-only mode.
-#   2. scripts/gate.sh, the one gate every machine runs: typecheck, lint, the personal-data check, the size budget and the test
+#   2. scripts/gate.sh, the one gate every machine runs: typecheck, lint, the personal-data check, the size budget, the timing lint and the test
 #      suites this push touches (all of them when the hook cannot tell what the push contains). It is the fast gate (gate.sh
 #      --fast, which falls back to the full gate where it must, and says which ran and why) unless GATE_FULL=1 asks for the full one.
 # A handoff branch (refs/heads/handoff/<machine>/<name>) gets part 1 only: a machine that cannot gate hands its work to one
@@ -282,7 +282,7 @@ for sha in $SHAS; do
 done
 [ "$PERSONAL_RC" = 0 ] || { echo "pre-push: REFUSED: the personal-data check failed (above)" >&2; exit 1; }
 
-# One gate for every machine (scripts/gate.sh): typecheck, lint, the personal-data check of the tree, the size budget and the
+# One gate for every machine (scripts/gate.sh): typecheck, lint, the personal-data check of the tree, the size budget, the timing lint and the
 # suites this push touches. It refuses on any failure, and when it cannot run (no node, no pnpm, no node_modules).
 # exec replaces this shell, so its EXIT trap would never run: the temp file goes first.
 rm -f "$CHANGED"

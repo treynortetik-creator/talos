@@ -103,7 +103,7 @@ struct SessionSwitcherTests {
     guard case .failed(let title, let detail) = content("x") else { Issue.record("not failed"); return }
     #expect(title.contains("x") && detail.contains("resume_missing") && detail.contains("boom"))
     let noScreen = SessionSwitcher.entries(main: .init(state: .notStarted, hasScreen: false), workers: nil)
-    if case .note(let t) = SessionSwitcher.content(for: noScreen[0], workers: nil) { #expect(t.contains("Start session")) } else {
+    if case .note(let t) = SessionSwitcher.content(for: noScreen[0], workers: nil) { #expect(t.contains("Start your agent")) } else {
       Issue.record("main with no session should be a note")
     }
   }

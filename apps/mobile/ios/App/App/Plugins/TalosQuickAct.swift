@@ -92,13 +92,13 @@ enum TalosQuickAct {
         }
         // One read of the active relay gives both the address the frame goes to and the id whose keys and grant sign it.
         guard let active = env.activeRelay(), let url = RichPush.actURL(relay: active.origin) else {
-            return env.fail("Talos couldn't find its server. Open Talos.", done)
+            return env.fail("This phone has no Talos server set up. Open Talos.", done)
         }
         let keyId = active.keyId
         // A button on a push from another relay (the app has moved on) refuses here, before any key is read: nothing is signed
         // and nothing is sent, so no text reaches a relay it was not meant for.
         guard RichPush.pressMatchesActiveKey(userInfo: userInfo, activeKeyId: keyId) else {
-            return env.fail("That notification is from another relay. Open Talos.", done)
+            return env.fail("That notification is from another Talos server. Open Talos.", done)
         }
         // A pairing whose check failed, or that was last verified a day ago or more, signs and sends nothing (the app shows no page for it
         // either). Before any key is read, like the check above.
@@ -136,7 +136,7 @@ enum TalosQuickAct {
         }
         // The app may have moved to another relay while this was signed: send only if the same pairing is still the active one.
         guard env.activeRelay()?.keyId == keyId else {
-            return run.conclude("That notification is from another relay. Open Talos.")
+            return run.conclude("That notification is from another Talos server. Open Talos.")
         }
         // A failed check may have landed while this was signed: the same look as at the start, just before the post.
         guard env.trusted(keyId) else {

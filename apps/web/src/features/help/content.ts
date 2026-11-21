@@ -56,7 +56,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: '[[Mac settings]] is a separate window that only the Mac app has. It holds what belongs to this Mac: the agent folder and launch command, sign-in, macOS permissions, the quick-compose hotkey, the Companion and the Dock icon. Open it from the Talos menu at the top of the screen ([[Settings…]], or ⌘,) or from the Talos icon in the Mac menu bar.',
+        text: '[[Mac settings]] is a separate window that only the Mac app has. It holds what belongs to this Mac, in five sections: [[Your agent]], [[Phone & Mac]], [[Privacy & access]], [[General]] and [[Advanced]]. Advanced is the quiet one, for how your agent starts, its folder and the address of your Talos server. Open it from the Talos menu at the top of the screen ([[Settings…]], or ⌘,) or from the Talos icon in the Mac menu bar.',
       },
       {
         kind: 'p',
@@ -73,8 +73,8 @@ export const HELP_SECTIONS: Section[] = [
         rows: [
           {
             q: 'See my devices, or end one',
-            where: [w('settings', 'Account', 'Devices')],
-            note: '[[Revoke]] ends that device’s access.',
+            where: [w('settings', 'Account', 'Your devices')],
+            note: '[[Remove]] ends that device’s access. On the Mac, ((Mac settings → Phone & Mac)) has See and remove your devices, which opens this list.',
           },
           { q: 'Sign out of this phone or browser', where: [w('settings', 'Account', 'Sign out of this device')] },
           { q: 'Sign out of every device', where: [w('settings', 'Account', 'Sign out everywhere')] },
@@ -130,7 +130,7 @@ export const HELP_SECTIONS: Section[] = [
               w('settings', 'Your agent', 'Compact'),
               w('settings', 'Your agent', 'New conversation'),
             ],
-            note: '[[Stop]] shows only while the agent is working.',
+            note: '[[Stop]] shows only while the agent is working. Then there is also a Stop button on the line under the newest message in the thread.',
           },
           {
             q: 'The agent’s model or effort',
@@ -168,38 +168,49 @@ export const HELP_SECTIONS: Section[] = [
             note: 'Both are saved on this device only.',
           },
           {
-            q: 'The agent folder and launch command',
-            where: [w('mac', 'Session', 'Agent folder'), w('mac', 'Session', 'Launch command')],
+            q: 'The folder your agent lives in, and the command that starts it',
+            where: [w('mac', 'Advanced', 'Agent’s folder'), w('mac', 'Advanced', 'How your agent starts')],
           },
           {
-            q: 'Restart the agent after a crash, or open the terminal when it needs you',
+            q: 'Restart your agent if it stops by itself, or show its screen when it needs you',
             where: [
-              w('mac', 'Session', 'Restart the agent after a crash'),
-              w('mac', 'Session', 'Open the terminal when the agent needs you'),
+              w('mac', 'Your agent', 'Restart it if it stops by itself'),
+              w('mac', 'Advanced', 'Show my agent’s screen when it needs me'),
             ],
           },
           {
-            q: 'Have Talos unstick the agent when it stops answering',
-            where: [w('mac', 'Session', 'Unstick the agent when it stops answering')],
+            q: 'Have Talos unstick your agent when it stops answering',
+            where: [w('mac', 'Advanced', 'Unstick my agent when it stops answering')],
           },
           {
-            q: 'The Talos server address, or sign this Mac in',
-            where: [w('mac', 'Connection', 'Relay address'), w('mac', 'Connection', 'Sign in…')],
+            q: 'The Talos server address, or connect this Mac',
+            where: [w('mac', 'Advanced', 'Talos server address'), w('mac', 'Phone & Mac', 'Connect this Mac…')],
           },
-          { q: 'End this Mac’s access to your account', where: [w('mac', 'Connection', 'Forget this Mac…')] },
-          { q: 'macOS permissions, such as notifications', where: [w('mac', 'Permissions')] },
-          { q: 'The quick-compose hotkey', where: [w('mac', 'Hotkeys', 'Quick compose hotkey')] },
+          {
+            q: 'Sign out of the Talos window on this Mac',
+            where: [
+              w('mac', 'Phone & Mac', 'Sign out of the Talos window…'),
+              w('topmenu', 'Window', 'Sign out of the Talos window…'),
+            ],
+          },
+          { q: 'End this Mac’s access to your account', where: [w('mac', 'Phone & Mac', 'Disconnect this Mac…')] },
+          { q: 'macOS permissions, such as notifications', where: [w('mac', 'Privacy & access')] },
+          { q: 'The Quick message shortcut', where: [w('mac', 'General', 'Quick message', 'Change shortcut')] },
           {
             q: 'The Companion, the little character on screen',
-            where: [w('mac', 'Companion', 'Show Companion'), w('menubar', 'Show Companion')],
+            where: [w('mac', 'General', 'Show the Companion'), w('menubar', 'Show Companion')],
           },
           {
             q: 'Start Talos at login, or show a Dock icon',
-            where: [w('mac', 'General', 'Start Talos when I log in'), w('mac', 'General', 'Show a Dock icon')],
+            where: [w('mac', 'General', 'Open Talos when I log in'), w('mac', 'General', 'Show Talos in the Dock')],
           },
           {
-            q: 'Start, stop or restart the agent',
-            where: [w('menubar', 'Start session'), w('menubar', 'Stop session'), w('menubar', 'Restart session')],
+            q: 'Start, stop or restart your agent',
+            where: [
+              w('menubar', 'Start your agent'),
+              w('menubar', 'Stop your agent'),
+              w('menubar', 'Restart your agent'),
+            ],
           },
           {
             q: 'Quit Talos',
@@ -216,8 +227,11 @@ export const HELP_SECTIONS: Section[] = [
             note: 'It shows only while Talos waits for your answer. The same question has an Allow updates button in the update window.',
           },
           {
-            q: 'See the agent’s terminal',
-            where: [w('menubar', 'Terminals…'), w('topmenu', 'Window', 'Terminals…')],
+            q: 'See your agent’s screen',
+            where: [
+              w('menubar', 'Advanced', 'Show my agent’s screen…'),
+              w('topmenu', 'Window', 'Show my agent’s screen…'),
+            ],
           },
         ],
       },
@@ -235,10 +249,10 @@ export const HELP_SECTIONS: Section[] = [
         kind: 'steps',
         items: [
           'On a Mac that is not set up yet, Talos opens [[Set up Talos…]] by itself (it is also in the Menu bar). It gets itself ready, you sign in to Claude, and you choose whether to connect your phone. Then your agent starts and says hello. Nothing else is needed here.',
-          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its tool settings, plus the hooks of any tool apps you have, change) or Choose (a Talos agent folder you already have). To use your own launch command instead, open [[Mac settings]], then Session, paste the whole command and press Import.',
-          'Sign in: [[Sign in…]] in the Window menu, in the Menu bar, or in ((Mac settings → Connection)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
-          'Allow the macOS permissions in ((Mac settings → Permissions)).',
-          'Start the agent: ((Menu bar → Start session)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
+          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its tool settings, plus the hooks of any tool apps you have, change) or Choose (a Talos agent folder you already have). To use your own start-up command instead, open ((Mac settings → Advanced → Take over or import)), paste the whole command and press Import.',
+          'Connect this Mac: [[Connect this Mac…]] in the Window menu, in the Menu bar, or in ((Mac settings → Phone & Mac)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
+          'Allow the macOS permissions in ((Mac settings → Privacy & access)).',
+          'Start your agent: ((Menu bar → Start your agent)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
           'Add your phone: run {{talos-app enroll}} in Terminal. For a phone browser, open the link it prints on the phone. For the iPhone app, copy the link and paste it into the app with [[Paste a setup link]] on its sign-in screen: opening the link on the iPhone opens Safari, which sets up a Home Screen copy instead.',
         ],
       },
@@ -269,9 +283,9 @@ export const HELP_SECTIONS: Section[] = [
             id: 'mac-offline',
             q: 'The app says my Mac is offline',
             steps: [
-              'Look at the Talos icon in the Mac menu bar. A head with a slash through it means your agent, Talos on your Mac or the Talos server is down. Choose [[Start session]] if the agent is stopped.',
-              'A Mac that has gone to sleep cannot answer. While it is plugged in, [[Keep this Mac awake while plugged in]] in ((Mac settings → General)) stops it sleeping on its own. A closed lid or Sleep from the Apple menu still puts it to sleep.',
-              'In Terminal, {{talos-app status}} and {{talos-app doctor}} say what is wrong in plain lines, and {{talos-app logs}} shows the bridge log.',
+              'Look at the Talos icon in the Mac menu bar. A head with a slash through it means your agent, Talos on your Mac or the Talos server is down. Choose [[Start your agent]] if your agent is stopped.',
+              'A Mac that has gone to sleep cannot answer. While it is plugged in, [[Keep my Mac awake while it’s plugged in]] in ((Mac settings → General)) stops it sleeping on its own. A closed lid or Sleep from the Apple menu still puts it to sleep.',
+              'In Terminal, {{talos-app status}} and {{talos-app doctor}} say what is wrong in plain lines, and {{talos-app logs}} shows the log of Talos on your Mac.',
               '((Settings → Health)) on your phone shows what the server can see, even while the Mac is off.',
             ],
           },
@@ -281,24 +295,24 @@ export const HELP_SECTIONS: Section[] = [
             steps: [
               'The iPhone app signs in with a setup link from your Mac, not a password. On the Mac, run {{talos-app enroll}} in Terminal.',
               'On the iPhone, press [[Paste a setup link]] on the sign-in screen and paste the link.',
-              'Signing out of the iPhone app, or revoking it, always needs a new link. Nothing is deleted from your Mac.',
+              'Signing out of the iPhone app, or removing it, always needs a new link. Nothing is deleted from your Mac.',
             ],
           },
           {
             id: 'dialog',
             q: 'The agent is stuck on a dialog',
             steps: [
-              'A dot on the Talos icon in the Mac menu bar means something needs you. Choose [[Terminals…]] and answer the dialog in the pane yourself.',
-              'To have Talos bring the terminal forward for you, turn on [[Open the terminal when the agent needs you]] in ((Mac settings → Session)).',
+              'A dot on the Talos icon in the Mac menu bar means something needs you. Choose ((Menu bar → Advanced → Show my agent’s screen…)) and answer the dialog in the pane yourself.',
+              'To have Talos show it for you, turn on [[Show my agent’s screen when it needs me]] in ((Mac settings → Advanced)).',
             ],
           },
           {
             id: 'no-replies',
             q: 'No replies after a restart',
             steps: [
-              'The first lines of the Menu bar menu say Session, Bridge and Relay. If the Bridge says unknown, restart the agent once ([[Restart session]]) so it runs the current version of Talos on your Mac.',
-              'If Talos says “Another session holds the channels”, your agent is still running in Terminal. Stop that one first.',
-              'Run {{talos-app doctor}} in Terminal. It lists what does not match, and {{talos-app logs}} shows the end of the bridge log.',
+              'The first lines of the Menu bar menu say Agent, Talos server and Your Mac. If Your Mac says checking or not connected while your agent is running, restart your agent once ([[Restart your agent]]) so it runs the current version of Talos on your Mac.',
+              'If Talos says “Another agent is already using this account”, your agent is still running in Terminal. Stop that one first.',
+              'Run {{talos-app doctor}} in Terminal. It lists what does not match, and {{talos-app logs}} shows the end of the log of Talos on your Mac.',
             ],
           },
         ],
@@ -321,7 +335,7 @@ export const HELP_SECTIONS: Section[] = [
                 when: 'While Talos is the front app. The top menu appears when a Talos window is open or the Dock icon is on.',
               },
               { keys: '⌘T', what: 'Show Talos', when: 'Same as above.' },
-              { keys: '⌘N', what: 'Quick compose…', when: 'Same as above.' },
+              { keys: '⌘N', what: 'Quick message…', when: 'Same as above.' },
               { keys: '⌘R', what: 'Reload', when: 'Same as above.' },
               { keys: '⌘W', what: 'Close', when: 'Same as above.' },
               { keys: '⌘M', what: 'Minimize', when: 'Same as above.' },
@@ -336,7 +350,7 @@ export const HELP_SECTIONS: Section[] = [
               {
                 keys: 'Ctrl+1 to Ctrl+9',
                 what: 'Switch to tab 1 to 9 (main agent first)',
-                when: 'On the Terminal screen, while its tabs show. Terminals… in the menu has no key: ⌘K is the command palette in the Talos window.',
+                when: 'On the Terminal screen, while its tabs show. Show my agent’s screen… in the menu has no key: ⌘K is the command palette in the Talos window.',
               },
             ],
           },
@@ -345,8 +359,8 @@ export const HELP_SECTIONS: Section[] = [
             rows: [
               {
                 keys: '⌃⌥Space',
-                what: 'Quick compose',
-                when: 'From any app. This is the default; change it in ((Mac settings → Hotkeys)). In the box, ⌘↩ sends and Esc closes it.',
+                what: 'Quick message',
+                when: 'From any app. This is the default; change it in ((Mac settings → General → Change shortcut)). In the box, ⌘↩ sends and Esc closes it.',
               },
             ],
           },
@@ -354,7 +368,7 @@ export const HELP_SECTIONS: Section[] = [
             title: 'Mac app, Menu bar menu',
             rows: [
               { keys: '⌘T', what: 'Show Talos', when: 'Shown beside the item in the Talos icon’s menu.' },
-              { keys: '⌘N', what: 'Quick compose…', when: 'Shown beside the item in the Talos icon’s menu.' },
+              { keys: '⌘N', what: 'Quick message…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘,', what: 'Settings…', when: 'Shown beside the item in the Talos icon’s menu.' },
               { keys: '⌘Q', what: 'Quit Talos', when: 'The item’s name goes on to say what happens to the agent.' },
             ],
@@ -443,7 +457,7 @@ export const HELP_SECTIONS: Section[] = [
             q: 'Change the iPhone app’s server address',
             a: 'The server address is fixed when the iPhone app is built.',
           },
-          { q: 'Rename a device', a: 'The Devices list shows a device’s name and lets you end it. It has no rename.' },
+          { q: 'Rename a device', a: 'Your devices shows a device’s name and lets you remove it. It has no rename.' },
         ],
       },
     ],
@@ -462,7 +476,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: 'What goes with it: the versions of the app, the bridge, the relay and Claude Code, which thread and screen you were on, the recent errors, and the last 200 log lines. Keys, tokens and your home folder are taken out first, the same way {{talos-app report}} does. The last 5 messages of the thread go along only if you turn that on. [[Preview everything that will be sent]] shows every word of it.',
+        text: 'What goes with it: the versions of the app, Talos on your Mac, the Talos server and Claude Code, which thread and screen you were on, the recent errors, and the last 200 log lines. Keys, tokens and your home folder are taken out first, the same way {{talos-app report}} does. The last 5 messages of the thread go along only if you turn that on. [[Preview everything that will be sent]] shows every word of it.',
       },
     ],
   },
@@ -472,15 +486,15 @@ export const HELP_SECTIONS: Section[] = [
     blocks: [
       {
         kind: 'p',
-        text: 'Logs. The Mac app writes its log to ~/Library/Logs/Talos/supervisor.log. ((Mac settings → General)) has [[Show the Mac app’s log]], which opens it in Finder, and [[Show desktop.json]] for your Mac settings file. The bridge writes bridge.log in ~/.config/talos/app (or the folder named by TALOS_APP_HOME). {{talos-app logs}} prints it, and {{talos-app report}} makes one file you can send with a bug report; it has keys, tokens and your home folder removed.',
+        text: 'Logs. The Mac app writes its log to ~/Library/Logs/Talos/supervisor.log. ((Mac settings → Advanced)) has [[Show the Mac app’s log]], which opens it in Finder, and [[Show settings file]] for your Mac settings file. Talos on your Mac writes bridge.log in ~/.config/talos/app (or the folder named by TALOS_APP_HOME). {{talos-app logs}} prints it, and {{talos-app report}} makes one file you can send with a bug report; it has keys, tokens and your home folder removed.',
       },
       {
         kind: 'p',
-        text: 'Updating. The Mac app can update itself. Choose [[Check for Updates…]] in the Talos menu at the top of the screen, or in the Menu bar menu. [[About Talos]] in the same menu opens a small Talos window with the version and a Check for Updates button; the answer (up to date, an update ready, or why it cannot update yet) shows right there, with Update now or Allow updates when one is needed. If Talos asks “Allow Talos to update itself?”, it has found a Talos code folder it has not used before: press Allow updates only if it is the folder you installed from (Not now hides it until the next update or the next time Talos starts, and [[Allow updates…]] in the Menu bar menu brings it back). A small window shows what is happening: downloading, waiting for Talos online, waiting for a quiet moment, restarting your agent, done. If something goes wrong it says so in one line and where the log is. When an update has been downloaded and checked, the item reads Update to, with a version and a dot. Click Update now to install it as soon as your agent is not in the middle of a turn (the Return key never presses it, and it never installs while you are typing), or Later to keep it for a quiet moment (Talos then installs it by itself when no agent is working, and waits up to 2 hours for that). One update moves the app, the Talos folder and your agent together; your agent restarts and carries on its conversation. The Talos server does not follow releases by itself: if the window says it is behind, redeploy it in Railway. If you use Terminal instead, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. If you build the Mac app yourself, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
+        text: 'Updating. The Mac app can update itself. Choose [[Check for Updates…]] in the Talos menu at the top of the screen, or in the Menu bar menu. [[About Talos]] in the same menu opens a small Talos window with the version and a Check for Updates button; the answer (up to date, an update ready, or why it cannot update yet) shows right there, with Update now or Allow updates when one is needed. If Talos asks “Allow Talos to update itself?”, it has found a Talos code folder it has not used before: press Allow updates only if it is the folder you installed from (Not now hides it until the next update or the next time Talos starts, and [[Allow updates…]] in the Menu bar menu brings it back). A small window shows what is happening: downloading, waiting for the Talos server, waiting for a quiet moment, restarting your agent, done. If something goes wrong it says so in one line and where the log is. When an update has been downloaded and checked, the item reads Update to, with a version and a dot. Click Update now to install it as soon as your agent is not in the middle of a turn (the Return key never presses it, and it never installs while you are typing), or Later to keep it for a quiet moment (Talos then installs it by itself when no agent is working, and waits up to 2 hours for that). One update moves the app, the Talos folder and your agent together; your agent restarts and carries on its conversation. The Talos server does not follow releases by itself: if the window says it is behind, redeploy it in Railway. If you use Terminal instead, run {{talos-app update}} from your Talos folder, then restart the agent: it keeps running the old code until you do. If you build the Mac app yourself, run apps/desktop/scripts/build-app.sh and then apps/desktop/scripts/install.sh from the Talos folder; with tmux the agent keeps running through it. The iPhone app updates through TestFlight.',
       },
       {
         kind: 'p',
-        text: 'Uninstalling. Turn off [[Start Talos when I log in]] in ((Mac settings → General)), choose [[Forget this Mac…]] in ((Mac settings → Connection)), then quit Talos and delete Talos.app from the Applications folder inside your home folder. Your settings are in ~/Library/Application Support/Talos and your logs in ~/Library/Logs/Talos; delete them if you want them gone. To remove the rest, follow “Uninstalling” in docs/SETUP.md. It lists the talos-app entry in the agent folder’s .mcp.json, the ~/.config/talos/app folder (your message history is in there) and the Railway project.',
+        text: 'Uninstalling. Turn off [[Open Talos when I log in]] in ((Mac settings → General)), choose [[Disconnect this Mac…]] in ((Mac settings → Phone & Mac)), then quit Talos and delete Talos.app from the Applications folder inside your home folder. Your settings are in ~/Library/Application Support/Talos and your logs in ~/Library/Logs/Talos; delete them if you want them gone. To remove the rest, follow “Uninstalling” in docs/SETUP.md. It lists the talos-app entry in the agent folder’s .mcp.json, the ~/.config/talos/app folder (your message history is in there) and the Railway project.',
       },
     ],
   },

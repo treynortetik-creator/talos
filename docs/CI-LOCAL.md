@@ -318,8 +318,8 @@ It gates with `--fast` (above), which runs the full gate by itself where it must
 3. **Pushes the gated commit**, by its sha: a commit made, or a tracked file changed, while the gate ran refuses the push.
    A push rejected because the branch moved is rebased and tried again, up to 3 times; a rebase that fails stops at once.
    When the new commits are words only (under `docs/`, or a Markdown file at the top), none of them is this change's, and
-   this change runs no test suite at all (tests in every project read docs from disk), **only typecheck, lint, personal and
-   size run again** (`gate.sh --checks-only`). That is not the full gate: it relies on CI, which runs every suite on `main`
+   this change runs no test suite at all (tests in every project read docs from disk), **only typecheck, lint, personal,
+   size and timing run again** (`gate.sh --checks-only`). That is not the full gate: it relies on CI, which runs every suite on `main`
    after the merge. Anything else, or a diff that cannot be read, runs the whole touched set again.
 
 While the gate runs, a background loop renews the lease every 4 minutes (over exactly the one it set). If another machine
@@ -492,7 +492,7 @@ for 2 h.) A ticket is CI only by its kind line, which only ci-local writes; a `h
 the most. The file is machine-local, so changing the number needs no code change and no restart: a waiter reads it on each
 look (a holder keeps the slot it has). **The first K slots are CI's** (`TALOS_CI_SLOTS`, else the first line of `~/.cache/talos-ci/ci-slots`, else **2**, never more
 than N - 1). Slot 1 **is** `locks/mutex-suites`. A ci-local job takes one of slots 1..K and no other, so **CI never waits behind a
-gate** (a gate runs 30 to 60 minutes, and "CI first" only orders who waits: it cannot take the lock from a gate already running;
+gate** for a slot (a gate runs 30 to 60 minutes, and "CI first" only orders who waits: it cannot take the lock from a gate already running;
 on 2026-11-16 CI's waits for the lock averaged 1,039 s), and the jobs of one run **overlap**, up to K at once: they used to take
 the one slot after another (a job once waited 1,629 s at a load of 4 to 7 on 18 cores). Each CI hold has its slot's own
 `PW_PORT` (4973 + 10 * (slot - 1), `TALOS_CI_HOLD_PW_PORT` moves it: a range of its own, never the builders' 4173 and up nor the
@@ -514,6 +514,43 @@ Swift desktop suites never run two at a time. No gate holds it (`gate.sh` runs n
 `apps/desktop/scripts/test.sh` or `ci.sh` does, for as long as it runs, and CI's desktop job waits behind that, CI first among
 the waiters. Titan's shared flock (`CI_SHARED_LOCK`) still serialises across the distros; set
 `TALOS_HEAVY_SLOTS=1` there.
+
+**Gate and CI take turns (one Mac).** The slots above keep CI's holds and a gate's apart, but the two ran at the same time on
+purpose, and CI's runs do more than hold a slot (install, build, the e2e and web specs, the image job take no slot), so a run that
+started in the middle of a gate pushed the load to 40 to 60 and failed the gate's timing-sensitive tests. Now, with two slots or more,
+**a gate's hold (anything `heavy-lock.sh run`: the gate's suites, a loop, an eval) and an admitted CI run never overlap**. Two
+classes take turns: _CI_ is a whole `ci-local.sh` run, from the moment it has a run slot (`locks/slot-N`) to the end of its cleanup;
+_gate_ is a hold of one of the gate slots (K+1..N). Nobody is stopped: a class that is on waits for the other to finish what it has.
+
+- **Who may start.** A new CI run (before `ci_acquire_slot` takes a run slot) and a new gate hold (before `ci_mutex` takes a gate
+  slot) each ask `ci_turn_ok`, which holds a short lock (`locks/mutex-turn`, taken with `ci_lock_try`, a dead holder is taken over
+  as any lock) while it looks and while the caller takes its slot, so the look and the take are one step. The answer is no while a
+  living holder of the other class exists (a run slot, or a gate slot), and no while a waiter of the other class that came
+  earlier is queued (a CI run waits in `locks.queue/admit`, a gate in `locks.queue/suites` as before; tickets sort by arrival, a
+  `jump` gate goes before CI waiters but still waits for the runs that are on). So the order is first come, first served across the two classes, and
+  a class that is on lets newcomers join it only while no older waiter of the other class is queued: a gate that arrives while
+  CI is on is not starved by CI runs that arrive after it, and CI queued behind a gate is not starved by gates that arrive after it.
+- **What is never held up.** A run already admitted goes on whatever waits: its own holds of CI's slots, its jobs, its cleanup
+  (stopping it for a waiting gate would throw away its verdict, and holding its inner holds back would deadlock). Nested calls
+  (`TALOS_CI_NESTED`, a run inside a holder) pass straight through, as they do for the locks.
+- **Bounded, and said.** A waiter's line names who it waits for (the runs or gates that hold the machine, with pid, what and
+  since when, or the older waiters) and is said again every five minutes with the time so far. A gate's wait counts in its
+  `HEAVY_LOCK_TIMEOUT` (a push gate four hours) and ends in exit 75 as any lock wait: a gate fails closed. A CI run **fails open**:
+  after `CI_TURN_MAX_S` (3000 s) it goes ahead beside the gate, with a loud line in its log and an alert ("ran beside a gate after N
+  min"), because an untested main commit is worse than a noisy run; its waits for a run slot keep `CI_LOCK_TIMEOUT`, which does not run while it waits for its turn. The runner's run step
+  has 120 minutes: keep `CI_TURN_MAX_S` plus a normal run well inside it, and the line "ran beside a gate" is said when the run's slot is
+  taken, not before. A run that waits for load (`CI_MAX_LOAD`) keeps its place in the queue, so gates queued after it go behind it until it
+  runs or gives up at `CI_LOCK_TIMEOUT`; a run counts from the moment it holds a run slot, including an idle wait for another run of the
+  same commit. After `TALOS_TURN_ALERT_S` (1200 s) of waiting ONE alert file goes to `alerts/` (what waits, for whom, how long). Each
+  wait of 1 s or more is a row of `logs/lock-waits.tsv` (kind `turn`), and `heavy-lock.sh status` shows who holds the machine and who waits.
+- **A holder that is gone.** A run slot or a gate slot whose owner process is gone counts for nothing (the same check every lock
+  makes): a crashed gate never holds CI back, nor a crashed run a gate.
+- **Off switch.** `CI_TURN=0` in the environment or a `turn-off` file in the cache gives the old behaviour (read on every look, by a CI run that already waits too).
+  With one heavy slot everyone already shares it, so none of this applies. A copy of the scripts from before this change
+  (a worktree not yet rebased) does not look; it still sees the run slots and gate slots, so a new gate waits for its CI, but an
+  old gate or an old CI run may still start beside the other, as before, until it has the new scripts.
+- **Not covered.** The gate's light steps (typecheck, lint, personal, size), which run outside the heavy lock, and the desktop
+  mutex (a builder's own Swift suite): both stay as they are.
 
 Each slot's command is given its own copies of everything the suites share, all from `TALOS_HEAVY_SLOT=<k>`:
 

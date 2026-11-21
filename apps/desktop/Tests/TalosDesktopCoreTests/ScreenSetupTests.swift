@@ -114,7 +114,7 @@ struct ScreenSetupModelTests {
     m.grant(.screenRecording)
     #expect(g.screenAsks == 1 && g.axAsks == 0)
     #expect(m.showReopen, "macOS counts Screen Recording only after Talos reopens")
-    #expect(ScreenSetupText.reopen == "After you turn on Screen Recording, macOS needs Talos to Quit & Reopen. Your sessions keep running.")
+    #expect(ScreenSetupText.reopen == "After you turn on Screen Recording, macOS needs Talos to Quit & Reopen. Your agent keeps running.")
     m.grant(.accessibility)
     #expect(g.axAsks == 1)
     g.answer = true
@@ -146,7 +146,7 @@ struct ScreenSetupModelTests {
     #expect(second.showStaleEntry)
     #expect(
       ScreenSetupText.staleEntry
-        == "macOS may still hold an old Talos entry. In System Settings → Privacy & Security → Screen & System Audio Recording, select Talos, press −, then Grant here again.")
+        == "macOS may still hold an old Talos entry. In System Settings → Privacy & Security → Screen & System Audio Recording, select Talos, press −, then Allow here again.")
     #expect(g.screenAsks == 1, "showing the line asks macOS nothing")
     // pressing Grant again in this run: the line waits for the next relaunch
     second.grant(.screenRecording)
@@ -165,7 +165,7 @@ struct ScreenSetupModelTests {
     let desktop = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let view = try String(contentsOf: desktop.appendingPathComponent("Sources/TalosDesktop/PermissionsView.swift"), encoding: .utf8)
     #expect(view.contains(#"memory: FileScreenGrantMemory(path: SupervisorController.supportDir + "/screen-grant-pressed")"#))
-    #expect(view.contains("if screen.showStaleEntry {") && view.contains("Text(ScreenSetupText.staleEntry)"))
+    #expect(view.contains("if screen.showStaleEntry {") && view.contains("ScreenSetupText.staleEntry"))
   }
 
   @Test func withoutAMemoryTheLineNeverShows() {

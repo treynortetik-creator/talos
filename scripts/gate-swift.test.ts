@@ -40,7 +40,7 @@ const env = gateTestEnv({
 })
 dirs.push(env.TALOS_CI_CACHE as string)
 
-const CHECKS = ['typecheck', 'lint', 'personal', 'size']
+const CHECKS = ['typecheck', 'lint', 'personal', 'size', 'timing']
 const DESKTOP = 'apps/desktop'
 const GUARD = 'apps/mobile/ios/BridgeGuard'
 const APP = 'apps/mobile/ios/App/App/AppDelegate.swift'

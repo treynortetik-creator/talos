@@ -63,7 +63,7 @@ function frame(attrs) { const f = document.createElement('iframe'); Object.assig
   await sleep(3000);
   R({t: 'after_go_evil', href: location.href});
   await sleep(300);
-  location.href = '/media/x/page?via=toplevel';          // gate should cancel + open SFSafariViewController
+  location.href = '/media/x/page?via=toplevel';          // gate should cancel + open the in-app media viewer
   await sleep(3000);
   R({t: 'after_toplevel_media', href: location.href});
   location.href = '/go-media';                              // 302 -> /media/x/page?via=redirect

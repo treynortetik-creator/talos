@@ -4,20 +4,20 @@ import Foundation
 /// Pure so the wording and the clearing rules are tested without the app.
 public enum SupervisorNotice {
   public static let needsYou = "Talos needs you at the Mac"
-  public static let restarted = "Talos restarted after a crash and resumed"
-  public static let stoppedRestarting = "Talos stopped restarting (crash loop)"
+  public static let restarted = "Your agent stopped and was restarted. It carried on."
+  public static let stoppedRestarting = "Your agent keeps stopping, so Talos paused it. Open Talos to look."
   public static let resumeFailed = "The last conversation can't be resumed"
-  public static let confirmFailed = "The restart wasn't confirmed in time; the session is stopped"
-  public static let blocked = "Another session holds the channels"
+  public static let confirmFailed = "The restart wasn't confirmed in time; your agent is stopped"
+  public static let blocked = MacWords.anotherAgentRunning
   public static let couldNotStart = "Talos couldn't start"
-  /// desktop.json's saved conversation id is not a session id (a UUID): nothing is started with it. The owner's way on is the menu's
+  /// desktop.json's saved conversation id is not a valid id (a UUID): nothing is started with it. The owner's way on is the menu's
   /// Start a new conversation (or fixing the file). The value is never shown or logged: it is from a file an agent may write.
   public static let sessionIdInvalid =
-    "The saved conversation id in desktop.json is not a session id, so Talos did not start Main with it. Start a new conversation, or fix session.id."
+    "The saved conversation id in desktop.json is not a valid id, so Talos did not start your agent with it. Start a new conversation, or fix the id in that file."
   public static let crashedNoRestart = "Talos crashed and auto-restart is off"
   public static let restartedOnRequest = "Restarted the agent: asked from your phone"
   public static let autoRestoredCrashLoop = "Talos kept crashing, so it put back the last good setup"
-  public static let autoRestoredBridgeDown = "The bridge stayed down, so Talos put back the last good setup"
+  public static let autoRestoredBridgeDown = "Talos on your Mac stayed down, so Talos put back the last good setup"
   public static let restoreNothingToChange = "Tried restoring the last good setup: nothing to change"
   public static let restoreFailed = "Talos couldn't put back the last good setup, so it stopped there and did not restart"
   public static let cleanExitLoop = "Talos stopped restarting: the agent keeps exiting cleanly"
@@ -34,14 +34,14 @@ public enum SupervisorNotice {
 
   /// The line for Main running without its bridge.
   public static func bridgeNotLive(_ reason: String?) -> String {
-    let base = "Main is running but its Talos bridge didn't start"
+    let base = "Your agent is running but Talos on your Mac didn't start"
     guard let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty else { return base }
     return base + ": " + reason
   }
 
   /// Main's bridge is live but has not reached the relay for `MainRestartContract.relayDownS`: the phone gets nothing.
   public static func relayUnreachable(closeCode: Int?) -> String {
-    "Talos bridge is running but can't reach the relay, so your phone gets nothing" + (closeCode.map { " (last close code \($0))" } ?? "")
+    "Talos on your Mac can't reach the Talos server, so your phone gets nothing right now. Talos keeps trying" + (closeCode.map { " (code \($0))" } ?? "")
   }
 
   /// Main was told about an owner message, has done nothing about it for `MainRestartContract.unseenS`, and its pane has printed
@@ -105,8 +105,8 @@ public enum SupervisorNotice {
   }
 
   /// Open Log with no log file yet. It describes a moment: it goes stale once the file exists.
-  public static let noLogYet = "No log yet."
-  public static func noLogNotice(path: String) -> String { "\(noLogYet) The bridge writes \(path) once it has run." }
+  public static let noLogYet = "No problem report yet."
+  public static func noLogNotice(path: String) -> String { "\(noLogYet) Talos writes it (\(path)) once it has run." }
 
   /// Which banner a notice raises. Every stopped or blocked state has one (D42).
   public static func event(for text: String) -> NotificationPolicy.Supervisor? {
@@ -133,7 +133,7 @@ public enum SupervisorNotice {
   }
 
   /// Menu line when there is no `desktop.json`. Names only controls that exist.
-  public static let notSetUp = "Not set up: Settings… → Session → Find a running session, or import your command"
+  public static let notSetUp = "Not set up yet: choose Set up Talos… in this menu, or take over a running agent in Mac settings → Advanced"
 
   /// What a prompt nobody named is, in the owner's words: `a 'Bash command' prompt`. Only the kind, which is ours (`Prompt.title`, a
   /// fixed table). The question on the pane is never quoted: it is screen text an agent or a file in a repository can write, and the
@@ -154,7 +154,7 @@ public enum SupervisorNotice {
       return "Claude is signed out. Choose Sign in to Claude again in the menu bar item"
     }
     if label == "api key" { return "Claude found an API key in your environment and is asking whether to use it. Answer in the Talos popup" }
-    if label == DialogMatcher.Screen.mcpConsent.label { return "Claude is asking whether to use a project MCP server. Answer in the Talos popup" }
+    if label == DialogMatcher.Screen.mcpConsent.label { return "Claude is asking whether to trust this project's connected tools. Answer in the Talos popup" }
     if label == DialogMatcher.Screen.bypassDisclaimer.label { return "Claude is asking whether to run with permission checks off. Answer in the Talos popup" }
     guard DialogMatcher.Screen.answerless(label: label) else { return "\(label) on screen" }
     if label == UsageLimitScreen.kind { return UsageLimitScreen.menuLine }
@@ -236,7 +236,7 @@ public struct ThreadNotices: Equatable, Sendable {
     case .untold: text = Self.untoldLine(name: name)
     case .failed(let code): text = Self.failedLine(name: name, code: code)
     }
-    return live.count > 1 ? "\(text) (+\(live.count - 1) more in Terminals…)" : text
+    return live.count > 1 ? "\(text) (+\(live.count - 1) more in \(MacWords.agentScreenName))" : text
   }
 
   /// The thread's name as config.json has it, cleaned to one short line; its id when it has none.
@@ -251,32 +251,32 @@ public struct ThreadNotices: Equatable, Sendable {
 
   public static func waitingLine(name: String, prompt: String) -> String {
     if answeredOnCard.contains(prompt) {
-      return "\(SupervisorNotice.needsYou): the \(name) session is waiting on a '\(prompt)' prompt. Answer it on its card or in the Talos popup."
+      return "\(SupervisorNotice.needsYou): the \(name) agent is waiting on a '\(prompt)' prompt. Answer it on its card or in the Talos popup."
     }
     let what = prompt.isEmpty ? "a prompt" : "a '\(prompt)' prompt"
-    if answeredOnPaneCard.contains(prompt) { return "\(SupervisorNotice.needsYou): the \(name) session is waiting on \(what). Answer it on its card, or at the Mac." }
-    return "\(SupervisorNotice.needsYou): the \(name) session is waiting on \(what). Open Terminals…"
+    if answeredOnPaneCard.contains(prompt) { return "\(SupervisorNotice.needsYou): the \(name) agent is waiting on \(what). Answer it on its card, or at the Mac." }
+    return "\(SupervisorNotice.needsYou): the \(name) agent is waiting on \(what). Choose \(MacWords.agentScreenName)."
   }
 
   public static func untoldLine(name: String) -> String {
-    "Couldn't tell the \(name) thread its session is waiting on a prompt. Open Terminals… to answer it."
+    "Couldn't tell the \(name) thread that its agent is waiting on a prompt. Choose \(MacWords.agentScreenName) to answer it."
   }
 
   /// One plain sentence per code, without the pointer to Terminals: the banner's words.
   public static func failedSentence(name: String, code: String) -> String {
     switch code {
-    case "crash_loop": return "The \(name) session kept crashing, so it was stopped"
-    case "start_failed": return "The \(name) session didn't start"
-    case "needs_mac": return "The \(name) session stopped at a question only this Mac can answer"
-    case "resume_missing": return "The \(name) session's conversation can't be resumed"
-    case "folder_claimed": return "The \(name) session didn't start: another thread session works in that folder"
-    case "mode_escalation_denied": return "The \(name) session wasn't started: it would have more access than the main session"
-    default: return "The \(name) session stopped and needs attention"
+    case "crash_loop": return "The \(name) agent kept stopping, so Talos stopped it"
+    case "start_failed": return "The \(name) agent didn't start"
+    case "needs_mac": return "The \(name) agent stopped at a question only this Mac can answer"
+    case "resume_missing": return "The \(name) agent's conversation can't be resumed"
+    case "folder_claimed": return "The \(name) agent didn't start: another thread's agent works in that folder"
+    case "mode_escalation_denied": return "The \(name) agent wasn't started: it would have more access than your main agent"
+    default: return "The \(name) agent stopped and needs attention"
     }
   }
 
   public static func failedLine(name: String, code: String) -> String {
-    failedSentence(name: name, code: code) + ". Open Terminals… for the reason."
+    failedSentence(name: name, code: code) + ". Choose \(MacWords.agentScreenName) for the reason."
   }
 
   /// The banner for a thread session that failed. One tag per thread, so a second failure of the same thread replaces the first.
@@ -316,6 +316,6 @@ public enum TalosHomeChange {
 
   public static let restartPrefix = "The Talos home changed"
   public static func restartNotice(to home: String) -> String {
-    "\(restartPrefix) to \(home), but thread sessions are still running from the old one. Quit and reopen Talos to move them."
+    "\(restartPrefix) to \(home), but thread agents are still running from the old one. Quit and reopen Talos to move them."
   }
 }

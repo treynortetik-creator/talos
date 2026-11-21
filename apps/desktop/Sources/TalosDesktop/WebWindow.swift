@@ -137,6 +137,8 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   /// which has no session and got a raw 401. The app downloads it itself, with the window's own sign-in, behind a save panel.
   /// Agent pages (`/media/:id/page`) and every other link still go to the browser.
   func routeExternal(_ u: URL) {
+    // only what `ExternalURL` allows ever reaches the browser (the page's open_external is parsed there, but this is the one door)
+    guard ExternalURL.parse(u.absoluteString) != nil else { return }
     guard let relay, let wv = webView, WebPolicy.isMediaFile(u, relay: relay) else { return openExternal(u) }
     wv.startDownload(using: URLRequest(url: u)) { [weak self] d in d.delegate = self }
   }
@@ -639,7 +641,8 @@ final class WebController: NSObject, ObservableObject, WKNavigationDelegate, WKU
   ) {
     guard let relay, let url = navigationAction.request.url else { return decisionHandler(.cancel) }
     let main = navigationAction.targetFrame?.isMainFrame ?? true
-    let d = main ? WebPolicy.decide(url, relay: relay) : WebPolicy.decideSubframe(url, relay: relay)
+    // inside a frame another host is never opened by a navigation WebKit cannot show to be the owner's own click (no public flag says so)
+    let d = main ? WebPolicy.decide(url, relay: relay) : WebPolicy.decideLinkInFrame(url, relay: relay, userInitiated: false)
     switch d {
     case .allow: decisionHandler(.allow)
     case .openExternally(let u):
@@ -846,9 +849,9 @@ extension WebController {
   /// revoke worked, and the result says what really happened.
   func forgetThisMac(config: DesktopConfig) {
     let a = NSAlert()
-    a.messageText = "Forget this Mac?"
-    a.informativeText = "This revokes this window's device and deletes its sign-in and device key. You will need a new setup code to sign in again."
-    a.addButton(withTitle: "Forget this Mac")
+    a.messageText = "Disconnect this Mac?"
+    a.informativeText = "Your phone keeps working. Connect this Mac again any time with a new setup code."
+    a.addButton(withTitle: "Disconnect this Mac")
     a.addButton(withTitle: "Cancel")
     guard a.runModal() == .alertFirstButtonReturn else { return }
     Task {
@@ -873,7 +876,7 @@ extension WebController {
       }
       if wipe { await self.wipeSiteData() }
       let done = NSAlert()
-      done.messageText = wipe ? "Forgot this Mac" : "Didn't forget this Mac"
+      done.messageText = wipe ? "This Mac is disconnected" : "This Mac is still connected"
       done.informativeText = note
       done.runModal()
     }

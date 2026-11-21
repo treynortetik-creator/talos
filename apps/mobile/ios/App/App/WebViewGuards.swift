@@ -1,6 +1,5 @@
 import BridgeGuard
 import Capacitor
-import SafariServices
 import UIKit
 import WebKit
 
@@ -122,7 +121,7 @@ enum MediaFetcher {
 
     static func message(for error: Error) -> String {
         if let f = error as? Failure, f.status == 410 || f.status == 404 {
-            return "This file expired from the relay. Ask the agent to resend it."
+            return "This file is no longer on the Talos server. Ask the agent to resend it."
         }
         return "Check your connection and try again."
     }
@@ -170,29 +169,29 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let inner: NSObject
     private let guardian: BridgeGuard
     let trust: RelayTrust
-    private let openInSafari: (URL) -> Void
+    private let openOutside: (URL) -> Void
     private let showMedia: (URL) -> Void
     private let pageDidReset: () -> Void
     private let pageLoadAllowed: () -> Bool
     private let retry: () -> Void
     private let processDied: () -> Void
-    private let didCommit: () -> Void
-    private let didFinish: () -> Void
+    private let didCommit: (WKNavigation?) -> Void
+    private let didFinish: (WKNavigation?) -> Void
 
     init(
         inner: NSObject, guardian: BridgeGuard, trust: RelayTrust,
-        openInSafari: @escaping (URL) -> Void, showMedia: @escaping (URL) -> Void,
+        openOutside: @escaping (URL) -> Void, showMedia: @escaping (URL) -> Void,
         pageDidReset: @escaping () -> Void = {},
         pageLoadAllowed: @escaping () -> Bool = { true },
         retry: @escaping () -> Void = {},
         processDied: @escaping () -> Void = {},
-        didCommit: @escaping () -> Void = {},
-        didFinish: @escaping () -> Void = {}
+        didCommit: @escaping (WKNavigation?) -> Void = { _ in },
+        didFinish: @escaping (WKNavigation?) -> Void = { _ in }
     ) {
         self.inner = inner
         self.guardian = guardian
         self.trust = trust
-        self.openInSafari = openInSafari
+        self.openOutside = openOutside
         self.showMedia = showMedia
         self.pageDidReset = pageDidReset
         self.pageLoadAllowed = pageLoadAllowed
@@ -235,7 +234,7 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     private func route(_ url: URL) {
-        if guardian.isRelayMedia(url) { showMedia(url) } else { openInSafari(url) }
+        if guardian.isRelayMedia(url) { showMedia(url) } else { openOutside(url) }
     }
 
     // MARK: Navigation
@@ -301,12 +300,12 @@ final class NavigationGate: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         pageDidReset()
-        didCommit()
+        didCommit(navigation)
         (inner as? WKNavigationDelegate)?.webView?(webView, didCommit: navigation)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        didFinish()
+        didFinish(navigation)
         (inner as? WKNavigationDelegate)?.webView?(webView, didFinish: navigation)
     }
 

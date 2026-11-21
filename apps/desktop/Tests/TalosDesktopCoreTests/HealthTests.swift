@@ -93,14 +93,14 @@ struct HealthModelTests {
   @Test func noStatusFileIsUnknownNotFineAndNotDown() {
     let s = HealthModel.summarize(.init(session: .running(activity: "idle"), bridge: nil, relayReachable: true))
     #expect(s.icon == .unknown)
-    #expect(s.lines.contains("Bridge: unknown"))
+    #expect(s.lines.contains("Your Mac: checking"), "running, nothing reported yet: checking, not down")
     #expect(icon(.init(session: .running(activity: "busy"), bridge: nil, relayReachable: true)) == .unknown)
   }
 
   @Test func aRelayNotCheckedYetOrNotSetIsUnknownToo() {
     #expect(icon(.init(session: .running(activity: "idle"), bridge: .healthy, relayReachable: nil)) == .unknown)
     let s = HealthModel.summarize(.init(session: .running(activity: "idle"), bridge: .healthy, relayReachable: nil, relayConfigured: false))
-    #expect(s.lines.contains("Relay: not set (Mac settings → Connection)"))
+    #expect(s.lines.contains("Talos server: not set up"))
   }
 
   @Test func staleRelayDownAndHeadlessAreDownNotFine() {
@@ -121,8 +121,8 @@ struct HealthModelTests {
 
   @Test func theFirstLineSpellsItOut() {
     let s = HealthModel.summarize(.init(session: .running(activity: "busy"), bridge: .healthy, relayReachable: true, host: "tmux"))
-    #expect(s.lines.first == "Session: busy · tmux")
-    #expect(s.lines.contains("Bridge: connected") && s.lines.contains("Relay: reachable"))
+    #expect(s.lines.first == "Agent: running")
+    #expect(s.lines == ["Agent: running", "Talos server: connected", "Your Mac: connected"])
   }
 }
 
@@ -131,7 +131,7 @@ struct NotificationPolicyTests {
   @Test func supervisorTextsAreFixedPhrases() {
     #expect(NotificationPolicy.notice(.needsYou, agent: "Talos").body == "Talos needs you at the Mac")
     #expect(NotificationPolicy.notice(.restartedAfterCrash, agent: "Talos").quiet)
-    #expect(NotificationPolicy.notice(.stoppedRestarting, agent: "Talos").body == "Talos stopped restarting (crash loop)")
+    #expect(NotificationPolicy.notice(.stoppedRestarting, agent: "Talos").body == "Talos keeps stopping, so Talos paused it. Open Talos to look.")
   }
 
   @Test func theAgentNameCannotCarryControlCharsOrLength() {

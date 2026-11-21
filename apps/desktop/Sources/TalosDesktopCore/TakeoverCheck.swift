@@ -87,7 +87,7 @@ public enum TakeoverCheck {
 
     public var message: String {
       let f = folder.map { ", folder \($0)" } ?? ""
-      return "Another Claude session (pid \(sessionPid)\(f)) holds \(resource.rawValue). Quit it first, or press \u{201C}\(BlockedText.adoptButton)\u{201D} to take it over."
+      return "Another Claude (pid \(sessionPid)\(f)) is already using \(resource.rawValue). Quit it first, or press \u{201C}\(BlockedText.adoptButton)\u{201D} to take it over."
     }
   }
 

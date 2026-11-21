@@ -12,7 +12,7 @@ extension SupervisorController {
   }
 }
 
-/// Opens Mac settings on a tab. The Session, Permissions and Compose hotkey windows are gone: every door lands here.
+/// Opens Mac settings on a tab. The Session, Permissions and Compose hotkey windows (and tabs) are gone: every door lands here.
 @MainActor
 enum SettingsRouter {
   static func open(_ tab: SettingsNavigator.Tab, via open: (String) -> Void) {
@@ -21,9 +21,10 @@ enum SettingsRouter {
     NSApp.activate(ignoringOtherApps: true)
   }
 
-  /// "Find a running session": the Session tab, then the search. The menu bar and the setup checklist both come through here.
+  /// "Take over an agent that's already running": the Advanced tab, then the search. The menu bar and the setup checklist both come
+  /// through here.
   static func openAdopt(model: SupervisorController, via open: (String) -> Void) {
-    Self.open(.session, via: open)
+    Self.open(.advanced, via: open)
     model.findSessionToAdopt()
   }
 }
@@ -39,7 +40,7 @@ enum HelpRouter {
       web.sendWhenReady(.navigate(path: path), reveal: false)
     case .needsRelay(let notice):
       model.notice = notice
-      SettingsRouter.open(.connection, via: open)
+      SettingsRouter.open(.advanced, via: open)
     }
   }
 }
@@ -62,7 +63,7 @@ enum AppMenuActions {
     case .help: HelpRouter.open(model: model, via: open)
     case .setupChecklist:
       window(OnboardingMarker.isNeeded(configured: model.configured, pending: OnboardingMarker.isPending(home: NSHomeDirectory())) ? "onboarding" : "advanced-setup")
-    case .permissions: SettingsRouter.open(.permissions, via: open)
+    case .permissions: SettingsRouter.open(.access, via: open)
     case .about: window("about")  // the Talos About window, never the stock panel
     case .checkForUpdates: UpdateController.shared.menuChoice()
     case .showTalos:
@@ -70,7 +71,7 @@ enum AppMenuActions {
         web.show()
       } else {
         model.notice = MacSettingsText.noRelayYet
-        SettingsRouter.open(.connection, via: open)
+        SettingsRouter.open(.advanced, via: open)
       }
     case .showTerminal:
       TerminalWindowController.shared.attach(model: model)
@@ -78,7 +79,7 @@ enum AppMenuActions {
     case .quickCompose: QuickCompose.shared.show(anchor: QuickCompose.shared.anchorProvider?())
     case .companionToggle: toggleCompanion()
     case .signIn: SignInAction.start(model: model)
-    case .signOut: Task { await web.signOut() }
+    case .signOut: SignOutAction.run(web: web)
     case .quit: model.quitFromMenu()
     case .reload: web.reloadFrontWindow()
     case .hide, .hideOthers, .showAll, .closeWindow, .minimize: break  // AppKit's own actions

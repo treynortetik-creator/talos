@@ -341,6 +341,8 @@ export type BridgeContext = {
   undo?: import('./undo/route-point.ts').UndoSeam
   /** The undo card (undo/card.ts): the live main bridge only. */
   undoCards?: import('./undo/card.ts').UndoCards
+  /** The offer to send a turn an update cut off again (router/update-resend.ts): the live main bridge only. */
+  updateResend?: import('./router/update-resend.ts').UpdateResendCards
   /** A message's undo point on its receipt and history rows (undo/marks.ts): the live main bridge only. */
   undoMarks?: import('./undo/marks.ts').UndoMarks
   /** Pushes a channel notification into the Claude session. A no-op in headless mode. */

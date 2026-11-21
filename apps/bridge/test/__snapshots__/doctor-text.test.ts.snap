@@ -22,6 +22,7 @@ ok    talos mod: Talos mod not installed in Claude Code
 ok    kit files: no kit manifest yet (expected until the kit writes one; nothing to check)
 ok    claude doctor: not run here: run \`claude doctor\` in Terminal for Claude Code's own checks
 ok    relay /healthz: fake
+ok    relay release: not a release build: a relay that deploys from main, or one too old to report its release
 ok    relay accepts this Mac: a signed read-only call was accepted
 warn  live bridge (status.json): no status.json: no bridge has run here since this update, or none is running. Start your agent with: talos-app start (a bridge that was already running needs a restart to start writing it)
 If the app says the server turned away this Mac's key, put this line in the relay variables on Railway and deploy:

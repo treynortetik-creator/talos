@@ -283,7 +283,17 @@ that is set on it can do. The terminal check and the guards below are a speed bu
 has been misled by a message it read; they are not a boundary against one that is determined to get through. The tripwire is
 the backstop: it cannot stop a change, it tells the owner about one.
 
-- **Terminal check.** `enroll`, `rotate` and `trust on` refuse when stdin or stdout is not a
+- **The Railway token (`talos-app relay connect`).** To redeploy an online relay by itself the bridge can keep one Railway token: a project
+  token (reads that project's settings and nothing else) or, if the owner insists and types `yes`, an account or workspace token (can
+  change every project in the Railway account). It is asked for hidden in a terminal (`relay connect` is terminal-only, refused to an
+  agent and denied by the guards; a token on the command line is refused), kept in the key store under a name of its own per Talos home,
+  and written to no file, log, row or output; `relay-connect.json` holds ids and names only (tested). The one module that talks to Railway
+  (`apps/bridge/src/relay/railway.ts`, the fixed endpoint, the token in one header) has a closed list of operations: one mutation, the
+  service's redeploy, and a few read-only questions; a test fails on any other operation or any other file that names the endpoint.
+  `relay update` and `relay auto on` follow the `peer link` gate (the lock, outside text); `relay auto off` and `relay disconnect` are
+  always allowed. Railway's address (and the releases list's) is fixed in code: no environment variable or file changes it, only a seam test code sets, since whoever picks that address receives the token. The guards keep a session from writing `relay-connect.json` and `relay-auto.json` (read-only) and from naming `relay-redeploy-request.json` and `-result.json` at all; a thread row never carries the Mac app's free error text, only the fixed line for its code. A relay the Mac app set up never gives the bridge a
+  token: the app redeploys and answers through a result file (docs/deploy-railway.md).
+- **Terminal check.** `enroll`, `rotate`, `trust on` and `relay connect` (it keeps a Railway token) refuse when stdin or stdout is not a
   terminal: what decides who the owner is (owner ruling 2026-11-14 keeps these until he decides on adding devices). `devices` and `peer`
   are the agent's own unless "Lock Talos settings" is on (owner ruling 2026-11-19, `agent-cli.ts`): `peer link|accept|create|add|list|remove|rotate|secret-forget`
   and `devices list|revoke` run from a session with no terminal, and refuse with the one lock sentence while the lock is on; a terminal runs

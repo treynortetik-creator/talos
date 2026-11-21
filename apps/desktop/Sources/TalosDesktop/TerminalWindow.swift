@@ -494,7 +494,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
       note?.isHidden = true
     }
     let rows = model.supervisor.hostScreen()
-    let shown = rows.isEmpty ? "(no agent session yet: Menu → Start session)" : rows.joined(separator: "\n")
+    let shown = rows.isEmpty ? "(no agent session yet: Menu → Start your agent)" : rows.joined(separator: "\n")
     if directText?.string != shown { directText?.string = shown }
   }
 
@@ -531,7 +531,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate, LocalProcessTe
     if threadsItem == nil {
       let pane = ThreadSessionsPane()
       let item = NSTabViewItem(identifier: "threads")
-      item.label = "Thread sessions"
+      item.label = MacWords.threadAgentsTab
       item.view = pane.view
       tabs.insertTabViewItem(item, at: min(1, tabs.numberOfTabViewItems))
       threadsItem = item
@@ -607,7 +607,7 @@ final class ThreadSessionsPane: NSObject, LocalProcessTerminalViewDelegate {
   private let attachButton = NSButton(title: "Attach", target: nil, action: nil)
   private let openButton = NSButton(title: "Open claude in this folder", target: nil, action: nil)
   private let holder = NSView()
-  private let empty = NSTextField(wrappingLabelWithString: "No thread sessions yet. A thread that runs its own session shows up here once it has started.")
+  private let empty = NSTextField(wrappingLabelWithString: MacWords.threadAgentsEmpty)
   private var rows: [ThreadSessionRow] = []
   private var signature = ""
   private var terminal: LocalProcessTerminalView?

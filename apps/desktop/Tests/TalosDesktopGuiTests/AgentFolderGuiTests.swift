@@ -200,7 +200,7 @@ struct AgentFolderCreateGuiTests {
     await w.flow.create()
     #expect(w.model.configured && w.disk != nil, "the setup is made")
     #expect(w.started.count == 0)
-    #expect(w.doneText?.contains("/login") == true && w.doneText?.contains("Start session") == true)
+    #expect(w.doneText?.contains("/login") == true && w.doneText?.contains("Start your agent") == true)
   }
 
   @Test func theAppQuittingMidStepLeavesARelaunchWithNothingToUndo() async throws {
@@ -632,9 +632,9 @@ struct ImportStartsGuiTests {
     #expect(w.model.importNote == SetupText.importSavedNotStarted)
   }
 
-  @Test func theSessionTabsImportButtonStartsTheSession() throws {
+  @Test func theAdvancedTabsImportButtonStartsTheAgent() throws {
     let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-      .appendingPathComponent("Sources/TalosDesktop/App.swift")
+      .appendingPathComponent("Sources/TalosDesktop/AdvancedSettingsView.swift")
     #expect(try String(contentsOf: src, encoding: .utf8).contains("model.importCommand(command, thenStart: true)"))
   }
 }

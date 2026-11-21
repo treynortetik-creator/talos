@@ -5,6 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ROOT } from './size-report.ts'
+import { lintSource } from './timing-lint.ts'
 
 function testFiles(dir: string): string[] {
   const out: string[] = []
@@ -47,10 +48,13 @@ describe('test budgets scale with the time factor', () => {
   })
 
   it('no test under scripts/ sets a flat file-level budget', () => {
-    const self = join(ROOT, 'scripts', 'test-timeouts.test.ts') // its own examples above are flat on purpose
-    const flat = testFiles(join(ROOT, 'scripts'))
-      .filter((f) => f !== self)
-      .flatMap((f) => flatBudgets(readFileSync(f, 'utf8')).map((b) => `${relative(ROOT, f)} (${b})`))
+    // the timing lint (scripts/timing-lint.ts) reads real calls, not text in a string, and covers more than setConfig; the gate
+    // runs it on changed lines, this one holds the whole of scripts/ to the setConfig rule
+    const flat = testFiles(join(ROOT, 'scripts')).flatMap((f) =>
+      lintSource(relative(ROOT, f), readFileSync(f, 'utf8'))
+        .filter((h) => h.rule === 'unscaled' && /\b(testTimeout|hookTimeout)\b/.test(h.text))
+        .map((h) => `${relative(ROOT, f)}:${h.line} (${h.text})`),
+    )
     expect(flat, 'wrap the value in scaled(…) from packages/testkit/src/time-factor.ts').toEqual([])
   })
 

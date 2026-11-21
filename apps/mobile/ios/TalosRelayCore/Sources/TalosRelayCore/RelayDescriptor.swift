@@ -6,7 +6,7 @@ public enum DescriptorCheck: Equatable {
     case updateAdvised(minApp: String)
 
     public var note: String? {
-        if case let .updateAdvised(minApp) = self { return "This relay asks for Talos \(minApp) or newer. Please update the app." }
+        if case let .updateAdvised(minApp) = self { return "This Talos server asks for Talos \(minApp) or newer. Please update the app." }
         return nil
     }
 }

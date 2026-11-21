@@ -28,7 +28,7 @@ export function hostWords(host: Host | null): HostWords {
       app: 'the Mac app',
       offline: 'Your Mac is offline.',
       restart:
-        'On your Mac, choose Restart session in the Talos menu bar, or quit and restart Claude Code in your terminal.',
+        'On your Mac, choose Restart your agent in the Talos menu bar, or quit and restart Claude Code in your terminal.',
       signin: null,
       restore: 'To put back the last good setup, use the Talos menu on your Mac: Restore last good setup.',
     }
@@ -137,8 +137,9 @@ const MAC_STEPS: HostSteps = {
   modQuiet: 'Check that Claude is still running on your Mac with the Talos mod loaded.',
   loginProof: "This device couldn't prove its key. Run talos-app enroll on your Mac to set it up again.",
   answerThere:
-    'It stopped at a question only the Mac can answer. Open Talos Terminal on the Mac, pick this thread under Thread sessions, and answer it there. Then press Restart here to start it again',
-  lookThere: "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
+    'It stopped at a question only the Mac can answer. In the Talos menu bar, choose Advanced, then Show my agent’s screen…. In Talos Terminal, pick this thread under Thread agents, and answer it there. Then press Restart here to start it again',
+  lookThere:
+    "It stopped for a reason this version doesn't know. In the Talos menu bar, choose Advanced, then Show my agent’s screen…, to see what happened",
   rotate: 'If you did not start Talos on a second computer on purpose, run talos-app rotate on your Mac.',
   dialogHere: "This prompt can't be shown here. Answer it at the Mac.",
   dialogExpired: 'Expired. Nobody answered in time; your agent is still waiting at the Mac.',

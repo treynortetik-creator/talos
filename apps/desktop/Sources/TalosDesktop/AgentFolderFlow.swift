@@ -428,17 +428,17 @@ final class AgentFolderFlow: ObservableObject {
     }
     var note: String
     if wasConfigured {
-      note = "\(dir) is now the agent folder. It applies the next time the agent starts (Restart session in the menu bar item)."
+      note = "\(dir) is now the agent folder. It applies the next time the agent starts (Restart your agent in the menu bar item)."
     } else if holdStart {
       note = "Set up."
     } else if signedIn == false {
       note =
-        "Set up. Claude isn't signed in, so nothing has started: choose Sign in to Claude again in the menu bar item, then choose Start session."
+        "Set up. Claude isn't signed in, so nothing has started: choose Sign in to Claude again in the menu bar item, then choose Start your agent."
     } else {
       note =
         model.beginSession(model)
-        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: connector and permission questions come as a Talos popup with buttons; for the folder question, open Terminals… in the menu bar item."
-        : "Set up, but the session did not start (the menu bar item says why). Choose Start session when you are ready."
+        ? "Set up, and the session is starting. The first time, Claude asks you to confirm a few things: connector and permission questions come as a Talos popup with buttons; for the folder question, open \(MacWords.agentScreenPath)."
+        : "Set up, but the session did not start (the menu bar item says why). Choose Start your agent when you are ready."
     }
     if let f = FirstRun.protectedFolder(dir, home: NSHomeDirectory()) {
       note += " The folder is inside \(f), which macOS protects, so macOS asks Talos once."

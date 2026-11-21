@@ -57,14 +57,14 @@ async function revokeTabletInSettings(stack: Stack, page: Page): Promise<void> {
   await page.goto(`${stack.origin}/settings/account`)
   const row = page.getByTestId('device-row').filter({ hasNotText: 'This device' })
   await expect(row).toHaveCount(1)
-  await row.getByRole('button', { name: /^Revoke/ }).click()
+  await row.getByRole('button', { name: /^Remove/ }).click()
   // no Face ID since 2026-11-14; a revoke can't be undone, so the confirm sheet asks first (the owner's ruling)
   await page
     .getByRole('dialog')
-    .getByRole('button', { name: /^Revoke / })
+    .getByRole('button', { name: /^Remove / })
     .click()
-  await expect(row.getByText('Revoked', { exact: true })).toBeVisible()
-  await expect(row.getByRole('button', { name: /^Revoke/ })).toHaveCount(0)
+  await expect(row.getByText('Removed', { exact: true })).toBeVisible()
+  await expect(row.getByRole('button', { name: /^Remove/ })).toHaveCount(0)
 }
 
 test('revoke: the Mac lists the device as REVOKED and the revoked device loses its socket', async ({

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
+import { t } from '@talos-app/testkit'
 import { challengeHostOk } from '../src/handshake.ts'
 import {
   backlogNotification,
@@ -11,6 +12,9 @@ import {
 import { backoffMs } from '../src/relay-client.ts'
 import { ChannelMeta, loadFrameFixturesForTests } from './fixtures-protocol.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(40_000))
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -145,7 +149,7 @@ describe('protocol fixtures', () => {
       sent++
     }
     expect(sent).toBeGreaterThan(5)
-    await sleep(400)
+    await sleep(t(400)) // lets the bridge work through every fixture before the connection is checked
     await eventually(() => expect(h.relay.bridgeConnected).toBe(true))
     await h.app.sendMessage('general', 'still alive')
     await waitFor(() => h.notes.some((n) => n.content === 'still alive'), 4000, 'the bridge still works')
@@ -173,7 +177,7 @@ describe('ordering, media and handshake', () => {
     }
     h.bridge.start()
     await h.waitNotes(3)
-    await sleep(100)
+    await sleep(100) // timing-ok: negative window: no frame is delivered twice
     await eventually(() => expect(h.notes.map((n) => n.content)).toEqual(['A', 'B', 'C']))
   })
 
@@ -192,7 +196,7 @@ describe('ordering, media and handshake', () => {
     expect(new TextDecoder().decode(h.relay.media.get(id)?.bytes)).toBe('old media')
     // an id the Mac does not know is just logged
     h.relay.sendToBridge(await h.app.buildMediaFetch('md_01JBF3V7Q8K2M4N6P8R0S2T4V6'), { durable: false })
-    await sleep(100)
+    await sleep(100) // timing-ok: negative window: an unknown media id must not take the bridge down
     await eventually(() => expect(h.relay.bridgeConnected).toBe(true))
   })
 

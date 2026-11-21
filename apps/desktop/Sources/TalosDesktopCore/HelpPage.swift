@@ -19,5 +19,5 @@ public enum HelpPage {
 
   /// Without a relay address the Talos window has nothing to load, and Help is a page in it.
   public static let noRelay =
-    "Help is a page in the Talos window, and the window needs your relay address first. Set one in \(MacSettingsText.connectionPath)."
+    "Help is a page in the Talos window, and the window needs the address of your Talos server first. Add it in \(MacSettingsText.connectionPath)."
 }

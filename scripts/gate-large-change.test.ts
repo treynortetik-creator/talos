@@ -80,7 +80,7 @@ function change(n: number, { gate, plan: planSh } = { gate: GATE, plan: PLAN }) 
   git('commit', '-qm', 'change')
   expect(git('diff', '--name-only', base, 'HEAD').split('\n')).toHaveLength(3 * n)
   const want = [
-    ...['typecheck', 'lint', 'personal', 'size', 'vitest'],
+    ...['typecheck', 'lint', 'personal', 'size', 'timing', 'vitest'],
     ...vit.sort().map((t) => `\t${t}`),
     ...['bun', '\tapps/bridge/test/scripts-named.test.ts'],
     ...['web-specs', '\ttest/foo/foo.spec.ts', 'web-specs-webkit', '\ttest/foo/foo.spec.ts'],

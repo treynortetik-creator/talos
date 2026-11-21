@@ -612,6 +612,55 @@ describe('guard decisions', () => {
     // NotebookEdit and MultiEdit: Claude Code matches no other tool name in a path rule)
     expect(fenceDenyRules(home)).toEqual(expect.arrayContaining([`Edit(/${home}/**)`]))
   })
+  describe('the relay update files: a session may read the two the bridge keeps, and never writes any of the four', () => {
+    // relay-connect.json decides which service is redeployed and whether auto-update is on; relay-auto.json holds the hourly limit and
+    // the backoff; the request and the result are what the bridge and the Mac app pass between them (a forged result puts text in a row)
+    test.each(['relay-connect.json', 'relay-auto.json'])(
+      '%s is read-only: readable, never written by a shell or a file tool',
+      (n) => {
+        const f = join(home, n)
+        expect(bash(`cat ${f}`), n).toBeUndefined()
+        for (const c of [
+          `echo '{}' > ${f}`,
+          `cd ${home} && printf x > ${n}`,
+          `tee ${f}`,
+          `sed -i s/true/false/ ${f}`,
+          `cp /tmp/x ${f}`,
+          `mv /tmp/x ${f}`,
+          `rm ${f}`,
+          `python3 -c "open('${f}','w')"`,
+        ])
+          expect(bash(c), c).toBeDefined()
+        for (const tool of ['Write', 'Edit', 'MultiEdit']) expect(write(f, tool), `${n} ${tool}`).toBeDefined()
+        expect(denyRules(cfg).some((r) => r.startsWith('Edit(/') && r.endsWith(`/${n})`))).toBe(true)
+      },
+    )
+    test.each(['relay-redeploy-request.json', 'relay-redeploy-result.json'])(
+      '%s is never touched by a command or a file tool',
+      (n) => {
+        const f = join(home, n)
+        for (const c of [
+          `cat ${f}`,
+          `echo '{}' > ${f}`,
+          `cd ${home} && printf x > ${n}`,
+          `mv /tmp/forged.json ${f}`,
+          `cp /tmp/forged.json ${f}`,
+          `rm ${f}`,
+          `touch ${f}`,
+          `python3 -c "open('${f}','w')"`,
+        ])
+          expect(bash(c), c).toBeDefined()
+        for (const tool of ['Write', 'Edit', 'MultiEdit']) expect(write(f, tool), `${n} ${tool}`).toBeDefined()
+        expect(denyRules(cfg)).toContain(`Bash(*${n}*)`)
+      },
+    )
+    test('`talos-app relay connect` is denied to a session (the update, auto and status words are not)', () => {
+      expect(denyRules(cfg)).toContain('Bash(talos-app relay connect:*)')
+      expect(bash('talos-app relay connect')).toBeDefined()
+      expect(bash('talos-app relay update')).toBeUndefined()
+      expect(bash('talos-app relay status')).toBeUndefined()
+    })
+  })
   test('the Write tools are denied on the trust files too', () => {
     for (const f of ['devices.json', 'config.json', 'tripwire.writing', 'tripwire.json', 'guards/guards.json'])
       expect(write(join(home, f), 'Edit'), f).toBeDefined()

@@ -77,9 +77,14 @@ export const REDELIVERED_PREFIX =
   "(Talos sent this again because the last turn ended without an answer. If you already acted on it, don't do it twice.)"
 
 /** The notice as it goes out the second time: the same owner trust and ids, marked in meta and in its first line. Never mutates the held one. */
-export function redelivered(n: Notification, why: 'missed' | 'stall'): Notification {
-  return { content: `${REDELIVERED_PREFIX}\n${n.content}`, meta: { ...n.meta, redelivered: why } }
+export function redelivered(n: Notification, why: 'missed' | 'stall' | 'update'): Notification {
+  const prefix = why === 'update' ? UPDATE_REDELIVERED_PREFIX : REDELIVERED_PREFIX
+  return { content: `${prefix}\n${n.content}`, meta: { ...n.meta, redelivered: why } }
 }
+
+/** The line put before a thread's message sent again because an app update restarted the session in the middle of its turn. */
+export const UPDATE_REDELIVERED_PREFIX =
+  "(Talos restarted for an update while you were working on this, so it is sent again. If you already did part of it, don't do it twice.)"
 
 export type ResendOutcome = 'sent' | 'failed'
 

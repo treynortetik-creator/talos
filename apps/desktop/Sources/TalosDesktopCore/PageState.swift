@@ -28,7 +28,7 @@ public enum PageState: Equatable, Sendable {
   /// Every command and menu name here is checked against the real CLI and menu bar by the web app's Help test.
   public static let outageHelp = [
     "Talos Help is a page on your Talos server, so it cannot open until the server answers.",
-    "Look at the Talos icon in the Mac menu bar: a head with a slash through it means the agent, the bridge or the server is down. Choose Start session if the agent is stopped.",
-    "In Terminal, talos-app status and talos-app doctor say what is wrong, and talos-app logs shows the bridge log.",
+    "Look at the Talos icon in the Mac menu bar: a head with a slash through it means your agent, Talos on your Mac or the Talos server is down. Choose Start your agent if your agent is stopped.",
+    "In Terminal, talos-app status and talos-app doctor say what is wrong, and talos-app logs shows the Talos activity log.",
   ]
 }

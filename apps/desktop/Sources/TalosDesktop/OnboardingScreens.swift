@@ -120,6 +120,7 @@ private struct ReadyScreen: View {
   var actions: OnboardingActions
 
   private var pct: Int { if case .running(let p) = flow.download { return p } else { return 100 } }
+  private var bar: OnboardingFlow.ReadyBar { OnboardingFlow.readyBar(pct: pct, done: flow.download == .done, elapsed: extras.downloadElapsed) }
 
   var body: some View {
     OBFrame(flow: flow) {
@@ -135,10 +136,9 @@ private struct ReadyScreen: View {
           HStack {
             Text(OnboardingCopy.readyDownloading).font(OB.body(14, .medium))
             Spacer()
-            Text(OnboardingCopy.readyDetail(pct: pct, secondsLeft: OnboardingCopy.secondsLeft(pct: pct, elapsed: extras.downloadElapsed)))
-              .font(OB.body(14)).foregroundStyle(OB.muted)
+            Text(bar.detail).font(OB.body(14)).foregroundStyle(OB.muted)
           }
-          OBBar(pct: pct, label: "Download progress")
+          OBBar(pct: bar.pct, label: "Download progress")
         }
         VStack(alignment: .leading, spacing: 10) {
           ForEach(Array(OnboardingFlow.readyLines(pct: pct, done: flow.download == .done).enumerated()), id: \.offset) { i, state in

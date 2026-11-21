@@ -85,15 +85,46 @@ public enum PermissionsModel {
     case (.accessibility, _): return ScreenSetupText.missing(.accessibility)
     case (.screenRecording, _): return ScreenSetupText.missing(.screenRecording)
     case (.notifications, .missing):
-      return "Denied. macOS blocks every Talos banner, including crash and health banners, and Talos can't turn that back on. Open System Settings \u{2192} Notifications \u{2192} Talos and allow them."
+      return "You said no, so macOS blocks every Talos banner, including warnings. Turn them back on in System Settings \u{2192} Notifications \u{2192} Talos."
     case (.notifications, .askedOnFirstUse): return "Not asked yet. macOS asks the first time a banner would show."
     case (.notifications, .unknown): return "Couldn't check. Talos can only ask macOS when it runs as the Talos app."
     case (.automation, _):
-      return "Can't be checked from here: macOS keeps one answer per app. Press Ask now, then review them in System Settings \u{2192} Privacy & Security \u{2192} Automation."
-    case (_, .missing): return "Denied. macOS won't ask again; turn it on in System Settings."
+      return "Talos can't check this one. Press Ask now, then review it in System Settings \u{2192} Privacy & Security \u{2192} Automation."
+    case (_, .missing): return "You said no. macOS won't ask again; allow it in System Settings."
     case (_, .unknown): return "Couldn't check."
     case (_, .askedOnFirstUse):
-      return action == .none ? "Not checked here. macOS asks the first time the agent needs it." : nil
+      return action == .none ? "Not checked here. macOS asks the first time your agent needs it." : nil
+    }
+  }
+
+  /// Every note a row can show, for the words guard.
+  public static var allStateNotes: [String] {
+    var out: [String] = []
+    for k in Kind.allCases {
+      for s in [State.granted, .missing, .askedOnFirstUse, .unknown] {
+        for a in [Action.none, .triggerPrompt] { if let n = stateNote(kind: k, state: s, action: a) { out.append(n) } }
+      }
+    }
+    return out
+  }
+
+  /// Where a row sits on the Privacy & access tab: what is allowed, what the owner said no to, and what has not come up yet.
+  public enum Group: Equatable, Sendable { case allowed, saidNo, notAskedYet }
+
+  /// "See and use the screen" is one row for two macOS permissions (the mouse and keyboard, and the screen itself): allowed only when
+  /// both are, "you said no" when either was refused, otherwise not asked yet.
+  public static func screenState(accessibility: State, screenRecording: State) -> State {
+    let both = [accessibility, screenRecording]
+    if both.allSatisfy({ $0 == .granted }) { return .granted }
+    if both.contains(.missing) { return .missing }
+    return both.contains(.unknown) ? .unknown : .askedOnFirstUse
+  }
+
+  public static func group(_ s: State) -> Group {
+    switch s {
+    case .granted: return .allowed
+    case .missing: return .saidNo
+    case .askedOnFirstUse, .unknown: return .notAskedYet
     }
   }
 
@@ -110,36 +141,35 @@ public enum PermissionsModel {
       .notifications, "Notifications", notificationsWhy,
       .openSettings(notificationsURL)
     ),
-    (.desktopFolder, "Desktop folder", "The agent folder may live under ~/Desktop.", .triggerPrompt),
-    (.documentsFolder, "Documents folder", "The agent reads and writes under ~/Documents.", .triggerPrompt),
-    (.downloadsFolder, "Downloads folder", "The agent reads files you download.", .triggerPrompt),
+    (.desktopFolder, "Desktop folder", "Open and save files on your Desktop", .triggerPrompt),
+    (.documentsFolder, "Documents folder", "Open and save your files", .triggerPrompt),
+    (.downloadsFolder, "Downloads folder", "Read files you download", .triggerPrompt),
     (
-      .fullDiskAccess, "Full Disk Access", "The iMessage channel reads chat.db; anything outside the user folders.",
+      .fullDiskAccess, "Messages and protected files", "Lets your agent read your Messages and other protected files",
       .openSettings(settingsBase + "Privacy_AllFiles")
     ),
     (
-      .accessibility, "Accessibility", "Screen control: your agent clicks and types for you, only in apps you allowed.",
+      .accessibility, "Use the mouse and keyboard", "Your agent clicks and types for you, only in apps you allow",
       .grant(settingsBase + "Privacy_Accessibility")
     ),
     (
-      .screenRecording, "Screen & System Audio Recording", "Screen control: your agent sees the screen, only the apps you allowed.",
+      .screenRecording, "See the screen", "Your agent sees the screen, only in apps you allow",
       .grant(settingsBase + "Privacy_ScreenCapture")
     ),
-    (.automation, "Automation", "Scripts that drive Mail, Calendar, Finder, Terminal and other apps.", .triggerPrompt),
-    (.microphone, "Microphone", "Anything the agent records.", .none),
-    (.camera, "Camera", "Anything the agent captures.", .none),
-    (.contacts, "Contacts", "Looking people up.", .none),
-    (.photos, "Photos", "Reading your photo library.", .none),
-    (.mediaLibrary, "Media Library", "Reading your music library.", .none),
-    (.networkVolumes, "Network Volumes", "Files on network shares.", .none),
-    (.fileProvider, "File Provider", "Cloud folders (iCloud Drive and others).", .none),
-    (.appData, "App Data", "Other apps' data folders.", .none),
+    (.automation, "Work in other apps", "Lets your agent work in Mail, Calendar, Finder and other apps", .triggerPrompt),
+    (.microphone, "Microphone", "Anything your agent records", .none),
+    (.camera, "Camera", "Anything your agent captures", .none),
+    (.contacts, "Contacts", "Looking people up", .none),
+    (.photos, "Photos", "Reading your photo library", .none),
+    (.mediaLibrary, "Music library", "Reading your music library", .none),
+    (.networkVolumes, "Network folders", "Files on network shares", .none),
+    (.fileProvider, "Cloud folders", "iCloud Drive and other cloud folders", .none),
+    (.appData, "Other apps' data", "Other apps' data folders", .none),
   ]
 
   /// Which banners obey which rules. The relay holds chat pushes back with the notification switch; health alarms ignore it.
   /// The Mac app's health and crash banners match that, so they pass the switch and respect only quiet hours.
-  public static let notificationsWhy =
-    "Banners for replies, a stuck agent, a crash loop and a dead relay. Reply banners follow the notification switch, quiet hours and each thread's setting in the Talos page (Settings \u{2192} Notifications). Health and crash banners from the Mac app pass that switch, the same as the relay's health alarms, and respect only quiet hours."
+  public static let notificationsWhy = "Replies and when your agent needs you"
 
   /// Every 4.9 row, with its state from `check`.
   public static func rows(check: (Kind) -> State) -> [Row] {
@@ -150,10 +180,14 @@ public enum PermissionsModel {
   /// After some grants macOS offers "Quit & Reopen". Talos starts a helper that opens it again if macOS doesn't (first real
   /// Mac run, 2026-11-01: Talos closed and stayed closed).
   public static let reopenNote =
-    "If macOS offers Quit & Reopen after a grant, say yes. Talos reopens itself a few seconds later; if it ever doesn't, open Talos from Applications."
+    "If macOS offers Quit & Reopen after you allow something, say yes. Talos reopens itself a few seconds later; if it ever doesn't, open Talos from Applications."
 
   public static func summary(_ rows: [Row]) -> String {
     let n = rows.filter { $0.state == .missing || $0.state == .unknown }.count
-    return n == 0 ? "Permissions: nothing missing that Talos can check" : "Permissions: \(n) to review (warnings only)"
+    switch n {
+    case 0: return "Nothing is missing that Talos can check"
+    case 1: return "1 thing you can still allow"
+    default: return "\(n) things you can still allow"
+    }
   }
 }

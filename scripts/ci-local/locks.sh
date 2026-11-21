@@ -389,6 +389,7 @@ ci_lock_release() { # ci_lock_release <lock>: a no-op unless we still own it
 
 ci_release_all() {
   local l
+  [ -z "${CI_TURN_HELD:-}" ] || ci_turn_leave # stopped between the turn lock's take and its release
   ci_drop_marker # a takeover killed part way: its claim must not outlive us
   [ -z "${CI_TICKET:-}" ] || rm -f "$CI_TICKET" "$CI_TICKET.part" # stopped while waiting: its place in the queue goes too
   CI_TICKET=""
@@ -428,10 +429,18 @@ ci_legacy_busy() { # 0 while a run of the old single-lock script (main) is in fl
   esac
 }
 
-ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machine and a free slot; sets CI_SLOT
-  local dir="${1:?}" what="$2" deadline state said="" n busy
+ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machine, a free slot and (ci_turn_*) a turn that no gate holds; sets CI_SLOT
+  local dir="${1:?}" what="$2" deadline state said="" n busy turns="" tk="" besides=""
   deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
   mkdir -p "$dir"
+  # a run waits in locks.queue/admit, so a gate that came after it lets it go first (ci_turn_ahead); a run inside a holder never waits
+  if [ "${TALOS_CI_NESTED:-0}" != 1 ] && ! ci_suites_nested "$dir" && ci_turn_on "$dir" && mkdir -p "$dir.queue/admit" 2>/dev/null; then
+    turns=1
+    ci_self
+    tk="$dir.queue/admit/$(perl -MTime::HiRes=time -e 'printf "%017.6f", time').$CI_SELF_PID.$RANDOM"
+    CI_TICKET="$tk"
+    printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "" ci > "$tk.part" && mv -f "$tk.part" "$tk" || { rm -f "$tk.part"; turns="" tk="" CI_TICKET=""; }
+  fi
   while :; do
     rm -rf "$dir"/*.gone.* 2>/dev/null # renamed away by a release that was killed before it deleted them
     if ci_legacy_busy "$(dirname "$dir")"; then
@@ -441,17 +450,44 @@ ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machin
       state="load"
       [ "$state" = "$said" ] || echo "ci-local: waiting: 5-min load average $(ci_load5) is above CI_MAX_LOAD=$CI_MAX_LOAD"
     else
-      n=1 busy=""
-      while [ "$n" -le "$CI_SLOTS" ]; do
-        if ci_lock_try "$dir/slot-$n" "$what"; then CI_SLOT=$n; return 0; fi
-        busy="$busy${busy:+, }slot-$n: $(cat "$dir/slot-$n/what" 2>/dev/null)"
-        n=$((n + 1))
-      done
-      state="slots"
-      [ "$state" = "$said" ] || echo "ci-local: waiting for a free slot ($busy)"
+      n=1 busy="" state=""
+      # the switch is read on every look: turned off while this run waits, it stops waiting for a turn
+      if [ -n "$turns" ] && ! ci_turn_on "$dir"; then turns="" CI_TICKET=""; [ -z "$tk" ] || rm -f "$tk"; tk=""; fi
+      if [ -n "$turns" ]; then # the turn: no gate holds the machine and none is queued before this run (turn.sh); the lock stays held through the take
+        if ci_turn_ci_enter "$dir" "$tk" "$what"; then :
+        elif ci_turn_overdue; then state="beside" # said when its slot is taken, not before: the gate may be gone by then
+        else state="turn: $CI_TURN_SAYS"; fi
+      fi
+      case "$state" in
+        turn:*) [ "$state" = "$said" ] || echo "ci-local: waiting for its turn: $CI_TURN_SAYS" ;;
+        *)
+          while [ "$n" -le "$CI_SLOTS" ]; do
+            if ci_lock_try "$dir/slot-$n" "$what"; then
+              CI_SLOT=$n
+              ci_turn_leave
+              [ -z "$tk" ] || { rm -f "$tk"; CI_TICKET=""; }
+              if [ "$state" = beside ]; then
+                case "$CI_TURN_BASE" in "the turn lock is busy"*) besides="went ahead because the turn lock stayed busy" ;; *) besides="ran beside a gate" ;; esac
+                echo "ci-local: $besides after $(($(ci_turn_waited) / 60)) min (CI_TURN_MAX_S): $CI_TURN_SAYS" >&2
+                ci_turn_alert "$dir" "CI run $what $besides after $(($(ci_turn_waited) / 60)) min of waiting for its turn (CI_TURN_MAX_S): $CI_TURN_SAYS" beside
+                ci_turn_done "$dir" "$what" "ran beside"
+              else ci_turn_done "$dir" "$what" got; fi
+              return 0
+            fi
+            busy="$busy${busy:+, }slot-$n: $(cat "$dir/slot-$n/what" 2>/dev/null)"
+            n=$((n + 1))
+          done
+          ci_turn_leave
+          state="slots"
+          [ "$state" = "$said" ] || echo "ci-local: waiting for a free slot ($busy)"
+          ;;
+      esac
     fi
     said="$state"
-    [ "$(date +%s)" -lt "$deadline" ] || { echo "ci-local: lock timeout (${CI_LOCK_TIMEOUT}s waiting for a slot)" >&2; return 1; }
+    case "$state" in
+      turn:*) deadline=$(($(date +%s) + CI_LOCK_TIMEOUT)) ;; # its own cap (CI_TURN_MAX_S), after which the run goes ahead: never "not tested"
+      *) [ "$(date +%s)" -lt "$deadline" ] || { [ -z "$tk" ] || { rm -f "$tk"; CI_TICKET=""; }; echo "ci-local: lock timeout (${CI_LOCK_TIMEOUT}s waiting for a slot)" >&2; return 1; } ;;
+    esac
     sleep "$CI_POLL"
   done
 }
@@ -826,7 +862,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   while :; do
     if [ "$name" = suites ]; then # the number of slots is read on every look: a change of the machine's heavy-slots file counts at once
       # With 2 slots or more: a ci-local job (kind ci) has CI's slots 1..K and nothing else, anyone else slots K+1..N, and a waiter
-      # goes in turn among those who want the same slots (CI_QCLASS), so CI never waits for a gate and a gate never waits for CI.
+      # goes in turn among those who want the same slots (CI_QCLASS), and whether a gate and CI run together is turn.sh's rule: one class at a time.
       # One slot: shared.
       nslots="$(ci_heavy_slots "$(dirname "$locks")")"
       nci="$(ci_ci_slots "$(dirname "$locks")" "$nslots")"
@@ -867,6 +903,8 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
         line="waiting for $label: CI's quiet group (the contract and schedules suites) holds CI's slots, and no new gate starts until it ends"
       elif [ "$CI_QCLASS" = gate ] && busy="$(ci_slots_busy "${slotlocks[@]}")" && [ "$busy" -ge 2 ] && ci_active "$locks" "$nci" "$q"; then
         line="waiting for $label: CI runs, and at most two gates run beside it"
+      elif [ "$CI_QCLASS" = gate ] && ci_turn_on "$locks" && ! ci_turn_gate_enter "$locks" "$t" "$jump"; then
+        line="waiting for $label: $CI_TURN_SAYS" # a CI run is on, or was queued before this gate (turn.sh); nothing is stopped
       else
         for l in "${slotlocks[@]}"; do # the first free slot, in order; an exclusive hold takes every one it finds free
           ci_in_list "$l" ${mine[@]+"${mine[@]}"} && continue
@@ -874,6 +912,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
           mine+=("$l")
           [ -n "$excl" ] || break
         done
+        ci_turn_leave # the turn lock was kept through the take, if this gate asked for it
         all=1
         for l in "${slotlocks[@]}"; do ci_in_list "$l" ${mine[@]+"${mine[@]}"} || all=""; done
         if [ ${#mine[@]} -gt 0 ] && { [ -z "$excl" ] || [ -n "$all" ]; }; then break; fi
@@ -888,6 +927,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
       CI_TICKET=""
       for m in ${mine[@]+"${mine[@]}"}; do ci_lock_release "$m"; done # an exclusive hold's slots taken so far
       [ -z "$shared_ci" ] || ci_shared_unmark
+      ci_turn_done "$locks" "$what" "timed out"
       echo "${CI_MSG:-ci-local}: timed out waiting for $label" >&2
       ci_wait_log "$locks" "$name" "$what" "$asked" "timed out" "$kind"
       return 1
@@ -896,6 +936,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   done
   rm -f "$t" # the queue folder stays: removing it could race a waiter that has just made it and is writing its ticket
   CI_TICKET=""
+  ci_turn_done "$locks" "$what" got # a gate that waited for its turn: its own row (kind turn)
   ci_wait_log "$locks" "$name" "$what" "$asked" got "$kind"
   lock="${mine[0]}"
   got=1
@@ -928,3 +969,15 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   return $rc
 }
 ci_mutex_all() { CI_MUTEX_EXCLUSIVE=1 ci_mutex "$@"; } # ci_mutex_all <locks dir> suites <cmd...>: the same, holding all of CI's slots (the quiet group runs alone among CI)
+# the turns of gates and CI runs (ci_turn_*): ci_acquire_slot and ci_mutex call them. A copy of this file without turn.sh beside it
+# (a test's, a half-copied folder) has no turns, says so each time it is loaded, and works as before.
+if [ -r "$(dirname "${BASH_SOURCE[0]}")/turn.sh" ]; then
+  # shellcheck source=turn.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/turn.sh"
+else
+  echo "ci-local: no turn.sh beside locks.sh: a gate and a CI run will not take turns" >&2
+  ci_turn_on() { return 1; }
+  ci_turn_leave() { return 0; }
+  ci_turn_done() { return 0; }
+  ci_turn_status() { return 0; }
+fi

@@ -422,7 +422,7 @@ Order matters: fork first (the relay builds from it), then the Mac, then the age
 
    It backs the folder up first, never deletes anything and never writes your `memory/`, wiki or `CLAUDE.md`. Reconcile the hooks and
    run the gate as [`kit/UPGRADE.md`](kit/UPGRADE.md) says; it has a rollback.
-4. [YOU] (the agent asks you first) Restart the agent (stop it, then `~/talos-agent/start-talos.sh`, or Restart session in the Mac app). `talos-app update` never
+4. [YOU] (the agent asks you first) Restart the agent (stop it, then `~/talos-agent/start-talos.sh`, or Restart your agent in the Mac app). `talos-app update` never
    restarts it for you, because that would end the live conversation.
 5. [YOU] Check the relay deployed in Railway.
 6. Rebuild the Mac app if you use it: `bash apps/desktop/scripts/build-app.sh`, then `bash apps/desktop/scripts/install.sh`.

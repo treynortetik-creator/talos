@@ -371,7 +371,7 @@ struct TakeoverIntegrationTests {
     let b = blockers(r.phase()) ?? []
     #expect(b.map(\.resource) == [.telegram])
     #expect(b.first?.holderPid == poller)
-    #expect(b.first?.message.contains("Find a running session") == true)
+    #expect(b.first?.message.contains("Take over an agent that's already running") == true)
     #expect(r.starts.isEmpty, "nothing started")
     #expect(ProcessInspect.alive(poller), "the check never kills")
   }

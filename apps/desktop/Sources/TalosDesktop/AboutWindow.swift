@@ -70,9 +70,9 @@ struct AboutView: View {
     if let clone = s.allowClone {
       PillRealClickButton(title: AllowUpdatesCopy.allowButton, primary: true, width: 170) { allow.allowFromWindow(clone: clone) }
     } else if s.pendingVersion != nil && AboutCopy.offersUpdateNow(s) {
-      PillRealClickButton(title: "Update now", primary: true, width: 170) { controller.updateNow() }
+      PillRealClickButton(title: AboutCopy.installButton, primary: true, width: 170) { controller.updateNow() }
     } else if !s.isBusy && s.pendingVersion == nil {
-      Button(AboutCopy.checkButton) { controller.checkFromAbout() }
+      Button(AboutCopy.checkButtonTitle(s)) { controller.checkFromAbout() }
         .buttonStyle(AboutPrimaryStyle())
         .frame(width: 200, height: 44)
     }

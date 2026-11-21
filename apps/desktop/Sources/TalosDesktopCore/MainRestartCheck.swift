@@ -371,7 +371,7 @@ public enum MainRestartCheck {
     case .autoConfirmOff?: return "answering the startup warning automatically is off, so Main would wait at it."
     case .budgetSpent?: return "the Mac has used up its automatic restarts for now, so Main would wait at its startup warning."
     case .someoneTyping?: return "someone is typing in Main's window on the Mac."
-    case .takeoverHeld?: return "another session holds the channels Main needs."
+    case .takeoverHeld?: return "another agent is already using this account."
     case .ownerStopped?: return "you stopped Main at the Mac, and that stands until you start it again."
     case .tooSoon?: return "Main was restarted less than 2 minutes ago."
     case .sessionIdInvalid?: return "the saved conversation id in desktop.json is not a session id, so Main would not start."

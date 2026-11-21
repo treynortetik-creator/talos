@@ -178,8 +178,8 @@ struct TopMenuGuiTests {
     let rec = Rec()
     let am = menu(rec)
     let built = am.build()
-    let signIn = try #require(allItems(built).first { $0.title == "Sign in\u{2026}" })
-    let signOut = try #require(allItems(built).first { $0.title == "Sign out" })
+    let signIn = try #require(allItems(built).first { $0.title == MacWords.connectThisMac })
+    let signOut = try #require(allItems(built).first { $0.title == MacWords.signOutWindow })
     _ = am.validateMenuItem(signIn); _ = am.validateMenuItem(signOut)
     #expect(!signIn.isHidden && signOut.isHidden)
     rec.signedIn = true; rec.offers = false
@@ -313,11 +313,11 @@ struct ScreenShotTests {
     let world = try TmuxWorld()
     let m = world.model
     for (tab, name) in [
-      (SettingsNavigator.Tab.session, "settings-session"), (.connection, "settings-connection"), (.companion, "settings-companion"),
-      (.general, "settings-general"),
+      (SettingsNavigator.Tab.agent, "settings-agent"), (.phone, "settings-phone"), (.access, "settings-access"),
+      (.general, "settings-general"), (.advanced, "settings-advanced"),
     ] {
       SettingsNavigator.shared.selected = tab
-      try shoot(SettingsView(model: m), size: NSSize(width: 700, height: 560), to: dir + "/\(name).png")
+      try shoot(SettingsView(model: m), size: NSSize(width: 900, height: 640), to: dir + "/\(name).png")
     }
     try shoot(AdvancedSetupView(model: m), size: NSSize(width: 560, height: 640), to: dir + "/setup-screen.png")
   }

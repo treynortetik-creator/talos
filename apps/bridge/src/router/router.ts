@@ -29,6 +29,7 @@ import type { Notification } from '../notify.ts'
 import { say } from '../owner-words.ts'
 import { BridgeStopping, isStopping } from '../stopping.ts'
 import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
+import { BRIDGE_COMMIT } from '../version.ts'
 import { dropWake } from '../wake-me/drop.ts'
 import { pendingOf } from '../wake-me/service.ts'
 import { WakeMeStore } from '../wake-me/store.ts'
@@ -47,6 +48,14 @@ import { type RouteRow, WorkerStore } from '../worker/store.ts'
 import { allowsStart, type GovernorReading, governorNow } from './governor.ts'
 import { tellOldSupervisor } from './old-supervisor-notice.ts'
 import { mainNeedsYou, statusLine } from './status-line.ts'
+import {
+  type InterruptedList,
+  OFFER_MAX_MESSAGES,
+  offerable,
+  readInterrupted,
+  turnEndedSince,
+  UpdateResendCards,
+} from './update-resend.ts'
 import { WorkerContextFeed } from './worker-context.ts'
 
 export type Emit = (n: Notification) => Promise<void>
@@ -125,6 +134,11 @@ export class ThreadRouter {
   private readonly sessionsSeen = new Map<string, string>()
   private readonly workerFeatures: (thread: string) => readonly string[] | undefined
   private readonly onCardUndelivered: (cardId: string, told?: false | 'unknown') => void
+  /** When this router began (the bridge's clock): the Mac's update marker is accepted only if it was written before. Tests move it. */
+  startedAt: number
+  /** The accepted update marker (read once, then the file is gone), and the reason last logged for a refusal. */
+  private interrupted: InterruptedList | null = null
+  private markerSaid = ''
 
   constructor(
     private readonly ctx: BridgeContext,
@@ -138,6 +152,11 @@ export class ThreadRouter {
       workerFeatures?: (thread: string) => readonly string[] | undefined
     } = {},
   ) {
+    this.startedAt = ctx.clock.now()
+    ctx.updateResend = new UpdateResendCards(ctx, {
+      held: (id) => this.store.route(id)?.notification,
+      route: (n) => this.route(n),
+    })
     this.workerFeatures = opts.workerFeatures ?? (() => undefined)
     this.onCardUndelivered = opts.onCardUndelivered ?? (() => {})
     this.store = opts.store ?? new WorkerStore(ctx.store.db)
@@ -667,6 +686,8 @@ export class ThreadRouter {
     const { ctx } = this
     const settled: string[] = []
     const report = new Map<string, string[]>()
+    const marker = this.markerNow()
+    const cut = new Map<string, string[]>()
     const jobs = new Map<string, string[]>()
     const unfinished: string[] = []
     for (const c of this.store.openClaims()) {
@@ -687,6 +708,23 @@ export class ThreadRouter {
         settled.push(c.message_id)
         continue
       }
+      // a turn the Mac's Update now cut off (it named this thread before the swap) is OFFERED again, whether or not the agent had already
+      // answered: Talos cannot tell what else it did. Never sent by itself (update-resend.ts).
+      if ((c.kind === 'text' || c.kind === 'file') && marker?.threads.has(c.thread_id)) {
+        const e = file.threads[c.thread_id]
+        if (
+          e &&
+          runEnded(e, c.at) &&
+          c.at <= marker.at &&
+          !turnEndedSince(ctx, c.thread_id, c.at) &&
+          !turnEndedSince(ctx, c.message_thread, c.at) &&
+          offerable(this.store.route(c.message_id)?.notification)
+        ) {
+          settled.push(c.message_id) // the offer replaces the plain notice; the claim is done either way
+          cut.set(c.message_thread, [...(cut.get(c.message_thread) ?? []), c.message_id])
+          continue
+        }
+      }
       if (this.store.answeredIn(c.thread_id, c.message_thread, c.at)) {
         settled.push(c.message_id)
         continue
@@ -703,6 +741,7 @@ export class ThreadRouter {
     // end the cards first: a crash between the two leaves the claim open, and the next tick tries again
     for (const id of unfinished) this.onCardUndelivered(id, 'unknown')
     this.store.settleClaims(settled, now)
+    for (const [thread, ids] of cut) this.offerAgain(thread, ids, marker as InterruptedList)
     // a scheduled run the session took and never reported on: say so (the run list shows it as it stands), never "send it again"
     for (const [thread, ids] of jobs) {
       this.store.settleClaims(ids, now)
@@ -718,6 +757,47 @@ export class ThreadRouter {
         thread: threadRef(ctx, thread),
       }).catch((e) => ctx.log.warn('unanswered notice not posted', { error: (e as Error).message }))
     }
+  }
+
+  /** The update marker once it is accepted (it is deleted by that read); null while none is. A refusal is logged once per reason. */
+  private markerNow(): InterruptedList | null {
+    if (this.interrupted) return this.interrupted
+    const r = readInterrupted(this.ctx.paths.updateInterrupted, {
+      now: this.ctx.clock.now(),
+      startedAt: this.startedAt,
+      commit: BRIDGE_COMMIT,
+    })
+    if (r.list) this.interrupted = r.list
+    else if (r.why !== 'absent' && r.why !== this.markerSaid) {
+      this.markerSaid = r.why
+      this.ctx.log.warn('update marker not used', { why: r.why })
+    }
+    return this.interrupted
+  }
+
+  /** One offer for a thread's cut turn (once per thread per update). If it cannot be shown, the plain words are posted: never silent. */
+  private offerAgain(thread: string, all: string[], marker: InterruptedList) {
+    let ids = all
+    const { ctx } = this
+    const key = `update_offer:${thread}:${marker.at}`
+    if (ctx.store.kvGet(key) !== undefined) return
+    ctx.store.kvSet(key, String(ctx.clock.now()))
+    const plain = () =>
+      postSystemNotice(ctx, "This thread's session stopped before it answered. Send the message again to carry on.", {
+        thread: threadRef(ctx, thread),
+      }).catch((e) => ctx.log.warn('unanswered notice not posted', { error: (e as Error).message }))
+    // the newest few ride on the card; any older ones get the plain words, never silence
+    if (ids.length > OFFER_MAX_MESSAGES) {
+      void plain()
+      ids = ids.slice(-OFFER_MAX_MESSAGES)
+    }
+    ctx.updateResend
+      ?.offer({ thread, name: threadRef(ctx, thread).name, ids })
+      .then((ok) => (ok ? undefined : plain()))
+      .catch((e) => {
+        ctx.log.warn('update resend offer failed', { error: (e as Error).message })
+        return plain()
+      })
   }
 
   /**

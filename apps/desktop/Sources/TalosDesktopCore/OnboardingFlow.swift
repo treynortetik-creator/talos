@@ -348,6 +348,20 @@ public struct OnboardingFlow: Equatable, Sendable {
     return [home, download, check]
   }
 
+  /// What the bar and the line above it say. Once the download line is ticked the bar is complete (never "88% · about 1 minute left"
+  /// next to a green tick); the install and the check after it have their own lines.
+  public struct ReadyBar: Equatable, Sendable {
+    public var pct: Int
+    public var detail: String
+    public var complete: Bool
+  }
+
+  public static func readyBar(pct: Int, done: Bool, elapsed: TimeInterval) -> ReadyBar {
+    if readyLines(pct: pct, done: done)[1] == .done { return ReadyBar(pct: 100, detail: OnboardingCopy.readyDownloaded, complete: true) }
+    return ReadyBar(
+      pct: pct, detail: OnboardingCopy.readyDetail(pct: pct, secondsLeft: OnboardingCopy.secondsLeft(pct: pct, elapsed: elapsed)), complete: false)
+  }
+
   private var pctNow: Int {
     switch download {
     case .running(let p), .offline(let p), .failed(let p, _): return p

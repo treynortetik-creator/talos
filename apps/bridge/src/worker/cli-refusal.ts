@@ -52,6 +52,10 @@ export const WORKER_AGENT_OK: readonly string[] = [
   'peer rotate',
   'peer secret-forget',
   'devices',
+  'relay update',
+  'relay auto',
+  'relay disconnect',
+  'relay status',
 ]
 const USAGE_WORDS = ['help', '--help', '-h']
 

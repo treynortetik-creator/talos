@@ -59,10 +59,12 @@ import { withPaneRun } from './pane-run.ts'
 import { notePeers, notePeerTaint, PeerService } from './peer/service.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
 import { ProblemService } from './problems/service.ts'
+import { noteRelay } from './relay/auto.ts'
 import { RelayClient } from './relay-client.ts'
 import { relayFeaturesMemo } from './relay-features-memo.ts'
 import { RelayHttp } from './relay-http.ts'
 import { RelaySilence } from './relay-silence.ts'
+import { governorState } from './router/governor.ts'
 import { ThreadRouter } from './router/router.ts'
 import { UsagePool } from './router/usage-pool.ts'
 import { ScheduleService } from './schedules/service.ts'
@@ -92,8 +94,6 @@ export {
   TRUST_INSTRUCTIONS,
   WORKER_INSTRUCTIONS,
 } from './instructions.ts'
-
-import { governorState } from './router/governor.ts'
 
 export type { BridgeOptions }
 // scripts/size-budget.test.ts looks for this exact line; the text itself lives in instructions.ts.
@@ -782,7 +782,7 @@ export class Bridge {
 
   /** A trust mode flip is said out loud in the thread, whether it happened while the bridge ran or while it was down. */
   private noteTrust() {
-    const notes = { trust: noteTrustFlip, lock: noteLockFlip, fence: noteFenceFlip, peer: notePeers }
+    const notes = { trust: noteTrustFlip, lock: noteLockFlip, fence: noteFenceFlip, peer: notePeers, relay: noteRelay }
     for (const [what, note] of Object.entries(notes))
       void note(this.ctx).catch((e) => this.log.warn(`${what} note failed`, { error: (e as Error).message }))
   }

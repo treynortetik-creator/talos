@@ -102,6 +102,7 @@ describe('kit/ instructions are not loaded in this repo', () => {
       'skills/talos-settings/SKILL.md',
       'skills/talos-theme/SKILL.md',
       'skills/talos-transcript-ingest/SKILL.md',
+      'skills/talos-using/SKILL.md',
     ]
     expect(walk(join(ROOT, 'kit/.claude')).sort()).toEqual(reviewed)
   })

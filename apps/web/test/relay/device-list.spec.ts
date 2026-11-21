@@ -18,7 +18,7 @@ const device = (id: string, name: string, extra: Record<string, unknown> = {}) =
   pubkey_jwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
   pinned: true,
   revoked: false,
-  created_at: '2026-10-01T00:00:00.000Z',
+  created_at: '2026-10-01T12:00:00.000Z',
   last_used_at: null,
   login_proven_at: '2026-10-02T00:00:00.000Z',
   ...extra,
@@ -31,6 +31,7 @@ async function open(
   page: Page,
   context: Parameters<Harness['seedDevice']>[0],
   serve: (thisId: string) => (() => Promise<{ status: number; body?: unknown }>) | { status: number; body?: unknown },
+  hash = '',
 ) {
   const { deviceId } = await harness.seedDevice(context, page)
   const answer = serve(deviceId)
@@ -38,7 +39,7 @@ async function open(
     const r = typeof answer === 'function' ? await answer() : answer
     await route.fulfill({ status: r.status, contentType: 'application/json', body: JSON.stringify(r.body ?? {}) })
   })
-  await page.goto('/settings/account')
+  await page.goto(`/settings/account${hash}`)
   await waitUntil(() => harness.relay.appCount > 0, 'app socket')
   return deviceId
 }
@@ -77,6 +78,59 @@ test('the row of this session is marked, and a second device with the same name 
   await expect(rowOf(page, fakeId(1)).getByText('This device', { exact: true })).toHaveCount(0)
 })
 
+test('/settings/account#devices lands on the list: Added and Last seen on every row, this device marked, block in view', async ({
+  page,
+  context,
+  harness,
+}, testInfo) => {
+  const frozen = Date.now()
+  await page.clock.setFixedTime(frozen)
+  const mine = await open(
+    harness,
+    page,
+    context,
+    (me) => ({
+      status: 200,
+      body: [
+        device(me, "Alex Example's iPhone", { last_used_at: new Date(frozen - 60_000).toISOString() }),
+        device(fakeId(1), 'Pixel 8', { last_used_at: new Date(frozen - 3 * 3_600_000).toISOString() }),
+        device(fakeId(2), 'Work Mac', { created_at: '2026-09-12T10:00:00.000Z' }),
+      ],
+    }),
+    '#devices',
+  )
+  await expect(rows(page)).toHaveCount(3)
+  await expect(page.getByRole('heading', { name: 'Your devices' })).toBeVisible()
+  for (const r of await rows(page).all()) {
+    await expect(r).toContainText('Added')
+    await expect(r).toContainText('Last seen')
+  }
+  await expect(rowOf(page, fakeId(2))).toContainText('Last seen: not known')
+  await expect(rowOf(page, mine).getByText('This device', { exact: true })).toBeVisible()
+  await expect(page.getByText('This device', { exact: true })).toHaveCount(1)
+  await expect(page.locator('#devices')).toBeInViewport()
+  await page.screenshot({ path: testInfo.outputPath('your-devices.png'), fullPage: false })
+  // The link really scrolls: in a short window the list's scroller moves to the block with #devices, and stays at the top
+  // without it (the block is near the top of Account, so "in view" alone would pass with no scroll at all).
+  const width = page.viewportSize()?.width ?? 390
+  await page.setViewportSize({ width, height: 360 })
+  const scrollerTop = () =>
+    page.locator('#devices').evaluate((el) => {
+      let p = el.parentElement
+      while (p && !(p.scrollHeight > p.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(p).overflowY)))
+        p = p.parentElement
+      return (p ?? document.scrollingElement)?.scrollTop ?? 0
+    })
+  await page.goto('/settings/account')
+  await expect(rows(page)).toHaveCount(3)
+  expect(await scrollerTop()).toBe(0)
+  await page.goto('/settings/account#devices')
+  await page.reload()
+  await expect(rows(page)).toHaveCount(3)
+  await expect.poll(scrollerTop).toBeGreaterThan(0)
+  await expect(page.getByRole('heading', { name: 'Your devices' })).toBeInViewport()
+})
+
 test('last used reads as unknown, never "never used", and a real time reads as a time', async ({
   page,
   context,
@@ -84,8 +138,8 @@ test('last used reads as unknown, never "never used", and a real time reads as a
 }) => {
   await listWith(page, harness, context)
   await expect(page.getByText(/never used/i)).toHaveCount(0)
-  await expect(rowOf(page, fakeId(2))).toContainText('last used unknown')
-  await expect(rowOf(page, fakeId(1))).toContainText('used 3 min ago')
+  await expect(rowOf(page, fakeId(2))).toContainText('Last seen: not known')
+  await expect(rowOf(page, fakeId(1))).toContainText('Last seen 3 min ago')
 })
 
 test('at 320 px wide every name is shown whole and the marker is fully inside the screen', async ({
@@ -137,7 +191,7 @@ for (const scheme of ['light', 'dark'] as const) {
   })
 }
 
-test('by keyboard: Tab reaches each Revoke in order, Enter on this device asks first, Escape returns focus', async ({
+test('by keyboard: Tab reaches each Remove in order, Enter on this device asks first, Escape returns focus', async ({
   page,
   context,
   harness,
@@ -145,16 +199,16 @@ test('by keyboard: Tab reaches each Revoke in order, Enter on this device asks f
 }) => {
   test.skip(browserName === 'webkit', 'WebKit does not Tab to buttons by default (system setting)')
   const mine = await listWith(page, harness, context)
-  const revokeMine = rowOf(page, mine).getByRole('button', { name: `Revoke ${SAME}` })
-  await page.getByRole('heading', { name: 'Devices' }).click()
+  const revokeMine = rowOf(page, mine).getByRole('button', { name: `Remove ${SAME}` })
+  await page.getByRole('heading', { name: 'Your devices' }).click()
   const seen: string[] = []
   for (let i = 0; i < 40 && seen.length < 4; i++) {
     await page.keyboard.press('Tab')
     const name = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '')
-    if (name.startsWith('Revoke ')) seen.push(name)
+    if (name.startsWith('Remove ')) seen.push(name)
   }
   // 4 live devices have the button; the revoked one does not.
-  expect(seen).toEqual([`Revoke ${SAME}`, `Revoke ${SAME}`, 'Revoke Old laptop', `Revoke ${LONG}`])
+  expect(seen).toEqual([`Remove ${SAME}`, `Remove ${SAME}`, 'Remove Old laptop', `Remove ${LONG}`])
   await revokeMine.focus()
   await page.keyboard.press('Enter')
   const dialog = page.getByRole('dialog')
@@ -177,7 +231,7 @@ test.describe('states', () => {
     })
     await expect(page.getByText('Loading…')).toBeVisible()
     await expect(rows(page)).toHaveCount(0)
-    await expect(page.getByText(/used/)).toHaveCount(0)
+    await expect(page.getByText(/Last seen/)).toHaveCount(0)
     release()
     await expect(rows(page)).toHaveCount(1)
     await expect(page.getByText('Loading…')).toHaveCount(0)

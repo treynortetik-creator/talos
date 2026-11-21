@@ -47,7 +47,7 @@ public enum OnboardingText {
 
   // First start
   public static let firstStartTitle = "Start your agent"
-  public static let firstStartIdle = "Not started. Finish the steps above, then choose Start session in the menu bar item."
+  public static let firstStartIdle = "Not started. Finish the steps above, then choose Start your agent in the menu bar item."
   public static let firstStartWarning = "Claude is asking about the development channel. Answer in the Talos popup."
   public static let firstStartWaiting = "Waiting for the Talos bridge to come up\u{2026}"
   public static let firstStartDone = "Done. Your agent is running and its Talos bridge is live."
@@ -58,8 +58,8 @@ public enum OnboardingText {
     "Claude is asking whether to use a project connector (an MCP server), or whether to run with permission checks off. Answer in the Talos popup."
   public static let firstStartSignIn = "Claude is signed out. Choose Sign in to Claude again in the menu bar item, then follow the steps in that window."
   public static let firstStartApiKey = "Claude found an API key in your environment and is asking whether to use it. Answer in the Talos popup."
-  public static let firstStartBlocked = "Another session holds the channels, so the agent did not start. Close it, then choose Start session in the menu bar item."
-  public static let firstStartStopped = "The agent stopped before the bridge came up. Choose Start session in the menu bar item."
+  public static let firstStartBlocked = "Another agent is already using this account, so yours did not start. Close it, then choose Start your agent in the menu bar item."
+  public static let firstStartStopped = "Your agent stopped before it finished starting. Choose Start your agent in the menu bar item."
 
   // Rules
   public static let rulesTitle = "Rules for your agent"
@@ -67,7 +67,7 @@ public enum OnboardingText {
     "Plain sentences your agent follows in every conversation. Leave it empty if you have none. Talos saves it as .claude/rules/owner-rules.md in your agent folder, which Claude Code reads at the start of each session, so it applies the next time the agent starts. Your own rules are kept apart from the ones Talos ships and are never replaced by an update."
   public static let rulesPlaceholder = "For example: Never include patient names or health details in anything you write or send."
   public static let rulesSave = "Save rules"
-  public static let rulesSaved = "Saved. Your agent reads it the next time it starts (Restart session in the menu bar item)."
+  public static let rulesSaved = "Saved. Your agent reads it the next time it starts (Restart your agent in the menu bar item)."
   public static let rulesRemoved = "Removed. Your agent has no rules of yours now."
   public static let rulesNothing = "Nothing to save."
   // Rules refusals

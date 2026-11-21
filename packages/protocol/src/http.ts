@@ -129,6 +129,8 @@ export const routes = {
     res: z.object({
       ok: z.literal(true),
       version: z.string(),
+      /** The release this relay image was built from (X.Y.Z). Absent on a relay that deploys from main and on an older relay. */
+      release: z.string().max(20).optional().catch(undefined),
       /** The once-per-wait push watcher (relay core/session-wait.ts): running, and its two fixed times. */
       session_wait: z
         .object({ running: z.boolean(), after_ms: z.number().int(), tick_ms: z.number().int() })
@@ -258,6 +260,8 @@ export const routes = {
       has_passkey: z.boolean(),
       rp_id: z.string(),
       version: z.string(),
+      /** The release this relay image was built from (X.Y.Z); absent as on /healthz. */
+      release: z.string().max(20).optional().catch(undefined),
       bridge_online: z.boolean(),
       /** Web Push application server key (base64url). Absent when the relay has no VAPID keys. */
       vapid_public_key: z.string().optional(),

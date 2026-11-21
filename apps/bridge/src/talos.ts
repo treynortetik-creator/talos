@@ -72,6 +72,8 @@ export const AGENT_UNLESS_LOCKED = [
   'peer secret-forget',
   'devices list',
   'devices revoke',
+  'relay update',
+  'relay auto',
 ] as const
 export function agentUnlessLocked(argv: readonly string[]): (typeof AGENT_UNLESS_LOCKED)[number] | undefined {
   const [a, b] = argv
@@ -247,6 +249,16 @@ export const COMMANDS: readonly CommandInfo[] = [
     'Link this Talos to another of yours (your agent may, unless settings are locked)',
     'link <name> | accept <code> --name <name> | create <name> | add <name> --url <https url> [--secret-file <file>] | list | remove <name> | rotate <name> | secret-forget <name>',
   ),
+  ownerTerminal(
+    'relay connect',
+    'Let this computer update your online relay: paste a Railway token once (asked for, not shown)',
+  ),
+  {
+    name: 'relay',
+    args: 'status | update | auto on|off | disconnect',
+    summary:
+      'Your online relay on Railway: update it to the newest release (your agent may, unless settings are locked), turn auto-update on or off, forget the token',
+  },
   {
     name: 'start',
     who: 'internal',

@@ -11,7 +11,7 @@ public enum TerminalPane {
 
   public static func choose(configured: Bool, hasLiveChild: Bool, sessionExists: Bool) -> Choice {
     if hasLiveChild || sessionExists { return .attach }
-    return .note(configured ? "No agent session yet. Menu → Start session." : "Talos isn't set up yet. Menu → Set up Talos…")
+    return .note(configured ? "No agent session yet. Menu → Start your agent." : "Talos isn't set up yet. Menu → Set up Talos…")
   }
 }
 

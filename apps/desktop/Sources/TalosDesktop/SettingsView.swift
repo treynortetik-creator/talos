@@ -2,48 +2,68 @@ import AppKit
 import SwiftUI
 import TalosDesktopCore
 
-/// Mac settings (DESKTOP-SPEC 6.6): Session, Connection, Permissions, Hotkeys, Companion, General. Each change is written to
-/// `desktop.json` at once through the supervisor (atomic, 0600); fields that change the launch command make the next start a
-/// cold one. Every setting says when it applies. Before setup there is no `desktop.json` and a change is held (see `PreSetup`).
+/// Mac settings (DESKTOP-SPEC 6.6, redrawn 2026-11-20 from the owner-approved mock): Your agent, Phone & Mac, Privacy & access,
+/// General and Advanced. One line per setting, at most one caption per section, and no engineer words outside Advanced
+/// (`MacWordsGuardTests`). Each change is written to `desktop.json` at once through the supervisor (atomic, 0600); fields that
+/// change the start-up command make the next start a cold one. Before setup there is no `desktop.json` and a change is held (see `PreSetup`).
 /// Which tab is showing, so any opener (the menus, the setup checklist, a link on another tab) can land on the matching one.
 @MainActor
 final class SettingsNavigator: ObservableObject {
   static let shared = SettingsNavigator()
-  enum Tab: String { case session, connection, permissions, hotkeys, companion, general }
-  @Published var selected: Tab = .session
-}
-
-/// A caption under a setting: when it applies.
-struct AppliesNote: View {
-  let setting: MacSettingsText.Setting
-  var body: some View {
-    Text(MacSettingsText.applies(setting)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+  /// The old Session, Connection, Permissions, Hotkeys and Companion tabs are gone: their settings moved to these five (see
+  /// docs/mac-label-map-2026-11-20.md).
+  enum Tab: String, CaseIterable {
+    case agent, phone, access, general, advanced
+    var title: String {
+      switch self {
+      case .agent: return MacWords.tabAgent
+      case .phone: return MacWords.tabPhone
+      case .access: return MacWords.tabAccess
+      case .general: return MacWords.tabGeneral
+      case .advanced: return MacWords.tabAdvanced
+      }
+    }
+    var symbol: String {
+      switch self {
+      case .agent: return "cpu"
+      case .phone: return "iphone"
+      case .access: return "lock.shield"
+      case .general: return "gearshape"
+      case .advanced: return "slider.horizontal.3"
+      }
+    }
   }
+  @Published var selected: Tab = .agent
 }
 
 struct SettingsView: View {
-  @ObservedObject private var nav = SettingsNavigator.shared
+  @ObservedObject var nav = SettingsNavigator.shared
   @ObservedObject var model: SupervisorController
-  @ObservedObject private var web = WebController.shared
-  @ObservedObject private var login = LoginItemController.shared
-  @ObservedObject private var awake = KeepAwake.shared
-  @State private var cfg = DesktopConfig.defaults
-  @State private var loaded = false
+  @ObservedObject var web = WebController.shared
+  @ObservedObject var login = LoginItemController.shared
+  @ObservedObject var awake = KeepAwake.shared
+  @ObservedObject var updates = UpdateController.shared
+  @ObservedObject var status = StatusCoordinator.shared
+  @State var cfg = DesktopConfig.defaults
+  @State var loaded = false
   // Text fields are saved on Return or when this window goes away, never per keystroke: a half-typed folder must not be the
   // live config (and each save can make the next restart cold).
-  @State private var drafts = SettingsDrafts()
-  @State private var launchDraft = ""
-  @State private var launchLoaded = ""
-  @State private var launchError: String?
-  @State private var launchSaved = false
-  @State private var pendingMode: PermissionMode?
-  @State private var confirmRestart = false
-  @State private var modeNote = ""
-  @State private var threads = ThreadChoices.Listing.unreadable
-  @State private var generalNote = ""
-  @AppStorage("showDockIcon") private var showDock = false
-  /// A test seam: type this into the launch command box and press Return when the window appears, to look at the error state.
+  @State var drafts = SettingsDrafts()
+  @State var launchDraft = ""
+  @State var launchLoaded = ""
+  @State var launchError: String?
+  @State var launchSaved = false
+  @State var pendingMode: PermissionMode?
+  @State var confirmRestart = false
+  @State var modeNote = ""
+  @State var threads = ThreadChoices.Listing.unreadable
+  @State var generalNote = ""
+  @AppStorage("showDockIcon") var showDock = false
+  @AppStorage(CompanionController.Key.replyBanners) var replyBanners = false
+  /// A test seam: type this into the start-up command box and press Return when the window appears, to look at the error state.
   var typedLaunchLine: String?
+  /// A test seam: the headline Your agent shows, for a picture of the running state (the real one comes from `StatusCoordinator`).
+  var headlineForTest: HealthSummary.Headline?
 
   init(model: SupervisorController, typedLaunchLine: String? = nil) {
     _model = ObservedObject(wrappedValue: model)
@@ -54,22 +74,31 @@ struct SettingsView: View {
     VStack(spacing: 0) {
       if !model.configured {
         Text(BlockedText.notSetUpLine)
-          .font(.caption).foregroundStyle(.orange)
+          .font(OB.body(13)).foregroundStyle(SP.orange)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal).padding(.top, 8)
           .frame(maxWidth: .infinity, alignment: .leading)
+          .background(SP.cream)
           .accessibilityIdentifier("settings-not-set-up")
       }
-      TabView(selection: $nav.selected) {
-        session.tabItem { Label("Session", systemImage: "terminal") }.tag(SettingsNavigator.Tab.session)
-        connection.tabItem { Label(MacSettingsText.connectionTab, systemImage: "network") }.tag(SettingsNavigator.Tab.connection)
-        PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag(SettingsNavigator.Tab.permissions)
-        HotkeyView(model: model).tabItem { Label("Hotkeys", systemImage: "keyboard") }.tag(SettingsNavigator.Tab.hotkeys)
-        CompanionSettingsView().tabItem { Label(MacSettingsText.companionName, systemImage: "figure.stand") }.tag(SettingsNavigator.Tab.companion)
-        general.tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsNavigator.Tab.general)
+      HStack(spacing: 0) {
+        sidebar
+        SP.line.frame(width: 1)
+        Group {
+          switch nav.selected {
+          case .agent: agentTab
+          case .phone: phoneTab
+          case .access: PermissionsView()
+          case .general: generalTab
+          case .advanced: advancedTab
+          }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .frame(minWidth: 640, minHeight: 520)
+    .frame(minWidth: 820, idealWidth: SP.width, minHeight: 560, idealHeight: SP.height)
+    .background(SP.cream)
+    .environment(\.colorScheme, .light)  // cream either way: the text is fixed ink, like the About and update windows
     .onAppear {
       cfg = model.configNow
       drafts.load(cfg)
@@ -91,18 +120,55 @@ struct SettingsView: View {
       // would wipe the "Saved" note it just set.
       if LaunchEdit.shouldReload(draft: launchDraft, loaded: launchLoaded, current: LaunchEdit.line(for: cfg)) { loadLaunch() }
     }
-    .onChange(of: nav.selected) { if nav.selected == .session { loadThreads() } }
+    .onChange(of: nav.selected) { if nav.selected == .agent { loadThreads() } }
+  }
+
+  /// The left list. Advanced sits apart at the bottom, quieter: nothing in it is needed to use Talos.
+  private var sidebar: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      ForEach(SettingsNavigator.Tab.allCases.filter { $0 != .advanced }, id: \.self) { tabButton($0) }
+      Spacer(minLength: 12)
+      tabButton(.advanced)
+    }
+    .padding(.horizontal, 12).padding(.vertical, 20)
+    .frame(width: SP.sidebarWidth)
+    .frame(maxHeight: .infinity)
+    .background(SP.nav)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Settings sections")
+  }
+
+  private func tabButton(_ tab: SettingsNavigator.Tab) -> some View {
+    let on = nav.selected == tab
+    return Button {
+      nav.selected = tab
+    } label: {
+      HStack(spacing: 10) {
+        Image(systemName: tab.symbol).frame(width: 18)
+        Text(tab.title).font(OB.body(tab == .advanced ? 13 : 14, on ? .semibold : .regular))
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(on ? SP.ink : (tab == .advanced ? SP.muted : SP.ink))
+      .padding(.horizontal, 12)
+      .frame(minHeight: 40)
+      .background(RoundedRectangle(cornerRadius: 10).fill(on ? SP.accent : Color.clear))
+      .contentShape(RoundedRectangle(cornerRadius: 10))
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(tab.title)
+    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    .accessibilityIdentifier("settings-tab-\(tab.rawValue)")
   }
 
   // MARK: saving
 
-  private func save(_ edit: @escaping @Sendable (inout DesktopConfig) -> Void) {
+  func save(_ edit: @escaping @Sendable (inout DesktopConfig) -> Void) {
     guard loaded else { return }
     model.saveSetting(edit)
     cfg = model.configNow  // the save does not wait for the supervisor: this is the config with the edit laid on
   }
 
-  private func commitDrafts() {
+  func commitDrafts() {
     guard loaded else { return }
     // Against the live config, not this window's copy: an Adopt or Import since the box was typed in must not be undone.
     let p = drafts.pending(against: model.configNow)
@@ -115,25 +181,25 @@ struct SettingsView: View {
     drafts.saved(model.configNow)
   }
 
-  private func bind<T: Sendable>(_ kp: WritableKeyPath<DesktopConfig, T> & Sendable) -> Binding<T> {
+  func bind<T: Sendable>(_ kp: WritableKeyPath<DesktopConfig, T> & Sendable) -> Binding<T> {
     Binding(get: { cfg[keyPath: kp] }, set: { v in save { $0[keyPath: kp] = v } })
   }
 
-  private func loadLaunch() {
+  func loadLaunch() {
     launchLoaded = LaunchEdit.line(for: model.configNow)
     launchDraft = launchLoaded
     launchError = nil
     launchSaved = false
   }
 
-  private func loadThreads() {
+  func loadThreads() {
     let c = model.configNow
     let path = ThreadChoices.configPath(
       configEnv: c.env, processEnv: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
     threads = ThreadChoices.read(FileManager.default.contents(atPath: path))
   }
 
-  private func commitLaunch() {
+  func commitLaunch() {
     guard loaded else { return }
     switch model.editLaunchLine(launchDraft) {
     case .unchanged:
@@ -152,7 +218,7 @@ struct SettingsView: View {
     }
   }
 
-  private func chooseFolder() {
+  func chooseFolder() {
     let panel = NSOpenPanel()
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
@@ -165,352 +231,5 @@ struct SettingsView: View {
     guard panel.runModal() == .OK, let url = panel.url else { return }
     drafts.dir = url.path
     commitDrafts()
-  }
-
-  // MARK: Session
-
-  private var folderCheck: AgentFolderCheck.Result { AgentFolderCheck.check(drafts.dir, home: NSHomeDirectory()) }
-
-  private var session: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 10) {
-        restartToApplySection
-        permissionSection
-        Divider()
-        hostSection
-        Divider()
-        Text("Agent folder").font(.headline)
-        HStack {
-          TextField("~/talos-agent", text: $drafts.dir).textFieldStyle(.roundedBorder).onSubmit { commitDrafts() }
-            .accessibilityLabel("Agent folder")
-          Button("Choose\u{2026}") { chooseFolder() }
-        }
-        Text(folderCheck.text)
-          .font(.caption).foregroundStyle(folderCheck.isProblem ? Color.orange : Color.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .agentFolder)
-        Divider()
-        launchSection
-        Divider()
-        Toggle("Restart the agent after a crash", isOn: bind(\.autoRestart))
-        AppliesNote(setting: .autoRestart)
-        Toggle(MacSettingsText.autoConfirmTitle, isOn: bind(\.autoConfirmRestart))
-        Text(MacSettingsText.autoConfirmHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .autoConfirmRestart)
-        Toggle(MacSettingsText.startOnOpenTitle, isOn: bind(\.startSessionOnLaunch))
-        Text(MacSettingsText.startOnOpenHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .startSessionOnLaunch)
-        Toggle("Open the terminal when the agent needs you", isOn: bind(\.openTerminalOnDialog))
-        AppliesNote(setting: .openTerminalOnDialog)
-        Toggle("Unstick the agent when it stops answering", isOn: bind(\.unstickMain))
-        Text(MacSettingsText.unstickHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .unstickMain)
-        Divider()
-        notifyThreadSection
-        Divider()
-        SessionView(model: model)
-      }
-      .padding()
-    }
-  }
-
-  private var hostSection: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Terminal host").font(.headline)
-      Picker(
-        "Terminal host",
-        selection: Binding(get: { cfg.host }, set: { v in save { $0.host = v } })
-      ) {
-        ForEach(HostChoice.all, id: \.self) { Text(HostChoice.label($0)).tag($0) }
-      }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .frame(maxWidth: 420, alignment: .leading)
-      .disabled(!HostChoice.canChange(sessionUp: model.sessionIsUp, workersRunning: model.workersRunning))
-      .accessibilityLabel("Terminal host")
-      if !HostChoice.canChange(sessionUp: model.sessionIsUp, workersRunning: model.workersRunning) {
-        Text(HostChoice.lockedNote).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-      }
-      Text(HostChoice.runningLine(tmux: model.hostKind == .tmux)).font(.caption).foregroundStyle(.secondary)
-      if let p = HostChoice.startBlock(saved: cfg.host, runningTmux: model.hostKind == .tmux, tmuxUsable: model.tmuxUsable) {
-        Text(p).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("host-change-pending")
-      }
-      if let c = HostChoice.caveat(choice: cfg.host, tmuxUsable: model.tmuxUsable) {
-        Text(c).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-      }
-      AppliesNote(setting: .host)
-    }
-  }
-
-  /// A saved launch command the running agent does not have (a picker choice saved without a restart, an edit in the box below, an
-  /// import): said here, with ONE button that restarts cold. Never left unapplied without a word.
-  @ViewBuilder private var restartToApplySection: some View {
-    if model.configured, model.sessionIsUp, model.status.launchPending {
-      VStack(alignment: .leading, spacing: 6) {
-        Text(LaunchPending.line).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-        Button(LaunchPending.button) {
-          switch model.permissionModeFollowUp {
-          case .askFirst: confirmRestart = true
-          default: model.restartToApply()
-          }
-        }
-        .accessibilityIdentifier("restart-to-apply")
-        .alert(PermissionModeSetting.askFirstTitle, isPresented: $confirmRestart) {
-          Button("Restart now") { model.restartToApply() }
-          Button("Cancel", role: .cancel) {}
-        } message: {
-          Text(PermissionModeSetting.askFirstBody)
-        }
-      }
-      Divider()
-    }
-  }
-
-  private var permissionSection: some View {
-    let reading = PermissionModeSetting.read(cfg.args)
-    return VStack(alignment: .leading, spacing: 6) {
-      Text(PermissionModeSetting.title).font(.headline)
-      if model.configured {
-        Picker(
-          PermissionModeSetting.title,
-          selection: Binding<String>(
-            get: {
-              switch reading {
-              case .mode(let m): return m.rawValue
-              case .custom: return "custom"
-              }
-            },
-            set: { v in if let m = PermissionMode(rawValue: v) { chooseMode(m) } })
-        ) {
-          ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
-          if reading == .custom { Text(PermissionModeSetting.customLabel).tag("custom") }
-        }
-        .pickerStyle(.radioGroup)
-        .labelsHidden()
-        .accessibilityLabel(PermissionModeSetting.title)
-        if reading == .mode(.bypass) {
-          Text(PermissionModeSetting.bypassLine).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("permission-bypass-line")
-        }
-        if reading == .custom {
-          Text(PermissionModeSetting.customLine).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-        if !modeNote.isEmpty {
-          Text(modeNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("permission-mode-note")
-        }
-      } else {
-        Text(SetupText.launchNeedsSetup).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-      }
-      AppliesNote(setting: .permissionMode)
-    }
-    .alert(
-      PermissionModeSetting.askFirstTitle, isPresented: Binding(get: { pendingMode != nil }, set: { if !$0 { pendingMode = nil } }),
-      presenting: pendingMode
-    ) { m in
-      Button("Restart now") { applyMode(m, restart: true) }
-      Button("Save, restart later") { applyMode(m, restart: false) }
-      Button("Cancel", role: .cancel) {}
-    } message: { _ in
-      Text(PermissionModeSetting.askFirstBody)
-    }
-  }
-
-  /// A choice in the picker: the mode already in force does nothing; a running agent is restarted for you, and asked about first only
-  /// while it is on a turn.
-  private func chooseMode(_ mode: PermissionMode) {
-    guard loaded, PermissionModeSetting.evaluate(mode, against: model.configNow) != .unchanged else { return }
-    // a half-typed launch command would save over the new flag: it is saved or reverted first
-    guard launchDraft == launchLoaded else {
-      modeNote = "The launch command box has changes that are not saved. Save or revert them first, then choose a mode."
-      return
-    }
-    switch model.permissionModeFollowUp {
-    case .askFirst: pendingMode = mode
-    case .restartNow: applyMode(mode, restart: true)
-    case .saveOnly: applyMode(mode, restart: false)
-    }
-  }
-
-  private func applyMode(_ mode: PermissionMode, restart: Bool) {
-    pendingMode = nil
-    model.setPermissionMode(mode, restart: restart)
-    cfg = model.configNow
-    modeNote =
-      restart
-      ? "Restarting the agent. Confirm the development-channel dialog once when it asks."
-      : (model.sessionIsUp ? "Saved. It applies the next time the agent starts." : PermissionModeSetting.savedNotRunning)
-  }
-
-  private var launchSection: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Launch command").font(.headline)
-      if model.configured {
-        HStack {
-          TextField("claude --dangerously-skip-permissions …", text: $launchDraft)
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-            .onSubmit { commitLaunch() }
-            .accessibilityLabel("Launch command")
-          Button("Save") { commitLaunch() }.disabled(launchDraft == launchLoaded)
-          Button("Revert") { loadLaunch() }.disabled(launchDraft == launchLoaded && launchError == nil)
-        }
-        Text("The program and its arguments, as Import reads them. The folder, the environment and the conversation are kept as they are.")
-          .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        Text(LaunchEdit.envLine(cfg)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        if let e = launchError {
-          Text(e).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("launch-error")
-        }
-        if launchSaved {
-          Text(LaunchEdit.coldNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("launch-saved")
-        }
-      } else {
-        Text(SetupText.launchNeedsSetup).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-      }
-      AppliesNote(setting: .launchCommand)
-    }
-  }
-
-  private var notifyThreadSection: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Thread for crash posts").font(.headline)
-      Picker(
-        "Thread for crash posts",
-        selection: Binding<String>(
-          get: { cfg.notifyThread ?? "" },
-          set: { v in
-            let pick = ThreadChoices.stored(v)
-            save { $0.notifyThread = pick }
-          })
-      ) {
-        ForEach(ThreadChoices.options(threads, current: cfg.notifyThread)) { o in Text(o.label).tag(o.value ?? "") }
-      }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .frame(maxWidth: 420, alignment: .leading)
-      .accessibilityLabel("Thread for crash posts")
-      Text(ThreadChoices.note(threads)).font(.caption).foregroundStyle(threads.readable ? Color.secondary : Color.orange)
-        .fixedSize(horizontal: false, vertical: true)
-      AppliesNote(setting: .notifyThread)
-    }
-  }
-
-  // MARK: Connection
-
-  private var connection: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        let why = MacSettingsText.connectionNotice(model.liveNotice, hasRelay: web.hasRelay)
-        if !why.isEmpty {
-          Text(why).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("connection-notice")
-        }
-        LabeledContent("Relay address") {
-          TextField(MacSettingsText.relayHint, text: $drafts.relay)
-            .textFieldStyle(.roundedBorder)
-            .onSubmit { commitDrafts() }
-        }
-        Text(MacSettingsText.relayUsing(web.relay?.url.absoluteString))
-          .font(.caption).foregroundStyle(.secondary)
-        AppliesNote(setting: .relayAddress)
-        LabeledContent("talos-app command") {
-          TextField("auto (PATH, then the agent folder's .mcp.json)", text: $drafts.cli)
-            .textFieldStyle(.roundedBorder)
-            .onSubmit { commitDrafts() }
-        }
-        Text("Used by Sign in and Forget this Mac. Leave empty unless Sign in can't find it, then enter e.g. bun run /path/to/talos-app/apps/bridge/src/cli.ts")
-          .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .talosAppCommand)
-        Divider()
-        SignInPanel(model: model, beforeSignIn: { commitDrafts() })
-        HStack {
-          if web.pageState == .signedIn { Button("Sign out") { Task { await web.signOut() } } }
-          Button("Forget this Mac…") {
-            commitDrafts()
-            web.forgetThisMac(config: model.configNow)
-          }
-          .disabled(!web.hasRelay)
-        }
-      }
-      .padding()
-    }
-  }
-
-  // MARK: General
-
-  private var general: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        Toggle(
-          "Start Talos when I log in",
-          isOn: Binding(get: { login.isOn }, set: { login.set($0) }))
-        if !login.message.isEmpty {
-          Text(login.message).font(.caption)
-            .foregroundStyle(login.message == MacSettingsText.loginPending ? Color.orange : Color.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        AppliesNote(setting: .startAtLogin)
-        Toggle(
-          "Show a Dock icon",
-          isOn: Binding(
-            get: { showDock },
-            set: {
-              showDock = $0
-              ActivationPolicyController.shared.refresh()
-            }))
-        AppliesNote(setting: .dockIcon)
-        Toggle(
-          "Keep this Mac awake while plugged in",
-          isOn: Binding(
-            get: { cfg.keepAwakeOnAC },
-            set: { on in
-              save { $0.keepAwakeOnAC = on }
-              KeepAwake.shared.setEnabled(on)
-            }))
-        Text(KeepAwake.caption(awake.status)).font(.caption).foregroundStyle(.secondary)
-        AppliesNote(setting: .keepAwake)
-        Toggle(
-          "Open the Talos window at launch",
-          isOn: Binding(
-            get: { cfg.openWindowAtLaunch },
-            set: { on in save { $0.openWindowAtLaunch = on } }))
-        AppliesNote(setting: .openWindowAtLaunch)
-        Toggle(
-          MacSettingsText.autoUpdateTitle,
-          isOn: Binding(
-            get: { cfg.autoUpdate },
-            set: { on in save { $0.autoUpdate = on } }))
-        Text(MacSettingsText.autoUpdateHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        AppliesNote(setting: .autoUpdate)
-        Divider()
-        Text("About").font(.headline)
-        Text(MacAbout.versionLine(version: WebController.version, build: WebController.build))
-          .font(.callout).textSelection(.enabled)
-        HStack {
-          Button("Show the Mac app's log") { reveal(SupervisorController.auditPath, what: "Mac app log", madeBy: MacAbout.logMissing) }
-          Button("Show desktop.json") {
-            reveal(SupervisorController.configPath, what: "desktop.json", madeBy: MacAbout.configMissing)
-          }
-        }
-        if !generalNote.isEmpty {
-          Text(generalNote).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("general-note")
-        }
-      }
-      .padding()
-    }
-  }
-
-  private func reveal(_ path: String, what: String, madeBy: String) {
-    switch MacAbout.reveal(path: path, exists: FileManager.default.fileExists(atPath: path), what: what, madeBy: madeBy) {
-    case .show(let p):
-      generalNote = ""
-      NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
-    case .missing(let m):
-      generalNote = m
-    }
   }
 }

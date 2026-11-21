@@ -14,6 +14,12 @@ KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+# A loaded machine (the gate sets TALOS_TEST_TIME_FACTOR=3) runs the hook slowly: every deadline below scales with the factor and
+# ends as soon as its condition holds. poll SECONDS COMMAND...: runs COMMAND every 0.05 s until it succeeds or the deadline passes.
+scale(){ awk -v a="$1" -v f="${TALOS_TEST_TIME_FACTOR:-1}" 'BEGIN { f += 0; if (!(f >= 1) || f == f + 1) f = 1; printf "%g", a * f }'; }
+poll(){ local i n; n="$(scale $(( $1 * 20 )))"; shift; for (( i = 0; i < ${n%%.*}; i++ )); do "$@" && return 0; sleep 0.05; done; return 1; }
+has(){ [ -s "$1" ]; }
+gone(){ ! kill -0 "$1" 2>/dev/null; }
 
 SB="$(mktemp -d)" || exit 2
 SB="$(cd "$SB" && pwd -P)" || exit 2
@@ -69,7 +75,7 @@ PY
 
 start_hub(){ # $1 = mode, $2 = record file; waits until the socket is bound
   rm -f "$2" "$2.ready"; python3 "$SB/fakehub.py" "$TH" "$1" "$2" & HUBPID=$!
-  for _ in $(seq 1 100); do [ -e "$2.ready" ] && break; sleep 0.05; done
+  for _ in $(seq 1 "$(scale 100)"); do [ -e "$2.ready" ] && break; sleep 0.05; done
   [ -e "$2.ready" ] || { echo "fake hub did not start" >&2; return 1; }
   printf '{"pid": %s, "instance": "x"}' "$HUBPID" > "$TH/bridge.pid"       # the pid the hook expects at the other end (the fake plays the live bridge)
 }
@@ -199,18 +205,18 @@ assert isinstance(r["pid"], int) and r["pid"] > 0, r
 PY
 start_hub deny "$SB/rec-w3"
 OUT="$(printf '%s' "$CALL" | TALOS_APP_HOME="$TH" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_WORKER_THREAD=trip python3 "$HOOK" 2>"$SB/err")"; RC=$?
-sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-w3" ]; } && ok "a thread session with no nonce sends nothing (it cannot prove itself) and prints nothing" || no "nonce-less worker sent a request"
 
 # ---- who is on the other end of hub.sock: only the live bridge ever sees the tool input -----------------------------------------
 start_hub allow "$SB/rec-fake"; printf '{"pid": 1, "instance": "x"}' > "$TH/bridge.pid"       # the pidfile names another process: the listener is a stand-in
-run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+run_hook "$CALL"; sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-fake" ]; } && ok "a listener that is not the bridge in bridge.pid: never sent the tool input, no output (a fake hub cannot hand back an allow)" || no "stand-in listener got the request or an answer" "out=$OUT rec=$(cat "$SB/rec-fake" 2>/dev/null)"
 start_hub allow "$SB/rec-nopid"; rm -f "$TH/bridge.pid"
-run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+run_hook "$CALL"; sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-nopid" ]; } && ok "no bridge.pid: nothing sent, no output" || no "no-pidfile case wrong" "out=$OUT"
 start_hub allow "$SB/rec-badpid"; printf 'not json' > "$TH/bridge.pid"
-run_hook "$CALL"; sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+run_hook "$CALL"; sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -e "$SB/rec-badpid" ]; } && ok "a garbled bridge.pid: nothing sent, no output" || no "garbled pidfile case wrong" "out=$OUT"
 
 # ---- the Mac's thread session: its folder's own settings, read again at every prompt (TALOS_APP_HOOK_CHECK_DIR) ------------------
@@ -225,7 +231,7 @@ check_case(){ # $1 = label, $2 = settings.local.json text, $3 = TALOS_APP_HOOK_C
   [ "$(cat "$CF/.claude/settings.local.json" 2>/dev/null)" = "$2" ] || printf '%s' "$2" > "$CF/.claude/settings.local.json"
   start_hub allow "$SB/rec-cf"
   OUT="$(printf '%s' "$CALL" | TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS="$3" python3 "$HOOK" 2>"$SB/err")"; RC=$?; ERR="$(cat "$SB/err")"
-  sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+  sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
   if [ "$4" = 1 ]; then
     { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ -e "$SB/rec-cf" ] && [ -z "$ERR" ]; } && ok "control, $1: the bridge decides" || no "control, $1: the bridge did not decide" "rc=$RC out=$OUT err=$ERR"
   elif [ "$4" = 2 ]; then
@@ -322,7 +328,7 @@ json.dump({"key": m._cache_key(cf, True), "at": time.monotonic() - 1.0, "refusal
 '; }
 relay_rooted(){ rm -f "$SB/rec-cf"; start_hub allow "$SB/rec-cf"
   OUT="$(printf '%s' "$CALL" | env $1 TALOS_APP_HOME="$TH" TALOS_APP_HOOK_CHECK_DIR="$CF" TALOS_APP_HOOK_CHECK_HOOKS=0 python3 "$HOOK" 2>"$SB/err")"; RC=$?
-  sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""; }
+  sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""; }
 forge_clean; relay_rooted TALOS_APP_HOOK_ROOTED=0
 [ -e "$SB/rec-cf" ] && ok "control: a kept walk is read (the forged clean one lets the bridge decide)" || no "control: the kept walk was not read" "rc=$RC out=$OUT"
 forge_clean; relay_rooted TALOS_APP_HOOK_ROOTED=1
@@ -385,10 +391,10 @@ SLOW_S=60 start_hub slow "$SB/rec-orph"
 sh -c "TALOS_APP_HOME='$TH' python3 '$HOOK' < '$SB/call.json' >/dev/null 2>&1 & echo \$! > '$SB/orphan.pid'; wait" &
 SHPID=$!
 printf '%s' "$CALL" > "$SB/call.json"
-for _ in $(seq 1 40); do [ -s "$SB/orphan.pid" ] && [ -e "$SB/rec-orph" ] && break; sleep 0.1; done
+for _ in $(seq 1 "$(scale 40)"); do [ -s "$SB/orphan.pid" ] && [ -e "$SB/rec-orph" ] && break; sleep 0.1; done
 OPID="$(cat "$SB/orphan.pid" 2>/dev/null)"
 kill -9 "$SHPID" 2>/dev/null; wait "$SHPID" 2>/dev/null
-for _ in $(seq 1 50); do kill -0 "$OPID" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 "$(scale 50)"); do kill -0 "$OPID" 2>/dev/null || break; sleep 0.1; done
 { [ -n "$OPID" ] && ! kill -0 "$OPID" 2>/dev/null; } && ok "the process that started the hook dies: the hook notices within seconds and exits (no orphan holding the card)" || no "the hook outlived its killed parent (pid $OPID)"
 kill "$OPID" 2>/dev/null; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 
@@ -406,11 +412,12 @@ import json, sys
 open(sys.argv[1], "a").write(json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": sys.argv[2], "content": "denied"}]}}) + "\n")
 PY
 }
-hook_pid_after(){ # $1 = id of the tool_result to append after 1.5 s; prints "gone" or "alive" 4 s later
+hook_pid_after(){ # $1 = id of the tool_result to append once the hook has sent its request; prints "gone" (as soon as it is) or "alive" 4 s later
   SLOW_S=60 start_hub slow "$SB/rec-tr"
   printf '%s' "$CALLT" | TALOS_APP_HOME="$TH" python3 "$HOOK" >"$SB/tr.out" 2>&1 & TRPID=$!
-  sleep 1.5; append_result "$1"; sleep 4
-  if kill -0 "$TRPID" 2>/dev/null; then echo alive; else echo gone; fi
+  poll 10 has "$SB/rec-tr"; sleep "$(scale 1.5)"   # the request is out; the hook's first look at the transcript follows the send at once, and it looks once a second
+  append_result "$1"
+  if poll 4 gone "$TRPID"; then echo gone; else echo alive; fi   # an "alive" answer holds a negative window: it must not end in 4 s
   kill "$TRPID" 2>/dev/null; wait "$TRPID" 2>/dev/null; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 }
 [ "$(hook_pid_after toolu_MINE)" = gone ] && [ ! -s "$SB/tr.out" ] && ok "the tool_result of THIS call appears in the transcript: the hook ends with no output (the card closes behind it)" || no "the hook ignored the end of its own prompt"
@@ -437,20 +444,22 @@ open(sys.argv[1], "w").write(json.dumps({"type": "assistant", "message": {"role"
 PY
 SLOW_S=60 start_hub slow "$SB/rec-late"
 printf '%s' "$CALLT" | TALOS_APP_HOME="$TH" python3 "$HOOK" >"$SB/late.out" 2>&1 & LPID=$!
-sleep 2.5
+poll 10 has "$SB/rec-late"; sleep "$(scale 1.5)"   # the request is out; the hook's first look follows the send at once (margin, so B "appears later")
 python3 - "$TP" <<'PY'
 import json, sys
 b = {"type": "tool_use", "id": "toolu_B", "name": "Bash", "input": {"command": "rm -rf /srv/proj/build", "description": "remove it"}}
 open(sys.argv[1], "a").write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [b]}}) + "\n")
 PY
-sleep 1.5; append_result toolu_A; sleep 3
+sleep "$(scale 1.5)"   # the hook looks at the transcript once a second at most: it has seen the second call
+append_result toolu_A
+sleep "$(scale 3)"   # negative window: the hook must still be there after the first call's result
 if kill -0 "$LPID" 2>/dev/null; then ok "a second identical call that appears later also turns the watcher off"; else no "the hook ended although a second identical call appeared"; fi
 kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 unset TP
 
 # ---- kill switches ---------------------------------------------------------------------------------------------------------------
 start_hub allow "$SB/rec-k"; OUT="$(printf '%s' "$CALL" | TALOS_PERMISSION_RELAY_OFF=1 TALOS_APP_HOME="$TH" python3 "$HOOK" 2>&1)"
-sleep 0.15; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
+sleep "$(scale 0.15)"; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ -z "$OUT" ] && [ ! -e "$SB/rec-k" ]; } && ok "TALOS_PERMISSION_RELAY_OFF=1 turns it off: nothing sent, nothing printed" || no "env kill switch ignored" "$OUT"
 
 # ---- registration: the settings template, through the shell wrapper Claude Code runs -----------------------------------------------

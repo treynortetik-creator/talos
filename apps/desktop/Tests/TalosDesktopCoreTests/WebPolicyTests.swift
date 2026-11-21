@@ -35,6 +35,26 @@ struct WebPolicyTests {
     }
   }
 
+  @Test func anotherHostIsNeverLoadedInTheApp() {
+    // main frame, target=_blank and window.open all use `decide`: any https link off the relay's own host opens in the browser
+    for h in ["https://example.org/a", "https://relay.example.com.evil.example/", "https://relay.example.com:8443/", "https://user@example.org/"] {
+      #expect(WebPolicy.decide(u(h), relay: relay) == .openExternally(u(h)), "\(h)")
+    }
+    // inside a frame: opened in the browser only for the owner's own gesture; a script's navigation of the frame stays refused
+    for h in ["https://example.org/a", "http://example.org/", "https://relay.example.com:8443/x"] {
+      #expect(WebPolicy.decideLinkInFrame(u(h), relay: relay, userInitiated: true) == .openExternally(u(h)), "\(h)")
+      #expect(WebPolicy.decideLinkInFrame(u(h), relay: relay, userInitiated: false) == .deny, "\(h)")
+      #expect(WebPolicy.decideSubframe(u(h), relay: relay) == .deny, "\(h)")
+    }
+    #expect(WebPolicy.decideLinkInFrame(u("https://relay.example.com/media/x/page"), relay: relay, userInitiated: false) == .allow)
+    for bad in ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "https:///nohost", "ftp://x.com/a", "mailto:a@b.c"] {
+      #expect(WebPolicy.decideLinkInFrame(u(bad), relay: relay, userInitiated: true) == .deny, "\(bad)")
+    }
+    // the page's open_external message only ever carries what ExternalURL accepts
+    #expect(ExternalURL.parse("https://example.org/a") != nil)
+    #expect(ExternalURL.parse("file:///etc/passwd") == nil && ExternalURL.parse("javascript:alert(1)") == nil)
+  }
+
   @Test func subframesMayLoadAgentPagesFromTheRelayButNothingElse() {
     #expect(WebPolicy.decideSubframe(u("https://relay.example.com/media/x/page"), relay: relay) == .allow)
     #expect(WebPolicy.decideSubframe(u("https://relay.example.com/t/general"), relay: relay) == .deny)  // not an agent page

@@ -9,7 +9,6 @@ import { useTalosClient } from '../../lib/client.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
 import { SlashPicker, useSlashPicker } from '../session/SlashPicker.tsx'
 import { useSessionController } from '../session/store.ts'
-import { useWorkingStop } from '../threads/WorkingRow.tsx'
 import { ChipList, useChipUpkeep } from './ComposerChips.tsx'
 import { ErrorLine, NoteLine, ReplyBar, TooLongBar } from './ComposerNotices.tsx'
 import { ComposerToolbar } from './ComposerToolbar.tsx'
@@ -37,7 +36,6 @@ export function Composer({ threadId, placeholder }: { threadId: string; placehol
   // CC-C3: the `/` picker and a calm note for session controls run from the box.
   const [note, setNote] = useState<Note | null>(null)
   const session = useSessionController()
-  const working = useWorkingStop(threadId)
   const picker = useSlashPicker(text, threadId)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const alive = useThreadAlive(threadId)
@@ -93,11 +91,6 @@ export function Composer({ threadId, placeholder }: { threadId: string; placehol
         />
       )}
 
-      {working.stopError && (
-        <p role="alert" data-testid="working-row-error" className="m-0 pb-1.5 text-sm text-danger">
-          {working.stopError}
-        </p>
-      )}
       <ComposerToolbar
         placeholder={placeholder}
         text={text}
@@ -119,7 +112,6 @@ export function Composer({ threadId, placeholder }: { threadId: string; placehol
         canSend={canSend}
         waiting={uploading}
         tooLong={tooLong}
-        working={working}
         onSend={() => void send()}
       />
     </div>

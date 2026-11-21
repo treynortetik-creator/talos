@@ -49,7 +49,7 @@ for (const theme of ['light', 'dark'] as const) {
       })
       const sw = page.getByRole('switch', { name: /Tool prompts as approval cards: On after restart/ })
       await expect(sw).toBeVisible()
-      await expect(page.getByTestId('permission-relay-state')).toContainText('Restart session')
+      await expect(page.getByTestId('permission-relay-state')).toContainText('Restart your agent')
       await expect(page.getByTestId('permission-relay-state')).toContainText(
         'quit and restart Claude Code in your terminal',
       )

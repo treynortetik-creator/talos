@@ -61,13 +61,13 @@ public enum AppMenuSpec {
       Item(.closeWindow, "Close", key: "w"),
       Item(.minimize, "Minimize", key: "m"), nil,
       Item(.showTalos, "Show Talos", key: "t"),
-      Item(.showTerminal, "Terminals…"),  // no key: ⌘K is search in the Talos window
-      Item(.quickCompose, "Quick compose\u{2026}", key: "n"), nil,
+      Item(.showTerminal, MacWords.showAgentScreen),  // no key: ⌘K is search in the Talos window
+      Item(.quickCompose, MacWords.quickMessage, key: "n"), nil,
       Item(.companionToggle, "Show Companion"),
-      Item(.signIn, "Sign in\u{2026}"),
-      Item(.signOut, "Sign out"), nil,
+      Item(.signIn, MacWords.connectThisMac),
+      Item(.signOut, MacWords.signOutWindow), nil,
       Item(.setupChecklist, "Set up Talos\u{2026}"),
-      Item(.permissions, "Permissions\u{2026}"),
+      Item(.permissions, MacWords.privacyAndAccess),
     ])
 
   public static let helpMenu = Menu(title: "Help", items: [Item(.help, "Talos Help", key: "?")])

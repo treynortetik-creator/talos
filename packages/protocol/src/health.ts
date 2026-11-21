@@ -82,7 +82,12 @@ export const HealthStatus = z.object({
   at: IsoTs,
   relay_ok: z.boolean(), // = relay_problems is empty
   relay_problems: z.array(RelayProblem),
-  relay: z.object({ version: z.string(), up_since: IsoTs }),
+  relay: z.object({
+    version: z.string(),
+    /** The release the relay image was built from (X.Y.Z). Optional: a relay that deploys from main, or an older one, omits it; junk drops only this. */
+    release: z.string().max(20).optional().catch(undefined),
+    up_since: IsoTs,
+  }),
   mac_problems: z.array(MacProblem), // informational for the workflow; the watchdog alerts on these
   bridge: z.object({
     online: z.boolean(),

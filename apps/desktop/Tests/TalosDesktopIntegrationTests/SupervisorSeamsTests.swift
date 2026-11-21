@@ -4,7 +4,7 @@ import TalosDesktopCore
 import TalosSupervisor
 
 /// The seams of the supervisor that decide what the owner sees: a start that never settles, the two off switches, following the
-/// session id the CLI reports, the menu's Restart session, and a second login-expired dialog. Real pty or real private tmux,
+/// session id the CLI reports, the menu's Restart your agent, and a second login-expired dialog. Real pty or real private tmux,
 /// the fake `claude`; every wait only caps a hang.
 @Suite("Supervisor seams (real pty, real tmux)", .serialized)
 struct SupervisorSeamsTests {
@@ -188,7 +188,7 @@ struct SupervisorSeamsTests {
       "the list could not be read, but the activity is still \(String(describing: r.sup.status.agentActivity))")
   }
 
-  // MARK: menu Restart session
+  // MARK: menu Restart your agent
 
   @Test(arguments: bothHosts)
   func restartSessionStopsTheOldChildThenStartsAColdResumeThatWaitsForTheOwner(kind: HostKind) throws {

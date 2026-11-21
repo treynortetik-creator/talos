@@ -164,8 +164,8 @@ struct PermissionModeTests {
     #expect(PermissionMode.auto.label == "Auto (recommended)")
     #expect(PermissionMode.ask.label == "Ask me")
     #expect(PermissionMode.bypass.label == "Bypass all")
-    #expect(PermissionModeSetting.bypassLine == "No permission cards reach your phone in this mode.")
-    #expect(PermissionModeSetting.customLabel == "Custom (from your launch command)")
+    #expect(PermissionModeSetting.bypassLine == "Bypass never asks you, on this Mac or on your phone.")
+    #expect(PermissionModeSetting.customLabel == "Custom (set in Advanced)")
     #expect(MacSettingsText.applies(.permissionMode).hasPrefix("Applies"))
   }
 }
@@ -240,7 +240,7 @@ struct PermissionModeRequestTests {
     let ask = PermissionModeSetting.changedLine(.ask, restarting: true)
     #expect(ask.hasPrefix("The agent asked to switch the permission mode to Ask me."))
     #expect(!ask.contains("as you asked"))
-    #expect(PermissionModeSetting.refusedLine(.custom).contains("own permission flags"))
+    #expect(PermissionModeSetting.refusedLine(.custom).contains("own custom setting"))
   }
 
   @Test func theMacPopupNamesTheModeTheChangedLaunchStartsIn() {
@@ -353,24 +353,24 @@ struct LaunchPendingTests {
   }
 }
 
-@Suite("Session tab layout")
+@Suite("Your agent tab layout")
 struct SessionTabLayoutTests {
-  /// An imported or adopted session has a `desktop.json`, so `configured` is true for it; nothing else hides a section. The Session
-  /// tab draws the restart banner, the picker, the host, the folder and the launch box in one column with no condition around them.
-  @Test func theSessionTabDrawsThePickerHostAndLaunchSectionsInOneUnconditionalColumn() throws {
+  /// An imported or adopted agent has a `desktop.json`, so `configured` is true for it; nothing else hides a section. Your agent
+  /// draws the three modes first, then the four rows, then the one caption, in one column; the launch command, the folder and the
+  /// host picker moved to Advanced.
+  @Test func yourAgentDrawsTheModesTheFourRowsAndTheCaptionInOrder() throws {
     let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-      .appendingPathComponent("Sources/TalosDesktop/SettingsView.swift")
+      .appendingPathComponent("Sources/TalosDesktop/SettingsAgentTab.swift")
     let t = try String(contentsOf: src, encoding: .utf8)
-    let start = try #require(t.range(of: "private var session: some View"))
-    let end = try #require(t.range(of: "private var restartToApplySection"))
+    let start = try #require(t.range(of: "var agentTab: some View"))
+    let end = try #require(t.range(of: "// MARK: how much it asks"))
     let body = String(t[start.lowerBound..<end.lowerBound])
     var last = body.startIndex
-    for name in ["restartToApplySection", "permissionSection", "hostSection", "launchSection"] {
-      let r = try #require(body.range(of: name, range: last..<body.endIndex), "\(name) is in the Session tab, in this order")
+    for name in ["modeSection", "startOnOpenTitle", "keepWorkingTitle", "restartIfStopsTitle", "problemsRow", "applyCaption"] {
+      let r = try #require(body.range(of: name, range: last..<body.endIndex), "\(name) is on Your agent, in this order")
       last = r.upperBound
     }
-    #expect(!body.contains("if model.configured"), "no section of the tab is behind the set-up flag")
-    #expect(!body.contains("if cfg"), "nor behind a config value")
+    #expect(!body.contains("launchSection") && !body.contains("hostSection"), "start-up command and host picker are in Advanced")
   }
 
   @Test func anImportedCommandThatBypassesShowsTheBypassChoice() throws {

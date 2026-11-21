@@ -394,9 +394,9 @@ final class TrustWordsTests: XCTestCase {
 
     func testTheBannerSaysWhatIsOffAndWhyAndWhenItWasLastConfirmed() {
         let text = TrustWords.banner(lastVerified: now.addingTimeInterval(-3 * 3600), reason: .macOffline, host: "mine.example.com", now: now)
-        XCTAssertTrue(text.hasPrefix("Can't confirm this is your Mac. The page's camera and microphone access, sharing and native features are off until it answers."), text)
+        XCTAssertTrue(text.hasPrefix("Can't confirm this is your Mac. Sharing and some phone features are off until it answers."), text)
         XCTAssertFalse(text.contains("Camera, mic"), "no absolute claim: a file input that opens the system camera is not a WebKit check")
-        XCTAssertTrue(text.contains("Your Mac is not connected to the relay."), text)
+        XCTAssertTrue(text.contains("Your Mac is not connected to the Talos server."), text)
         XCTAssertTrue(text.hasSuffix("Last confirmed 3 hours ago."), text)
     }
 
@@ -408,7 +408,7 @@ final class TrustWordsTests: XCTestCase {
     func testEveryReasonHasItsOwnWordsAndAnOldMacIsToldToUpdate() {
         let reasons: [UnverifiedReason] = [.checking, .network, .macOffline, .unsupported, .macTimeout, .rateLimited, .badAnswer, .keyChanged, .saveFailed]
         XCTAssertEqual(Set(reasons.map { TrustWords.why($0, host: "h") }).count, reasons.count)
-        XCTAssertTrue(TrustWords.why(.unsupported, host: "h").contains("update talos-app"))
+        XCTAssertTrue(TrustWords.why(.unsupported, host: "h").contains("update Talos on your Mac"))
     }
 
     func testTheScreensNameTheHostAndNothingIsLoaded() {

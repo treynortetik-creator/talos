@@ -326,7 +326,7 @@ struct AgentRecoveryNoticeTests {
         == "Talos kept crashing, so it put back the last good setup (wrote .mcp.json, .claude/settings.json from the version saved 2026-11-02 17:02 UTC) and restarted")
     #expect(
       SupervisorNotice.recovery(.restored(.bridgeDown, .unknown, restarted: true))
-        == "The bridge stayed down, so Talos put back the last good setup and restarted")
+        == "Talos on your Mac stayed down, so Talos put back the last good setup and restarted")
     #expect(
       SupervisorNotice.recovery(.restored(.bridgeDown, .nothingToChange, restarted: true))
         == "Tried restoring the last good setup: nothing to change. Restarted the agent.")

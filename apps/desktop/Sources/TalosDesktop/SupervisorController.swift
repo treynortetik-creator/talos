@@ -62,6 +62,11 @@ final class SupervisorController: ObservableObject {
   let workerBox = WorkerBox()
   /// The app's own updater (AutoUpdateWiring.swift); nil until set up, and never for a desktop.json that cannot be read.
   var autoUpdater: AutoUpdater?
+  /// The updater's timer and the Allow-updates question are started once, at launch or when setup finishes (AutoUpdateWiring.swift).
+  var autoUpdaterStarted = false
+  var clonePromptsWired = false
+  /// The Talos home the updater was built for.
+  var autoUpdaterHome: String?
   /// Settings edits handed to the supervisor that it has not applied yet, and the config with them laid on: what a reader on the
   /// main thread sees meanwhile (`configNow`), so no caller waits on the supervisor's queue to read its own change back.
   private var pendingEdits = 0
@@ -153,6 +158,8 @@ final class SupervisorController: ObservableObject {
     refresh = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in self?.refreshNow() }
     }
+    // The updater exists from the first launch, with its timer off until Talos is set up: Check for Updates answers before sign-in.
+    prepareAutoUpdater()
     if supervisor.status.configUnreadable {
       // Nothing starts: not Main, not a thread session (the workers were built from the defaults too). The menu says why.
       notice = SupervisorNotice.configUnreadable
@@ -209,6 +216,7 @@ final class SupervisorController: ObservableObject {
   /// with nothing said. With no thread session running the manager is rebuilt for the new home; with one running nothing moves
   /// (it would be orphaned) and the menu says a restart is needed.
   func followTalosHome() {
+    rebuildUpdaterIfHomeMoved()  // the updater follows the home too (AutoUpdateWiring.swift)
     guard let old = workers, !movingHome, !supervisor.status.configUnreadable else { return }
     let cfg = supervisor.currentConfig()
     let env = launchEnv
@@ -454,13 +462,13 @@ final class SupervisorController: ObservableObject {
     if s.configUnreadable { return SupervisorNotice.configUnreadableStatus }
     let host = s.host == .tmux ? "tmux" : "owned pty"
     switch s.phase {
-    case .idle: return "Session: not started · \(host)"
-    case .blocked: return "Blocked: another session holds the channels"
-    case .starting: return "Session: starting · \(host)"
-    case .running: return "Session: running · \(host)\(s.childPid.map { " · pid \($0)" } ?? "")"
-    case .cleaningUp, .waitingToRestart: return "Session: restarting · \(host)"
-    case .stopping: return "Session: stopping"
-    case .stopped(let r): return r.isFailure ? "Session stopped. \(r.plainSentence)" : "Session: stopped"
+    case .idle: return "Agent: not started · \(host)"
+    case .blocked: return "Blocked: another agent is already using this account"
+    case .starting: return "Agent: starting · \(host)"
+    case .running: return "Agent: running · \(host)\(s.childPid.map { " · pid \($0)" } ?? "")"
+    case .cleaningUp, .waitingToRestart: return "Agent: restarting · \(host)"
+    case .stopping: return "Agent: stopping"
+    case .stopped(let r): return r.isFailure ? "Agent stopped. \(r.plainSentence)" : "Agent: stopped"
     }
   }
 
@@ -612,6 +620,7 @@ final class SupervisorController: ObservableObject {
     PreSetup.finish(store: store, fileExists: true)
     configured = true
     configRevision += 1
+    startAutoUpdater()  // setup finished in this session: the updater's timer must not wait for a relaunch
     // setup finished: own-session threads must not wait for a relaunch (D10). Not while the manager is being replaced for a new
     // Talos home: this one is being let go, and the one that replaces it is started when the move ends.
     if !movingHome { workers?.startTicking() }

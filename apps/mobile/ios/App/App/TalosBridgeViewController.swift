@@ -1,7 +1,6 @@
 import BridgeGuard
 import Capacitor
 import Network
-import SafariServices
 import TalosRelayCore
 import UIKit
 import WebKit
@@ -9,7 +8,8 @@ import WebKit
 /// The shell's only view controller. It locks the native bridge to the relay origin (IOS-SPEC rev 2, item I14):
 ///  1. Capacitor's "bridge" WKScriptMessageHandler is wrapped, so plugin calls are dropped unless they come from the
 ///     top frame, on the relay origin, at a path outside /media/.
-///  2. Anything that is not a relay page leaves this web view: other hosts go to SFSafariViewController, relay /media/
+///  2. Anything that is not a relay page leaves this web view: other hosts open OUTSIDE Talos through the system (a Drive or Docs
+///     link in its app, the rest in Safari with the owner's own sign-ins; the owner, 2026-11-20), relay /media/
 ///     pages (agent-written HTML, "Open in new tab", downloads) go to a bridge-less in-app viewer that shares the
 ///     session cookie. Capacitor's prompt() cookie channel and the camera/mic grant are limited to the trusted frame.
 /// The relay origin is the active `RelayProfile` (RelayRuntime), saved only by the native scan. A DEBUG build with no profile may
@@ -62,6 +62,15 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     private var launchStarted = Date()
     private var shareInFlight = false
     private var relayPageFinished = false
+    var relayPageFinishedForTests: Bool { relayPageFinished }
+    /// For tests: what a finish sees as the web view's url. A real web view's url changes with the real (unreachable) load, so a
+    /// test that must be exact sets it.
+    var shownURLForTests: URL?
+    var relayPageCommittedForTests: Bool { relayPageCommitted }
+    /// The navigation `loadRelay` started, until it finishes or the next `loadRelay`. A finish or commit for any OTHER navigation while it is
+    /// pending is an earlier load's late news (Capacitor's offline page, which the gate's cancelled first load leaves behind):
+    /// `webView.url` already names the relay by then, so the url alone cannot tell them apart.
+    private(set) var relayNavigation: WKNavigation?
     private var relayPageCommitted = false
     /// True once the offline page is what the web view shows. Network-return and foreground retries act only then, so the
     /// initial launch load is never restarted by the notifications that fire at launch.
@@ -275,7 +284,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         //    lives on self.
         let gate = NavigationGate(
             inner: handler, guardian: guardian, trust: trust,
-            openInSafari: { [weak self] url in self?.openInSafari(url) },
+            openOutside: { [weak self] url in self?.openOutside(url) },
             showMedia: { [weak self] url in self?.showMedia(url, guardian: guardian) },
             pageDidReset: {
                 TalosAudioPlugin.resetSession()
@@ -284,8 +293,8 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             pageLoadAllowed: { [weak trust] in trust?.allowsPageLoad ?? false },
             retry: { [weak self] in self?.retryIfNeeded(tapped: true) },
             processDied: { [weak self] in self?.webProcessDied() },
-            didCommit: { [weak self] in self?.pageDidCommit() },
-            didFinish: { [weak self] in self?.pageDidFinish() }
+            didCommit: { [weak self] nav in self?.pageDidCommit(nav) },
+            didFinish: { [weak self] nav in self?.pageDidFinish(nav) }
         )
         navigationGate = gate
         webView.navigationDelegate = gate
@@ -436,6 +445,13 @@ final class TalosBridgeViewController: CAPBridgeViewController {
     var repinPromptForTests: RepinPrompt { repinPrompt }
     /// For tests: the launch watchdog is counting.
     var isLaunchWatchdogRunning: Bool { launchWatchdog?.isValid == true }
+    /// For tests: why a watchdog is not running (a page finished, the app is off screen, or it never started).
+    /// The app's state as the watchdog sees it. A test sets it: a simulator test host that is not in front reports .background,
+    /// which pauses the watchdog by design, so a test about the watchdog cannot leave it to the machine.
+    static var applicationState: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
+    var watchdogStateForTests: String {
+        "running=\(isLaunchWatchdogRunning) paused=\(watchdogPaused) finished=\(relayPageFinished) fallback=\(showingFallback) appState=\(UIApplication.shared.applicationState.rawValue)"
+    }
 
     private func showBanner(_ text: String) {
         launchSpinner.stopAnimating()
@@ -546,7 +562,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
             self.recovering = true
             updateReconnectNotice()
         }
-        webView.load(URLRequest(url: target))
+        relayNavigation = webView.load(URLRequest(url: target))
         startLaunchWatchdog()
     }
 
@@ -622,7 +638,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         launchWatchdog?.invalidate()
         launchWatchdog = nil
         // A load that starts while the app is off screen (a web process that died there) is watched from the return to the front.
-        if UIApplication.shared.applicationState == .background {
+        if Self.applicationState() == .background {
             watchdogPaused = true
             return
         }
@@ -661,20 +677,35 @@ final class TalosBridgeViewController: CAPBridgeViewController {
 
     /// The relay answered and its HTML is arriving: the load is progressing, so the 12 s stall limit no longer applies.
     /// Restart the watchdog once with the longer committed limit.
-    fileprivate func pageDidCommit() {
-        guard let guardian, let url = webView?.url, guardian.isRelayURL(url),
+    fileprivate func pageDidCommit(_ navigation: WKNavigation?) {
+        if isEarlierNavigation(navigation) { return }
+        guard let guardian, let url = shownURLForTests ?? webView?.url, guardian.isRelayURL(url),
               !relayPageFinished, !relayPageCommitted else { return }
         relayPageCommitted = true
         startLaunchWatchdog()
     }
 
-    fileprivate func pageDidFinish() {
+    /// True for a navigation that is not the pending relay load, while one is pending.
+    private func isEarlierNavigation(_ navigation: WKNavigation?) -> Bool {
+        guard let pending = relayNavigation else { return false }
+        return navigation !== pending
+    }
+
+    fileprivate func pageDidFinish(_ navigation: WKNavigation?) {
+        // While the relay load is pending, only ITS finish is the relay page finishing. Any other navigation's finish is an
+        // earlier page's late news: it must not stop the spinner or the watchdog or mark the relay finished. The relay load
+        // failing does not change that (the pending navigation stays until the next `loadRelay` or its own finish), so the
+        // offline page Capacitor shows for the failure is told apart by its url, never by "the relay load is over".
+        let isRelayLoad = relayNavigation == nil || navigation === relayNavigation
+        if isRelayLoad { relayNavigation = nil }
+        let shown = shownURLForTests ?? webView?.url
+        if !isRelayLoad, let shown, guardian?.isRelayURL(shown) == true { return }
         launchSpinner.stopAnimating()
         // A page is on screen again, the relay's or the offline page (which has its own "Try again").
         hasShownAPage = true
         recovering = false
         updateReconnectNotice()
-        guard let guardian, let url = webView?.url else { return }
+        guard let guardian, let url = shown else { return }
         if guardian.isRelayURL(url) {
             relayPageFinished = true
             showingFallback = false
@@ -694,7 +725,7 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         guard let webView else { return }
         let viewer = MediaViewerController(
             url: url, dataStore: webView.configuration.websiteDataStore, guardian: guardian
-        ) { [weak self] external in self?.openInSafari(external) }
+        ) { [weak self] external in self?.openOutside(external) }
         let nav = UINavigationController(rootViewController: viewer)
         // Over full screen, not the default card: a card closes on a swipe down, which fought every scroll of a long page
         // (the owner, 2026-11-14). The X in the bar is the only way out; a swipe down only scrolls. Not .fullScreen: that
@@ -744,8 +775,15 @@ final class TalosBridgeViewController: CAPBridgeViewController {
         webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('talos:share-media-done'))", completionHandler: nil)
     }
 
-    private func openInSafari(_ url: URL) {
+    /// How a link leaves Talos. The system decides where it goes: a universal link (a Google Drive or Docs link, say) opens in its
+    /// app, anything else in Safari, signed in as the owner is there. Never an in-app browser: SFSafariViewController shares no
+    /// sign-in with Safari and keeps a Drive link out of the Drive app, so the owner met a Google sign-in inside Talos
+    /// (2026-11-20). Tests replace it.
+    var openURL: (URL) -> Void = { UIApplication.shared.open($0, options: [:], completionHandler: nil) }
+
+    /// A web link that is not a relay page: out of Talos, through `openURL`. Only http and https; any other scheme is refused.
+    func openOutside(_ url: URL) {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
-        topPresenter().present(SFSafariViewController(url: url), animated: true)
+        openURL(url)
     }
 }

@@ -61,7 +61,7 @@ struct MainSafetyTests {
     Thread.sleep(forTimeInterval: 2)
     #expect(keys.keys.isEmpty, "nothing is pressed on the question by itself: \(keys.keys)")
     #expect(!r.allEvents.contains(.openTerminal))
-    #expect(SupervisorNotice.mainDialog(DialogMatcher.Screen.mcpConsent.label) == "Claude is asking whether to use a project MCP server. Answer in the Talos popup")
+    #expect(SupervisorNotice.mainDialog(DialogMatcher.Screen.mcpConsent.label) == "Claude is asking whether to trust this project's connected tools. Answer in the Talos popup")
   }
 
   @Test func aClickOnAllowIsTwoArrowsAndOneEnterEachReadBackAndTheOfferIsOnce() throws {

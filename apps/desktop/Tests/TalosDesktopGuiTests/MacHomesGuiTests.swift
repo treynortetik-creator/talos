@@ -43,7 +43,7 @@ struct MacHomesDoorsGuiTests {
     let m = try scratchModel()
     defer { removeScratchConfig() }
     for (action, tab) in [
-      (AppMenuSpec.Action.permissions, SettingsNavigator.Tab.permissions), (.showTalos, .connection),
+      (AppMenuSpec.Action.permissions, SettingsNavigator.Tab.access), (.showTalos, .advanced),
     ] {
       SettingsNavigator.shared.selected = .general
       let o = Opened()
@@ -58,7 +58,7 @@ struct MacHomesDoorsGuiTests {
     }
   }
 
-  @Test func helpWithNoRelayAddressSaysWhyAndLandsOnConnection() throws {
+  @Test func helpWithNoRelayAddressSaysWhyAndLandsOnAdvanced() throws {
     _ = NSApplication.shared
     let m = try scratchModel()
     defer { removeScratchConfig() }
@@ -67,7 +67,7 @@ struct MacHomesDoorsGuiTests {
     let o = Opened()
     AppMenuActions.perform(.help, model: m, open: { o.ids.append($0) })
     #expect(o.ids == ["settings"], "Help has no window of its own: \(o.ids)")
-    #expect(SettingsNavigator.shared.selected == .connection)
+    #expect(SettingsNavigator.shared.selected == .advanced)
     #expect(m.notice == HelpPage.noRelay)
   }
 
@@ -119,7 +119,7 @@ struct MacHomesDoorsGuiTests {
   @Test func everyHelpDoorGoesThroughOneRouter() throws {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Sources/TalosDesktop")
-    for f in ["App.swift", "Onboarding.swift", "AppMenuActions.swift"] {
+    for f in ["StatusMenu.swift", "Onboarding.swift", "AppMenuActions.swift"] {
       let t = try String(contentsOf: root.appendingPathComponent(f), encoding: .utf8)
       #expect(t.contains("HelpRouter.open("), "\(f) opens Help through HelpRouter")
     }
@@ -133,19 +133,19 @@ struct MacHomesDoorsGuiTests {
     for a in [AppMenuSpec.Action.settings, .help, .setupChecklist, .permissions, .showTalos] {
       AppMenuActions.perform(a, model: m, open: { o.ids.append($0) })
     }
-    SettingsRouter.open(.hotkeys, via: { o.ids.append($0) })
+    SettingsRouter.open(.general, via: { o.ids.append($0) })
     SettingsRouter.openAdopt(model: m, via: { o.ids.append($0) })
     #expect(Set(o.ids).isSubset(of: ["settings", "onboarding"]), "\(o.ids)")
   }
 
-  @Test func noRelayWordsTheNoticeAndLandsOnConnection() throws {
+  @Test func noRelayWordsTheNoticeAndLandsOnAdvanced() throws {
     _ = NSApplication.shared
     let m = try scratchModel()
     defer { removeScratchConfig() }
     try #require(!WebController.shared.hasRelay, "this test needs a Mac with no relay address")
     AppMenuActions.perform(.showTalos, model: m, open: { _ in })
     #expect(m.notice == MacSettingsText.noRelayYet)
-    #expect(!m.notice.contains("desktop.json") && m.notice.contains("Connection"))
+    #expect(!m.notice.contains("desktop.json") && m.notice.contains("Advanced"))
   }
 
   @Test func findARunningSessionWorksFromTheMenuBarAndFromTheChecklist() async throws {
@@ -158,7 +158,7 @@ struct MacHomesDoorsGuiTests {
       m.adoptNote = ""
       let o = Opened()
       SettingsRouter.openAdopt(model: m, via: { o.ids.append($0) })
-      #expect(SettingsNavigator.shared.selected == .session)
+      #expect(SettingsNavigator.shared.selected == .advanced)
       #expect(o.ids == ["settings"])
       #expect(m.adoptNote == AdoptLookup.looking, "the search is under way, off the main thread, and the window says so")
     }
@@ -169,11 +169,16 @@ struct MacHomesDoorsGuiTests {
     // and from the Session tab itself the button is still there: its label comes from the one constant
     let src = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent("Sources/TalosDesktop/App.swift").path, encoding: .utf8)
-    #expect(src.contains("Button(BlockedText.adoptButton) { model.findSessionToAdopt() }"))
+    let advanced = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appendingPathComponent("Sources/TalosDesktop/AdvancedSettingsView.swift").path, encoding: .utf8)
+    let advancedMenu = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appendingPathComponent("Sources/TalosDesktop/AdvancedMenu.swift").path, encoding: .utf8)
+    #expect(advanced.contains("Button(\"Look for one\") { model.findSessionToAdopt() }"), "the one take-over row")
+    #expect(!advanced.contains("Button(BlockedText.adoptButton)"), "no second take-over button")
     let onboarding = try String(contentsOfFile: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent("Sources/TalosDesktop/Onboarding.swift").path, encoding: .utf8)
     #expect(onboarding.contains("SettingsRouter.openAdopt(model: model)"))
-    #expect(src.contains("SettingsRouter.openAdopt(model: model)"))
+    #expect(advancedMenu.contains("SettingsRouter.openAdopt(model: model)"))
   }
 }
 
@@ -580,6 +585,50 @@ struct SetupGuiTests {
     #expect(PreSetup.load(store) == nil)
   }
 
+  @Test func aSetUpLaunchWiresTheCloneQuestionSoAnUnsafeFolderCanNeverBeAccepted() throws {
+    let m = try scratchModel()
+    defer { removeScratchConfig() }
+    #expect(m.importCommand("claude --one") == nil)
+    CloneConfirmCenter.shared.unsafe = { [] }  // what an unwired app has
+    let again = SupervisorController(store: MemoryStore())  // a relaunch with desktop.json present
+    #expect(again.configured)
+    let unsafe = CloneConfirmCenter.shared.unsafe()
+    #expect(!unsafe.isEmpty, "the folders no clone may live in are named: \(unsafe)")
+    #expect(unsafe.contains(NSTemporaryDirectory()) && unsafe.contains("/tmp"))
+    #expect(AllowUpdatesWatch.isRunning, "the watch for a clone nobody accepted runs")
+    #expect(again.autoUpdaterStarted && again.clonePromptsWired)
+    again.startAutoUpdater()  // idempotent
+    #expect(again.autoUpdater != nil)
+  }
+
+  @Test func theUpdaterFollowsATalosHomeThatSetupChanged() throws {
+    let m = try scratchModel()
+    defer { removeScratchConfig() }
+    let first = try #require(m.autoUpdater)
+    let firstHome = try #require(m.autoUpdaterHome)
+    let newHome = TmuxWorld.root + "/other-apphome-\(UUID().uuidString.prefix(6))"
+    #expect(newHome != firstHome)
+    // Import writes TALOS_APP_HOME into desktop.json's env: the Talos home is now somewhere else
+    #expect(m.importCommand("TALOS_APP_HOME=\(newHome) claude --one") == nil)
+    #expect(m.autoUpdaterHome == newHome, "the updater was rebuilt for the new home: \(m.autoUpdaterHome ?? "nil")")
+    let now = try #require(m.autoUpdater)
+    #expect(now !== first && now.options.talosHome == newHome)
+    #expect(m.autoUpdaterStarted, "and its timer runs (setup finished)")
+    m.followTalosHome()  // nothing moved since: the same updater stays
+    #expect(m.autoUpdater === now)
+    now.stop()
+  }
+
+  @Test func finishingSetupInThisSessionStartsTheUpdaterWithoutARelaunch() throws {
+    let m = try scratchModel()
+    defer { removeScratchConfig() }
+    #expect(!m.configured && !m.autoUpdaterStarted, "before setup the timer is off")
+    #expect(m.autoUpdater != nil, "but the updater exists, so Check for Updates can look")
+    #expect(m.importCommand("claude --one") == nil)  // setup finishes here (commitSetup)
+    #expect(m.configured && m.autoUpdaterStarted && m.clonePromptsWired)
+    #expect(!CloneConfirmCenter.shared.unsafe().isEmpty)
+  }
+
   @Test func aSavedHostThatNeedsARelaunchRefusesToStartAndSaysWhy() throws {
     let m = try scratchModel()
     defer { removeScratchConfig() }
@@ -686,7 +735,7 @@ struct MacHomesScreensGuiTests {
     return try #require(rep.representation(using: .png, properties: [:]))
   }
 
-  /// All six tabs, light and dark, and the states that matter: not set up, set up, a refused launch line, a narrow window.
+  /// All five tabs, light and dark, and the states that matter: not set up, set up, a refused launch line, a narrow window.
   @Test func everyTabRendersInBothThemes() async throws {
     _ = NSApplication.shared
     let m = try scratchModel()
@@ -695,9 +744,9 @@ struct MacHomesScreensGuiTests {
     if let d = shots { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
     var sizes: [String: Int] = [:]
     for dark in [false, true] {
-      for tab in [SettingsNavigator.Tab.session, .connection, .permissions, .hotkeys, .companion, .general] {
+      for tab in SettingsNavigator.Tab.allCases {
         SettingsNavigator.shared.selected = tab
-        let (w, h) = host(SettingsView(model: m), size: NSSize(width: 700, height: 600), dark: dark)
+        let (w, h) = host(SettingsView(model: m), size: NSSize(width: 900, height: 700), dark: dark)
         _ = w
         await pump(1.0)
         h.layoutSubtreeIfNeeded()
@@ -707,7 +756,7 @@ struct MacHomesScreensGuiTests {
         if let d = shots { try data.write(to: URL(fileURLWithPath: d + "/mac-\(tab.rawValue)-\(dark ? "dark" : "light").png")) }
       }
     }
-    #expect(sizes["session-false"] != sizes["session-true"], "the dark theme really drew differently")
+    #expect(sizes["agent-false"] == sizes["agent-true"], "Mac settings stay cream in the dark theme, like the About and update windows")
   }
 
   /// The screens' words are asserted in the core tests (`MacHomesCoreTests`) and the pictures are read by a person: this checks
@@ -717,7 +766,7 @@ struct MacHomesScreensGuiTests {
     let m = try scratchModel()
     defer { removeScratchConfig() }
     let dir = ProcessInfo.processInfo.environment["TALOS_SHOT_DIR"]
-    SettingsNavigator.shared.selected = .session
+    SettingsNavigator.shared.selected = .advanced
     func shot(_ name: String, _ v: SettingsView, size: NSSize, dark: Bool) async throws -> Data {
       let (_, h) = host(v, size: size, dark: dark)
       await settle(h)
@@ -725,11 +774,11 @@ struct MacHomesScreensGuiTests {
       if let dir { try d.write(to: URL(fileURLWithPath: dir + "/\(name).png")) }
       return d
     }
-    let notSet = try await shot("mac-session-not-set-up-light", SettingsView(model: m), size: NSSize(width: 700, height: 600), dark: false)
+    let notSet = try await shot("mac-session-not-set-up-light", SettingsView(model: m), size: NSSize(width: 900, height: 700), dark: false)
     #expect(m.importCommand("SECRET=secret-value claude --x") == nil)
-    let setUp = try await shot("mac-session-set-up-light", SettingsView(model: m), size: NSSize(width: 700, height: 600), dark: false)
-    let refused = try await shot("mac-session-refused-dark", SettingsView(model: m, typedLaunchLine: "claude; ls"), size: NSSize(width: 700, height: 600), dark: true)
-    let narrow = try await shot("mac-session-narrow-light", SettingsView(model: m), size: NSSize(width: 640, height: 520), dark: false)
+    let setUp = try await shot("mac-session-set-up-light", SettingsView(model: m), size: NSSize(width: 900, height: 700), dark: false)
+    let refused = try await shot("mac-session-refused-dark", SettingsView(model: m, typedLaunchLine: "claude; ls"), size: NSSize(width: 900, height: 700), dark: true)
+    let narrow = try await shot("mac-session-narrow-light", SettingsView(model: m), size: NSSize(width: 820, height: 560), dark: false)
     for d in [notSet, setUp, refused, narrow] { #expect(d.count > 8_000) }
     #expect(notSet != setUp && setUp != refused)
     #expect(m.supervisor.currentConfig().args == MainChannelFlag.ensured(["--x"]), "the refused line changed nothing")
@@ -743,8 +792,8 @@ struct MacHomesScreensGuiTests {
     let m = try scratchModel()
     defer { removeScratchConfig() }
     #expect(m.importCommand("claude --x") == nil)
-    SettingsNavigator.shared.selected = .session
-    let size = NSSize(width: 700, height: 700)
+    SettingsNavigator.shared.selected = .advanced
+    let size = NSSize(width: 900, height: 800)
     let (_, h1) = host(SettingsView(model: m, typedLaunchLine: "claude --y"), size: size, dark: false)
     await settle(h1, 2.5)
     #expect(m.supervisor.currentConfig().args == MainChannelFlag.ensured(["--y"]), "the edit was saved")
@@ -764,9 +813,9 @@ struct MacHomesScreensGuiTests {
     defer { removeScratchConfig() }
     #expect(m.importCommand("claude --x") == nil)
     let before = SupervisorController.findTmuxCalls
-    for tab in [SettingsNavigator.Tab.session, .general] {
+    for tab in [SettingsNavigator.Tab.agent, .general] {
       SettingsNavigator.shared.selected = tab
-      let (_, h) = host(SettingsView(model: m), size: NSSize(width: 700, height: 600), dark: false)
+      let (_, h) = host(SettingsView(model: m), size: NSSize(width: 900, height: 700), dark: false)
       await settle(h, 2.8)  // past two of the controller's 1 s status republishes, each of which redraws the view
       m.saveSetting { $0.autoRestart.toggle() }  // and a change redraws it too
       await pump(0.3)

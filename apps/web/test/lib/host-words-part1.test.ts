@@ -54,10 +54,10 @@ describe("hostSteps: commands and controls in each host's words", () => {
       "This device couldn't prove its key. Run talos-app enroll on your Mac to set it up again.",
     )
     expect(m.answerThere).toBe(
-      'It stopped at a question only the Mac can answer. Open Talos Terminal on the Mac, pick this thread under Thread sessions, and answer it there. Then press Restart here to start it again',
+      'It stopped at a question only the Mac can answer. In the Talos menu bar, choose Advanced, then Show my agent’s screen…. In Talos Terminal, pick this thread under Thread agents, and answer it there. Then press Restart here to start it again',
     )
     expect(m.lookThere).toBe(
-      "It stopped for a reason this version doesn't know. Open Talos Terminal on the Mac to see what happened",
+      "It stopped for a reason this version doesn't know. In the Talos menu bar, choose Advanced, then Show my agent’s screen…, to see what happened",
     )
     expect(m.rotate).toBe(
       'If you did not start Talos on a second computer on purpose, run talos-app rotate on your Mac.',

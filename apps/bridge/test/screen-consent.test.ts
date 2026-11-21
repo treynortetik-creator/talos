@@ -1,7 +1,7 @@
 // Screen helper lane 3: the owner's consent, one card per app per Mac. The real bridge, FakeRelay and a signing FakeApp; the Mac's
 // screen socket is a fake that answers the way TalosDesktopCore's ScreenProtocol does and refuses what it refuses: an `allow`
 // whose owner signature, device or binding does not check out against devices.json allows nothing.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -11,6 +11,7 @@ import {
   sha256Hex,
   verifyOwnerSignedString,
 } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { pgidOf } from '../src/hub/server.ts'
@@ -21,6 +22,9 @@ import { displayName, SCREEN_CONSENT_TEXT, SCREEN_NOT_NOW_MS } from '../src/scre
 import { callTool } from '../src/tools/index.ts'
 import { screenTransport } from '../src/tools/screen.ts'
 import { eventually, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+
+// the waits of one test (card, owner tap, Mac check, next try) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 const workers: Bridge[] = []
@@ -163,7 +167,7 @@ describe('the first use of an app asks the owner once', () => {
     const { x } = await start()
     const t0 = Date.now()
     const r = await typeHi(x)
-    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(Date.now() - t0).toBeLessThan(t(2000))
     expect(r.isError).toBe(true)
     expect(text(r)).toBe('Asked the owner to allow Notes Example on this Mac. Try again after they answer.')
     await eventually(() => expect(screenCards(x)).toHaveLength(1))
@@ -184,6 +188,7 @@ describe('the first use of an app asks the owner once', () => {
     // twice more, two of them at the same moment
     const again = await Promise.all([typeHi(x), typeHi(x), typeHi(x)])
     for (const a of again) expect(text(a)).toBe(SCREEN_CONSENT_TEXT.asked('Notes Example'))
+    // timing-ok: negative window: the three asks make no second card
     await sleep(200)
     expect(screenCards(x)).toHaveLength(1)
   })
@@ -241,25 +246,30 @@ describe('the first use of an app asks the owner once', () => {
     expect(failed.result.text).toBe(SCREEN_CONSENT_TEXT.macOff)
   })
 
-  test('Not now holds for an hour: no card meanwhile, then the next use asks again', async () => {
-    const { x } = await start()
-    await typeHi(x)
-    await eventually(() => expect(screenCards(x)).toHaveLength(1))
-    const card = screenCards(x)[0] as CardT
-    await x.app.resolveCard(card, 'kill', card.payload_hash)
-    await eventually(() => expect(updates(x, card.id).some((u) => u.state === 'done')).toBe(true))
-    expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.notNow('Notes Example'))
-    await sleep(150)
-    expect(screenCards(x)).toHaveLength(1)
-    // an hour on (the record says when it ends; move it, as the clock would)
-    const ctx = x.bridge.ctx
-    const key = ctx.store.kvKeys('scr:')[0] as string
-    const rec = JSON.parse(ctx.store.kvGet(key) as string) as { not_now_until: number }
-    expect(rec.not_now_until - Date.now()).toBeGreaterThan(SCREEN_NOT_NOW_MS - 60_000)
-    ctx.store.kvSet(key, JSON.stringify({ ...rec, not_now_until: Date.now() - 1 }))
-    expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.asked('Notes Example'))
-    await eventually(() => expect(screenCards(x)).toHaveLength(2))
-  })
+  test(
+    'Not now holds for an hour: no card meanwhile, then the next use asks again',
+    async () => {
+      const { x } = await start()
+      await typeHi(x)
+      await eventually(() => expect(screenCards(x)).toHaveLength(1))
+      const card = screenCards(x)[0] as CardT
+      await x.app.resolveCard(card, 'kill', card.payload_hash)
+      await eventually(() => expect(updates(x, card.id).some((u) => u.state === 'done')).toBe(true))
+      expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.notNow('Notes Example'))
+      // timing-ok: negative window: Not now makes no new card
+      await sleep(150)
+      expect(screenCards(x)).toHaveLength(1)
+      // an hour on (the record says when it ends; move it, as the clock would)
+      const ctx = x.bridge.ctx
+      const key = ctx.store.kvKeys('scr:')[0] as string
+      const rec = JSON.parse(ctx.store.kvGet(key) as string) as { not_now_until: number }
+      expect(rec.not_now_until - Date.now()).toBeGreaterThan(SCREEN_NOT_NOW_MS - 60_000)
+      ctx.store.kvSet(key, JSON.stringify({ ...rec, not_now_until: Date.now() - 1 }))
+      expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.asked('Notes Example'))
+      await eventually(() => expect(screenCards(x)).toHaveLength(2))
+    },
+    t(60_000),
+  )
 
   test('an impostor with the same id but another signature is another app: its own card, never folded into the real one', async () => {
     const { x, mac } = await start()
@@ -282,6 +292,7 @@ describe('what can never be asked', () => {
         'That request is too old or unknown. Use the app again to ask the owner.',
       ),
     )
+    // timing-ok: negative window: the stale ask makes no card
     await sleep(150)
     expect(screenCards(x)).toHaveLength(0)
   })
@@ -373,6 +384,7 @@ describe('a thread session asks through the main bridge', () => {
     expect(forged?.text).toContain("Terminal isn't on this Mac's allowed list yet, and Talos couldn't ask the owner")
     const bad = await w.hubClient?.rpc('screen_ask', { ask: '../../x' })
     expect(bad?.text).toBe('screen_ask needs the id the Mac gave. Nothing was asked.')
+    // timing-ok: negative window: the forged and malformed asks make no card
     await sleep(150)
     expect(screenCards(x)).toHaveLength(1)
   })
@@ -393,6 +405,7 @@ describe('how many apps are asked about at once (R1-5)', () => {
     // an app already asked about still gets its own line
     mac.measured = app(1)
     expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.asked('App 1'))
+    // timing-ok: negative window: the fourth app makes no card
     await sleep(150)
     expect(screenCards(x)).toHaveLength(3)
   })
@@ -409,6 +422,7 @@ describe('how many apps are asked about at once (R1-5)', () => {
     }
     mac.measured = app(10)
     expect(text(await typeHi(x))).toBe(SCREEN_CONSENT_TEXT.busy)
+    // timing-ok: negative window: the eleventh app in the hour makes no card
     await sleep(150)
     expect(screenCards(x)).toHaveLength(10)
   })
@@ -436,6 +450,7 @@ describe('the lock screen and the security prompts are never offered to an agent
     // the same, with the id spelled in another case
     mac.measured = SYSTEM('COM.APPLE.LOGINWINDOW')
     expect(text(await typeHi(x))).toContain('never asks the owner')
+    // timing-ok: negative window: a system app makes no card
     await sleep(200)
     expect(screenCards(x)).toHaveLength(0)
     expect(x.bridge.ctx.store.kvKeys('scr:')).toHaveLength(0)
@@ -459,6 +474,7 @@ describe('the lock screen and the security prompts are never offered to an agent
       "A system prompt (X) is in front; Talos won't act on it. The owner answers it.",
     )
     expect(SCREEN_TEXT.systemPrompt('X')).not.toContain('locked')
+    // timing-ok: negative window: a system prompt makes no card
     await sleep(150)
     expect(screenCards(x)).toHaveLength(0)
   })
@@ -481,7 +497,7 @@ describe('the lock screen and the security prompts are never offered to an agent
     mac.measured = SYSTEM('com.apple.loginwindow')
     const r = await callTool(x.bridge.ctx, 'screen_key', { keys: 'cmd+r' })
     expect(text(r)).toBe(SCREEN_TEXT.denied('loginwindow'))
-    await sleep(200)
+    await sleep(200) // timing-ok: negative window: a system app's key press makes no card
     expect(screenCards(x)).toHaveLength(0)
   })
 
@@ -532,7 +548,7 @@ describe('the lock screen and the security prompts are never offered to an agent
       'The Mac is locked (or the screen saver is on); Talos does nothing until the owner unlocks it.',
     )
     expect(mac.seen).toHaveLength(calls.length)
-    await sleep(150)
+    await sleep(150) // timing-ok: negative window: a locked Mac makes no card
     expect(screenCards(x)).toHaveLength(0)
   })
 })

@@ -5,6 +5,50 @@ Railway side.
 
 - **One service**, built from `apps/relay/Dockerfile` (`railway.json` selects it). One replica, **sleep off**: the Mac's
   connection must stay up. Health check `/healthz`; restart on failure.
+- **Which release it is.** A relay built from a release image (`--build-arg TALOS_RELEASE=0.1.8`, which the Dockerfile turns into the
+  `TALOS_RELEASE` variable) says so: `/healthz`, `/api/me` and the health report's `relay` carry `release` (a plain `X.Y.Z`, read once
+  at start; anything else is ignored and logged once). `version`, the commit, is unchanged. A relay that deploys from `main` sets
+  nothing and reports no `release`; `talos-app doctor` and `status` never call it behind. For one that does report it, they count the
+  published releases newer than it ("2 releases behind"), see [`bridge.md`](bridge.md).
+- **Release images.** Each published release (`mac-v<X.Y.Z>`) of the public repository builds this Dockerfile with
+  `TALOS_RELEASE=<X.Y.Z>` (`.github/workflows/relay-image.yml`) and pushes `ghcr.io/<owner>/talos-relay:<X.Y.Z>`, a tag that is never
+  overwritten, and then `:stable` to the same image. `:stable` moves only on a release, never on a push to `main`, and a rebuild of an
+  older release, a prerelease or a draft leaves it where it is (a rebuild by hand, with the `version` input, must name a published release). There is no `:latest`. Before anything is pushed, the built image's `/app` folder (what the Dockerfile adds, not the base image) is exported and
+  scanned (`scripts/relay-image-scan.sh`): secret-looking files (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`), a token in an `.npmrc`, a
+  `.git` folder, an absolute link, a private key or a GitHub, Anthropic, AWS or Slack token, and the personal-data rules fail the build, as does a checkout that is not exactly the tag's tracked files. A relay
+  that follows `:stable` runs the newest release. **One-time owner step:** after the first push, make the `talos-relay` package public
+  (GitHub, Packages, Package settings, Change visibility), or Railway cannot pull it. A rebuild by hand for a tag made before this workflow existed fails closed: the scan script comes from the tag's own checkout, which does not have it.
+- **Keeping a release relay up to date.** Run `talos-app relay connect` once, in a terminal. It walks you through making a Railway
+  **project token** (Project, Settings, Tokens, for the relay's environment; Railway lets you mint one only in the dashboard), reads it
+  hidden (a token on the command line is refused), finds your relay's service by matching this install's relay address against the
+  environment's service domains (else you paste the service ID), shows "relay service: <name>, environment <name>" and asks you to
+  confirm. The token goes in this computer's key store (item `com.talos.app.railway.<h>`, account `relay`, one per Talos home), never in a
+  file. `relay-connect.json` in the Talos home holds the ids, the names and the switch. A project token "can read your relay's
+  settings" and nothing outside that project; an **account or workspace token** is accepted too, but "can change every project in
+  your Railway account; a project key is safer", so it is kept only if you type `yes`. The bridge sends Railway one redeploy
+  request (`serviceInstanceRedeploy`) and a few read-only questions that find the service; nothing else (`apps/bridge/src/relay/railway.ts`
+  is the one module that talks to Railway, with a test that fails on any other operation).
+  - `talos-app relay update` moves a `behind` relay to the newest release now and watches `/healthz` (every 10 seconds, up to 10
+    minutes). Your agent may run it unless "Lock Talos settings" is on (the same rule as `peer link`); it never runs `connect`.
+    A relay that deploys from `main` is refused ("it isn't updated from releases"); one already on the latest does nothing.
+  - **Auto-update is on once connected.** At most once an hour the bridge compares its relay with the published releases; when the relay
+    is `behind` and that release was not already tried, it redeploys once and says so in the default thread ("Your online relay is
+    updating to X", then "is on X" or "didn't update to X: <reason>. Run talos-app relay update to try again"). After a failure it does
+    not retry the same release by itself for 24 hours. `talos-app relay auto off` turns it off (always allowed to an agent), `relay auto on`
+    turns it on. `talos-app relay status` shows what is connected, the switch and the last attempt (never the token);
+    `talos-app relay disconnect` forgets the token and the file.
+  - **A relay the Mac app set up** holds the Railway login in the app (the app refreshes it; the bridge never sees a Railway token). The
+    app writes `relay-connect.json` itself with `via: "app"` and no token. The bridge then asks through two files in the Talos home;
+    their shapes are `RelayConnectFile`, `RelayRedeployRequest` and `RelayRedeployResult` in `packages/protocol/src/relay-redeploy.ts`
+    (fixtures in `packages/protocol/fixtures/relay-redeploy`). The bridge writes `relay-redeploy-request.json` (0600, atomic, never
+    through a symlink): `{v:1, id, release, requested_at}`; a new request replaces the old, and the bridge writes one at most once an
+    hour on its own. The app ignores a request older than 10 minutes, keeps one in flight (the newest `id`), redeploys, and writes
+    `relay-redeploy-result.json`: `{v:1, id, release, ok, code?, error?, done_at}`. The bridge believes only a result with the same `id`
+    AND `release`, confirms the move by `/healthz`, and after 10 minutes with no result says it didn't update. `code` is one of
+    `not_signed_in`, `no_card`, `railway_down`, `not_found`, `other` (an unknown one reads as `other`) and maps to a plain fix in the
+    thread row. When an app update and a relay update are both due the relay goes first, and the app does not start its own install while a
+    relay request is in flight. `relay disconnect` for such a relay only clears the bridge's files; the app's Railway login is removed in
+    the app.
 - **One volume** mounted at `/data` (SQLite database and uploaded media). One gigabyte is enough. There is brief
   downtime on each deploy while the old container stops; the app and the bridge reconnect with backoff.
 - **Which branch a relay deploys from.** A relay service deploys on a push to its trigger branch, which is set in Railway (Service,

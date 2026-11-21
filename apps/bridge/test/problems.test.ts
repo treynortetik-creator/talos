@@ -1,6 +1,6 @@
 // Problem reports on the Mac (docs/ERRORS.md): a real Bridge (live mode) wired to the FakeRelay, plus the service and the
 // CLI on their own with a fake clock. The files are read back from disk; nothing here checks a mock's answer.
-import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -14,7 +14,7 @@ import {
   sanitizeExternal,
   sha256Hex,
 } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { loadEnv } from '../src/config.ts'
 import { diskSync } from '../src/fsutil.ts'
 import { bridgeFeatures } from '../src/handshake.ts'
@@ -27,6 +27,10 @@ import { closeProblem, listProblems, problemDirs } from '../src/problems/store.t
 import { RelayHttpError } from '../src/relay-http.ts'
 import { refusedForWorkers } from '../src/worker/cli-refusal.ts'
 import { type Harness, startHarness, tempHome, waitFor } from './helpers.ts'
+
+// the waits of one test add up past bun's 5 s default (a screenshot retry alone waits 30 s three times over): the limit sits above
+// the longest of them, on this machine's scale (TALOS_TEST_TIME_FACTOR)
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 afterEach(async () => {
@@ -102,22 +106,27 @@ describe('problem.item on a live bridge', () => {
     expect(h.relay.rec.of('reply', 'from_bridge').every((r) => r.message.thread_id === 'inbox')).toBe(true)
   })
 
-  test('100 repeats: one file, count 100, one notice, no notification to the agent', async () => {
-    h = await startHarness()
-    const ids: string[] = []
-    for (let i = 0; i < 100; i++) {
-      const p = problem({ message: `item ${i} missing`, at: '2026-11-02T10:00:00.000Z' })
-      ids.push(p.id)
-      h.relay.sendToBridge(item(p), { durable: true })
-    }
-    await waitFor(() => ids.every((id) => consumed(h as Harness, id)), 20_000, '100 consumed')
-    const files = open(h.home)
-    expect(files).toHaveLength(1)
-    expect(readOpen(h.home, files[0] as string).count).toBe(100)
-    await Bun.sleep(150)
-    expect(systemRows(h)).toBe(1)
-    expect(h.notes).toHaveLength(0)
-  })
+  test(
+    '100 repeats: one file, count 100, one notice, no notification to the agent',
+    async () => {
+      h = await startHarness()
+      const ids: string[] = []
+      for (let i = 0; i < 100; i++) {
+        const p = problem({ message: `item ${i} missing`, at: '2026-11-02T10:00:00.000Z' })
+        ids.push(p.id)
+        h.relay.sendToBridge(item(p), { durable: true })
+      }
+      await waitFor(() => ids.every((id) => consumed(h as Harness, id)), 20_000, '100 consumed')
+      const files = open(h.home)
+      expect(files).toHaveLength(1)
+      expect(readOpen(h.home, files[0] as string).count).toBe(100)
+      // timing-ok: negative window: nothing more is filed or notified after the 100 repeats
+      await Bun.sleep(150)
+      expect(systemRows(h)).toBe(1)
+      expect(h.notes).toHaveLength(0)
+    },
+    t(90_000),
+  )
 
   test('a replay of the same problem under a new frame id changes nothing', async () => {
     h = await startHarness()
@@ -125,24 +134,30 @@ describe('problem.item on a live bridge', () => {
     h.relay.sendToBridge(item(p), { durable: true })
     await waitFor(() => consumed(h as Harness, p.id), 5000, 'first')
     h.relay.sendToBridge({ ...item(p), id: newUlid() }, { durable: true })
+    // timing-ok: negative window: a replayed problem under a new frame id files nothing
     await Bun.sleep(300)
     expect(readOpen(h.home, open(h.home)[0] as string).count).toBe(1)
     expect(systemRows(h)).toBe(1)
   })
 
-  test('the Mac was off: held frames arrive after hello, are filed once, consumed once', async () => {
-    h = await startHarness({ startBridge: false })
-    const p = problem()
-    h.relay.sendToBridge(item(p), { durable: true })
-    expect(open(h.home)).toHaveLength(0)
-    h.bridge.start()
-    await waitFor(() => consumed(h as Harness, p.id), 10_000, 'consumed after hello')
-    expect(open(h.home)).toHaveLength(1)
-    // the relay re-sends everything unconsumed on each hello; a second delivery files nothing new
-    h.relay.sendToBridge(item(p), { durable: true })
-    await Bun.sleep(300)
-    expect(readOpen(h.home, open(h.home)[0] as string).count).toBe(1)
-  })
+  test(
+    'the Mac was off: held frames arrive after hello, are filed once, consumed once',
+    async () => {
+      h = await startHarness({ startBridge: false })
+      const p = problem()
+      h.relay.sendToBridge(item(p), { durable: true })
+      expect(open(h.home)).toHaveLength(0)
+      h.bridge.start()
+      await waitFor(() => consumed(h as Harness, p.id), 10_000, 'consumed after hello')
+      expect(open(h.home)).toHaveLength(1)
+      // the relay re-sends everything unconsumed on each hello; a second delivery files nothing new
+      h.relay.sendToBridge(item(p), { durable: true })
+      // timing-ok: negative window: the second delivery files nothing new
+      await Bun.sleep(300)
+      expect(readOpen(h.home, open(h.home)[0] as string).count).toBe(1)
+    },
+    t(60_000),
+  )
 
   test('identity is what the content hashes to: a forged fingerprint is ignored', async () => {
     h = await startHarness()
@@ -166,47 +181,52 @@ describe('problem.item on a live bridge', () => {
     expect(raw).not.toMatch(/EXTERNAL\s+UNTRUSTED/i)
   })
 
-  test('an owner report keeps the steps and never merges with another; a picture that never arrives is tried again, then the report is filed without it', async () => {
-    h = await startHarness()
-    const warn = spyOn(h.bridge.ctx.log, 'warn')
-    const shot = {
-      media_id: newId('md'),
-      kind: 'image' as const,
-      role: 'attachment' as const,
-      mime: 'image/png',
-      name: 'screenshot.png',
-      size: 10,
-      sha256: 'c'.repeat(64),
-    }
-    const a = problem({
-      kind: 'owner',
-      steps: 'I tapped Send and it froze',
-      screenshot: shot,
-      name: 'Report',
-      message: 'froze',
-    })
-    const b = problem({ kind: 'owner', steps: 'I tapped Send and it froze', name: 'Report', message: 'froze' })
-    h.relay.sendToBridge(item(b), { durable: true })
-    await waitFor(() => consumed(h as Harness, b.id), 10_000, 'the report without a picture')
-    // the report with a picture the relay cannot give: kept (not filed, not consumed) for every try but the last
-    const tried = () => warn.mock.calls.filter((c) => String(c[0]).startsWith('problem screenshot not fetched')).length
-    for (let i = 1; i < SCREENSHOT_TRIES; i++) {
-      h.relay.sendToBridge(item(a), { durable: true }) // what the relay's own resend does
-      await waitFor(() => tried() === i, 10_000, `try ${i}`)
-      expect(consumed(h, a.id)).toBe(false)
-      expect(open(h.home)).toHaveLength(1) // only b
-    }
-    h.relay.sendToBridge(item(a), { durable: true })
-    await waitFor(() => consumed(h as Harness, a.id), 10_000, 'filed without the picture on the last try')
-    const files = open(h.home)
-    expect(files).toHaveLength(2)
-    const recs = files.map((f) => readOpen((h as Harness).home, f))
-    expect(recs.every((r) => r.count === 1 && r.steps === 'I tapped Send and it froze')).toBe(true)
-    const lost = recs.filter((r) => r.screenshot_unavailable === true)
-    expect(lost).toHaveLength(1)
-    expect(lost[0].screenshot_unavailable_reason).toContain(`${SCREENSHOT_TRIES} tries`)
-    await waitFor(() => systemRows(h as Harness) === 2, 5000, 'a notice for each owner report')
-  })
+  test(
+    'an owner report keeps the steps and never merges with another; a picture that never arrives is tried again, then the report is filed without it',
+    async () => {
+      h = await startHarness()
+      const warn = spyOn(h.bridge.ctx.log, 'warn')
+      const shot = {
+        media_id: newId('md'),
+        kind: 'image' as const,
+        role: 'attachment' as const,
+        mime: 'image/png',
+        name: 'screenshot.png',
+        size: 10,
+        sha256: 'c'.repeat(64),
+      }
+      const a = problem({
+        kind: 'owner',
+        steps: 'I tapped Send and it froze',
+        screenshot: shot,
+        name: 'Report',
+        message: 'froze',
+      })
+      const b = problem({ kind: 'owner', steps: 'I tapped Send and it froze', name: 'Report', message: 'froze' })
+      h.relay.sendToBridge(item(b), { durable: true })
+      await waitFor(() => consumed(h as Harness, b.id), 10_000, 'the report without a picture')
+      // the report with a picture the relay cannot give: kept (not filed, not consumed) for every try but the last
+      const tried = () =>
+        warn.mock.calls.filter((c) => String(c[0]).startsWith('problem screenshot not fetched')).length
+      for (let i = 1; i < SCREENSHOT_TRIES; i++) {
+        h.relay.sendToBridge(item(a), { durable: true }) // what the relay's own resend does
+        await waitFor(() => tried() === i, 10_000, `try ${i}`)
+        expect(consumed(h, a.id)).toBe(false)
+        expect(open(h.home)).toHaveLength(1) // only b
+      }
+      h.relay.sendToBridge(item(a), { durable: true })
+      await waitFor(() => consumed(h as Harness, a.id), 10_000, 'filed without the picture on the last try')
+      const files = open(h.home)
+      expect(files).toHaveLength(2)
+      const recs = files.map((f) => readOpen((h as Harness).home, f))
+      expect(recs.every((r) => r.count === 1 && r.steps === 'I tapped Send and it froze')).toBe(true)
+      const lost = recs.filter((r) => r.screenshot_unavailable === true)
+      expect(lost).toHaveLength(1)
+      expect(lost[0].screenshot_unavailable_reason).toContain(`${SCREENSHOT_TRIES} tries`)
+      await waitFor(() => systemRows(h as Harness) === 2, 5000, 'a notice for each owner report')
+    },
+    t(120_000),
+  )
 
   test('a screenshot that is on the relay is saved beside the report, 0600, byte for byte', async () => {
     h = await startHarness()
@@ -246,7 +266,11 @@ describe('problem.item on a live bridge', () => {
     writeFileSync(join(h.home, 'problems'), 'in the way')
     const p = problem()
     h.relay.sendToBridge(item(p), { durable: true })
-    await Bun.sleep(400)
+    await waitFor(
+      () => warn.mock.calls.some((c) => String(c[0]) === 'problem not filed'),
+      t(5000),
+      'the not-filed warning',
+    )
     expect(consumed(h, p.id)).toBe(false)
     expect(warn.mock.calls.some((c) => String(c[0]) === 'problem not filed')).toBe(true)
     expect(errors.mock.calls.length).toBe(0)
@@ -276,6 +300,7 @@ describe('the bridge own errors', () => {
     const raw = readFileSync(join(problemDirs(h.home).open, open(h.home)[0] as string), 'utf8')
     expect(raw).toContain('relay post failed')
     expect(raw).not.toContain(CANARY)
+    // timing-ok: negative window: no second problem is filed for the same error
     await Bun.sleep(100)
     expect(readOpen(h.home, open(h.home)[0] as string)).toMatchObject({ source: 'bridge', count: 1 })
   })
@@ -302,6 +327,7 @@ describe('the bridge own errors', () => {
     h = await startHarness({ bridge: { logger: log, headless: true }, startBridge: false })
     expect(h.bridge.ctx.problems).toBeUndefined()
     log.error('something broke', { error: 'x' })
+    // timing-ok: negative window: no problem file appears with the recorder off
     await Bun.sleep(100)
     expect(existsSync(problemDirs(h.home).open)).toBe(false)
     expect(bridgeFeatures(h.bridge.ctx)).not.toContain(PROBLEMS_FEATURE)
@@ -421,7 +447,7 @@ describe('limits, with warnings', () => {
     for (let i = 0; i < PROBLEM_LIMITS.files; i++) mkdirSync(join(d.closed, `${i.toString(16).padStart(32, '0')}.json`))
     const t0 = Date.now()
     expect(await svc.onItem(problem({ message: 'no room and the closed ones will not go' }))).toBe('done')
-    expect(Date.now() - t0).toBeLessThan(3000)
+    expect(Date.now() - t0).toBeLessThan(t(3000))
     expect(open(home)).toHaveLength(0) // refused and counted, not filed
     expect(warns).toContain('problem not filed: the problem folder is full of open problems')
   })
@@ -927,6 +953,7 @@ describe('a report picture that cannot be fetched is not lost', () => {
     writeFileSync(join(h.home, 'problems'), 'in the way')
     const p = problem()
     h.relay.sendToBridge(item(p), { durable: true })
+    // timing-ok: negative window: the failed filing is not consumed in the meantime
     await Bun.sleep(300)
     expect(consumed(h, p.id)).toBe(false)
     const { rmSync } = await import('node:fs')
@@ -934,6 +961,7 @@ describe('a report picture that cannot be fetched is not lost', () => {
     h.relay.sendToBridge(item(p), { durable: true })
     h.relay.sendToBridge(item(p), { durable: true }) // a resend that overlaps the first
     await waitFor(() => consumed(h as Harness, p.id), 5000, 'consumed')
+    // timing-ok: negative window: the overlapping resend files nothing more
     await Bun.sleep(200)
     expect(open(h.home)).toHaveLength(1)
     expect(readOpen(h.home, open(h.home)[0] as string).count).toBe(1)

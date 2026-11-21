@@ -222,6 +222,8 @@ export function paths(home: string, inboxRoot: string = join(homedir(), '.talos-
     mainResend: join(home, 'main-resend.json'),
     /** What the bridge answers it with, for the Mac to read: {v, unseen_at, outcome: 'sent' | 'failed', delivered, why?}. */
     mainResendResult: join(home, 'main-resend-result.json'),
+    /** The Mac's updater names here (in its own 0700 folder) the threads whose turn an Update now cut off ({v, at, version, threads}); update-resend.ts reads it once and offers, never sends. */
+    updateInterrupted: join(home, 'auto-update', 'update-interrupted.json'),
     /** The relay's last `ready.features`, so a restart's first hello is the one it takes (relay-features-memo.ts). */
     relayFeatures: join(home, 'relay-features.json'),
     /** The versions the live bridge started cleanly from, newest first; `talos-app rollback` reads it. */

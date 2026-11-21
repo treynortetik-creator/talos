@@ -137,7 +137,7 @@ struct AllowUpdatesCoreTests {
   }
 
   @Test func theMenuBarItemAndTheWindowButtonAreReallyThere() throws {
-    let app = try String(contentsOf: Self.desktop.appendingPathComponent("Sources/TalosDesktop/App.swift"), encoding: .utf8)
+    let app = try String(contentsOf: Self.desktop.appendingPathComponent("Sources/TalosDesktop/StatusMenu.swift"), encoding: .utf8)
     #expect(app.contains(#"Button("Allow updates\u{2026}")"#) && app.contains("allowUpdates.pending != nil"), "shown only while an answer is owed")
     let win = try String(contentsOf: Self.desktop.appendingPathComponent("Sources/TalosDesktop/UpdateWindow.swift"), encoding: .utf8)
     #expect(win.contains("PillRealClickButton(title: AllowUpdatesCopy.allowButton"))

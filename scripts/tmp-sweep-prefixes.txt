@@ -12,6 +12,11 @@ talos-vitest-run-
 # Pane-prompt tests (the tool permission and question screens: a marker file that swaps the screen)
 talos-pane-swap-
 
+# Update-window and draft-copy tests (a scratch home; a saved copy of Main's unsent text)
+talos-ua-
+talos-draft-note-
+talos-draft-notice-
+
 # Allow-updates prompt tests (a scratch home with a clone and its record)
 talos-allow-
 talos-allow-own-

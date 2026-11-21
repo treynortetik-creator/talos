@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import TalosDesktopCore
 
@@ -29,7 +30,7 @@ extension Supervisor {
       default: why.append("main \(status.agentActivity ?? "busy")")
       }
       if let rows = host.visibleRows() {
-        if PointerTyper.draftPresent(rows: rows) { why.append("main has a draft") }
+        if PointerTyper.draftPresent(rows: rows) { why.append(AutoUpdate.mainDraftReason) }
       } else {
         why.append("main unreadable")
       }
@@ -92,6 +93,69 @@ extension Supervisor {
     q.async {
       self.audit("auto_update_line", [:])
       _ = self.postToPhone { _ in text }
+    }
+  }
+}
+
+/// An Update now overrides unsent text in Main's box: a copy is saved right before the swap and, once the update really happened, shown
+/// to the owner (`DraftNote`, the notice with Copy and Dismiss). Nothing ever types it back into the box. A box that cannot be read, or
+/// a file that cannot be written, is said plainly beforehand (`UpdateStatus.DraftPlan.cannotKeep`) and the update still goes ahead.
+extension Supervisor {
+  /// Where the copy lives: the update folder (the app's own, beside pending.json).
+  public var draftNotePath: String { talosAppHome + "/auto-update/main-draft.json" }
+
+  /// The unsent text in Main's box as the screen shows it, one clean line, and whether it may be only part of it: nil when the box cannot
+  /// be read, "" when it is empty. The screen is all there is to read, so this is never promised to be exact.
+  func mainDraftRead() -> (text: String, partial: Bool)? {
+    guard let rows = host.visibleRows(), let raw = PointerTyper.boxText(rows: rows), let box = PointerTyper.inputBox(rows: rows) else { return nil }
+    let text = DraftNote.clean(raw)
+    // the box's top rule is the first row of the pane: older lines of a long draft have scrolled out of sight
+    return (text, DraftNote.looksPartial(text: text, boxStartsAtTop: box.lowerBound <= 1))
+  }
+
+  /// A fingerprint of the unsent text in Main's box (never the text), for telling whether it changed between two looks; nil: unreadable.
+  public func draftFingerprintForUpdate() -> String? {
+    q.sync {
+      guard phase == .running, let d = mainDraftRead() else { return nil }
+      return SHA256.hash(data: Data(d.text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+  }
+
+  /// True when the box's text may be only part of the draft (a copy of it would not be whole).
+  public func draftIsPartialForUpdate() -> Bool {
+    q.sync { phase == .running ? (mainDraftRead()?.partial ?? true) : false }
+  }
+
+  /// What an Update now would do with Main's draft; nothing is written.
+  public func draftPlanForUpdate() -> UpdateStatus.DraftPlan {
+    q.sync {
+      guard phase == .running else { return .none }  // no Main running: nothing typed there to lose
+      guard let d = mainDraftRead() else { return .cannotKeep }
+      if d.text.isEmpty { return .none }
+      let dir = (draftNotePath as NSString).deletingLastPathComponent
+      guard (try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil,
+        FileManager.default.isWritableFile(atPath: dir)
+      else { return .cannotKeep }
+      return .keep
+    }
+  }
+
+  /// Saves a copy of Main's draft for the update to `version` (and reads it back). `.none`: nothing to keep.
+  public func keepDraftForUpdate(version: String) -> UpdateStatus.DraftPlan {
+    q.sync {
+      guard phase == .running else { return .none }
+      guard let d = mainDraftRead() else {
+        audit("draft_keep", ["result": "unreadable"])
+        return .cannotKeep
+      }
+      if d.text.isEmpty { return .none }
+      let note = DraftNote(version: version, text: d.text, partial: d.partial, saved_at: Date().timeIntervalSince1970)
+      guard DraftNote.write(note, to: draftNotePath) else {
+        audit("draft_keep", ["result": "not_written"])
+        return .cannotKeep
+      }
+      audit("draft_keep", ["result": "kept", "chars": "\(d.text.count)", "partial": d.partial ? "1" : "0"])  // never the text
+      return .keep
     }
   }
 }

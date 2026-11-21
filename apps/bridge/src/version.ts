@@ -64,7 +64,8 @@ export type Skew = { level: 'ok' | 'warn'; text: string } | undefined
 
 /** `abc1234` or `abc1234-dirty` -> `abc1234`; anything else (dev, a tag, empty) -> undefined. */
 export function shaOf(v: string | undefined): string | undefined {
-  const m = /^([0-9a-f]{7,40})(-dirty)?$/.exec(v?.trim() ?? '')
+  // a relay's answer is data: anything but a string is no commit
+  const m = /^([0-9a-f]{7,40})(-dirty)?$/.exec(typeof v === 'string' ? v.trim() : '')
   return m?.[1]?.slice(0, 7)
 }
 

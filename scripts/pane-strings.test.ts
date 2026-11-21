@@ -46,10 +46,10 @@ const ALLOWED: Allowed[] = [
     row: 'advanced',
   },
   {
-    file: 'apps/desktop/Sources/TalosDesktop/App.swift',
-    line: 'Button("Copy tmux attach command")',
-    why: 'a developer menu item (two copies, Talos menu and the Terminals menu)',
-    row: '12 (move into Settings > Advanced)',
+    file: 'apps/desktop/Sources/TalosDesktopCore/MacWords.swift',
+    line: 'public static let copyAttachCommand = "Copy tmux attach command"',
+    why: 'a developer menu item, now only in the Advanced submenu and the Advanced tab',
+    row: 'advanced',
   },
   // not a pane prompt: installing tmux with Homebrew
   {
@@ -59,12 +59,6 @@ const ALLOWED: Allowed[] = [
     row: 'out of scope (prerequisite install)',
   },
   // rows not converted yet
-  {
-    file: 'apps/desktop/Sources/TalosDesktop/AgentFolderFlow.swift',
-    line: 'for the folder question, open Terminals… in the menu bar item',
-    why: 'the first start still asks the folder-trust question Main answers in a pane',
-    row: '1',
-  },
   {
     file: 'apps/desktop/Sources/TalosDesktopCore/OnboardingText.swift',
     line: 'Claude has not finished starting. Open Terminals',
@@ -77,14 +71,6 @@ const ALLOWED: Allowed[] = [
     why: 'the setup screen line for the folder-trust question',
     row: '1',
   },
-  {
-    file: SWIFT_NOTICE,
-    line: 'Open Terminals…"',
-    why: 'waiting line in the menu, for the prompts not converted',
-    row: '1, 11',
-  },
-  { file: SWIFT_NOTICE, line: 'Open Terminals… to answer it.', why: 'could not tell the thread', row: '12' },
-  { file: SWIFT_NOTICE, line: 'Open Terminals… for the reason.', why: 'failed session', row: '12' },
   { file: SESSION_SWITCHER, line: 'Open this thread in Terminals to clear it', why: 'left-over line', row: '12' },
   {
     file: SESSION_SWITCHER,

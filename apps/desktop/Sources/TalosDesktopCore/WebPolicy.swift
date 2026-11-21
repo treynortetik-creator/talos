@@ -81,6 +81,18 @@ public enum WebPolicy {
     return (scheme == "http" || scheme == "https") && relay.contains(url) && isMediaPath(url) ? .allow : .deny
   }
 
+  /// A link followed inside a frame (the page's own, or an agent's page in its sandboxed frame): the frame rules, and, only when the owner
+  /// made the gesture, any http(s) link that is not the relay's own host goes to the default browser, never inside the app. A script
+  /// that navigates the frame is no gesture: it stays refused. WebKit offers no public flag for a user gesture, so the window passes
+  /// `userInitiated: false` and nothing in a frame opens the browser by itself.
+  public static func decideLinkInFrame(_ url: URL, relay: RelayOrigin, userInitiated: Bool) -> NavigationDecision {
+    let d = decideSubframe(url, relay: relay)
+    guard d == .deny, userInitiated else { return d }
+    let scheme = url.scheme?.lowercased() ?? ""
+    guard scheme == "http" || scheme == "https", !(url.host ?? "").isEmpty, !relay.contains(url) else { return .deny }
+    return .openExternally(url)
+  }
+
   /// A path is in the media space when its decoded, dot-resolved form starts with /media (any case, any escaping).
   public static func isMediaPath(_ url: URL) -> Bool {
     guard let segs = normalizedSegments(url) else { return true }

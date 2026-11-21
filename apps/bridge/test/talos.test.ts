@@ -188,6 +188,8 @@ describe('talos commands', () => {
     'lead init': { argv: ['lead', 'init'], says: /usage: talos-app lead/, code: 2 },
     'lead check': { argv: ['lead', 'check'], says: /usage: talos-app lead/, code: 2 },
     peer: { argv: ['peer', '--no-such-flag'], says: /usage: talos-app peer/, code: 2 },
+    relay: { argv: ['relay', '--no-such-flag'], says: /usage: talos-app relay/, code: 2 },
+    'relay connect': { argv: ['relay', 'connect', '--no-such-flag'], says: /never goes on the command line/, code: 1 },
     trust: { argv: ['trust', '--no-such-flag'], says: /usage: talos-app trust/, code: 2 },
     'trust on': { argv: ['trust', 'on', 'extra'], says: /usage: talos-app trust/, code: 2 },
     'install-mcp': { argv: ['install-mcp', '--no-such-flag'], says: unknown, code: 1 },

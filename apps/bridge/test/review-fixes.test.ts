@@ -1,5 +1,5 @@
 // Regression tests for the full-codebase review (bridge findings). Each block names the finding it pins.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import {
   chmodSync,
   existsSync,
@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { runCli } from '../src/cli.ts'
 import { paths } from '../src/config.ts'
@@ -22,6 +22,9 @@ import { nullLogger } from '../src/log.ts'
 import { installMcp, mcpEntry } from '../src/mcp-config.ts'
 import { OUTBOX_RETENTION_MS } from '../src/transport.ts'
 import { eventually, type Harness, sleep, startHarness, tempHome, waitFor } from './helpers.ts'
+
+// Its waits (waitFor, eventually) are longer than bun's 5 s on a loaded machine.
+setDefaultTimeout(t(60_000))
 
 let h: Harness
 afterEach(async () => h?.stop())
@@ -56,7 +59,7 @@ describe('#6 rotate reconnect', () => {
     const newKey = JSON.parse(readFileSync(paths(h.home).bridgeKey, 'utf8')).key_id as string
     await h.bridge.poll()
     await waitFor(() => helloKeyIds(h).includes(newKey), 4000, 'hello with the new key')
-    await sleep(1600) // longer than the first reconnect backoff (800 ms with random=0): a stray timer would fire by now
+    await sleep(1600) // timing-ok: negative window: longer than the first backoff (800 ms with random=0), a stray timer would fire by now
     expect(helloKeyIds(h).filter((k) => k === newKey)).toHaveLength(1)
     expect(h.bridge.live).toBe(true)
     expect(h.relay.bridgeConnected).toBe(true)
@@ -86,6 +89,7 @@ describe('#7 oversized durable frames', () => {
     expect(res.content[0]?.text).toMatch(/too large/i)
     expect(h.bridge.ctx.store.outboxCount()).toBe(0)
     expect(h.bridge.ctx.ledger.list('pending')).toHaveLength(0)
+    // timing-ok: negative window: the oversized card must not drop the socket
     await sleep(300)
     await eventually(() => expect(h.relay.bridgeConnected).toBe(true))
     expect(h.relay.frames.filter((r) => r.direction === 'to_bridge' && r.frame.type === 'ready').length).toBe(before)
@@ -104,7 +108,7 @@ describe('#7 oversized durable frames', () => {
     h.bridge.start()
     await h.relay.expectFrame('ready', () => true, { direction: 'to_bridge' })
     await waitFor(() => h.bridge.ctx.store.outboxCount() === 0, 4000, 'oversized outbox row dropped')
-    await sleep(1500) // a close-and-resend loop would have reconnected by now
+    await sleep(1500) // timing-ok: negative window: a close-and-resend loop would have reconnected by now
     expect(h.relay.frames.filter((r) => r.direction === 'to_bridge' && r.frame.type === 'ready')).toHaveLength(1)
     expect(h.relay.bridgeConnected).toBe(true)
   })
@@ -160,6 +164,7 @@ describe('#7 oversized durable frames', () => {
     expect(page.messages.length).toBeGreaterThan(0)
     expect(page.messages.length).toBeLessThan(100)
     expect(page.messages.at(-1)?.id).toBe(`m_${'99'.padStart(26, '0')}`) // newest end of the window is kept
+    // timing-ok: negative window: the history page must not drop the socket
     await sleep(200)
     await eventually(() => expect(h.relay.bridgeConnected).toBe(true))
   })
@@ -318,8 +323,10 @@ describe('#18 unhandled rejections', () => {
         expires_in_s: 1,
       })
       expect(res.isError).toBeUndefined()
+      // timing-ok: product deadline: the card expires in 1 s
       await sleep(1500)
       h.bridge.expiry.sync() // also covers the sweep path for cards already past due
+      // timing-ok: negative window: no unhandled rejection follows the failed emit
       await sleep(200)
       expect(seen).toEqual([])
     } finally {
@@ -338,6 +345,7 @@ describe('#38 non-consumable durable frames are acked after processing', () => {
       throw new Error('disk full')
     }
     const f = h.relay.sendToBridge({ type: 'device.revoked', device_id: victim })
+    // timing-ok: negative window: a failed device.revoked must stay unacked
     await sleep(400)
     await eventually(() => expect(h.relay.buffered((e) => e.frame.id === f.id)).toHaveLength(1)) // never acked: the relay still holds it
     expect(devices.isRevoked(victim)).toBe(false)

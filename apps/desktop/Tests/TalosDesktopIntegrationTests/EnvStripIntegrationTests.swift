@@ -50,7 +50,7 @@ struct EnvStripIntegrationTests {
     expectClean(try #require(dump(r, 1)), "cold start")
   }
 
-  /// Launch path: Supervisor restart (Restart session / crash respawn: tmux respawn-pane).
+  /// Launch path: Supervisor restart (Restart your agent / crash respawn: tmux respawn-pane).
   @Test(arguments: bothHosts)
   func aRestartIsCleanToo(kind: HostKind) throws {
     let r = try rig(kind)

@@ -89,7 +89,7 @@ for (const scheme of ['light', 'dark'] as const) {
     })
     harness.setSharedPasskey(true)
     await openSignedIn(harness, page, context, '/settings/account')
-    const revoke = page.getByRole('button', { name: /^Revoke Old laptop/ })
+    const revoke = page.getByRole('button', { name: /^Remove Old laptop/ })
     await revoke.focus()
     await page.keyboard.press('Enter')
     const dialog = page.getByRole('dialog')
@@ -125,6 +125,6 @@ test('a relay that does not report shared_passkey keeps the one-tap revoke (no d
     pinned: true,
   })
   await openSignedIn(harness, page, context, '/settings/account')
-  await expect(page.getByRole('button', { name: 'Revoke Old laptop' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Remove Old laptop' })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })

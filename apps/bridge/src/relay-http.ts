@@ -288,10 +288,17 @@ export class RelayHttp {
     return this.json<{ ok: true; shared_passkey?: boolean }>('POST', `/bridge/devices/${deviceId}/revoke`, {})
   }
 
-  async healthz(): Promise<{ ok: boolean; version?: string }> {
+  async healthz(): Promise<{ ok: boolean; version?: string; release?: string }> {
     const res = await this.fetchFn(`${this.baseUrl}/healthz`, { signal: AbortSignal.timeout(this.timeoutMs) })
     if (!res.ok) throw new RelayHttpError(res.status, `healthz -> ${res.status}`)
-    return (await res.json()) as { ok: boolean; version?: string }
+    const body = (await res.json()) as { ok: boolean; version?: unknown; release?: unknown }
+    // the relay's answer is data: a field of the wrong type is as good as absent
+    const { version, release, ...rest } = body
+    return {
+      ...rest,
+      ...(typeof version === 'string' ? { version } : {}),
+      ...(typeof release === 'string' ? { release } : {}),
+    }
   }
 }
 

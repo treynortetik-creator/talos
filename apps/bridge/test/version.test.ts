@@ -227,3 +227,11 @@ describe('status and doctor compare the bridge and the relay', () => {
     })
   })
 })
+
+describe('a relay that sends a version that is not a string', () => {
+  test('shaOf and versionSkew say nothing instead of throwing', () => {
+    expect(shaOf(7 as unknown as string)).toBeUndefined()
+    expect(shaOf({} as unknown as string)).toBeUndefined()
+    expect(versionSkew('abc1234', 7 as unknown as string)).toBeUndefined()
+  })
+})

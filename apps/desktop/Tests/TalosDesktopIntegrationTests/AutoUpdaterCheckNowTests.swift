@@ -195,7 +195,7 @@ struct AutoUpdaterCheckNowTests {
     u.tick()
     #expect(u.status == .relayBehind(version: "1.5.0", relay: r.a, app: r.b, why: ["main running"]))
     let t = u.status.words.detail
-    #expect(t.contains("redeploy the relay") && t.contains("also waiting for a quiet moment") && t.contains("does not wait for the relay"))
+    #expect(t.contains("redeploy the Talos server") && t.contains("also waiting for a quiet moment") && t.contains("does not wait for the Talos server"))
   }
 
   @Test func twoAsksAtOnceAreOneCheck() throws {
@@ -227,7 +227,7 @@ struct AutoUpdaterCheckNowTests {
     #expect(u.status == .relayBehind(version: "1.5.0", relay: r.a, app: r.b))
     let text = u.status.words.detail
     #expect(text.contains(String(r.a.prefix(7))) && text.contains(String(r.b.prefix(7))), "both builds: \(text)")
-    #expect(text.contains("redeploy the relay in Railway"), "what to do")
+    #expect(text.contains("redeploy the Talos server in Railway"), "what to do")
     #expect(UpdateMenu.showsDot(u.status), "the update is still offered")
     // the owner redeploys; the next look (5 minutes on) sees the relay on the release
     relay.set(r.b)
@@ -291,7 +291,7 @@ struct AutoUpdaterCheckNowTests {
     #expect(u.status.pendingVersion == "1.5.0")
     u.updateNow()
     u.queue.sync {}
-    #expect(u.status == .waitingForTurn(version: "1.5.0"), "the window says so: \(u.status)")
+    #expect(u.status == .waitingForTurn(version: "1.5.0", why: ["main running"]), "the window says so: \(u.status)")
     #expect(r.audit().contains("auto_update update_now version=1.5.0"))
     for _ in 0..<8 {
       Self.step(r, u)

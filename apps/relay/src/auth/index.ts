@@ -27,7 +27,7 @@ import { z } from 'zod'
 import { bodyTimeout, limitBody, smallBodyGuard } from '../core/body-guard.ts'
 import { findRuntime } from '../core/runtime.ts'
 import type { AppEnv, RelayServices } from '../services.ts'
-import { VERSION } from '../version.ts'
+import { RELEASE, VERSION } from '../version.ts'
 import { isTestAuthInstalled, setAuthImplementation } from './contract.ts'
 import { enrollSessionRoutes } from './enroll-session.ts'
 import { implFor, sessionFor } from './impl.ts'
@@ -420,6 +420,7 @@ routes.get('/api/me', sessionAny, (c) => {
     has_passkey: core.hasPasskey,
     rp_id: services.env.RP_ID,
     version: VERSION,
+    ...(RELEASE ? { release: RELEASE } : {}),
     bridge_online: services.bus.bridgeOnline(),
     ...(services.env.VAPID_PUBLIC_KEY ? { vapid_public_key: services.env.VAPID_PUBLIC_KEY } : {}),
   })

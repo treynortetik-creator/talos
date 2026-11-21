@@ -29,28 +29,30 @@ describe('the Goes to line says what the relay says', () => {
   it('nowhere else, when the relay passes nothing on', async () => {
     mount()
     await waitFor(() =>
-      expect(goesTo()).toBe('Goes to: Talos online and your Mac, with the screenshot. It is not sent anywhere else.'),
+      expect(goesTo()).toBe(
+        'Goes to: your Talos server and your Mac, with the screenshot. It is not sent anywhere else.',
+      ),
     )
   })
   it('the Talos team, when this relay was deployed with the team inbox', async () => {
     mount({}, (c) => vi.spyOn(c.bugs, 'destination').mockResolvedValue({ to: 'team' }))
     await waitFor(() =>
-      expect(goesTo()).toBe('Goes to: Talos online and your Mac, then the Talos team, with the screenshot.'),
+      expect(goesTo()).toBe('Goes to: your Talos server and your Mac, then the Talos team, with the screenshot.'),
     )
   })
   it('the webhook host, when the owner set an address', async () => {
     mount({}, (c) => vi.spyOn(c.bugs, 'destination').mockResolvedValue({ to: 'webhook', host: 'hooks.example.com' }))
     await waitFor(() =>
       expect(goesTo()).toBe(
-        'Goes to: Talos online and your Mac, then hooks.example.com (the words and details, not the screenshot).',
+        'Goes to: your Talos server and your Mac, then hooks.example.com (the words and details, not the screenshot).',
       ),
     )
   })
   it('only what is sure while the relay has not answered, or when it cannot (an older relay)', async () => {
     mount({}, (c) => vi.spyOn(c.bugs, 'destination').mockRejectedValue(new Error('404')))
-    expect(goesTo()).toBe('Goes to: Talos online and your Mac. Talos has not said whether it passes reports on.')
+    expect(goesTo()).toBe('Goes to: your Talos server and your Mac. Talos has not said whether it passes reports on.')
     await waitFor(() => expect(within(dialog()).getByText('Recent errors (2)')).toBeTruthy())
-    expect(goesTo()).toBe('Goes to: Talos online and your Mac. Talos has not said whether it passes reports on.')
+    expect(goesTo()).toBe('Goes to: your Talos server and your Mac. Talos has not said whether it passes reports on.')
   })
 })
 
@@ -70,7 +72,7 @@ describe('BugReporter', () => {
     expect(d.getByText('Attached automatically')).toBeTruthy()
     expect(d.getByText(/Keys, sign-in codes and your home folder are removed/)).toBeTruthy()
     expect(
-      await d.findByText('Goes to: Talos online and your Mac, with the screenshot. It is not sent anywhere else.'),
+      await d.findByText('Goes to: your Talos server and your Mac, with the screenshot. It is not sent anywhere else.'),
     ).toBeTruthy()
     await waitFor(() => expect(d.getByText('Recent errors (2)')).toBeTruthy())
     // the four automatic parts are on, the last five messages are off

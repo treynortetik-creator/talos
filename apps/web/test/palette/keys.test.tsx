@@ -76,7 +76,7 @@ describe('chords', () => {
     down(window, { code: 'BracketRight', key: ']', metaKey: true })
     expect(ids(fn)).toEqual(['threadPrev', 'threadNext'])
   })
-  it('there is no Cmd+N chord in the page: the browser’s and the Mac menu’s Quick compose', () => {
+  it('there is no Cmd+N chord in the page: the browser’s and the Mac menu’s Quick message', () => {
     const fn = vi.fn()
     render(<Probe onAction={fn} macApp />)
     const e = down(window, { code: 'KeyN', key: 'n', metaKey: true })

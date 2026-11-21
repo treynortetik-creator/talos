@@ -12,6 +12,23 @@ public enum PermissionMode: String, CaseIterable, Equatable, Sendable {
   /// Nothing asks: no permission card ever reaches the phone.
   case bypass
 
+  /// The settings screen's card title and its one line (the mock's "How much your agent asks before it acts").
+  public var settingsName: String {
+    switch self {
+    case .auto: return "Auto"
+    case .ask: return "Ask me"
+    case .bypass: return "Bypass"
+    }
+  }
+
+  public var settingsBlurb: String {
+    switch self {
+    case .auto: return "Does everyday work on its own; asks you about anything risky."
+    case .ask: return "Checks with you before it changes anything."
+    case .bypass: return "Never asks. Only for an agent you fully trust."
+    }
+  }
+
   public var label: String {
     switch self {
     case .auto: return "Auto (recommended)"
@@ -29,15 +46,14 @@ public enum PermissionModeSetting {
     case custom
   }
 
-  public static let bypassLine = "No permission cards reach your phone in this mode."
-  public static let customLabel = "Custom (from your launch command)"
-  public static let customLine = "Your launch command sets its own permission flags. Choosing a mode replaces them."
-  public static let title = "Permission mode"
-  public static let applies =
-    "Applies now: Talos restarts the agent for you, and that start is a cold start. You confirm the development-channel dialog once, at the Mac or on the phone card."
-  public static let askFirstTitle = "The agent is working on something"
-  public static let askFirstBody = "Changing the permission mode restarts the agent and ends the turn it is on. Restart it now?"
-  public static let savedNotRunning = "Saved. The agent is not running: the new mode applies when it starts."
+  public static let bypassLine = "Bypass never asks you, on this Mac or on your phone."
+  public static let customLabel = "Custom (set in Advanced)"
+  public static let customLine = "Your agent starts with its own custom setting (see Advanced). Choosing one of the three above replaces it."
+  public static let title = "How much your agent asks before it acts"
+  public static let applies = "Applies now: Talos restarts your agent for you."
+  public static let askFirstTitle = "Your agent is working on something"
+  public static let askFirstBody = "Changing this restarts your agent and ends what it is doing. Restart it now?"
+  public static let savedNotRunning = "Saved. It applies when your agent starts."
 
   /// The lines the phone gets about an agent's request: fixed words, never the agent's own text.
   public static func changedLine(_ mode: PermissionMode, restarting: Bool) -> String {
@@ -46,7 +62,7 @@ public enum PermissionModeSetting {
       : "It applies the next time the agent starts."
     // Bypass all is said plainly and with the way back: a row the owner sees, so an injected switch cannot go unseen
     if mode == .bypass {
-      return "Your agent switched itself to \(mode.label). No permission cards reach your phone in this mode. If you did not ask for this, change it back in Mac settings, Session, Permission mode. \(tail)"
+      return "Your agent switched itself to \(mode.label). No permission cards reach your phone in this mode. If you did not ask for this, change it back in \(MacSettingsText.agentPath). \(tail)"
     }
     return "The agent asked to switch the permission mode to \(mode.label). \(tail)"
   }
@@ -56,9 +72,16 @@ public enum PermissionModeSetting {
     case .locked: return "The agent asked to change the permission mode, but Talos settings are locked. Nothing changed."
     case .ownerStopped: return "The agent asked to change the permission mode, but you stopped it at the Mac. Nothing changed."
     case .tooSoon: return "The agent asked to change the permission mode again within two minutes. Nothing changed."
-    case .custom: return "The agent asked to change the permission mode, but your launch command sets its own permission flags. Nothing changed. Choose a mode in Mac settings, Session, to replace them."
+    case .custom: return "The agent asked to change the permission mode, but your agent starts with its own custom setting (Mac settings, Advanced). Nothing changed. Choose a mode in \(MacSettingsText.agentPath) to replace them."
     }
   }
+
+  /// What the Your agent tab says around the three cards, for the words guard.
+  public static var settingsTexts: [String] {
+    [title, customLabel, customLine, bypassLine, applies, askFirstTitle, askFirstBody, savedNotRunning, restartingNote, unsavedNote]
+  }
+  public static let restartingNote = "Restarting your agent. If Claude asks a question, answer it in the Talos window."
+  public static let unsavedNote = "There are changes in Advanced that are not saved. Save or undo them first, then choose again."
 
   static let bypassFlag = "--dangerously-skip-permissions"
   static let allowFlag = "--allow-dangerously-skip-permissions"

@@ -1,10 +1,10 @@
 // One-paste link, two installs: A shows a code, B pastes it, both directions are live. Each install is a real bridge over its own
 // FakeRelay (which holds the inbox AND the link routes like the real relay); the redeem call goes from B to A's relay.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parsePeerLinkCode, peerInboxUrl } from '@talos-app/protocol'
-import { waitFor } from '@talos-app/testkit'
+import { t, waitFor } from '@talos-app/testkit'
 import { runCli } from '../../src/cli.ts'
 import { ConfigFile } from '../../src/config-file.ts'
 import { addInboundPeer, PEER_SECRET_SERVICE, peerSecretAccount, readInboundPeers } from '../../src/peer/records.ts'
@@ -70,13 +70,25 @@ const cfg = (h: Harness) => new ConfigFile(join(h.home, 'config.json')).load()
 const secretOf = (h: Install, name: string) =>
   h.secrets.data.get(`${PEER_SECRET_SERVICE}\u0000${peerSecretAccount(name)}`)
 /** A's bridge picks up what B sent back (its poll). */
+/** How long a driven poll may take (longer on a slow machine: TALOS_TEST_TIME_FACTOR). */
+const POLL_MS = t(6000)
+/** A wait for the other side, with the same slack. */
+const WAIT_MS = t(6000)
+// The runner's own limit is 5 s per test. The longest test here starts two installs, drives a poll for up to POLL_MS and then
+// waits for the other side three times, and the testkit's waitFor runs at waitScale (3) x its timeout: 3 x 3 x WAIT_MS = 54 s of
+// waiting, plus POLL_MS, before the test's own steps. So the limit sits above that real sum, on this machine's scale, and a
+// loaded machine fails a check with its message, not the runner's timeout (a 5 s timeout once hit at load 4.7, 2026-11-20; the
+// t(40_000) that landed first was under the 54 s the three waits can take, scripts/timing-lint.ts says so).
+setDefaultTimeout(t(90_000))
+
+/** Drives A's poll until `ok`, up to POLL_MS. The loop is the wait: no fixed wait after it, only the check. */
 async function pollUntil(h: Install, ok: () => boolean, what: string) {
-  const end = Date.now() + 6000
+  const end = Date.now() + POLL_MS
   while (!ok() && Date.now() < end) {
     await h.bridge.poll()
     await new Promise((r) => setTimeout(r, 100))
   }
-  await waitFor(ok, 2000, what)
+  expect(ok(), `${what}: not within ${POLL_MS} ms of driven polls`).toBe(true)
 }
 const files = (h: Harness): string =>
   ['bridge.log', 'config.json', 'peers-inbound.json']
@@ -117,15 +129,19 @@ describe('one paste links both directions', () => {
     // both directions land
     const ab = await a.bridge.callTool('peer_send', { peer: 'work', text: 'hello from A', label: 'TASK' })
     expect(ab.isError, text(ab)).toBeFalsy()
-    await waitFor(() => b.peerNotes().length === 1, 6000, 'A to B')
+    await waitFor(() => b.peerNotes().length === 1, WAIT_MS, 'A to B')
     expect(b.peerNotes()[0]?.meta).toMatchObject({ peer: 'home', trust: 'external' })
     const ba = await b.bridge.callTool('peer_send', { peer: 'home', text: 'hello from B', label: 'TASK' })
     expect(ba.isError, text(ba)).toBeFalsy()
-    await waitFor(() => a.peerNotes().length === 1, 6000, 'B to A')
+    await waitFor(() => a.peerNotes().length === 1, WAIT_MS, 'B to A')
     expect(a.peerNotes()[0]?.meta).toMatchObject({ peer: 'work', trust: 'external' })
 
     // the rows: one "Linked with" per side, no "Linked peer added", and no "Peer inbox created" on B
-    await waitFor(() => rowsOf(a).includes('Linked with work') && rowsOf(b).includes('Linked with home'), 6000, 'rows')
+    await waitFor(
+      () => rowsOf(a).includes('Linked with work') && rowsOf(b).includes('Linked with home'),
+      WAIT_MS,
+      'rows',
+    )
     for (const h of [a, b]) expect(rowsOf(h).filter((t) => t.startsWith('Linked peer added'))).toEqual([])
     expect(rowsOf(b).filter((t) => t.startsWith('Peer inbox created'))).toEqual([])
     expect(rowsOf(a).filter((t) => t.startsWith('Linked with'))).toHaveLength(1)

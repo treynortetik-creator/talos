@@ -15,6 +15,7 @@ final class RelayTrustControllerTests: XCTestCase {
     private let newFp = String(repeating: "B", count: 43)
     private var savedRuntime: (@MainActor () -> RelayRuntime)!
     private var savedAttester: (@MainActor () -> AttestRunning)!
+    private var savedAppState: (@MainActor () -> UIApplication.State)!
     private var stub: StubAttester!
     private var window: UIWindow?
     private var store: RelayStore!
@@ -29,6 +30,9 @@ final class RelayTrustControllerTests: XCTestCase {
         super.setUp()
         savedRuntime = TalosBridgeViewController.runtime
         savedAttester = TalosBridgeViewController.attester
+        savedAppState = TalosBridgeViewController.applicationState
+        // In front, whatever the simulator host is doing: the watchdog tests below do not depend on the machine.
+        TalosBridgeViewController.applicationState = { .active }
         stub = StubAttester(.verdict(.pass))
         let s = stub!
         TalosBridgeViewController.attester = { s }
@@ -39,6 +43,7 @@ final class RelayTrustControllerTests: XCTestCase {
         window = nil
         TalosBridgeViewController.runtime = savedRuntime
         TalosBridgeViewController.attester = savedAttester
+        TalosBridgeViewController.applicationState = savedAppState
         super.tearDown()
     }
 
@@ -108,9 +113,80 @@ final class RelayTrustControllerTests: XCTestCase {
         XCTAssertFalse(c.relayContext?.trust.allowsPageLoad ?? true)
         stub.release()
         waitFor("the page load starts") { c.lastRelayLoad != nil }
-        XCTAssertTrue(c.isLaunchWatchdogRunning, "the watchdog starts with the page load, after the check")
+        XCTAssertTrue(c.isLaunchWatchdogRunning, "the watchdog starts with the page load, after the check: \(c.watchdogStateForTests)")
         XCTAssertEqual(c.relayContext?.trust.state, .pass)
         XCTAssertFalse(c.isShowingTrustBanner)
+    }
+
+    /// The race behind a flaky `testNothingLoads...`: the gate cancels Capacitor's first relay load while the check is held, so
+    /// Capacitor loads offline.html, and under load that page's didFinish can arrive AFTER `loadRelay` has started the real load.
+    /// By then `webView.url` names the relay, so a finish counted by url alone stopped the watchdog and a stalled relay never fell
+    /// to the offline page. Every event here is delivered by hand, in order, so nothing depends on timing.
+    func testALateFinishOfAnEarlierPageDoesNotCountAsTheRelayPageFinishing() throws {
+        try pair()
+        stub.holds = true
+        let c = try show()
+        waitFor("the check starts") { self.stub.isHeld }
+        let web = try XCTUnwrap(c.webView)
+        let gate = try XCTUnwrap(web.navigationDelegate as? NavigationGate)
+        // From here the web view's real lifecycle events (a real load of the unreachable test host) are not passed on.
+        let shim = PolicyOnlyDelegate(gate: gate)
+        web.navigationDelegate = shim
+        objc_setAssociatedObject(web, &PolicyOnlyDelegate.key, shim, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        stub.release()
+        waitFor("the page load starts") { c.lastRelayLoad != nil }
+        let relayNav = try XCTUnwrap(c.relayNavigation, "loadRelay keeps the navigation it started")
+        XCTAssertTrue(c.isLaunchWatchdogRunning, c.watchdogStateForTests)
+        // An earlier navigation (another web view's, so it can never be the relay load) finishes late.
+        let earlier = try XCTUnwrap(WKWebView(frame: .zero).loadHTMLString("<html></html>", baseURL: nil))
+        XCTAssertFalse(earlier === relayNav)
+        gate.webView(web, didFinish: earlier)
+        XCTAssertTrue(c.isLaunchWatchdogRunning, "an earlier page finishing is not the relay page finishing")
+        XCTAssertFalse(c.relayPageFinishedForTests)
+        // The same for a late commit: it must not move the watchdog to the longer committed limit.
+        gate.webView(web, didCommit: earlier)
+        XCTAssertFalse(c.relayPageCommittedForTests)
+        // The relay navigation's own finish counts.
+        gate.webView(web, didFinish: relayNav)
+        XCTAssertTrue(c.relayPageFinishedForTests)
+        XCTAssertFalse(c.isLaunchWatchdogRunning, "the relay page finished: the watchdog stops")
+        XCTAssertNil(c.relayNavigation)
+    }
+
+    /// A load that starts while the app is off screen is watched from the return to the front (the watchdog pauses): the same
+    /// rule the tests above no longer leave to the simulator host's state.
+    func testALoadStartedWhileTheAppIsInTheBackgroundIsPausedNotWatched() throws {
+        try pair()
+        TalosBridgeViewController.applicationState = { .background }
+        let c = try show()
+        settled(c)
+        waitFor("the page load starts") { c.lastRelayLoad != nil }
+        XCTAssertFalse(c.isLaunchWatchdogRunning, c.watchdogStateForTests)
+        XCTAssertTrue(c.watchdogStateForTests.contains("paused=true"), c.watchdogStateForTests)
+    }
+
+    /// The relay load itself fails fast (no server answers: what the test host does under load) and THEN the late finish of an
+    /// earlier page arrives, with `webView.url` still the relay. A failure must not make that finish count as the relay page:
+    /// the watchdog keeps running, so a relay that is down still ends on the offline page.
+    func testARelayLoadThatFailsDoesNotLetALateFinishOfAnEarlierPageStopTheWatchdog() throws {
+        try pair()
+        stub.holds = true
+        let c = try show()
+        waitFor("the check starts") { self.stub.isHeld }
+        let web = try XCTUnwrap(c.webView)
+        let gate = try XCTUnwrap(web.navigationDelegate as? NavigationGate)
+        let shim = PolicyOnlyDelegate(gate: gate)
+        web.navigationDelegate = shim
+        objc_setAssociatedObject(web, &PolicyOnlyDelegate.key, shim, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        stub.release()
+        waitFor("the page load starts") { c.lastRelayLoad != nil }
+        let relayNav = try XCTUnwrap(c.relayNavigation)
+        c.shownURLForTests = try XCTUnwrap(c.lastRelayLoad)   // the web view names the relay while its load is pending
+        (gate as WKNavigationDelegate).webView?(web, didFailProvisionalNavigation: relayNav, withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost))
+        let earlier = try XCTUnwrap(WKWebView(frame: .zero).loadHTMLString("<html></html>", baseURL: nil))
+        gate.webView(web, didFinish: earlier)
+        XCTAssertFalse(c.relayPageFinishedForTests, "an earlier page's finish is not the relay page finishing, failed load or not")
+        XCTAssertTrue(c.isLaunchWatchdogRunning, "the watchdog still runs, so a relay that never answers falls to the offline page")
     }
 
     func testTheNavigationGateCancelsARelayLoadUntilTheCheckHasAnswered() throws {
@@ -141,7 +217,7 @@ final class RelayTrustControllerTests: XCTestCase {
         settled(c)
         XCTAssertTrue(c.isShowingTrustBanner)
         let text = try XCTUnwrap(c.trustBannerText)
-        XCTAssertTrue(text.hasPrefix("Can't confirm this is your Mac. The page's camera and microphone access, sharing and native features are off until it answers."), text)
+        XCTAssertTrue(text.hasPrefix("Can't confirm this is your Mac. Sharing and some phone features are off until it answers."), text)
         XCTAssertTrue(text.contains("Last confirmed 3 hours ago."), text)
         XCTAssertEqual(buttons(in: c.view).filter { $0.hasPrefix("trust.") }, ["trust.remove", "trust.retry"])
         XCTAssertFalse(c.isShowingTrustBlock)
@@ -225,7 +301,7 @@ final class RelayTrustControllerTests: XCTestCase {
         settled(c)
         XCTAssertTrue(c.isShowingTrustBlock)
         XCTAssertTrue(c.trustBlockIsFail)
-        XCTAssertEqual(buttons(in: c.view).filter { $0.hasPrefix("trust.") }, ["trust.remove"], "only Remove this relay and pair again")
+        XCTAssertEqual(buttons(in: c.view).filter { $0.hasPrefix("trust.") }, ["trust.remove"], "only Remove this Talos server and pair again")
         XCTAssertNil(c.lastRelayLoad)
         XCTAssertFalse(TalosPluginGate.allows(c.bridge))
         NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -285,7 +361,7 @@ final class RelayTrustControllerTests: XCTestCase {
         waitFor("the confirm") { c.isRepinPromptShowing }
         let alert = try XCTUnwrap(c.presentedViewController as? UIAlertController)
         XCTAssertTrue(alert.title?.contains("mine.example.com") == true, "the host is in the title: \(alert.title ?? "")")
-        XCTAssertEqual(alert.actions.map(\.title), ["Continue", "Not now", "Remove this relay"])
+        XCTAssertEqual(alert.actions.map(\.title), ["Continue", "Not now", "Remove this Talos server"])
         XCTAssertFalse(c.relayContext!.trust.state.allowsNativeFeatures, "not a pass while the question is up")
         XCTAssertEqual(try s.active()?.bridgeFp, fp)
         c.testRepinPrompt.choose(.decline)
@@ -320,7 +396,7 @@ final class RelayTrustControllerTests: XCTestCase {
         var shared = 0
         let share = ShareMediaMessageHandler(guardian: guardian, trust: trust) { _, _ in shared += 1 }
         let ui = SpyUI()
-        let gate = NavigationGate(inner: ui, guardian: guardian, trust: trust, openInSafari: { _ in }, showMedia: { _ in })
+        let gate = NavigationGate(inner: ui, guardian: guardian, trust: trust, openOutside: { _ in }, showMedia: { _ in })
         let controller = WKUserContentController()
         return (
             { plugin in
@@ -437,6 +513,18 @@ final class RelayTrustControllerTests: XCTestCase {
         XCTAssertTrue(next.isShowingFirstRun, "and cancelling it leaves the native first-run screen")
         XCTAssertNil(next.relayContext)
     }
+
+    func testAnExternalLinkLeavesTalosThroughTheSystemNeverAnInAppBrowser() {
+        // the owner, 2026-11-20: a Google Docs link started a Google sign-in inside Talos (an in-app browser)
+        let c = TalosBridgeViewController()
+        var opened: [URL] = []
+        c.openURL = { opened.append($0) }
+        c.openOutside(URL(string: "https://docs.google.com/document/d/abc/edit")!)
+        c.openOutside(URL(string: "https://drive.google.com/file/d/xyz/view")!)
+        c.openOutside(URL(string: "javascript:alert(1)")!)
+        XCTAssertEqual(opened.map(\.host), ["docs.google.com", "drive.google.com"], "web links go to the system; other schemes are refused")
+        XCTAssertNil(c.presentedViewController, "no browser is presented inside Talos")
+    }
 }
 
 extension TalosBridgeViewController {
@@ -448,4 +536,17 @@ private func find(_ root: UIView, _ id: String) -> UIView? {
     if root.accessibilityIdentifier == id { return root }
     for v in root.subviews { if let f = find(v, id) { return f } }
     return nil
+}
+
+
+/// Passes only the navigation decisions to the gate; lifecycle events (commit, finish, fail) come from the test by hand.
+final class PolicyOnlyDelegate: NSObject, WKNavigationDelegate {
+    nonisolated(unsafe) static var key: UInt8 = 0
+    let gate: NavigationGate
+    init(gate: NavigationGate) { self.gate = gate }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        gate.webView(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
+    }
 }

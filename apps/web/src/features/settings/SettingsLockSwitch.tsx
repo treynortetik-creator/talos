@@ -13,7 +13,7 @@ import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 /** The exact label: the bridge's undo lines say "turn Lock Talos settings off in Settings". */
 export const SETTINGS_LOCK_LABEL = 'Lock Talos settings'
 export const SETTINGS_LOCK_HELP =
-  'Off: when you ask your agent to change a setting, it makes the change and tells you how to undo it. On: it only proposes, and you approve each change on a card. It also covers linking another Talos (`peer`) and revoking devices: with the lock on, your agent leaves those to you.'
+  'Off: when you ask your agent to change a setting, it makes the change and tells you how to undo it. On: it only proposes, and you approve each change on a card. It also covers linking another Talos (`peer`) and removing devices: with the lock on, your agent leaves those to you.'
 
 export function SettingsLockSwitch() {
   const id = useId()

@@ -37,7 +37,7 @@ final class CloneConfirmCenter: ObservableObject {
   var record: () -> (clone: String, file: String)? = { AgentFolderSetup.recordedCheckout(in: AutoSetup.recordFolders(home: NSHomeDirectory())) }
   var unsafe: () -> [String] = { [] }
   /// After an accept: run the check again so the release that waited goes ahead.
-  var onAccepted: () -> Void = { UpdateController.shared.checkAgain() }
+  var onAccepted: () -> Void = { UpdateController.shared.recheckAfterAllow() }
   /// Puts a panel on screen for this token; tests replace it.
   var present: (CloneConfirmCenter, PanelToken) -> Void = { AllowUpdatesPanelHost.show($0, $1) }
   var dismiss: () -> Void = { AllowUpdatesPanelHost.hide() }
@@ -138,13 +138,29 @@ final class CloneConfirmCenter: ObservableObject {
 /// Looks for a recorded clone nobody accepted: at launch, then every few seconds while the app runs (an install.sh run from Terminal
 /// records one while Talos is open). Only ever asks; accepting is the owner's click.
 enum AllowUpdatesWatch {
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var task: Task<Void, Never>?
+  static var isRunning: Bool { lock.withLock { task != nil } }
+
+  /// Starts the one watch; a second call while it runs does nothing (the question is asked from one place).
   static func start(every seconds: UInt64 = 15, find: @escaping @Sendable () -> String?) {
-    Task.detached {
-      while !Task.isCancelled {
-        let found = find()
-        await MainActor.run { CloneConfirmCenter.shared.sync(unaccepted: found) }
-        try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+    lock.withLock {
+      guard task == nil else { return }
+      task = Task.detached {
+        while !Task.isCancelled {
+          let found = find()
+          await MainActor.run { CloneConfirmCenter.shared.sync(unaccepted: found) }
+          try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+        }
       }
+    }
+  }
+
+  /// Tests only: ends the watch so the next `start` is a fresh one.
+  static func stop() {
+    lock.withLock {
+      task?.cancel()
+      task = nil
     }
   }
 }

@@ -282,7 +282,7 @@ describe('gate.sh --push', () => {
     r.change(r.clone, { 'docs/mine.md': 'my words\n' })
     const p = r.gatePush({ ON_TYPECHECK: r.otherPushes('docs/news.md') })
     expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain('only typecheck, lint, personal and size run again')
+    expect(p.err).toContain('only typecheck, lint, personal, size and timing run again')
     expect(r.calls().filter((x) => x === TYPECHECK)).toHaveLength(2)
     expect(r.ok(r.origin, 'log', '-2', '--format=%s', 'main').split('\n')).toEqual(['change', 'other'])
   })

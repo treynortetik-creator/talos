@@ -40,7 +40,7 @@ test('palette: Report a bug opens the form with the tools, the fields and the at
   await expect(d.getByRole('checkbox', { name: 'Last 5 messages in this thread' })).not.toBeChecked() // off by default
   await expect(d.getByText('Keys, sign-in codes and your home folder are removed.', { exact: false })).toBeVisible()
   await expect(
-    d.getByText('Goes to: Talos online and your Mac, with the screenshot. It is not sent anywhere else.'),
+    d.getByText('Goes to: your Talos server and your Mac, with the screenshot. It is not sent anywhere else.'),
   ).toBeVisible()
 })
 

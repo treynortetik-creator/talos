@@ -42,8 +42,9 @@ struct AboutWindowGuiTests {
     let actions = try String(contentsOf: sources.appendingPathComponent("TalosDesktop/AppMenuActions.swift"), encoding: .utf8)
     #expect(actions.contains(#"case .about: window("about")"#))
     let app = try String(contentsOf: sources.appendingPathComponent("TalosDesktop/App.swift"), encoding: .utf8)
+    let menu = try String(contentsOf: sources.appendingPathComponent("TalosDesktop/StatusMenu.swift"), encoding: .utf8)
     #expect(app.contains(#"Window("About Talos", id: "about") { AboutView("#), "the window exists")
-    #expect(app.contains(#"Button("About Talos") {"#) && app.contains(#"openWindow(id: "about")"#), "the menu bar item opens it")
+    #expect(menu.contains(#"Button("About Talos") {"#) && menu.contains(#"openWindow(id: "about")"#), "the menu bar item opens it")
   }
 
   @Test func theAppMenuActionOpensTheAboutWindowId() throws {
@@ -55,6 +56,27 @@ struct AboutWindowGuiTests {
     var opened: [String] = []
     AppMenuActions.perform(.about, model: model, open: { opened.append($0) })
     #expect(opened == ["about"])
+  }
+
+  @Test func theAppHasItsUpdaterBeforeSignInSoCheckForUpdatesCanLook() throws {
+    cannotTakeTheKeyboard()
+    _ = TmuxWorld.root
+    TmuxWorld.hookBundle()
+    try #require(SupervisorController.configPath.hasPrefix(TmuxWorld.root), "refusing to build a controller on the real config")
+    let model = SupervisorController(store: MemoryStore())
+    #expect(!model.configured, "this is the app before sign-in")
+    #expect(model.autoUpdater != nil, "the updater is built from the first launch (its timer stays off until Talos is set up)")
+  }
+
+  @Test func theTalosMenuHasAboutAndCheckForUpdatesFromSwiftUIToo() throws {
+    let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sources")
+    let app = try String(contentsOf: sources.appendingPathComponent("TalosDesktop/App.swift"), encoding: .utf8)
+    let i = try #require(app.range(of: "CommandGroup(replacing: .appInfo)"))
+    let group = String(app[i.lowerBound...].prefix(500))
+    let about = try #require(group.range(of: #"Button("About Talos")"#))
+    let check = try #require(group.range(of: "Button(UpdateMenu.checkTitle)"))
+    #expect(about.lowerBound < check.lowerBound, "Check for Updates is right below About")
+    #expect(app.contains(".commands { TalosAppCommands() }"))
   }
 
   @Test func theButtonStartsExactlyOneCheckAndIsIgnoredWhileOneRuns() {
@@ -78,7 +100,7 @@ struct AboutWindowGuiTests {
   @Test func theInlineWordsFollowTheUpdateFlow() {
     #expect(AboutCopy.headline(.idle).isEmpty && AboutCopy.detail(.idle) == nil)
     #expect(AboutCopy.headline(.checking) == "Checking\u{2026}")
-    #expect(AboutCopy.headline(.upToDate(version: "0.1.7")) == "You\u{2019}re up to date")
+    #expect(AboutCopy.headline(.upToDate(version: "0.1.7")) == "Talos is up to date (0.1.7)")
     #expect(AboutCopy.headline(.ready(version: "0.1.8")) == "Talos 0.1.8 is ready")
     #expect(AboutCopy.headline(.waitingForQuiet(version: "0.1.8", why: ["draft"])) == "Waiting for a quiet moment")
     #expect(AboutCopy.headline(.failed(line: "The download did not match.", logPath: "~/log")).contains("didn\u{2019}t work"))
@@ -96,7 +118,7 @@ struct AboutWindowGuiTests {
       #expect(bs.allSatisfy { $0.keyEquivalent.isEmpty })
       return bs.map(\.title)
     }
-    #expect(titles(.ready(version: "0.1.8")) == ["Update now"])
+    #expect(titles(.ready(version: "0.1.8")) == ["Install"])
     #expect(titles(.needsAllow(version: "0.1.8", clone: "/home/alex/talos")) == ["Allow updates"])
     #expect(titles(.checking).isEmpty, "no second check while one runs, and no update button")
   }

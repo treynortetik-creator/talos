@@ -69,7 +69,7 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
   await open(page, '/settings/bug-reports')
   const s = page.getByRole('region', { name: 'Bug reports' }).or(page.locator('section[aria-labelledby="bug-reports"]'))
   await expect(s.getByTestId('bug-webhook-state')).toHaveText(
-    'Off: reports go to your Mac (through Talos online) and nowhere else.',
+    'Off: reports go to your Mac (through your Talos server) and nowhere else.',
   )
   const field = s.getByLabel('Send new reports to a webhook')
 
@@ -80,7 +80,7 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
     await expect(s.getByRole('alert')).toHaveText(BUG_WEBHOOK_URL_RULE)
   }
   await expect(s.getByTestId('bug-webhook-state')).toHaveText(
-    'Off: reports go to your Mac (through Talos online) and nowhere else.',
+    'Off: reports go to your Mac (through your Talos server) and nowhere else.',
   )
 
   // a good one: saved with the passkey step, then only its host is shown; the address (and its token) never comes back
@@ -97,7 +97,7 @@ test('Settings > Bug reports: report a bug, and set, replace and turn off the we
 
   await s.getByRole('button', { name: 'Turn off' }).click()
   await expect(s.getByTestId('bug-webhook-state')).toHaveText(
-    'Off: reports go to your Mac (through Talos online) and nowhere else.',
+    'Off: reports go to your Mac (through your Talos server) and nowhere else.',
   )
 
   // and the reporter itself, from here

@@ -58,7 +58,7 @@ struct EmbeddedTerminalGuiTests {
     t.source = facts.source
     let host = NSView(frame: CGRect(x: 0, y: 0, width: 1000, height: 700))
     open(t, in: host)
-    #expect(t.noteTextForTest == "No agent session yet. Menu → Start session.")
+    #expect(t.noteTextForTest == "No agent session yet. Menu → Start your agent.")
     #expect(!t.hasViewerForTest)
     facts.sessionExists = true
     t.tick()
@@ -101,7 +101,7 @@ struct EmbeddedTerminalGuiTests {
     facts.sessionExists = false
     t.tick()
     #expect(!t.hasViewerForTest, "a viewer that ended is not left as a frozen screen")
-    #expect(t.noteTextForTest == "No agent session yet. Menu → Start session.")
+    #expect(t.noteTextForTest == "No agent session yet. Menu → Start your agent.")
     t.close()
   }
 

@@ -42,7 +42,7 @@ describe('BugReporter on a phone', () => {
     mount({}, (c) => vi.spyOn(c.bugs, 'destination').mockResolvedValue({ to: 'team' }))
     await waitFor(() =>
       expect(within(dialog()).getByTestId('bug-goes-to').textContent).toBe(
-        'Goes to: Talos online and your Mac, then the Talos team, with the screenshot.',
+        'Goes to: your Talos server and your Mac, then the Talos team, with the screenshot.',
       ),
     )
   })
