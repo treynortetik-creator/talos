@@ -1,8 +1,8 @@
-// Settings -> Account: "Always allowed" (always-allow.ts). The send kinds the owner lets go out without a card, added by the
+// Settings -> Account: "Always allowed" (always-allow.ts). The kinds of action the owner lets go ahead without a card, added by the
 // "Always allow" button on a card (or by the agent when he asks). Each has Remove, and Remove all empties the list. Every
 // change writes the WHOLE list as an ordinary owner-signed config.patch (an RFC 7386 patch replaces an array).
 // Offered only to a bridge that says it reads the list (ALWAYS_ALLOW_FEATURE): an older one would take the patch and ignore it.
-import { ALWAYS_ALLOW_FEATURE, type AlwaysAllowEntryT, type SendKind } from '@talos-app/protocol'
+import { ALWAYS_ALLOW_FEATURE, type AlwaysAllowEntryT, type AlwaysKind } from '@talos-app/protocol'
 import { useState } from 'react'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { placeWords, useHost } from '../../lib/hostWords.ts'
@@ -12,15 +12,19 @@ import { NOT_CONNECTED_LINE, useWriteBlock } from './offline.ts'
 
 export const ALWAYS_ALLOWED_TITLE = 'Always allowed'
 /** What each kind's row says (the card button's words, without "Always allow"). */
-export const ALWAYS_ALLOWED_KIND: Record<SendKind, string> = {
+export const ALWAYS_ALLOWED_KIND: Record<AlwaysKind, string> = {
   email: 'Emails',
   message: 'Messages',
   deploy: 'Deploys',
   publish: 'Publishing',
   purchase: 'Purchases',
   push: 'Pushing code',
+  generic: 'Approvals',
+  schedule: 'Schedule changes',
+  undo: 'Undos',
+  config: 'Settings changes',
 }
-export const ALWAYS_ALLOWED_EMPTY = 'Cards for sends always ask. Tap “Always allow” on a card to add its kind here.'
+export const ALWAYS_ALLOWED_EMPTY = 'Action cards ask every time. Tap “Always allow” on a card to add its kind here.'
 export const ALWAYS_ALLOWED_HELP =
   'These go out without a card. You still get a quiet line in the thread (no notification); passes within 10 minutes fold into one line.'
 

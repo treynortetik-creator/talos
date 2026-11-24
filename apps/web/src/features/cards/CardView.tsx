@@ -2,18 +2,19 @@
 // for an altered or expired card, supports inline edit (edited_hash), revise, "Always allow" for a send kind, and
 // collapses to one line after a decision. The owner's signed tap is the whole approval (owner ruling 2026-11-14).
 import {
-  ALWAYS_ALLOW_FEATURE,
+  type AlwaysKind,
+  alwaysKindOffered,
   CARD_KIND_TABLE,
   CARD_KINDS,
   type CardIconKey,
   type CardKind,
   type CardT,
   cardExpiryMs,
+  cardOffersAlways,
   type Host,
+  isAlwaysKind,
   isBodyEditable,
-  isSendKind,
   ScheduleCardPayload,
-  type SendKind,
 } from '@talos-app/protocol'
 import { type ComponentType, type ReactNode, type SVGProps, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { NoAnswerError, NotSentError, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
@@ -99,13 +100,17 @@ const NO_ANSWER_COPY = "Didn't hear back. Check whether it ran before trying aga
  * The second button on a live card of a send kind (always-allow.ts): what it allows from now on. A table, so each kind reads
  * right ("Always allow publishing", not "publishs").
  */
-export const ALWAYS_ALLOW_LABEL: Record<SendKind, string> = {
+export const ALWAYS_ALLOW_LABEL: Record<AlwaysKind, string> = {
   email: 'Always allow emails',
   message: 'Always allow messages',
   deploy: 'Always allow deploys',
   publish: 'Always allow publishing',
   purchase: 'Always allow purchases',
   push: 'Always allow pushing code',
+  generic: 'Always allow approvals',
+  schedule: 'Always allow schedule changes',
+  undo: 'Always allow undos',
+  config: 'Always allow settings changes',
 }
 
 /** Shown when a high-risk card was answered from a notification (error `open_in_app`). */
@@ -241,10 +246,12 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
     }
   }
 
-  // "Always allow" is offered only on a card of a send kind, and only by a bridge that reads it (an older one would approve
+  // "Always allow" is offered only on an action card that offers it (cardOffersAlways: never a question, a permission card or a trust-key settings card), and only by a bridge that reads it (an older one would approve
   // this card and ignore the rest). Without the feature the card is unchanged.
-  const alwaysOffered = useTalos((s) => s.presence.features?.includes(ALWAYS_ALLOW_FEATURE) ?? false)
-  const alwaysLabel = alwaysOffered && isSendKind(card.kind) ? ALWAYS_ALLOW_LABEL[card.kind] : null
+  // (the send kinds need always-allow/1; the newer kinds need always-allow/2, which an older bridge does not say)
+  const alwaysOffered = useTalos((s) => alwaysKindOffered(s.presence.features, card.kind))
+  const alwaysLabel =
+    alwaysOffered && cardOffersAlways(card) && isAlwaysKind(card.kind) ? ALWAYS_ALLOW_LABEL[card.kind] : null
 
   const primary = (opts: { always?: true } = {}) =>
     run(async () => {

@@ -85,6 +85,12 @@ export const newOfferState = (): OfferState => ({
 /** How long (seconds, monotonic) a timed-out Enter keeps the same unchanged dialog from being offered again. Twin: `unsentEnterMemory` on the Mac. */
 export const DIALOG_UNSENT_MEMORY_S = 5
 
+/**
+ * The offer's time (its `expires_at`, wall clock) has passed. A dialog still on the screen after that is offered again under a new id
+ * (twin: `WorkerReoffer.ranOut` on the Mac). A time that cannot be read counts as run out: it can never be answered, so offering anew is safe.
+ */
+export const offerRanOut = (o: { expires_at: string }, nowMs: number): boolean => !(nowMs < Date.parse(o.expires_at))
+
 /** What the thread is told when the owner answered "No, exit" to the folder-trust question (null: they did not); taking it clears the mark. */
 export function declinedTrustText(o: OfferState): string | null {
   const was = o.declinedTrust
@@ -270,6 +276,8 @@ export class WorkerDialogs {
     // after a restart is never the same, however exactly it equals the screen: nobody was looking at the pane meanwhile (the
     // dialog can have been answered there and another that reads alike be in its place), so what is there now is a new sighting
     // with a new id, and a card or a tap for the old id applies to nothing (the Mac's WorkerDialogOffer.swift does the same).
+    // One whose time ran out with the same dialog still on this look's screen is offered again the same way: a new id, so a card for
+    // it can be made again, and a tap on the old card (which no longer answers anything) cannot answer the new one.
     if (
       cur &&
       cur.kind === d.kind &&
@@ -277,7 +285,8 @@ export class WorkerDialogs {
       sameList(cur.options, d.options) &&
       !t.offer.disturbed &&
       t.offer.enterSentFor !== cur.id &&
-      t.offer.sinceAwake !== null
+      t.offer.sinceAwake !== null &&
+      !offerRanOut(cur, nowMs)
     ) {
       if (cur.cursor !== d.cursor) t.setDialog({ ...cur, cursor: d.cursor })
       return
@@ -390,12 +399,13 @@ export class WorkerDialogs {
     if (!dialogFileFresh(a.at, nowMs)) return nothing('unverified')
     if (a.dialog_id !== offer.id) return nothing('unverified') // not the dialog on this pane
     if (!(nowMs < Date.parse(offer.expires_at))) return nothing()
-    // the screen was seen to change under this offer: the dialog there now may not be the one the tap was for
-    if (t.offer.disturbed) return nothing()
     // a signed tap is used once per dialog, whatever came of it (the control id is not signed), across a restart too
     const used = `${a.dialog_id}|${sha256Hex(a.proof.signed)}`
     const usedPath = join(this.dir(t.id), WORKER_FILES.dialogProofsUsed)
     if (t.offer.proofsUsed.includes(used) || readProofsUsed(usedPath).includes(used)) return nothing('already_answered')
+    // the screen was seen to change under this offer (or a tap of the owner's pressed nothing and ended it): the dialog there now may not be the
+    // one the tap was for
+    if (t.offer.disturbed) return nothing()
     const v = await verifyDialogAnswer(a, {
       pinnedKey: (id) => this.d.pinnedKey(id),
       nowMs,
@@ -407,6 +417,23 @@ export class WorkerDialogs {
       this.d.audit('worker_dialog_unverified', { thread: t.id, step: String(v.step), why: v.why })
       return nothing(v.reason)
     }
+    // The owner's own tap that pressed nothing (a typing client, clients that could not be read, a changed screen) ends this offer: it is marked
+    // disturbed, as every other end of an offer without an answer is, so the next look at the same dialog on a settled screen makes a new id and a
+    // new card instead of leaving the question with a failed card for a day. Only a tap that proved itself gets here, and each new card needs a new
+    // real tap, so a forged file cannot end an offer and it cannot repeat by itself (twin: `endOfferAfterRefusedTap` on the Mac).
+    const o = await this.pressVerified(t, pane, offer, v, used, usedPath)
+    if (o.outcome === 'nothing_pressed') t.offer.disturbed = true
+    return o
+  }
+
+  private async pressVerified(
+    t: OfferTarget,
+    pane: DialogPane,
+    offer: WorkerDialogT,
+    v: { choice: number | null; label: string | null },
+    used: string,
+    usedPath: string,
+  ): Promise<Outcome> {
     // on disk before anything is pressed: a copy of this tap is refused whatever happens next
     const all = [...new Set([...t.offer.proofsUsed, ...readProofsUsed(usedPath), used])].slice(-PROOFS_KEPT)
     t.offer.proofsUsed = all

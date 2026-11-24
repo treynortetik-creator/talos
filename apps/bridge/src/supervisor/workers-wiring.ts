@@ -14,6 +14,7 @@ import {
   workerMcpConfigPath,
 } from '@talos-app/protocol'
 import { ensureDir, writeFileAtomic } from '../fsutil.ts'
+import { planOsSandbox } from '../guards/os-sandbox.ts'
 import { workerDir } from '../worker/files.ts'
 import { claudeMdExcludes, instructionsText } from '../worker/instruction-files.ts'
 import {
@@ -42,6 +43,7 @@ import {
   STATE_FILES,
   STATE_HOOK,
 } from './worker-hook.ts'
+import { workerLaunch } from './worker-launch.ts'
 import {
   claudeJsonHome,
   planWorkerMcp,
@@ -266,6 +268,11 @@ export type PlannerInputs = {
    * ceiling), the guards and the deny on other sessions' settings and hooks stay.
    */
   threadFence?: () => boolean
+  /**
+   * The opt-in OS sandbox switch (config.json `os_sandbox`), read at each start: true only when the owner turned it on. Absent: off.
+   * On, each start is preflighted (guards/os-sandbox.ts) and the session's settings carry the sandbox; a start that cannot is refused.
+   */
+  osSandbox?: () => boolean | 'kept_on'
   /** The launch config's `env` (supervisor.json), folded into every session's environment: part of the launch spec. */
   launchEnv?: () => Record<string, string> | undefined
   /** TESTS ONLY: a hook source taken as is, past the release checks (a golden's fixed path). */
@@ -440,6 +447,23 @@ function parentFolderRules(
   return { deny: pr.deny, ask: pr.ask }
 }
 
+/**
+ * The two switches read once at each start, so the spec and its check agree: the developer thread fence (off only when the owner turned
+ * it off; said in the audit log) and the opt-in OS sandbox (guards/os-sandbox.ts: off changes nothing; on, the start is refused unless
+ * the protected files are fine, else the pieces the settings carry).
+ */
+function startSwitches(i: PlannerInputs, thread: string, folder: string, dry: boolean, loadsProject: boolean) {
+  const threadFence = i.threadFence?.() !== false
+  if (!threadFence && !dry) i.audit?.('worker_thread_fence_off', { thread })
+  const on = i.osSandbox?.() // 'kept_on': config.json could not be read and the lock was on at the last good reading (the owner is told)
+  const sb = planOsSandbox(
+    on === true || on === 'kept_on',
+    { talosHome: i.talosHome, userHome: i.userHome, folder, claudeDir: i.claudeDir },
+    dry,
+  )
+  return 'refusal' in sb ? sb : { threadFence, osSandbox: sb.pieces, unreadable: on === 'kept_on' }
+}
+
 /** The plan function WorkerManager takes: one start's launch, or why it may not start. */
 export function workerPlanner(given: PlannerInputs) {
   return (p: {
@@ -607,14 +631,13 @@ export function workerPlanner(given: PlannerInputs) {
     }
     const main = mainCeiling(i, read)
     const permissionFlag = main.permissionArgs.find((a) => PERMISSION_FLAGS.test(a)) ?? null
-    // the developer thread fence: off only when the owner turned it off (read once, so the spec and its check agree)
-    const threadFence = i.threadFence?.() !== false
-    if (!threadFence && !p.dry) i.audit?.('worker_thread_fence_off', { thread: p.thread.id })
+    const sw = startSwitches(i, p.thread.id, folder, p.dry === true, isAgentFolder)
+    if ('refusal' in sw) return refuse(sw.refusal)
     try {
-      const sessionRules = sessionSettingsRules(i, read, [...fences, ...chain], !threadFence)
+      const sessionRules = sessionSettingsRules(i, read, [...fences, ...chain], !sw.threadFence)
       const inputs: WorkerInputs = {
         rooted,
-        threadFence,
+        threadFence: sw.threadFence,
         threadId: p.thread.id,
         sessionId: p.sessionId,
         resume: p.resume,
@@ -643,8 +666,9 @@ export function workerPlanner(given: PlannerInputs) {
         // with the thread fence off, a config folder's agents, skills, commands and the like ask the owner by card instead
         settingsAsk: [...new Set([...parentRules.ask, ...narrowing.ask, ...sessionRules.ask])],
         settingsDeny: [...new Set([...parentRules.deny, ...narrowing.deny, ...sessionRules.deny])],
+        osSandbox: sw.osSandbox,
       }
-      const spec = buildWorkerSpec(inputs)
+      const spec = buildWorkerSpec(inputs) // checks the sandbox block too (validateSpec's osSandbox)
       validateSpec(spec, {
         talosHome: i.talosHome,
         parentDeny: parentRules.deny,
@@ -705,7 +729,7 @@ export function workerPlanner(given: PlannerInputs) {
       }
       const argv = [spec.program, ...spec.args]
       return {
-        launch: { session: `t-${p.thread.id}`, argv, cwd: spec.cwd, env: spec.env },
+        ...workerLaunch(p.thread.id, argv, spec, sw.osSandbox ? { home: i.talosHome, folder } : null, sw.unreadable),
         settingsJSON: spec.settingsJSON,
         cwd: spec.cwd,
         ...specHashOf(

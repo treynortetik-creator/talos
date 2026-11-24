@@ -10,7 +10,8 @@ machine that sees it for real saves it, read-only, as described here. Nothing in
 - **Press nothing in that pane.** No Enter, no digit, no arrow, no Escape, no typing, no mouse click in it. Do not `tmux attach` to
   it to look: an attached client can send keys by accident. Read it from outside with `capture-pane`, which only reads.
 - The session at its limit cannot do this itself (it is stopped at the menu). Another session, or the owner, takes the capture.
-- The owner decides what to do with the menu afterwards. Talos never answers it.
+- The owner decides what to do with the menu afterwards. Talos presses no row of it; on the Mac the owner's own tap on its card sends Escape (and, for
+  Switch model, `/model`), and that is not part of taking a capture: nothing in this procedure answers the card.
 
 ## Steps (a pane under the Talos supervisor, Linux or Mac)
 

@@ -112,9 +112,11 @@ test.describe('desktop', () => {
 test.describe('phone', () => {
   test.skip(({ viewport }) => (viewport?.width ?? 0) >= 768, 'phone only')
 
-  test('the search button in the header opens the same palette, with no shortcuts shown', async ({ page }) => {
+  test('on a phone the palette opens from the keyboard chord (the header search is the thread search now), with no shortcuts shown', async ({
+    page,
+  }) => {
     await page.goto('/t/general')
-    await page.getByRole('button', { name: 'Search and commands' }).click()
+    await openPalette(page)
     await expect(palette(page)).toBeVisible()
     await expect(page.getByRole('option').first()).toBeVisible()
     await expect(palette(page).locator('kbd')).toHaveCount(0)
@@ -125,7 +127,6 @@ test.describe('phone', () => {
     await expectAxeClean(page)
     await page.keyboard.press('Escape')
     await expect(palette(page)).toBeHidden()
-    await expect(page.getByRole('button', { name: 'Search and commands' })).toBeFocused()
   })
 
   test('a pull down from the top of the thread list opens it; a normal scroll never does', async ({ page }) => {

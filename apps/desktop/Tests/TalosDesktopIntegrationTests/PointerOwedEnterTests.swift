@@ -193,8 +193,9 @@ struct PointerOwedEnterTests {
 
   /// A line that never reached the screen at all (Claude dropped the keys, or a menu kept the focus with an empty box drawn under it):
   /// `screenLag` after the typing it is held as never seen, NEVER typed a second time on top and never followed by an Enter, and the
-  /// thread is told once, in its own words (the Linux typer's Fable R5-1). Once the box shows the line after all, its Enter goes.
-  @Test func aLineThatNeverReachedTheScreenIsHeldNeverTypedAgainAndSaid() throws {
+  /// thread shows as Needs you with no line in it (the Linux typer's Fable R5-1; the hub's deadline, not a line, decides what happens to
+  /// the message).
+  @Test func aLineThatNeverReachedTheScreenIsHeldNeverTypedAgainAndFlagged() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.echoBox()
@@ -208,12 +209,10 @@ struct PointerOwedEnterTests {
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") })
     #expect(r.wait(WorkerManager.screenLag + 10) { m.needsYou()["trip"] == WorkerNotice.unseenKind }, "\(m.needsYou()) \(r.why("trip"))")
-    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
-    #expect(log.all.first?.text == WorkerNotice.unseenLine())
     usleep(3_000_000)  // more ticks, held
     #expect(r.typedLines.isEmpty && r.boxIsEmpty, "\(r.typedLines)\n\(r.screen())")
     #expect(r.emptyEnters.isEmpty, "an Enter went into an empty box: \(r.emptyEnters)")
-    #expect(log.all.count == 1, "said once: \(log.all)")
+    #expect(log.all.isEmpty, "a line was posted for the hold: \(log.all)")
     // the fake now lets keys in: nothing more is typed, so the box stays empty and the message stays with main
     FileManager.default.createFile(atPath: letIn, contents: nil)
     usleep(3_000_000)
@@ -324,8 +323,8 @@ struct PointerOwedEnterTests {
   }
 
   /// The same, with the hold's wait longer than the claim deadline: at the deadline the hub has given the message to main, so the pointer
-  /// is dropped then (nothing owed any more, Needs you over) and the thread is told at that moment, once; nothing is typed, ever.
-  @Test func aNeverSeenLineIsDroppedAtItsDeadlineAndSaidThen() throws {
+  /// is dropped then (nothing owed any more, Needs you over) and no line is posted by the Mac; nothing is typed, ever.
+  @Test func aNeverSeenLineIsDroppedAtItsDeadlineWithoutALine() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.echoBox()
@@ -342,9 +341,8 @@ struct PointerOwedEnterTests {
     #expect(r.owed().until != nil && log.all.isEmpty, "\(r.owed()) \(log.all)")
     c.jump(PointerTyper.claimDeadlineCold + 30)
     #expect(r.wait(10) { r.owed().until == nil }, "not dropped at the deadline: \(r.owed())")
-    #expect(r.wait(5) { log.all.map(\.text) == [WorkerNotice.unseenLine()] }, "\(log.all)")
     usleep(2_000_000)
-    #expect(log.all.count == 1 && r.typedLines.isEmpty && r.emptyEnters.isEmpty, "\(log.all) \(r.typedLines)")
+    #expect(log.all.isEmpty && r.typedLines.isEmpty && r.emptyEnters.isEmpty, "\(log.all) \(r.typedLines)")
     #expect(m.needsYou()["trip"] == nil, "\(m.needsYou())")
   }
 

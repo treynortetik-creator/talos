@@ -136,8 +136,7 @@ Also, where the change touches them: hostile text, size limits, checks that run 
 - **Mac app changes** (anything under `apps/desktop`) also need, before the push, one run of
   `bash apps/desktop/scripts/guards-test.sh`. Its first step runs the whole desktop Swift suite (`apps/desktop/scripts/test.sh`,
   through `scripts/ci-swift-retry.sh`), then it builds the app and checks that each guard really gates. Run it instead of
-  running the suite separately. Locally there is no retry: `ci-swift-retry.sh` reruns failed tests only inside a CI job
-  (when `CI_FLAKE_FILE` is set); by hand it runs the suite once, so one failed test is a red run. A `warn` line (a home path
+  running the suite separately. There is no retry anywhere: `ci-swift-retry.sh` runs the suite once, so one failed test is a red run. A `warn` line (a home path
   under `apps/desktop`) counts as a failure for you. It is heavy: load checked first, one at a time (the Swift tests take
   the machine's desktop lock themselves). A builder that does not touch Swift may skip it and grep its changed files under
   `apps/desktop` for `/Users/` instead.

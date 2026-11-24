@@ -1,5 +1,5 @@
-// "An approval is open": while the full-screen approval sheet owns the screen, nothing else may draw over it (the now-playing pill,
-// the new-reply banner and its toast viewport, the undo strip). One counter, read through `useApprovalOpen`, written by the sheet.
+// "An approval is open": while the full-screen approval sheet owns the screen, nothing else may draw over it (the
+// new-reply banner and its toast viewport, the undo strip). One counter, read through `useApprovalOpen`, written by the sheet.
 import { useSyncExternalStore } from 'react'
 
 let open = 0

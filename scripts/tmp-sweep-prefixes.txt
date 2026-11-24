@@ -9,8 +9,18 @@
 tbrun-
 talos-vitest-run-
 
+# OS sandbox tests, Mac half (a throwaway root with a Talos home, an agent folder and a kit release; files in it may carry chflags uchg)
+talos-osbx-
+
 # Pane-prompt tests (the tool permission and question screens: a marker file that swaps the screen)
 talos-pane-swap-
+
+# Usage-limit card tests (a marker file that ends the menu, as if the owner pressed Esc at the Mac)
+talos-ul-end-
+
+# tmux-unknown tests (a scratch folder for a scripted tmux host)
+talos-hostgone-
+talos-unit-
 
 # Update-window and draft-copy tests (a scratch home; a saved copy of Main's unsent text)
 talos-ua-
@@ -172,6 +182,9 @@ talos-nostate-
 !stall-
 !pairing-
 talos-autoclone-
+# Auto-update tests: the Swift rig's folder (AutoUpdaterTests.swift, UpdaterGitHardeningTests.swift) and the shell test's (auto-update-apply-test.sh)
+talos-au-
+talos-au-apply-test-
 talos-tools-
 talos-build-tools-
 talos-tools-test-
@@ -191,3 +204,18 @@ talos-mover-tidy-
 talos-modes-
 talos-about-shots-
 talos-allow-shots-
+talos-upd-contrast-
+# App bundle env test (a scratch .app folder)
+talos-appbundle-
+
+# One-installer-run tests (a scratch HOME / XDG_CONFIG_HOME and marker folders)
+talos-onerun-
+
+# The deaf-thread alarm's Mac tests (DeafThreadIntegrationTests, KeyGuardIntegrationTests): trigger files and the killed-runner test's throwaway folder
+talos-deaf-park-
+talos-deaf-flap1-
+talos-deaf-flap2-
+talos-deaf-deb1-
+talos-deaf-deb2-
+talos-deaf-switch-
+talos-bg-leak-

@@ -3,6 +3,7 @@
 import { type AttachmentRefT, type MessageT, newId } from '@talos-app/protocol'
 import { isArchivedVoice } from './archivedVoice.ts'
 import { TalosClientError } from './client.ts'
+import { releaseAck } from './reloadHold.ts'
 import { ACKED_REFS_MAX, INBOX_QUEUE } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { InboxPatch, OutboxEntry } from './socket-types.ts'
@@ -109,6 +110,7 @@ export function createOutboxQueue(c: SocketCtx) {
   async function dropFromOutbox(frameId: string) {
     const e = c.outbox.find((x) => x.id === frameId)
     if (!e) return
+    releaseAck(e.clientMsgId)
     c.outbox = c.outbox.filter((x) => x.id !== frameId)
     // The screen follows memory at once; the stored copy goes after. Under load an IndexedDB delete took over 10 s, and a
     // message waiting on it still showed as queued. (A reload before the delete lands sends the stored copy again, and the
@@ -130,7 +132,10 @@ export function createOutboxQueue(c: SocketCtx) {
       }
     }
     // the row's receipt first, like the queue: neither waits on the storage delete
-    if (e) writtenOn.delete(e.clientMsgId)
+    if (e) {
+      writtenOn.delete(e.clientMsgId)
+      releaseAck(e.clientMsgId)
+    }
     if (e) c.patchMessage(e.clientMsgId, (m) => (m.receipt ? m : { ...m, receipt: 'sent' }))
     await dropFromOutbox(frameId)
   }

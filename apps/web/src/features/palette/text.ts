@@ -8,6 +8,5 @@ export const PALETTE_TEXT = {
   searchHint: 'in all messages',
   close: 'Close',
   commands: 'Commands',
-  searchButton: 'Search and commands',
   needsGroup: 'Needs you',
 } as const

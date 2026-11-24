@@ -132,8 +132,7 @@ struct OnboardingSignInTests {
     #expect(o == .timedOut)
     let pid = Int32(t.read("login-runs").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     #expect(pid > 0)
-    try await Task.sleep(nanoseconds: 500_000_000)
-    #expect(kill(pid, 0) != 0, "the login this started is not left running")
+    #expect(waitUntil(timeout: 20) { kill(pid, 0) != 0 }, "the login this started is not left running")
   }
 
   @Test func aStatusThatNeverAnswersIsTimedOutAsUnknownNotSignedOut() async throws {
@@ -151,13 +150,12 @@ struct OnboardingSignInTests {
     let e = env(t, ["FAKE_LOGIN": "hang"])
     let claude = t.claude
     let task = Task { await ClaudeSignIn.run(claude: claude, env: e, interval: 0.1, limit: 60) }
-    for _ in 0..<100 where !t.exists("login-runs") { try await Task.sleep(nanoseconds: 50_000_000) }
+    _ = waitUntil(timeout: 20) { t.exists("login-runs") }
     #expect(t.exists("login-runs"))
     task.cancel()
     #expect(await task.value == .cancelled)
     let pid = Int32(t.read("login-runs").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-    try await Task.sleep(nanoseconds: 500_000_000)
-    #expect(kill(pid, 0) != 0, "cancel ends the login this started")
+    #expect(waitUntil(timeout: 20) { kill(pid, 0) != 0 }, "cancel ends the login this started")
   }
 
   // MARK: the three ways the real login goes (the login runs in a pty; the screen is read, never logged)
@@ -257,14 +255,13 @@ struct OnboardingSignInTests {
     let e = env(t, ["FAKE_LOGIN": "hang"])
     let claude = t.claude
     let task = Task { await ClaudeSignIn.run(claude: claude, env: e, interval: 0.1, limit: 60, session: ClaudeLoginSession(claude: claude, env: e)) }
-    for _ in 0..<100 where !t.exists("child-pid") { try await Task.sleep(nanoseconds: 50_000_000) }
+    _ = waitUntil(timeout: 20) { t.exists("child-pid") }
     let pid = Int32(t.read("login-runs").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     let child = Int32(t.read("child-pid").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     #expect(pid > 0 && child > 0 && kill(pid, 0) == 0)
     task.cancel()
     #expect(await task.value == .cancelled)
-    try await Task.sleep(nanoseconds: 700_000_000)
-    #expect(kill(pid, 0) != 0 && kill(child, 0) != 0, "the login and its background child are gone")
+    #expect(waitUntil(timeout: 20) { kill(pid, 0) != 0 && kill(child, 0) != 0 }, "the login and its background child are gone")
 
     let t2 = try FakeTools()
     defer { t2.remove() }
@@ -272,8 +269,7 @@ struct OnboardingSignInTests {
     let o = await ClaudeSignIn.run(claude: t2.claude, env: e2, interval: 0.1, limit: 1.0, session: ClaudeLoginSession(claude: t2.claude, env: e2))
     #expect(o == .timedOut)
     let child2 = Int32(t2.read("child-pid").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-    try await Task.sleep(nanoseconds: 700_000_000)
-    #expect(child2 > 0 && kill(child2, 0) != 0, "a timeout kills the group too")
+    #expect(child2 > 0 && waitUntil(timeout: 20) { kill(child2, 0) != 0 }, "a timeout kills the group too")
   }
 
   // MARK: one sign-in for the whole app, gone when the app quits
@@ -285,11 +281,12 @@ struct OnboardingSignInTests {
     defer { c.stopNow() }
     let e = env(t, ["FAKE_LOGIN": "hang"])
     #expect(c.start(claude: t.claude, env: e, interval: 0.1, limit: 60))
-    for _ in 0..<100 where !t.exists("login-runs") { try await Task.sleep(nanoseconds: 50_000_000) }
+    _ = waitUntil(timeout: 20) { t.exists("login-runs") }
     // the window closes and a new one opens: it asks again
     #expect(!c.start(claude: t.claude, env: e, interval: 0.1, limit: 60), "a second start is refused")
     #expect(c.isRunning)
     if case .waiting = c.state {} else { Issue.record("the reopened window sees a sign-in in progress: \(c.state)") }
+    // timing-ok: a negative window; a second login would show within it, and no event marks "never"
     try await Task.sleep(nanoseconds: 500_000_000)
     #expect(t.read("login-starts").split(separator: "\n").count == 1, "one login only")
   }
@@ -308,7 +305,7 @@ struct OnboardingSignInTests {
     c.onChange = { window.bump() }  // a ClaudeSignInModel is created after the card: it sets this slot
     c.onChange = { window.bump() }  // and a second window replaces it
     #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "ok", "FAKE_LOGIN_DELAY": "0.4"]), interval: 0.1, limit: 20))
-    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    _ = waitUntil(timeout: 30) { !c.isRunning }
     #expect(c.state == .finished(.signedIn))
     #expect(fired.value == 1, "the sign-in's success reached the card once")
     #expect(window.value > 0, "the window's own slot heard it too")
@@ -317,7 +314,7 @@ struct OnboardingSignInTests {
     c.reset()
     t.signOut()
     #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "ok", "FAKE_LOGIN_DELAY": "0.2"]), interval: 0.1, limit: 20))
-    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    _ = waitUntil(timeout: 30) { !c.isRunning }
     #expect(fired.value == 1)
   }
 
@@ -330,7 +327,7 @@ struct OnboardingSignInTests {
     let watcher = SignInDoneWatcher(c) { fired.bump() }
     defer { watcher.stop() }
     #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "fail"]), interval: 0.1, limit: 5))
-    for _ in 0..<300 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    _ = waitUntil(timeout: 30) { !c.isRunning }
     #expect(fired.value == 0)
   }
 
@@ -341,7 +338,7 @@ struct OnboardingSignInTests {
     let c = ClaudeSignInCoordinator()
     defer { c.stopNow() }
     #expect(c.start(claude: t.claude, env: env(t), interval: 0.1, limit: 5))
-    for _ in 0..<200 where c.isRunning { try await Task.sleep(nanoseconds: 20_000_000) }
+    _ = waitUntil(timeout: 30) { !c.isRunning }
     #expect(c.state == .finished(.alreadySignedIn))
     c.reset()
     #expect(c.state == .idle, "a stale result can be dropped")
@@ -391,7 +388,7 @@ struct OnboardingSignInTests {
     defer { t.remove() }
     let c = ClaudeSignInCoordinator()
     #expect(c.start(claude: t.claude, env: env(t, ["FAKE_LOGIN": "hang"]), interval: 0.1, limit: 60))
-    for _ in 0..<100 where !t.exists("child-pid") { try await Task.sleep(nanoseconds: 50_000_000) }
+    _ = waitUntil(timeout: 20) { t.exists("child-pid") }
     let pid = Int32(t.read("login-runs").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     let child = Int32(t.read("child-pid").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     #expect(pid > 0 && child > 0 && kill(pid, 0) == 0)
@@ -405,7 +402,7 @@ struct OnboardingSignInTests {
     let e = env(t, ["FAKE_STATUS_HANG": "1", "FAKE_LOGIN": "hang"])
     let claude = t.claude
     let task = Task { await ClaudeSignIn.run(claude: claude, env: e, interval: 0.1, limit: 60, statusTimeout: 10) }
-    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(waitUntil(timeout: 20) { t.read("events").contains("status") }, "the status check never started")
     let start = Date()
     task.cancel()
     #expect(await task.value == .cancelled)

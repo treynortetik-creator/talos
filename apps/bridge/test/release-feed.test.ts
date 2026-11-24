@@ -64,6 +64,22 @@ const boom = () => () => {
   throw new Error('offline')
 }
 
+describe('loadReleases: readOnly (talos-app facts)', () => {
+  test('a fetch for a stale or missing cache is used for the answer but writes nothing, and says where the list came from', async () => {
+    const home = tempHome()
+    const clock = fakeClock()
+    const file = join(home, 'release-feed.json')
+    const got = await loadReleases({ home, now: clock.now, fetch: fakeFetch([ok()]).fn, readOnly: true })
+    expect(got).toEqual({ versions: ['0.1.6', '0.1.8', '0.1.10'], fetched_at: clock.now(), from: 'fetch' })
+    expect(existsSync(file)).toBe(false)
+    writeFileSync(file, JSON.stringify({ fetched_at: clock.now() - FEED_FRESH_MS - 1, versions: ['0.1.6'] }))
+    const before = readFileSync(file, 'utf8')
+    const stale = await loadReleases({ home, now: clock.now, fetch: fakeFetch([boom()]).fn, readOnly: true })
+    expect(stale).toEqual({ versions: ['0.1.6'], fetched_at: clock.now() - FEED_FRESH_MS - 1, from: 'cache' })
+    expect(readFileSync(file, 'utf8')).toBe(before) // a failure is not recorded either
+  })
+})
+
 describe('loadReleaseList: cache', () => {
   test('fetches, writes release-feed.json (0600), and uses the cache for 6 hours', async () => {
     const home = tempHome()

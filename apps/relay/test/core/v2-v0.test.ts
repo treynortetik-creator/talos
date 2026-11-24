@@ -9,6 +9,7 @@ import {
   fakeClock,
   mkFrame,
   sleep,
+  t,
   waitFor,
 } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,7 +19,7 @@ import { testAppHeaders } from '../helpers/test-auth.ts'
 import { ORIGIN, startTestRelay, type TestRelay } from './harness.ts'
 import { advance, kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 20_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // a test whose waits add up higher (the relay and sockets it starts, each testkit wait at x3) says so itself
 
 let relay: TestRelay | null = null
 afterEach(async () => {
@@ -28,6 +29,13 @@ afterEach(async () => {
 })
 
 const inFrames = (a: FakeApp) => a.rec.frames.filter((r) => r.direction === 'in').map((r) => r.raw)
+/** Everything this socket sent before this has been handled by the relay (and what the relay sent to it before the answer has arrived): the relay answers one socket's frames in order. */
+const handled = async (s: FakeApp | FakeBridge) => {
+  const nonce = `after-${Math.random().toString(36).slice(2, 10)}`
+  if ('device' in s) s.send(mkFrame('ping', { nonce }))
+  else s.send({ type: 'ping', nonce })
+  await s.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'in' })
+}
 const bridgeIn = (b: FakeBridge) => b.rec.frames.filter((r) => r.direction === 'in').map((r) => r.raw)
 
 async function world(opts: { clock?: ReturnType<typeof fakeClock>; bridge?: boolean; features?: string[] } = {}) {
@@ -85,7 +93,7 @@ defineEphemeralFramesContract('real relay + FakeBridge', {
       freshCatchup: async () => {
         const fresh = await k.connectedApp()
         fresh.send({ type: 'catchup.request', since_seq: 0 })
-        await sleep(300)
+        await handled(fresh) // the relay has answered the request: its frames come before the pong
         const got = inFrames(fresh).flatMap((f) =>
           f.type === 'catchup.batch' ? (f.frames as Record<string, unknown>[]) : [f],
         )
@@ -130,20 +138,27 @@ describe('the shared router (core/ephemeral.ts) on the real relay', () => {
       took_ms: 1,
       index: 'ready',
     })
-    await sleep(150)
+    // relay-side start point: the relay has handled the late answer; then a quiet window
+    if (bridge) await handled(bridge)
+    await handled(app)
+    await sleep(t(150))
     expect(inFrames(app).some((x) => x.type === 'search.results')).toBe(false)
   })
 
-  it('search.query is rate limited per socket at 120/min', async () => {
-    const { app } = await world({ bridge: false })
-    // with the Mac offline every one is answered at once (mac_offline) until the bucket is empty
-    for (let i = 0; i < 121; i++) app.send(await app.sign({ ...mkFrame('search.query'), ...searchFrame() }))
-    await waitFor(() => inFrames(app).filter((x) => x.type === 'error').length >= 121, 10_000, '121 errors')
-    const codes = inFrames(app)
-      .filter((x) => x.type === 'error')
-      .map((x) => x.code)
-    expect(codes.filter((c) => c === 'mac_offline')).toHaveLength(121) // offline wins before the limiter
-  })
+  it(
+    'search.query is rate limited per socket at 120/min',
+    async () => {
+      const { app } = await world({ bridge: false })
+      // with the Mac offline every one is answered at once (mac_offline) until the bucket is empty
+      for (let i = 0; i < 121; i++) app.send(await app.sign({ ...mkFrame('search.query'), ...searchFrame() }))
+      await waitFor(() => inFrames(app).filter((x) => x.type === 'error').length >= 121, 10_000, '121 errors')
+      const codes = inFrames(app)
+        .filter((x) => x.type === 'error')
+        .map((x) => x.code)
+      expect(codes.filter((c) => c === 'mac_offline')).toHaveLength(121) // offline wins before the limiter
+    },
+    t(40_000),
+  ) // the world's setup waits and the 121-errors wait (x3)
 
   it('a read signed by another device than the session is refused before it is forwarded', async () => {
     relay = await startTestRelay()
@@ -163,7 +178,8 @@ describe('the shared router (core/ephemeral.ts) on the real relay', () => {
     app.send(f)
     const err = await app.expectFrame('error', (x) => x.ref === f.id, { direction: 'in' })
     expect(err.code).toBe('unauthorized')
-    await sleep(100)
+    await handled(bridge) // relay-side: the relay has handled the Mac's ping; a forward would have come before its pong
+    await sleep(t(150))
     expect(bridgeIn(bridge).some((x) => x.id === f.id)).toBe(false)
     await app.close()
     await bridge.close()
@@ -255,7 +271,9 @@ describe('frame additions', () => {
       has_more: false,
     })
     await app.expectFrame('history.page', (x) => x.request_id === rid, { direction: 'in' })
-    await sleep(200)
+    await handled(other) // the relay has handled the other app's ping: anything it sent it came before the pong
+    await handled(app)
+    await sleep(t(150))
     expect(inFrames(other).some((f) => f.type === 'history.page' || f.type === 'error')).toBe(false)
     expect(inFrames(app).some((f) => f.type === 'message.stored')).toBe(false) // no "An action was rejected" row
   })
@@ -282,7 +300,8 @@ describe('frame additions', () => {
     app.send(f)
     const err = await app.expectFrame('error', (x) => x.ref === f.id, { direction: 'in' })
     expect(err.code).toBe('unauthorized')
-    await sleep(150)
+    await handled(bridge) // relay-side: a forward would have come before the pong
+    await sleep(t(150))
     expect(bridgeIn(bridge).some((x) => x.type === 'history.request')).toBe(false)
     await app.close()
   })
@@ -306,7 +325,8 @@ describe('frame additions', () => {
     bridge?.send({ type: 'health.beat', beat })
     await waitFor(() => relay?.runtime.store.getState('health_beat') !== null, 3000, 'beat stored')
     expect(JSON.parse(relay?.runtime.store.getState('health_beat') as string).sqlite.fts5).toBe(true)
-    await sleep(100)
+    await handled(app) // the beat is stored, so the relay has handled it; its ping answered in order proves nothing was sent to the app before
+    await sleep(t(150))
     expect(inFrames(app).some((f) => f.type === 'health.beat')).toBe(false)
   })
 

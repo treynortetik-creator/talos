@@ -1,5 +1,5 @@
 // What the owner is told when a linked agent's signing secret is missing from this home's key store (a link made before the per-home
-// key store, a cleared store, a legacy item that only the default home may take): one plain line, in `peer list` and in `doctor`.
+// key store, a cleared store, a legacy item that is not this home's): one plain line, in `peer list` and in `doctor`.
 // The way back is the normal one: `peer accept` refuses a name that is still set up here, so `peer remove` comes first; the other
 // Talos's `peer link` refuses while it still has its record of this one and says to remove it, so that line comes from its own CLI.
 import { PeerName, type SecretStore } from '@talos-app/protocol'
@@ -7,9 +7,9 @@ import { type BridgeEnv, paths } from '../config.ts'
 import { parseConfig } from '../config-file.ts'
 import type { Check } from '../doctor-checks.ts'
 import { readJsonFile } from '../fsutil.ts'
-import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PEER_SECRET_SERVICE, peerSecretAccount } from './records.ts'
+import { peerScopedStore } from './secret-store.ts'
 
 /** The line for one linked agent. `name` must be a valid peer name (it is put into a command the owner may paste). */
 export function relinkLine(name: string): string {
@@ -31,7 +31,7 @@ export async function linkedAgentsCheck(
   const missing: string[] = []
   try {
     const raw = opts.secrets ?? (await openSecretStore({ home: env.home }))
-    const store = homeScopedStore(raw, env.home, { kind: 'peer' })
+    const store = peerScopedStore(raw, env.home)
     for (const p of peers) if (!(await store.get(PEER_SECRET_SERVICE, peerSecretAccount(p.name)))) missing.push(p.name)
   } catch (e) {
     return {

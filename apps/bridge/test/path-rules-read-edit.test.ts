@@ -75,7 +75,11 @@ describe('the rules now: Read( ) and Edit( ) path rules only, on exactly the old
       const b = before[name] as string[]
       const n = now[name] as string[]
       expect(sorted(paths(n, new Set(['Read']))), `${name} read`).toEqual(sorted(paths(b, READS)))
-      expect(sorted(paths(n, new Set(['Edit']))), `${name} write`).toEqual(sorted(paths(b, WRITES)))
+      // The one pattern changed on purpose, after the fixture was taken (not rewritten history): the state file's deny was
+      // `<file>/**`, which Claude Code 2.1.330 reads as a deny of the file itself too (its Edit was refused); it is `<file>/*`,
+      // the children only. The fixture keeps the old text; only this generator's expected paths are mapped.
+      const write = [...paths(b, WRITES)].map((p) => (name === 'stateFileDenyRules' ? p.replace(/\/\*\*$/, '/*') : p))
+      expect(sorted(paths(n, new Set(['Edit']))), `${name} write`).toEqual(sorted(new Set(write)))
     }
   })
 

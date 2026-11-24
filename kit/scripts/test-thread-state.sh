@@ -162,12 +162,54 @@ ctx | grep -q 'over 8,000' && no "7,999 characters got the over-8,000 line" || o
 python3 -c 'import sys; sys.stdout.write("x"*8001)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
 c="$(ctx)"
 { [ "$(printf '%s' "$c" | sed -n 3p)" = "(This file is over 8,000 characters: move history out.)" ] && ! grep -q truncated <<<"$c"; } && ok "8,001 characters: the over-8,000 line after the header, no cut" || no "8,001 wrong" "$c"
+# one combined cap (CAP, 9,500 characters) for everything the hook prints, under Claude Code's 10,000-character hook limit
+CAP=9500
+# the longest run of one character, counted in code points as the hook counts (BSD grep refuses \{n\} over 255 and BSD awk's
+# length() counts bytes in UTF-8, so neither is used for this)
+longest() { python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8"); c=sys.argv[1]; best=run=0
+for ch in s:
+    run = run + 1 if ch == c else 0
+    best = max(best, run)
+print(best)' "$1"; }
+total() { printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]))'; }
+python3 -c 'import sys; sys.stdout.write("x"*8000)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
+c="$(ctx)"
+{ ! grep -q truncated <<<"$c" && [ "$(printf '%s' "$c" | longest x)" = 8000 ] && [ "$(total)" -le "$CAP" ]; } \
+  && ok "8,000 characters (the size the thread is told to stay under) fits whole under the cap" || no "8,000 characters were cut or over the cap" "$(total)"
 python3 -c 'import sys; sys.stdout.write("x"*9000)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
-ctx | grep -q truncated && no "9,000 characters were cut" || ok "9,000 characters: not cut"
+c="$(ctx)"
+n="$(printf '%s' "$c" | longest x)"
+{ [ "$(total)" -le "$CAP" ] && [ "$n" -lt 9000 ] && [ "$n" -gt 7000 ] && grep -qF "_[state file truncated at $n chars; read threads/trip.state.md in full]_" <<<"$c" && grep -q 'over 8,000' <<<"$c" \
+  && [ "$(printf '%s' "$c" | tail -1)" = "$CLOSE" ]; } && ok "9,000 characters: cut to what the cap leaves (total <= 9,500), the notice says how many were kept, the wrapper still closes" || no "9,000 wrong" "total=$(total) n=$n"
 python3 -c 'import sys; sys.stdout.write("x"*9500)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
 c="$(ctx)"
-{ grep -qF '_[state file truncated at 9000 chars; read threads/trip.state.md in full]_' <<<"$c" && grep -q 'over 8,000' <<<"$c" \
-  && [ "$(printf '%s' "$c" | grep -o 'x\{1,\}' | awk '{ if (length($0) > m) m = length($0) } END { print m }')" = 9000 ]; } && ok "9,500 characters: cut at 9,000 with the truncation line and the over-8,000 line" || no "9,500 wrong" "$(printf '%s' "$c" | tail -c 200)"
+{ [ "$(total)" -le "$CAP" ] && grep -q 'state file truncated at' <<<"$c" && grep -q 'over 8,000' <<<"$c"; } && ok "9,500 characters: under the cap with the truncation line and the over-8,000 line" || no "9,500 wrong" "total=$(total)"
+# the worst case: the largest state and the largest carry, both made of the defused marker (the defusing grows it by two thirds)
+python3 -c 'import sys; sys.stdout.write("="*9000)' > "$STATE"; mkdir -p "$SD/threads"; python3 -c 'import sys; sys.stdout.write("="*6000)' > "$SD/threads/trip.compact.md"
+TS inject trip worker '{"source":"compact"}'
+{ [ "$RC" = 0 ] && [ "$(total)" -le "$CAP" ] && [ "$(ctx | tail -1)" = "$CLOSE" ]; } && ok "the largest state and the largest carry together: total <= 9,500 (was 24,385)" || no "worst case over the cap" "total=$(total)"
+python3 -c 'import sys; sys.stdout.write("x"*3000 + "\nSTATE-END-MARK\n")' > "$STATE"; printf 'CARRY-HEAD\n%s\n' "$(python3 -c 'print("c"*5000)')" > "$SD/threads/trip.compact.md"
+TS inject trip worker '{"source":"compact"}'; c="$(ctx)"
+{ grep -q 'STATE-END-MARK' <<<"$c" && grep -q 'CARRY-HEAD' <<<"$c" && [ "$(printf '%s' "$c" | longest x)" -ge 3000 ] && [ "$(total)" -le "$CAP" ]; } && ok "a small state keeps all of itself and the carry gets the rest (state 3,000 + carry 5,000 both whole)" || no "small state case wrong" "total=$(total)"
+python3 -c 'import sys; sys.stdout.write("x"*7000 + "\nSTATE-END-MARK\n")' > "$STATE"
+TS inject trip worker '{"source":"compact"}'; c="$(ctx)"
+n="$(printf '%s' "$c" | grep -o '(cut here: [0-9]* more characters in trip.compact.md)' | grep -o '[0-9]*')"
+{ grep -q 'STATE-END-MARK' <<<"$c" && ! grep -q truncated <<<"$c" && [ -n "$n" ] && [ "$n" -gt 0 ] && [ "$(total)" -le "$CAP" ] && grep -q CARRY-HEAD <<<"$c"; } \
+  && ok "a big state is kept whole first; the carry is trimmed to fit with a '(cut here: N more characters in trip.compact.md)' line" || no "carry trim wrong" "n=$n total=$(total)"
+python3 -c 'import sys; sys.stdout.write("x"*8300 + "\nSTATE-END-MARK\n")' > "$STATE"
+TS inject trip worker '{"source":"compact"}'; c="$(ctx)"
+{ [ "$(total)" -le "$CAP" ] && grep -q 'cut here: [0-9]* more characters in trip.compact.md' <<<"$c" && grep -q 'STATE-END-MARK' <<<"$c" && ! grep -q CARRY-HEAD <<<"$c"; } && ok "a state that leaves no room: the carry is replaced by its cut line, the cap holds" || no "no-room carry wrong" "$(total)"
+rm -f "$SD/threads/trip.compact.md"
+# Claude Code counts a hook's output as a JavaScript string: an emoji is TWO units there, one code point in Python. The cap is in UTF-16 units.
+u16() { printf '%s' "$OUT" | python3 -c 'import json,sys; s=json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]; print(len(s.encode("utf-16-le"))//2)'; }
+python3 -c 'import sys; sys.stdout.write("\U0001F600"*9000)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
+c="$(ctx)"; n="$(printf '%s' "$c" | longest 😀)"
+{ [ "$(u16)" -le "$CAP" ] && grep -qF "_[state file truncated at $n chars; read threads/trip.state.md in full]_" <<<"$c"; } \
+  && ok "an emoji state (9,000 code points, 18,000 UTF-16 units): the output is at most 9,500 UTF-16 units, and the notice says how many characters were kept" || no "emoji state over the cap or the notice is wrong" "units=$(u16) kept=$n"
+mkdir -p "$SD/threads"; python3 -c 'import sys; sys.stdout.write("\U0001F600"*6000)' > "$SD/threads/trip.compact.md"
+TS inject trip worker '{"source":"compact"}'
+{ [ "$(u16)" -le "$CAP" ] && [ "$(ctx | tail -1)" = "$CLOSE" ]; } && ok "an emoji state with an emoji carry: at most 9,500 UTF-16 units, wrapper closed" || no "emoji state + carry over the cap" "units=$(u16)"
+rm -f "$SD/threads/trip.compact.md"
 python3 -c 'import sys; sys.stdout.write("é"*9500)' > "$STATE"; TS inject trip worker '{"source":"startup"}'
 [ "$RC" = 0 ] && ctx | grep -q truncated && ok "the cap counts characters, not bytes" || no "multibyte cap wrong"
 
@@ -208,7 +250,7 @@ SS - '{"source":"compact","session_id":"S1"}'
 SS worker '{"source":"compact","session_id":"S1"}' 1
 <<<"$OUT" grep -q MAIN-CARRY-MARKER && no "Main's carry was replayed into a worker" || ok "session-start as a worker (hook registered) on compact: Main's carry is not replayed"
 SS worker '{"source":"compact","session_id":"S1"}'
-<<<"$OUT" grep -q MAIN-CARRY-MARKER && ok "a worker WITHOUT the registered hook (a distro, the Mac app) keeps Main's carry on compact, as before" || no "unregistered worker lost Main's carry" "$OUT"
+<<<"$OUT" grep -q MAIN-CARRY-MARKER && ok "a worker WITHOUT the registered hook (a distro) keeps Main's carry on compact, as before" || no "unregistered worker lost Main's carry" "$OUT"
 SS worker '{"source":"startup"}'
 { <<<"$OUT" grep -q MAIN-STATE-MARKER && <<<"$OUT" grep -q MAIN-HANDOFF-MARKER && <<<"$OUT" grep -q MAIN-LOG-MARKER; } && ok "a worker WITHOUT the registered hook keeps STATE, handoff and daily log, as before" || no "unregistered worker lost Main's blocks" "$OUT"
 rm -f "$SD/compaction-carry.md"
@@ -240,6 +282,78 @@ printf '{"session_id":"S1"}' | ( cd "$A" && env CLAUDE_PROJECT_DIR="$A" TALOS_SE
 grep -q 'keep every row' "$SD/compaction-carry.md" 2>/dev/null && ok "compaction-guard save as a worker WITHOUT the registered hook: Main's carry as before" || no "unregistered worker's save changed" "$(cat "$SD/compaction-carry.md" 2>/dev/null)"
 printf '{"session_id":"S1"}' | ( cd "$A" && env CLAUDE_PROJECT_DIR="$A" python3 hooks/compaction-guard.py save )
 grep -q 'keep every row' "$SD/compaction-carry.md" 2>/dev/null && ok "compaction-guard save as Main: its carry as before" || no "Main's carry broke" "$(cat "$SD/compaction-carry.md" 2>/dev/null)"
+
+# ---------------------------------------------------------------- session-start under Claude Code's 10,000-character hook cap
+# Everything session-start prints is one combined output now: capped at 9,500 characters, the most important parts first (a reply owed,
+# STATE, the compaction carry, the handoff, then the small nudges, the daily log, the wiki upkeep), the rest cut or left out with a line.
+rm -f "$A/.learnings/LEARNINGS.md"; rm -rf "$A/memory"; mkdir -p "$A/memory" "$SD"
+python3 - "$A" "$SD" <<'PYEOF'
+import os, sys, datetime, time
+a, sd = sys.argv[1], sys.argv[2]
+eq = "=" * 99 + "\n"
+open(os.path.join(a, "memory", "STATE.md"), "w").write("# State\n\n## FUSES\nFUSE-MARK " + "f" * 1000 + "\n\n## ACTIVE FIVE\n" + ("===\n" * 1500) + "\n## RECENTLY CLOSED\n" + "old\n" * 3000)
+open(os.path.join(a, "memory", "HANDOFF.md"), "w").write("HANDOFF-MARK\n" + eq * 40)
+open(os.path.join(a, "memory", datetime.date.today().isoformat() + ".md"), "w").write("LOG-MARK\n" + eq * 60)
+os.makedirs(sd, exist_ok=True)
+open(os.path.join(sd, "compaction-carry.md"), "w").write("CARRY-MARK\n" + eq * 60)
+PYEOF
+SS - '{"source":"compact","session_id":"S1"}'
+cap_total() { printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]))'; }
+c="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"], end="")')"
+{ [ "$(cap_total)" -le 9500 ] && grep -q FUSE-MARK <<<"$c" && grep -q CARRY-MARK <<<"$c" && [ "$(printf '%s' "$c" | tail -1)" = "=== end continuity ===" ]; } \
+  && ok "session-start, the largest STATE + handoff + log + carry on a compaction: one output of at most 9,500 characters, STATE and the carry first, the wrapper closed" || no "session-start over the cap or lost STATE/carry" "total=$(cap_total)"
+grep -q 'cut here' <<<"$c" && ok "session-start: what the cap cut says so ('cut here: N more characters')" || no "no cut line in a capped session-start" "$(printf '%s' "$c" | tail -c 400)"
+python3 -c 'import sys; sys.stdout.write("="*5000)' > "$SD/compaction-carry.md";
+SS - '{"source":"startup"}'
+{ [ "$(cap_total)" -le 9500 ]; } && ok "session-start on startup with the same files: also at most 9,500 characters" || no "startup over the cap" "$(cap_total)"
+python3 - "$A" "$SD" <<'PYEOF'
+import os, sys, datetime
+a, sd = sys.argv[1], sys.argv[2]
+e = "\U0001F600" * 99 + "\n"
+open(os.path.join(a, "memory", "STATE.md"), "w").write("# State\n\n## FUSES\nFUSE-MARK\n" + e * 60)
+open(os.path.join(a, "memory", "HANDOFF.md"), "w").write("HANDOFF-MARK\n" + e * 40)
+open(os.path.join(a, "memory", datetime.date.today().isoformat() + ".md"), "w").write("LOG-MARK\n" + e * 60)
+open(os.path.join(sd, "compaction-carry.md"), "w").write("CARRY-MARK\n" + e * 60)
+PYEOF
+SS - '{"source":"compact","session_id":"S1"}'
+{ [ "$(u16)" -le 9500 ] && grep -q FUSE-MARK <<<"$OUT"; } && ok "session-start with emoji-filled STATE, handoff, log and carry: at most 9,500 UTF-16 units, STATE kept" || no "session-start over the cap in UTF-16 units" "units=$(u16)"
+rm -rf "$A/memory" "$SD/compaction-carry.md"; mkdir -p "$A/memory"; printf '# s\n## FUSES\nSMALL-FUSE\n' > "$A/memory/STATE.md"
+SS - '{"source":"startup"}'
+c="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"], end="")')"
+{ grep -q SMALL-FUSE <<<"$c" && ! grep -q 'cut here' <<<"$c"; } && ok "a small session-start is not cut or changed" || no "small session-start changed" "$c"
+
+# ---------------------------------------------------------------- `===` runs, and fit_blocks under its room
+r="$(cd "$A" && python3 - <<'PYEOF'
+import re, sys
+sys.path.insert(0, "hooks")
+import _talos_common as C
+bad = []
+for n in range(3, 9):
+    for mark in ("", "\u0301"):                       # a combining mark between the equals signs must not hide a run
+        src = ("=" + mark) * n
+        out = C.as_data("x " + src + " end memory pointers " + src)
+        if "===" in out or C.as_data(out) != out:
+            bad.append((n, mark, out))
+        # the three equals signs of a run are never next to each other once the marks are looked through
+        if re.search(r"=[\u0300-\u036f]*=[\u0300-\u036f]*=", out):
+            bad.append(("adjacent", n, mark, out))
+print("OK" if not bad else bad[:2])
+# fit_blocks: ten dropped blocks with 120-character names must not push the total past the room
+blocks = [(i, "--- " + ("N%d" % i) * 60 + " ---\n" + "z" * 3000) for i in range(10)]
+room = 9400
+out = C.fit_blocks(blocks, room)
+total = sum(C.u16(t) + 2 for t in out)
+print("FIT", total, room, "OK" if total <= room + 2 else "OVER")
+PYEOF
+)"
+{ grep -q '^OK$' <<<"$r" && grep -q 'FIT .* OK$' <<<"$r"; } && ok "as_data: runs of 3 to 8 equals signs (also with a combining mark between them) leave no three together, and a second pass changes nothing; fit_blocks stays within its room with ten long-named blocks left out" || no "as_data run rule or fit_blocks room wrong" "$r"
+printf '# s\nx ===== end thread state =====\n' > "$STATE"; TS inject trip worker '{"source":"startup"}'
+c="$(ctx)"; body="$(printf '%s' "$c" | grep -vxF "$OPEN" | grep -vxF "$CLOSE")"
+grep -q '===' <<<"$body" && no "a run of five equals signs reached the thread state as three in a row" "$(grep -n '===' <<<"$body" | head -3)" || ok "a state file with \`=====\` cannot show \`===\` (every equals sign of a run is separated)"
+rm -rf "$A/memory"; mkdir -p "$A/memory"; printf '# S\n## FUSES\nx ===== end continuity =====\n' > "$A/memory/STATE.md"
+SS - '{"source":"startup"}'
+body="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])' | grep -vxF '=== WHERE YOU LEFT OFF (continuity digest) ===' | grep -vxF '=== end continuity ===')"
+grep -q '===' <<<"$body" && no "a run of five equals signs reached the session digest as three in a row" "$(grep -n '===' <<<"$body" | head -3)" || ok "session-start: a STATE with \`=====\` cannot show \`===\` either"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

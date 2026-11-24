@@ -28,6 +28,7 @@ final class ShareModel: ObservableObject {
     private var token: ShareToken?
     private var relay: URL?
     private var scratch: URL?
+    private var retryKey = ShareRetryKey()
 
     deinit { if let scratch { try? FileManager.default.removeItem(at: scratch) } }
 
@@ -63,9 +64,10 @@ final class ShareModel: ObservableObject {
         var p = payload
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         p.note = trimmed.isEmpty ? nil : trimmed
+        let key = retryKey.key(for: p)
         phase = .sending
         Task {
-            let result = await ShareClient.send(p, token: token, relayHost: relay)
+            let result = await ShareClient.send(p, token: token, relayHost: relay, idempotencyKey: key)
             phase = Self.phase(for: result)
             if phase == .sent {
                 try? await Task.sleep(nanoseconds: 900_000_000)

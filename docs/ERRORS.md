@@ -49,6 +49,21 @@ it from the scrubbed content and uses only its own answer (it is a file name).
 
 A screenshot can show messages. The form says so, shows the report before it is sent, and the owner chooses to attach it.
 
+### Audio trace
+
+A failed or stalled audio start leaves one extra `auto` report named `Audio trace: <event>` (`apps/web/src/features/problems/audioTrace.ts`).
+Events: `play-rejected` (the error name), `restart` and `give-up` (the stall self-heal), `media-error` (the MediaError code),
+`stalled-long` (`stalled` or `waiting` past 8 seconds), `interrupted` (a pause nobody asked for: a call, Siri, another app) and
+`session-interrupted` (WebKit's audio session API). The message is `key=value` pairs: the event, readyState, networkState, paused,
+the rounded position and speed, the restart count, for `interrupted`, `restart` and `give-up` the order in which the audio-route call
+and play() happened (`order=r-812/a-640/p-640`: milliseconds since the route was asked for, since the phone answered it or `cap` when
+play() went ahead without an answer or `none`, and since play() was called), the screen kind (thread, card or other: never an id), the file's MIME type and a
+size bucket, the platform and engine version from the user agent, and native or web. No file name, URL, message text or thread
+name is ever passed in, and the same scrubber runs over it. At most one per event a minute and five a minute in all, plus the
+session cap; held ones count in Health's "held back". The last three lines also go after the note in "Report a problem", where
+the preview shows them. The iPhone shell's TalosAudio plugin does not surface AVAudioSession interruptions or route changes to the
+page yet, so on the shell an interruption shows up as the `interrupted` pause.
+
 ## Reports from another install
 
 A beta user's relay can send her bug reports to the team relay's bug inbox (`POST /api/bug-inbox`; set-up in

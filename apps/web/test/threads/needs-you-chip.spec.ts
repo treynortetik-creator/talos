@@ -54,7 +54,7 @@ const overlaps = (a: B, b: B) =>
   a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5
 
 /** The header of this viewport: the phone's, or the desktop thread header. */
-const headerOf = (page: Page) => page.locator('[data-testid="thread-screen"] > header').first()
+const headerOf = (page: Page) => page.locator('[data-testid="thread-under-search"] > header').first()
 
 const sizes = [
   { name: 'default size', viewport: null },

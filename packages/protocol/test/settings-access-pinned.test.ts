@@ -67,6 +67,7 @@ describe('phone path: checkConfigPatch result for every field', () => {
     ['dev.thread_fence', false, PLAIN],
     ['dev.note_lookup', false, PLAIN],
     ['dev.unlisted_key', 1, refused('dev.unlisted_key')],
+    ['os_sandbox', true, PLAIN],
     ['settings_lock', false, PLAIN],
     ['dedicated', {}, PLAIN],
     ['theme', 'paper', PLAIN],
@@ -138,6 +139,7 @@ describe('phone path: the exported lists', () => {
       'always_allow',
       'dev.thread_fence',
       'dev.note_lookup',
+      'os_sandbox',
       'settings_lock',
       'dedicated',
       'theme',
@@ -152,7 +154,7 @@ describe('phone path: the exported lists', () => {
 
 describe('agent path: config_propose result for every field', () => {
   const ALLOWED_LIST =
-    'agent.name, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, settings_lock, dedicated, theme'
+    'agent.name, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, os_sandbox, settings_lock, dedicated, theme'
   // owner ruling 2026-11-14: the agent changes the rest when he asks; these stay the owner's
   const NAMED = new Set([
     'permission_relay',
@@ -188,6 +190,7 @@ describe('agent path: config_propose result for every field', () => {
     ['always_allow', ['email'], []],
     ['dev.thread_fence', false, true],
     ['dev.note_lookup', false, true],
+    ['os_sandbox', true, false],
     ['settings_lock', true, false],
   ]
   it.each(allowed)('%s is allowed', (path, value, old) => {
@@ -260,6 +263,7 @@ describe('agent path: config_propose result for every field', () => {
       'always_allow',
       'dev.thread_fence',
       'dev.note_lookup',
+      'os_sandbox',
       'settings_lock',
       'dedicated',
       'theme',

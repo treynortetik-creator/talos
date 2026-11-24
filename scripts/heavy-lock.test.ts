@@ -1718,6 +1718,96 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       expect([await a.done, await q1.done, await q2.done]).toEqual([0, 0, 0])
     })
 
+    // The scheduled runs (CI_NIGHTLY=1, CI_HOSTILE=1: ci-local.sh keeps both as shell variables for its jobs) never go before a push run.
+    // On 2026-11-21 a hostile run on an older commit held slot 1 for hours while a push run's quiet group waited for it until its limit.
+    const sched = { ...ci, CI_NIGHTLY: '1' }
+    it('a push run’s job goes before a scheduled run’s, though the scheduled one asked first; nothing running is stopped', async () => {
+      const m = machine('5')
+      const a = ciHold(m, 'a', ci)
+      const b = ciHold(m, 'b', ci)
+      await m.until(() => m.ran('a') && m.ran('b'))
+      const s = ciHold(m, 's', sched) // the nightly asks first
+      await m.until(() => s.err().includes('waiting for the heavy lock'))
+      const p = ciHold(m, 'p', ci) // a push run's job asks later
+      await m.until(() => p.err().includes('waiting for the heavy lock'))
+      a.go() // a slot frees: the push run's job takes it
+      await m.until(() => m.ran('p'))
+      await sleep(500) // timing-ok: a negative window: the scheduled job must not have started
+      expect(m.ran('s')).toBe(false)
+      p.go()
+      await m.until(() => m.ran('s')) // the scheduled job goes when the push run's job has finished
+      s.go()
+      b.go()
+      expect([await a.done, await b.done, await p.done, await s.done]).toEqual([0, 0, 0, 0])
+    })
+
+    it('a scheduled job does not take a slot that sits free while a push run’s job is queued, though its grace has run out', async () => {
+      const m = machine('5')
+      const h = ciHold(m, 'h', sched) // the nightly's job runs: slot 1
+      await m.until(() => m.ran('h'))
+      // the push run's quiet group takes slot 2 and waits for slot 1, looking only every 3 s
+      const q = ciHold(m, 'q', { ...ci, HOLD_POLL: '3' }, 'ci_mutex_all')
+      await m.until(() => existsSync(lockOf(m, 2)))
+      // the nightly's next job looks every 0.1 s and would take a slot that sits free for 0 s
+      const s = ciHold(m, 's', { ...sched, CI_DEFER_GRACE: '0' })
+      await m.until(() => s.err().includes('waiting for the heavy lock'))
+      h.go() // slot 1 frees; q is first in line and takes it on its next look, s must not take it first
+      await m.until(() => m.ran('q'), 15_000)
+      expect(m.ran('s')).toBe(false)
+      q.go()
+      await m.until(() => m.ran('s'))
+      s.go()
+      expect([await h.done, await q.done, await s.done]).toEqual([0, 0, 0])
+    })
+
+    it('a scheduled quiet group that holds one slot lets it go when a push run’s quiet group comes ahead: they never each hold one', async () => {
+      const m = machine('5')
+      const a = ciHold(m, 'a', ci) // a push job runs: slot 1
+      await m.until(() => m.ran('a'))
+      const sn = ciHold(m, 'sn', sched, 'ci_mutex_all') // the nightly's quiet group takes slot 2 and waits for slot 1
+      await m.until(() => existsSync(lockOf(m, 2)))
+      const pq = ciHold(m, 'pq', ci, 'ci_mutex_all') // the push run's goes ahead of it
+      await m.until(() => pq.err().includes('waiting for the heavy lock'))
+      a.go()
+      await m.until(() => m.ran('pq')) // it has both slots, so the nightly's let slot 2 go
+      expect(m.ran('sn')).toBe(false)
+      pq.go()
+      await m.until(() => m.ran('sn'))
+      sn.go()
+      expect([await a.done, await pq.done, await sn.done]).toEqual([0, 0, 0])
+    })
+
+    it('the waiting line leaves this run’s own partial hold in its place: marked "(this run)", never a stranger', async () => {
+      const m = machine('5')
+      const a = ciHold(m, 'a', ci)
+      await m.until(() => m.ran('a'))
+      const q = ciHold(m, 'q', ci, 'ci_mutex_all') // holds slot 2, waits for slot 1
+      await m.until(() => q.err().includes('held by'))
+      await m.until(() => existsSync(lockOf(m, 2)))
+      await m.until(() => q.err().includes('(this run)'))
+      expect(q.err()).toMatch(new RegExp(`pid ${a.c.pid} \\(slot 1, since [\\d:]+\\)(?! \\(this run\\))`))
+      expect(q.err()).toMatch(new RegExp(`pid ${q.c.pid} \\(slot 1, since [\\d:]+\\) \\(this run\\)`))
+      a.go()
+      await m.until(() => m.ran('q'))
+      q.go()
+      expect([await a.done, await q.done]).toEqual([0, 0])
+    })
+
+    it('the first-in-line look prints nothing on stderr when its reader stops early (a runner that ignores SIGPIPE once printed "write error: Broken pipe" 611 times in a wait)', () => {
+      const m = machine('5')
+      const r = spawnSync(
+        'bash',
+        [
+          '-c',
+          `trap '' PIPE; CI_NONCE=t; . "${LOCKS_SH}"; q="${m.cache}/q"; mkdir -p "$q"; me="$$"; st="$(ci_proc_start $$)"; ` +
+            `for i in 1 2 3 4 5 6; do printf '%s\\n' "$me" "$st" t w "" ci > "$q/0000$i.$me.1"; done; ` +
+            `for i in $(seq 200); do CI_QCLASS=ci ci_first_in_line "$q" "$q/00006.$me.1"; done`,
+        ],
+        { env: m.env, encoding: 'utf8' },
+      )
+      expect(r.stderr).toBe('')
+    })
+
     it('a Swift job holds only the desktop mutex, never a CI slot: it waits for the mutex with no slot, and runs beside check’s suites without taking one', async () => {
       const m = machine('5')
       const hold = spawn(
@@ -1886,13 +1976,18 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     const inRepo = join(here, '..', 'apps', 'web') // a Talos checkout's folder: where the real server runs
     // the real shape, three levels in a group of their own: sh (the group's leader) -> sh (pnpm's place) -> node, whose command line
     // reads `vite preview --port <argPort>` while it listens on <port>. The `; true` after each keeps a shell from exec'ing its child.
+    // The pid file is written whole (a rename) once the port is bound, so a reader never sees it half there; when node ends, `$2.exit`
+    // says so, and everything the tree prints goes to server-<port>.log: a server that never listens is told at once, with its reason.
     const shape = (m: ReturnType<typeof machine>, port: number, argPort: number) => {
       writeFileSync(
         join(m.cache, 'server.sh'),
-        `node -e "require('net').createServer().listen($1, () => require('fs').writeFileSync('$2', String(process.pid)))" vite preview --port "$3" --strictPort\ntrue\n`,
+        `node -e "require('net').createServer().listen($1, () => { const fs = require('fs'); fs.writeFileSync('$2.tmp', String(process.pid)); fs.renameSync('$2.tmp', '$2') })" vite preview --port "$3" --strictPort\necho "node exited with $?" > "$2.exit.tmp"; mv "$2.exit.tmp" "$2.exit"\n`,
       )
       writeFileSync(join(m.cache, 'pnpm.sh'), `sh "${m.cache}/server.sh" "$@"\ntrue\n`)
-      return ['-c', `set -m; sh "${m.cache}/pnpm.sh" ${port} "${m.cache}/pid-${port}" ${argPort} > /dev/null 2>&1 &`]
+      return [
+        '-c',
+        `set -m; sh "${m.cache}/pnpm.sh" ${port} "${m.cache}/pid-${port}" ${argPort} > "${m.cache}/server-${port}.log" 2>&1 &`,
+      ]
     }
     // an orphan: the run is gone, so the group's leader is re-parented to pid 1 as soon as the shell that started it exits
     const orphan = (m: ReturnType<typeof machine>, port: number, argPort = port, cwd = inRepo) =>
@@ -1904,9 +1999,28 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       kids.push(c)
       return c
     }
+    // the stand-in's pid, once it listens. If node ends first (the port taken, a fork refused) or the budget runs out, the error carries
+    // what the tree printed: a server that never came up is the reason, not a slow machine's 20 s.
     const pidOf = async (m: ReturnType<typeof machine>, port: number) => {
-      await m.until(() => existsSync(join(m.cache, `pid-${port}`)))
-      const pid = Number(readFileSync(join(m.cache, `pid-${port}`), 'utf8'))
+      const file = join(m.cache, `pid-${port}`)
+      const never = (why: string) => {
+        const log = join(m.cache, `server-${port}.log`)
+        // what of its tree is still alive (a command line naming its pid file): node there but slow, or nothing ever ran
+        const alive = leftovers().filter((l) => l.command.includes(`pid-${port}`))
+        return new Error(
+          `the preview server stand-in on port ${port} never listened (${why}): ${existsSync(log) ? readFileSync(log, 'utf8').trim() : 'no log'}; ` +
+            (alive.length
+              ? `still alive: ${alive.map((l) => `${l.pid} ${l.command}`).join(' | ')}`
+              : 'none of its processes is alive'),
+        )
+      }
+      try {
+        await m.until(() => existsSync(file) || existsSync(`${file}.exit`))
+      } catch {
+        throw never('no pid file in time')
+      }
+      if (!existsSync(file)) throw never(readFileSync(`${file}.exit`, 'utf8').trim())
+      const pid = Number(readFileSync(file, 'utf8'))
       const pgid = Number(ps(pid, 'pgid')) // the tree's group: killed after this test, whatever it did or did not finish
       if (pgid > 1 && pgid !== ownGroup) groups.add(pgid)
       return pid
@@ -1917,6 +2031,19 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       m.run(['run', 'next', '--', 'sh', '-c', `kill -0 ${pid} 2>/dev/null && echo up || echo gone`], {
         TALOS_HEAVY_PW_PORT: String(port),
       })
+
+    it('a stand-in that cannot bind its port fails the wait at once, naming why, not after the whole budget', async () => {
+      const m = mach()
+      const taken = createServer()
+      await new Promise<void>((res) => taken.listen(0, res))
+      try {
+        const port = (taken.address() as { port: number }).port
+        orphan(m, port)
+        await expect(pidOf(m, port)).rejects.toThrow(/EADDRINUSE/)
+      } finally {
+        taken.close()
+      }
+    })
 
     it('the tree is as the real one is: only the shell at the top is re-parented (to init, or on Linux to a subreaper), the server is not', async () => {
       const m = mach()

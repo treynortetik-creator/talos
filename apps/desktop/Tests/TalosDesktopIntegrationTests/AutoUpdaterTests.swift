@@ -61,6 +61,8 @@ struct AutoUpdaterTests {
     let fetches = Box(0)
     let downloads = Box(0)
     let spawns = Box<[[String]]>([])
+    /// Every child process the updater itself started (its run and spawn hooks), for tests that look for leftovers.
+    let pids = Box<[Int32]>([])
     let on = Box(true)
     let busy = Box<[String]>([])
     let clock = Box(1000.0)
@@ -85,8 +87,12 @@ struct AutoUpdaterTests {
     /// What the jitter draws (0 up to 1).
     let random = Box(0.5)
 
-    init() throws {
-      root = try TestTemp.real(TestTemp.base) + "au-\(UUID().uuidString.prefix(8))"
+    /// A link folder with no space in its path that points at `stub`, made only when the rig's own path has a space (see `toolDirsCopy`).
+    let linkDir = Box<String?>(nil)
+
+    /// `spaced`: the rig's folder has a space in its name whatever TMPDIR is (the guard test for a TMPDIR or home folder with one).
+    init(spaced: Bool = false) throws {
+      root = try TestTemp.real(TestTemp.base) + "/talos-au-\(UUID().uuidString.prefix(8))" + (spaced ? " sp" : "")
       feed = root + "/feed"
       home = root + "/talos-home"
       checkout = root + "/co"
@@ -94,13 +100,20 @@ struct AutoUpdaterTests {
       stub = root + "/stub"
       stubLog = root + "/stub.log"
       for d in [feed, home, dest + "/Talos.app", stub] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
-      try write(stub + "/pnpm", "#!/bin/bash\necho \"pnpm $*\" >> \"$STUBLOG\"\nexit ${PNPM_RC:-0}\n", mode: 0o755)
+      // (the prepare and restore run with a fixed environment, so this stub names its log outright instead of reading it from one)
+      try write(stub + "/pnpm", "#!/bin/bash\necho \"pnpm $*\" >> \"\(stubLog)\"\nexit 0\n", mode: 0o755)
       try write(stub + "/osascript", "#!/bin/bash\necho \"osascript $*\" >> \"$STUBLOG\"\necho false\n", mode: 0o755)
       try write(stub + "/open", "#!/bin/bash\necho \"open $*\" >> \"$STUBLOG\"\n", mode: 0o755)
       try makeRepo()
     }
 
-    deinit { try? FileManager.default.removeItem(atPath: root) }
+    deinit {
+      if let l = linkDir.get() {  // the link first (a link is removed, never followed), then its own folder
+        try? FileManager.default.removeItem(atPath: l + "/s")
+        try? FileManager.default.removeItem(atPath: l)
+      }
+      try? FileManager.default.removeItem(atPath: root)
+    }
 
     func write(_ path: String, _ text: String, mode: Int = 0o644) throws {
       try Data(text.utf8).write(to: URL(fileURLWithPath: path))
@@ -123,8 +136,9 @@ struct AutoUpdaterTests {
       return r.out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The public repo: A (the checkout's commit; its install.sh stub answers --check-only with CHECK_RC) and B (the release; its stub
-    /// "installs" with INSTALL_RC). A real install.sh copy can stand in for A's with `realInstallSh`.
+    /// The public repo: A (the checkout's commit; its install.sh is never run) and B (the release; its stub answers --check-only with
+    /// CHECK_RC and "installs" with INSTALL_RC: the check runs the RELEASE commit's install.sh). A real install.sh copy can stand in
+    /// for B's with `realInstallSh`.
     func makeRepo(realInstallSh: Bool = false) throws {
       let src = root + "/src"
       let origin = root + "/origin.git"
@@ -134,17 +148,18 @@ struct AutoUpdaterTests {
       git(["init", "-q", "-b", "main", src])
       try FileManager.default.createDirectory(atPath: src + "/apps/desktop/scripts", withIntermediateDirectories: true)
       let install = src + "/apps/desktop/scripts/install.sh"
-      if realInstallSh {
-        try FileManager.default.copyItem(atPath: AutoUpdaterTests.repo() + "/apps/desktop/scripts/install.sh", toPath: install)
-      } else {
-        try write(install, "#!/bin/bash\necho \"install A $*\" >> \"$STUBLOG\"\nexit ${CHECK_RC:-0}\n", mode: 0o755)
-      }
+      try write(install, "#!/bin/bash\necho \"install A $*\" >> \"$STUBLOG\"\nexit ${CHECK_RC:-0}\n", mode: 0o755)
       git(["-C", src, "add", "-A"]); git(["-C", src, "commit", "-qm", "A"])
       a = git(["-C", src, "rev-parse", "HEAD"])
       try? FileManager.default.removeItem(atPath: install)
-      try write(
-        install, "#!/bin/bash\necho \"install B $*\" >> \"$STUBLOG\"\n[ \"$1\" = --rollback ] && exit ${ROLLBACK_RC:-0}\nexit ${INSTALL_RC:-0}\n",
-        mode: 0o755)
+      if realInstallSh {
+        try FileManager.default.copyItem(atPath: AutoUpdaterTests.repo() + "/apps/desktop/scripts/install.sh", toPath: install)
+      } else {
+        try write(
+          install,
+          "#!/bin/bash\necho \"install B $*\" >> \"$STUBLOG\"\n[ \"$1\" = --rollback ] && exit ${ROLLBACK_RC:-0}\nfor a in \"$@\"; do [ \"$a\" = --check-only ] && exit ${CHECK_RC:-0}; done\nexit ${INSTALL_RC:-0}\n",
+          mode: 0o755)
+      }
       git(["-C", src, "add", "-A"]); git(["-C", src, "commit", "-qm", "B"])
       b = git(["-C", src, "rev-parse", "HEAD"])
       git(["-C", src, "push", "-q", origin, "\(a):refs/heads/main", "\(b):refs/tags/v1.5.0"])
@@ -173,6 +188,55 @@ struct AutoUpdaterTests {
       try Data((sig + "\n").utf8).write(to: URL(fileURLWithPath: feed + "/latest.json.sig"))
     }
 
+    /// The folder to put first in the copy's `TOOL_DIRS`. The script's `tool()` splits that list on spaces, so a stub folder whose path
+    /// has one is never found, and the script then falls back to the REAL /usr/bin/open and /usr/bin/osascript. So a stub path with a
+    /// space is reached through a link folder under /private/tmp (made here, removed in deinit) whose own path has none.
+    func spacelessStub() -> String {
+      if !stub.contains(where: \.isWhitespace) { return stub }
+      if let l = linkDir.get() { return l + "/s" }
+      var tpl = Array("/private/tmp/talos-stub.XXXXXX".utf8CString)
+      guard let made = mkdtemp(&tpl) else { Issue.record("could not make the link folder for the stub tools"); return stub }
+      let l = String(cString: made)
+      linkDir.set(l)
+      try? FileManager.default.createSymbolicLink(atPath: l + "/s", withDestinationPath: stub)
+      return l + "/s"
+    }
+
+    /// The real apply script with its ONE `TOOL_DIRS` line rewritten to try the stub folder first (the stand-ins for open and
+    /// osascript live there). The script takes no folder from the environment, so this copy is the only way a test reaches the
+    /// stubs; the shell test does the same (auto-update-apply-test.sh `tool_dirs_copy`). A stand-in that is not the one the script
+    /// resolves FAILS the test (`fakesAreTheOnesResolved`), so a test never runs on the real open or osascript.
+    func toolDirsCopy() -> String {
+      let src = AutoUpdaterTests.repo() + "/apps/desktop/scripts/auto-update-apply.sh"
+      let dst = root + "/auto-update-apply.sh"
+      guard let text = try? String(contentsOfFile: src, encoding: .utf8) else { return src }
+      let line = #"TOOL_DIRS="/usr/bin /bin /usr/sbin /sbin""#
+      precondition(text.contains(line), "the apply script's TOOL_DIRS line changed; update toolDirsCopy")
+      let out = text.replacingOccurrences(of: line, with: "TOOL_DIRS=\"\(spacelessStub()) /usr/bin /bin /usr/sbin /sbin\"")
+      try? out.write(toFile: dst, atomically: true, encoding: .utf8)
+      fakesAreTheOnesResolved(in: out)
+      return dst
+    }
+
+    /// Runs the copy's own TOOL_DIRS line and tool() in bash and records an issue unless open and osascript resolve to the stub
+    /// folder's files (never /usr/bin's). Returns what each resolved to.
+    @discardableResult
+    func fakesAreTheOnesResolved(in script: String) -> [String] {
+      let lines = script.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+      guard let dirs = lines.first(where: { $0.hasPrefix("TOOL_DIRS=") }), let fn = lines.first(where: { $0.hasPrefix("tool() {") }) else {
+        Issue.record("the apply script has no TOOL_DIRS line or tool() function to check the fakes against")
+        return []
+      }
+      let r = ProcessRunner.run(["/bin/bash", "-c", dirs + "\n" + fn + "\ntool open; echo; tool osascript; echo", "x"], env: ["PATH": "/usr/bin:/bin"], timeout: 20)
+      let got = r.out.split(separator: "\n").map(String.init)
+      let want = spacelessStub() + "/"
+      for (name, path) in zip(["open", "osascript"], got) where !path.hasPrefix(want) {
+        Issue.record("the stand-in \(name) is not the one the apply script would run: it resolves \(name) to \(path), not a file in \(want) (a space in the stub folder's path splits TOOL_DIRS, and the real tool would run)")
+      }
+      if got.count != 2 { Issue.record("could not resolve open and osascript through the copy's tool(): \(r.out) \(r.err)") }
+      return got
+    }
+
     /// An updater as the app makes one, with these hooks; `spawn` runs the real apply script to its end (as the detached one would).
     /// The swaps started for real (`realSwap`), kept so the test can wait for them.
     let procs = Box<[Process]>([])
@@ -187,9 +251,10 @@ struct AutoUpdaterTests {
       var o = AutoUpdater.Options(
         talosHome: home, appPath: appPath ?? dest + "/Talos.app", appVersion: version, keys: ReleaseTrust.testKeys)
       o.allowLocalFeed = true
+      o.repoURL = root + "/origin.git"  // the "public repo": the release's commit is fetched from this address, never from `origin`
       o.firstCheckAfter = 0
       o.checkJitter = jitter  // the jitter has its own tests (AutoUpdaterCheckNowTests); the rest count in whole checkEvery
-      o.applyScript = AutoUpdaterTests.repo() + "/apps/desktop/scripts/auto-update-apply.sh"
+      o.applyScript = toolDirsCopy()
       o.auditLogPath = root + "/audit.log"
       o.healthWait = 2
       if let quietPoll { o.quietPoll = quietPoll }
@@ -209,11 +274,21 @@ struct AutoUpdaterTests {
         downloads.edit { $0 += 1 }
         return download(url, path, max, t)
       }
-      h.spawn = { [spawns, root] argv, env, log in
+      h.run = { [pids] a, e, t in
+        ProcessRunner.run(a, env: e, timeout: t, started: { pid in pids.edit { $0.append(pid) } })
+      }
+      h.spawn = { [spawns, pids, root] argv, env, log in
         spawns.edit { $0.append(argv) }
-        let r = ProcessRunner.run(argv, env: env, timeout: 120)
+        let r = ProcessRunner.run(argv, env: env, timeout: 120, started: { pid in pids.edit { $0.append(pid) } })
         try? (r.out + r.err).write(toFile: root + "/apply-out.log", atomically: true, encoding: .utf8)
         return 999_999  // a pid that is gone by the time anyone looks
+      }
+      // the swap and the zip check run in a fixed environment: the stand-ins for open, osascript and install.sh get what they read from it
+      h.testScriptEnv = { [unowned self] in
+        var e = self.extraEnv.get()
+        e["PATH"] = nil
+        e["STUBLOG"] = self.stubLog
+        return e
       }
       h.awake = { [clock] in clock.get() }
       h.random = { [random] in random.get() }
@@ -762,6 +837,26 @@ struct AutoUpdaterTests {
     let old = r.updater(version: "1.4.0")
     old.tick()
     #expect(r.posts.get().last == "Talos 1.5.0 didn't start properly, so it went back to 1.4.0. The update is paused for a week.")
+  }
+
+  /// A TMPDIR or home folder with a space in it: the apply script's tool() splits its folder list on spaces, so the stand-ins must be
+  /// reached by a spaceless path and the script must run THEM, never the real /usr/bin/open or osascript. Fails if a fake is not resolved.
+  @Test func aTempFolderWithASpaceStillRunsTheFakesNeverTheRealOpenOrOsascript() throws {
+    let r = try Rig(spaced: true)
+    #expect(r.root.contains(" "), "the rig is really in a folder with a space: \(r.root)")
+    try r.publish()
+    r.extraEnv.set(["INSTALL_RC": "9"])  // the swap fails after the checkout moved, so the kept app is opened again (via open)
+    let u = r.updater()
+    // the copy the updater runs resolves BOTH stand-ins inside the stub folder (its link, since the stub's own path has a space)
+    let copy = try String(contentsOfFile: r.root + "/auto-update-apply.sh", encoding: .utf8)
+    let resolved = r.fakesAreTheOnesResolved(in: copy)
+    #expect(resolved == [r.linkDir.get()! + "/s/open", r.linkDir.get()! + "/s/osascript"], "\(resolved)")
+    r.driveToSwap(u)
+    #expect(r.spawns.get().count == 1)
+    let log = r.log()
+    #expect(log.contains("open \(r.dest)/Talos.app"), "the FAKE open ran (a real one leaves no line here): \(log)")
+    #expect(log.contains("osascript "), "the FAKE osascript ran: \(log)")
+    #expect(r.head() == r.a && r.branch() == "main")
   }
 
   @Test func aNewAppThatNeverGetsReadyIsRolledBackAndNeverWritesTheReport() throws {

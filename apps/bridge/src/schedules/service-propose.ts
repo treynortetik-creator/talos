@@ -9,6 +9,7 @@ import {
   type ScheduleChangeT,
   type ScheduleDetailT,
 } from '@talos-app/protocol'
+import { passBridgeCard } from '../always-allow.ts'
 import { threadRef } from '../context.ts'
 import { say } from '../owner-words.ts'
 import { handoffSince } from '../worker/handoff.ts'
@@ -90,6 +91,11 @@ export function toolPropose(
     recent.push(now)
     // who proposed it, kept beside the card: supersede, the pending count and the apply-time check read it
     this.ctx.store.kvSet(proposerKey(minted.card.id), scope?.thread ?? MAIN_PROPOSER)
+    // "Always allow schedule changes": the owner's standing yes is applied as his tap would be, with no card shown
+    if (await passBridgeCard(this.ctx, minted.card, (row, approved) => this.applyCard(row, approved, minted.card.id)))
+      return yes(
+        `card ${minted.card.id} approved without a card (the owner always allows schedule changes); it is being saved`,
+      )
     await this.publishCard(minted.card)
     return yes(`card ${minted.card.id} pending, expires ${minted.card.expires_at}`)
   })

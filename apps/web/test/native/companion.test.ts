@@ -348,6 +348,25 @@ describe('the feed, against the real client store', () => {
     expect(feed.dropped).toBe(0) // a reply with no seq must not become a frame the bridge refuses (that would blind the pet)
   })
 
+  it('a reply replayed in a catch-up batch raises no last_reply; the same reply live does', async () => {
+    feed = startCompanionFeed(client, bridgeOf(), { coalesceMs: 5, tickMs: 60_000 })
+    const replayed = reply({}, 20)
+    relay.sendToApps(
+      mkFrame('catchup.batch', {
+        from_seq: 19,
+        to_seq: 20,
+        frames: [replayed as Record<string, unknown>],
+        more: false,
+      }),
+    )
+    await waitFor(() => client.store.getState().lastSeq >= 20, 3000, 'batch applied')
+    await new Promise((r) => setTimeout(r, 60))
+    expect(lastFrame().last_reply).toBeNull()
+    relay.sendToApps(reply({}, 21))
+    await waitFor(() => lastFrame().last_reply !== null, 3000, 'live reply')
+    expect(lastFrame().last_reply).toEqual({ thread_id: 'general', seq: 21 })
+  })
+
   it('a "Needs you only" thread raises no last_reply for a plain reply, and an "all" thread still does', async () => {
     const quiet = AgentConfig.parse({
       ...readyFixture.agent_config,

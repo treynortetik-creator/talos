@@ -1,10 +1,12 @@
 // Background work under a thread session's pane (bg-work.ts; the Mac's BackgroundWorkFoundTests). The table is a real session's,
 // read with `ps -o pid,ppid,ucomm,command` on 2026-11-15 (Claude Code 2.1.325, native install), the home folder replaced.
+// gate-reads: apps/desktop/Sources/TalosDesktopCore/BackgroundWorkFound.swift
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  busyLine,
   command,
   cutLine,
   evalCommand,
@@ -16,6 +18,7 @@ import {
   type Proc,
   procTable,
 } from '../../src/supervisor/bg-work.ts'
+import { BUSY_KIND } from '../../src/supervisor/worker-notices.ts'
 
 const REAL: Proc[] = [
   { pid: 43682, ppid: 2326, name: '2.1.325', argv: ['/home/alex/.local/bin/claude', '--settings', '{}'] },
@@ -106,5 +109,16 @@ describe('the /proc reader', () => {
   })
   it('a /proc that cannot be listed is unknown (null), never an empty table', () => {
     expect(procTable(join(tmpdir(), 'talos-no-such-proc-dir'))).toBeNull()
+  })
+})
+
+describe('the line for a start over the limit (T7)', () => {
+  it('is the same words, and the same record kind, as the Mac’s', () => {
+    const swift = readFileSync(
+      join(import.meta.dir, '../../../desktop/Sources/TalosDesktopCore/BackgroundWorkFound.swift'),
+      'utf8',
+    )
+    expect(swift).toContain(`public static let busyLine = "${busyLine}"`)
+    expect(swift).toContain(`public static let busyKind = "${BUSY_KIND}"`)
   })
 })

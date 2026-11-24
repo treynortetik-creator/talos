@@ -10,14 +10,17 @@ import type { BridgeEnv } from './config.ts'
 import { paths } from './config.ts'
 import { parseConfig } from './config-file.ts'
 import { DeviceStore } from './devices.ts'
+import { deafThreadChecks } from './doctor-deaf.ts'
 import { actionRulesUnreadableCheck, guardTimeoutsCheck } from './doctor-guards.ts'
 import { memorySearchCheck } from './doctor-memory.ts'
 import { modDoctorChecks } from './doctor-mods.ts'
+import { osSandboxCheck } from './doctor-sandbox.ts'
 import { wslDoctorChecks } from './doctor-wsl.ts'
 import { fileMode, readJsonFile } from './fsutil.ts'
+import { readOsSandboxSwitch } from './guards/os-sandbox.ts'
 import { loadKeyFile } from './keys.ts'
 import { hasTalosKit, isPlainFolder, noKitMessage, plainFolderWarning } from './kit-marker.ts'
-import { readMcpEntry } from './mcp-config.ts'
+import { installMcp, mcpEntry, mcpEntryState, mcpProtectedRoots, readMcpEntry } from './mcp-config.ts'
 import { say } from './owner-words.ts'
 import { linkedAgentsCheck } from './peer/relink.ts'
 import { askRuleFiles, askRulesIn, DEFAULT_ASK_RULES, normalizeRule, settingsPath } from './permission/ask-rules.ts'
@@ -34,7 +37,14 @@ const BRIDGE_DIR = resolve(dirname(import.meta.path), '..')
 export type Check = { level: 'ok' | 'warn' | 'FAIL'; name: string; detail: string }
 
 /** noKit: the agent folder is a plain Claude Code folder on purpose (`--no-kit`, as start takes it). */
-export type DoctorOptions = { agentDir?: string; claudeDir?: string; deep?: boolean; noKit?: boolean }
+export type DoctorOptions = {
+  agentDir?: string
+  claudeDir?: string
+  deep?: boolean
+  noKit?: boolean
+  /** Rewrite the talos-app entry in the agent folder's .mcp.json in the current form (the fix the older-entry row names). */
+  fixMcp?: boolean
+}
 
 /** What the checks found: the rows, and the bridge key when there is one (the caller prints the relay line for it). */
 export type DoctorResult = { checks: Check[]; key?: { keyId: string; publicKeyB64: string } }
@@ -116,6 +126,19 @@ export async function runDoctorChecks(
   if (hasTalosKit(agentDir)) add('ok', 'Talos kit', `installed in ${agentDir}`)
   else if (opts.noKit || isPlainFolder(env.home, agentDir)) add('warn', 'Talos kit', plainFolderWarning(agentDir))
   else add('FAIL', 'Talos kit', noKitMessage(agentDir))
+  // `doctor --fix-mcp`: the one fix for the older entry, written the way install-mcp writes it (other servers kept)
+  if (opts.fixMcp) {
+    try {
+      const r = installMcp(agentDir, mcpEntry(BRIDGE_DIR, env.home, agentDir), false, mcpProtectedRoots(env.home))
+      add(
+        'ok',
+        '.mcp.json entry fix',
+        r.changed ? `rewrote the talos-app entry in ${r.target}` : 'the entry was already current',
+      )
+    } catch (e) {
+      add('FAIL', '.mcp.json entry fix', (e as Error).message)
+    }
+  }
   const entry = readMcpEntry(agentDir) as
     | { command?: string; args?: string[]; env?: Record<string, unknown> }
     | undefined
@@ -127,7 +150,7 @@ export async function runDoctorChecks(
     )
   else {
     const absolute = typeof entry.command === 'string' && isAbsolute(entry.command)
-    const here = entry.args?.includes(BRIDGE_DIR)
+    const here = entry.args?.some((a) => typeof a === 'string' && (a === BRIDGE_DIR || a.includes(`${BRIDGE_DIR}/`)))
     add(
       absolute && here ? 'ok' : 'warn',
       '.mcp.json entry',
@@ -137,10 +160,22 @@ export async function runDoctorChecks(
           : `. The command is not an absolute path, so Claude Code needs it on the PATH of the session, and Main can start without it (the bridge then never starts). Run talos-app install-mcp --agent-dir ${agentDir} to write the full path of bun.`),
     )
   }
+  // the entry written before the sandbox's launch check (`run --cwd ...`): fine with the extra lock off, refused with it on
+  if (entry && mcpEntryState(entry, BRIDGE_DIR) === 'old') {
+    const locked = readOsSandboxSwitch(env.home)
+    add(
+      locked ? 'FAIL' : 'warn',
+      '.mcp.json entry form',
+      `the talos-app entry is the older form (it starts bun in the bridge folder${locked ? ', and the extra lock refuses it' : ''}). Fix it with one command: talos-app doctor --fix-mcp --agent-dir ${agentDir}`,
+    )
+  }
   const memory = memorySearchCheck(agentDir)
   if (memory) checks.push(memory)
+  checks.push(...deafThreadChecks(env.home))
   const guards = guardTimeoutsCheck(agentDir)
   if (guards) checks.push(guards)
+  const sandbox = osSandboxCheck(env.home, agentDir)
+  if (sandbox) checks.push(sandbox)
   const ruleFiles = actionRulesUnreadableCheck(agentDir)
   if (ruleFiles) checks.push(ruleFiles)
   if (entry && !(typeof entry.env?.TALOS_AGENT_DIR === 'string' && entry.env.TALOS_AGENT_DIR !== ''))

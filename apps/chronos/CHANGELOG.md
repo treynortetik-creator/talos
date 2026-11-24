@@ -1,0 +1,290 @@
+# Changelog
+
+## Next release
+
+- **The macOS installer has distinct exit codes and leaves nothing half-loaded.** `install.sh` now exits with a different code for
+  python3 missing or too old, a config step, a plist, `launchctl` refusing an agent, and agents loaded but the tick not listed
+  (asked for a few seconds, as launchd can lag); the list is in the header of `install.sh`. After a failed load nothing this run loaded
+  stays loaded, a plist this run made is removed and one that was there is put back and loaded again. Linux keeps its codes. For
+  tests, `CHRONOS_PYTHON` and `CHRONOS_PRINT_TRIES` (with `CHRONOS_TEST_MODE=1`).
+
+- **The probe ("try again") refuses a pretend HOME.** When `HOME` is not this user's home in the user database, nothing is submitted
+  to `launchd` and a block that is there stays as it is. A linked home, or one that cannot be read, is not refused.
+
+- **Linux gets the background timer.** `install.sh` on Linux writes a systemd user timer, `chronos-tick.timer` with
+  `chronos-tick.service` in `~/.config/systemd/user`, and enables it with `systemctl --user enable --now`. It runs the tick every
+  5 minutes, as launchd does on a Mac, with `Persistent=true` so a tick missed while the computer slept runs at wake. So jobs
+  that run by themselves in the background, and command jobs, now run on Linux. The service sets `KillMode=process`, launchd's
+  `AbandonProcessGroup`, so the runs a tick starts outlive it. With no systemd user session (a container, WSL without systemd)
+  the units are written, nothing is started, and the installer says so and how to run the tick by hand. When linger is off it
+  says how to keep the timer running with nobody logged in (`loginctl enable-linger`). `--no-load` writes the units and starts
+  nothing. `uninstall.sh` stops and removes them. The tick and its runs keep their own fixed PATH, so a `claude` the installer finds elsewhere (nvm, an npm prefix) has its folder
+  added to the config's `"path"`, which every run puts first. The installer warns when there is no `claude` at all, or when its
+  `python3` is not one the tick will find.
+- Tests: the restricted clock-run tests no longer fail on a Saturday or Sunday (their jobs ran on weekdays only).
+- `install.sh` runs on Linux. It copies the runtime to `~/.local/share/chronos` (or runs a checkout that is already there in
+  place), makes the config, jobs and UI token as on a Mac, and loads nothing: jobs that run in a client's session work, jobs that
+  run by themselves in the background need a timer Chronos does not install on Linux yet. It takes `python3` from PATH there,
+  and says that `--no-copy` and `--no-load` do nothing on Linux.
+- `uninstall.sh` skips `launchctl` off a Mac, and `--purge` keeps a `~/.local/share/chronos` that is a git checkout.
+- `install.sh --help` shows the whole header again, and the missing-`claude` warning goes to stderr (so `--quiet` is one line).
+
+## 0.5.1 (2026-11-10)
+
+**Security and correctness audit, 2026-11-10** ([docs/audits/2026-11-10-security.md](docs/audits/2026-11-10-security.md)). Fixes only; `api` stays 1.
+- **Behaviour change:** a `config.json` that exists but cannot be read or parsed now stops Chronos (the tick starts nothing, the UI does not start) instead of
+  quietly running on the defaults, which are the widest settings (`--dangerously-skip-permissions`, `approval_required` off, no `notify`). `chronos api config set` refuses to rewrite such a file.
+- The tick keeps the events a trigger pass had already announced when the pass is killed at its deadline (they used to be lost).
+- Run now (CLI and web UI) clears the day's done / failed markers only once it holds the claim, so a refused Run now can no longer cause a second run.
+- `chronos claim <id> --unattended` answers `NOT_DUE` for a paused job and under Pause all: in-session timers now honour the pause switches.
+- A file trigger on a folder with more than 5,000 matching files reports an error instead of replaying old files.
+- The tick runs with `umask 077`. Run keys, model names, tool entries and file names no longer accept a trailing newline.
+- Web UI: `/api/control` shows an MCP server's host only (never credentials in its URL), `agent_files_exclude` ignores case, a negative `Content-Length` is refused.
+- The UI launchd agent passes its paths as arguments, so a checkout in a folder with a space (or shell characters) in its name starts correctly. Re-run `install.sh` to pick this up.
+- Still open, see the report: the web UI gives its token to any local client (B-01), and a live session run longer than `stale_claim_min` gets a background duplicate (B-02).
+
+## 0.5.0 (2026-11-08)
+
+**Job memory for headless and command runs.** All changes are additive; `api` stays 1, and `features` now lists `memory`.
+- A job can carry a `memory_dir` (an existing, non-link folder set by the client, such as Talos). When it holds a `pack.json` whose binding matches the job's current text (headless) or kind and command (command job), Chronos adds it to the run.
+  - A headless run gets it appended after the task, framed as data with a fresh random marker per run (markers inside the pack are neutralised), plus a per-run path to write a new notepad.
+  - A command run gets a private 0700 scratch folder (`TALOS_MEMORY_DIR`, `TALOS_MEMORY_NOTEPAD_OUT`) holding copies, never the real files.
+  - Restricted runs get past results only. Event-started runs get no memory.
+- `CHRONOS_RUN_ID` is scoped to the prompt step and never reaches the agent or the command.
+- New: `chronos memory-out`, `chronos memory-command`, `chronos api run-result <job> <run>`, `chronos api memory-binding <job>`.
+
+## 0.4.0 (2026-11-04)
+
+**Upgrade note: clients that parse `chronos api` output strictly must accept these before upgrading. Talos does as of its 2026-11-04 main.**
+
+Wire changes a client must tolerate (all additive, `api` stays 1):
+- `when.type` can be `times` (with a `times` list of `"HH:MM"`), besides the existing types.
+- Slot run keys: a `times` job's run key, `last_run` and `runs` entries look like `YYYY-MM-DDTHHMM` (`2026-10-05T0945`), not just a date. They can also appear on a plain job after a `times` to `time` switch.
+- Run now on a `times` job uses an ad-hoc key (the date and the current minute, moved to the next minute when that is a slot's own), in the same `YYYY-MM-DDTHHMM` shape.
+- `meta`: an opaque object on the job record.
+- `date_key` on every schedule in `api snapshot` and `detail.schedule`.
+- `features` (`["times", "meta"]`) on `chronos api version`.
+
+- **`times`: several fire times a day for one job.** `"times": ["09:45", "12:15", "14:45", "17:15"]` (1 to 24 times, ascending, at least 15 minutes apart). Each time is a slot with its own run key `YYYY-MM-DDTHHMM`, so claims, `ran-`/`failed-`/`stalled-` markers, reports and run rows are per slot, a failed slot does not block the next, and the midnight rule applies per slot. A job with a plain `time` is unchanged: same keys, same output, same hashes (the existing goldens are untouched except `version.json`). A slot key is never rewritten to the date key; `_last_run`/`detail.runs`/`report --date` understand slot keys; `session_wait_notify` fires once per date for such a job; `health` reports `missed_recently` only for two missed slots in a row; the tick runs the new `chronos prune`, which deletes slot markers older than 15 days (more than the UI's 14-day strip). Catch-up runs only the newest open slot of a job (older ones read `missed`), one run of a job at a time, Run now on such a job uses a key that is never a slot, is visible as running and refuses to overlap, and clears its stalled slot markers; switching between `time` and `times` the same day does not rerun it; the 15 minute gap is also checked across midnight; `meta` refuses NaN; one bad `times` record no longer takes `api health` or the UI job list down; `config set session_runner hook` is refused while a `times` job runs in a session; the UI can revert a `times` job with `times: null`. **Release order:** the new `features` key and slot keys need a tolerant Talos first (a strict Talos closes the whole scheduler on `features`). The API `when` gains `{"type": "times", "days", "times"}`; `ui/server.py` shows `times` and keeps them on save (a different single `time` is refused, not silently applied); the SessionStart hook skips such a job and the API refuses `runner: session` for it unless `session_runner` is `talos`.
+- **Review fixes for `times` / `meta`.**
+  - A `times` job on named days (`mon,wed`) now reports `when.days` as names (`["mon", "wed"]`), not weekday numbers, so `validate` and `apply` accept the snapshot's own `when`.
+  - The web UI shows a job's `meta` (pretty-printed, as text) in the job view and in the "Approve as it is on disk" dialog; the approval is bound to the `content_hash` of the same fetch, and the server refuses it (409) if the job changed since.
+  - Switching `times` to a plain `time` the same day no longer reruns it on the session path (`api due --for session`, `api claim`, day state); Run now is not blocked by it.
+  - Run now on a `times` job no longer clears stalled slot markers when it starts. A Run now that finishes OK settles them: the newest slot that had started when the Run now was claimed, if it stalled and is on the same day and inside its window, counts as run; every other stalled slot is only cleared, and yesterday's is never marked. A Run now is recognised by its owner file (`trigger: run_now`), not by its key. A failed Run now leaves the stall alone.
+  - `chronos prune` also deletes per-slot reports (`reports/<id>-<date>T<hhmm>*.md`) and logs (`logs/<id>-<date>T<hhmm>-<hhmm>.log`) older than 15 days, always keeping each job's newest slot report and log.
+  - **Clients must accept slot keys on a plain job.** After a `times` to `time` switch, `last_run` and `runs` can carry slot keys (`2026-10-05T0945`) until they age out of the 20-run window and the retention window.
+  - Reads never delete a claim: `due`, `due --dry`, `api due --for session` and `api snapshot` leave a stale-looking claim alone and treat it as live, as on 0.3.1. Only `claim` sweeps a stale claim, and only one of its own key. A claim that records a pid (a headless run) is live only while that pid exists (`os.kill(pid, 0)`; EPERM counts as alive): a crashed run's claim no longer blocks later slots on any path, and any `claim` or Run now removes it. A session claim has no pid and is never swept by a read or another key.
+  - **Known limit:** a session claim has no pid, so a session run longer than `stale_claim_min` (45 minutes) can be swept by its own next claim.
+  - **Known limit:** after switching `times` back to a single `time`, the job can run twice that day if an earlier slot was missed and a later one ran.
+  - **Known limit:** the test harness mixes timezones (the clock and the claim timestamps are not always in the same zone).
+  - **Known limit:** a race of a few milliseconds between two starters of different slots of one `times` job can let both claim; the one-run-at-a-time check and the claim are not one atomic step. It is documented, not fixed.
+- **`meta`: an opaque object on the job record** (at most 4 KiB as canonical JSON, settable through `validate`/`apply` as `draft.meta` / `set.meta`, `null` clears it). It is part of `content_hash` when present, so changing it holds the job under `approval_required`; changing `times` does not, like `time`. A job without `meta` hashes exactly as before.
+- `chronos api version` gains `"features": ["times", "meta"]` (same `api: 1`) so a client can tell what this install understands. New tests in `tests/test_times.py`; new goldens `validate-times`, `validate-times-error`, `apply-times`, `snapshot-times`, `detail-times`, `claim-times-*`, `finish-times-slot`.
+- `chronos api snapshot` (and `detail.schedule`): every schedule now carries `date_key`, the date its claim and markers are keyed on. For a recurring job it equals `ds`; for a one-shot it is the date the job was set for, which `ds` (today) did not show. Additive: no field was renamed or changed.
+- New read-only verb `chronos api report <id> [--date <date_key>] [--run <run_id>]`: the stored report of one run as JSON, same envelope and error codes as the other verbs (`not_found`, `bad_request`). New goldens `report`, `report-not-found`; new tests in `tests/test_oneshot_report.py`.
+- A new install with no `jobs.json` is an empty registry everywhere, not just in `api health` and `api snapshot`: `chronos list` and `chronos field` no longer print a traceback, `chronos due` and `chronos triggers` find nothing to do (the tick stops logging `TICK-ERROR jobs file missing` every five minutes), and `api due --for session` returns `{"due": []}` instead of `internal`. The fix is in `load_jobs` itself, so every caller gets it. A jobs file that exists but cannot be parsed is still an error (`registry_unreadable` from the API, exit 3 with a message from the CLI). New tests in `tests/test_no_jobs_file.py`.
+- Review fixes for the above: a configured `jobs_file` (not the default location) whose **directory** does not exist (a typo, an unmounted volume, a sync folder that is missing) is still an error, not an empty registry: `chronos due` exits 3, the tick logs `TICK-ERROR jobs file unreadable or its directory is missing`, and `api health` returns `registry_unreadable`. `chronos list` with an entry that is not a job object (e.g. `[1]`) prints a message and exits 3 instead of a traceback. `api detail`, `api snapshot` and the last-run lookup skip a non-numeric `start_ts` or `duration_s` in a `runs.jsonl` row instead of failing the whole verb with `internal`. New tests in `tests/test_review_pr5.py`.
+- **Exit codes changed (check scripts that parse them):** `chronos due` and `chronos triggers` with no `jobs.json` (directory present) go from 3 to 0; `chronos field` with a corrupt jobs file goes from 1 (traceback) to 3 (message); `chronos api due --for session` with a corrupt jobs file goes from error code `internal` to `registry_unreadable`.
+
+## 0.3.1 - 2026-10-29
+
+Two gaps in the 0.3.0 API, found by the Talos integration.
+- `chronos api detail <id>` now returns `runs`: the job's 20 most recent runs, newest first, each `{run_id, ds, status, runner, trigger, started_at, ended_at, duration_s, has_report}` (plus `late_note` when one exists). A day that has only a `failed-` / `stalled-` / `ran-` marker and no run row appears with `run_id: null`. It was always `[]`.
+- `chronos api health` on an install with no `jobs.json` returns a normal result (`headless: "unused"`, no issues) instead of `registry_unreadable`. A jobs file that exists but cannot be parsed is still an error.
+- Compiled Python: no `.pyc` or `__pycache__` was ever committed to Chronos (checked, and a test now guards it); both stay in `.gitignore`.
+- New goldens `detail-with-runs` and `health-empty`; `chronos --version` and `api version` report `0.3.1`.
+
+## 0.3.0 - 2026-10-29
+
+The runs half of 0.3. New `chronos api` verbs: `claim`, `finish`, `orphans`, `start`, `session-prompt`, `health`, `probe` (README, "Run verbs").
+Run ids (`r_<ULID>`) in `runs.jsonl` with `ds`, `run_id`, `status` and `claude_path`; one report per run plus the per-day copy; the claim's sibling owner
+file (written tmp + rename, removed before every `rmdir`, swept with a stale claim). **Launch watchdog**: a headless run with no output and no CPU progress
+for `launch_timeout_s` is killed and becomes `stalled-` (terminal for the tick) with `headless.blocked`; `probe` is "Retry" (a one-off `launchctl submit`
+job; `CHRONOS_LAUNCHCTL` swaps the binary for tests). Every Python step of `chronos-run.sh` now runs under the external `kill -9` deadline. The tick sends the
+session-wait notification (talos only) and skips Claude runs while headless is blocked. New config: `launch_timeout_s`, `probe_timeout_s`, `env_pass`.
+
+Also in 0.3.0: a step of the run script killed at its deadline is a launch stall (`stalled-`, `headless.blocked`, no auto-retry); the test-only environment variables (`CHRONOS_LAUNCHCTL`, `CHRONOS_TEST_BLOCK_FIFO*`) are honoured only with `CHRONOS_TEST_MODE=1` and otherwise ignored with a stderr warning; `probe` can take up to `probe_timeout_s` (120 s), so callers must not wait on it synchronously and should poll `health` instead; `chronos --version` and `api version` report `0.3.0`.
+
+Review fixes: a claim whose run script is alive (pid + start time in the owner file) is never swept, so a sleeping Mac cannot start a second copy; notify commands run under the external deadline and, from the tick, in the background; the trigger pass skips session-only jobs and `triggers` are part of `content_hash` when present; `chronos run` and the UI's Run now honour `headless:false` and `headless.blocked` and clear `stalled-`; `probe` keeps the block until it hears OK and its one-off job limits itself; `due` evaluates yesterday's fire and the tick claims that `ds`; a failed or stalled day is refused by `claim` and by the run script; spawned runs get a scrubbed environment; `finish` writes 0600 and never closes a headless run; no wait notice on the first tick after a sleep.
+
+## 0.3.0-rc1 - 2026-10-29
+
+The core of 0.3: a JSON API for programs that drive Chronos, one writer for every change, an approved record that can hold
+tampered jobs, session jobs, honest times, and deadlines the tick enforces from outside. **Everything from 0.2.2 keeps
+working unchanged under the defaults** (`approval_required: false`, `session_runner: "hook"`): all 144 existing tests pass
+without a single edit. The run verbs (`claim`, `finish`, `start`, `session-prompt`, `health`, `probe`, `orphans`), run ids,
+the launch watchdog and the session-wait notification come in the next release candidate.
+
+**`chronos api <verb>`** - JSON on stdin and stdout, exit 0 or 1, errors as `{"error": {code, message, fields}}`
+- `version`, `snapshot`, `detail`, `validate`, `apply`, `pause`, `disable`, `config set`, `due --for session`,
+  `session-beat`, `approved`, `migrate`; see the README's "The API"
+- `tests/golden/api/*.json`: 26 golden outputs generated by the real CLI against a temp `HOME` with a fixed clock;
+  `tests/run.sh --golden` regenerates them and a test fails if the CLI drifts
+
+**Times** - every instant `chronos api` prints is RFC 3339 with an offset, and `tz` is an IANA zone (`$TZ`, else the zone
+`/etc/localtime` resolves to, including macOS's `zoneinfo.default`), not an abbreviation. Spring-forward gaps fire at the next
+valid minute; a fall-back hour fires once, at its first occurrence. The 0.2 files (`jobs.json`, markers, `chronos list`) keep
+their naive local format.
+
+**One writer** (`lib/chronos_write.py`) - `apply` and every web-UI save (create, schedule, model, triggers, prompt, delete) take
+one flock, `<jobs_file>.lock`. A stale `base_etag`, an `expected_etag` the write would not produce, a create on an existing id or
+folder, or a change that is not the `normalized` form `validate` returned is refused with nothing written. `enabled: false` is
+honoured on create; the prompt is written byte for byte (the web UI's `write_prompt` now takes the flock too, so a UI save racing
+`apply` serializes).
+
+**Approved record** - every write through the single writer also writes `<state_dir>/approved/<id>.json` (0600).
+`approval_required` (default `false`) decides what it means:
+- off: information only. `snapshot` reports `changed_outside`; hand-written and hand-edited jobs run as in 0.2.2, and upgrading
+  holds nothing
+- on: a job whose `content_hash` differs from its record, or has none, is **held**: not due, `claim`/`run`/`prompt` refuse, the
+  tick does not spawn it (clock or event), the hook does not arm it. Deleting `approved/` holds everything
+- the web UI shows held jobs with **Approve as it is on disk** (token-gated, `via: "ui"`); a UI save of a prompt is itself an
+  approval, but a settings save on an already-held job does not approve what changed outside
+- `chronos api migrate`: interactive y/N baseline for an existing install (approve each job, convert `both` jobs to session-only,
+  then switch `session_runner` to `talos` and `approval_required` on). `config set session_runner talos` is refused with
+  `both_jobs_remain` while any `both` job exists
+
+**Runners and session jobs**
+- new job field `headless` (absent = true): `session` = `in_session` and not `headless`; `headless`; `both` = the 0.2 meaning of
+  `in_session: true` (shown, but an edit must choose one). A job that is neither can never run and is refused
+- `due --for session`: `in_session`, enabled, on the clock, not restricted, not a command, not paused, not held, inside its
+  window, no grace; evaluates today's **and yesterday's** fire (a 23:50 job is offered at 00:05 with yesterday's `ds`)
+- `session_runner: "talos"`: the SessionStart hook arms nothing and prints "Talos runs session jobs; no timers armed."; one-shots
+  may be session jobs (the UI stops clearing `in_session` on them)
+- `day_state` (the per-day state machine: `pending`, `waiting`, `running`, `ran`, `failed`, `stalled`, `missed`, `held`) moved
+  into the library; `missed` appears only at fire + `catchup_min`. The dashboard strip uses it, so a job past its grace period but
+  inside its window shows as upcoming rather than missed
+- session heartbeat (`session-beat`, refreshed by `due --for session`), reported as `session_beat_age_s`
+
+**Deadlines from outside the process** - `bin/chronos-deadline.sh` (`ch_step`) runs each Python step of the tick as a child under
+a bash watchdog that `kill -9`s it after `step_deadline_s` (60; `trigger_deadline_s` 150 for the trigger pass), logs
+`DEADLINE <step>` and lets the tick exit 0. The test blocks a step in the kernel for real (`open()` of a FIFO with no writer).
+
+**Review fixes** - the tick never spawns a `headless:false` (session-only) job; an API `update` on a held job is refused (`held`) and never re-approves outside edits; spring-forward gap times fire at the first valid instant and the repeated fall-back hour keeps its offset (fold-aware, ages computed in UTC); the web UI never creates `both` jobs under `session_runner: talos`, "Approve as it is on disk" is bound to the reviewed `content_hash`, and a UI prompt save approves only if the settings still match; ids with a trailing newline are rejected; an invalid `$TZ` is dropped with a warning.
+
+**Config** - new keys `session_runner`, `approval_required`, `session_wait_notify_min` (stored; the notification is next),
+`step_deadline_s`, `trigger_deadline_s`.
+
+**Version** - `chronos api version` reports `0.3.0-rc1`. `chronos --version` now says `0.3.0-rc1` too (the three version pins in `tests/test_chronos.py` were updated; nothing else in it changed).
+
+**Tests** - 144 -> 261 (117 new: api core 21, writer 27, approval 31, session 16, deadlines 4, golden 5, review 13)
+
+## 0.2.2 - 2026-10-07
+
+Restricted scheduled jobs. Everything from 0.2.1 keeps working unchanged: a job without the new field runs exactly as before.
+
+**Restricted jobs** - `"restricted": true` on a Claude job makes its scheduled (clock) runs use the narrow tool list event
+runs already used
+- `--permission-mode=default`, `--allowedTools` from the job's `allowed_tools` (default `Read`, `Grep`, `Glob` plus the
+  notify sender), `--tools`, the secret-path `--disallowedTools`, `--strict-mcp-config` unless the list names an MCP tool
+- never `--dangerously-skip-permissions` and none of `claude_args`
+- Chronos writes the report and the done-marker from the final message (the job has no Write tool unless you grant one);
+  success is a clean exit with no error result, so `require_marker` does not apply
+- the run prompt states the tool list and tells the job it is restricted; the Control Room shows a "Restricted: schedule" chip
+- refused together with `in_session: true` (a live session's permissions cannot be narrowed) and on command jobs
+- `bin/chronos jobenv` reports `CH_RESTRICTED`; `chronos record` takes `--restricted`
+- **Saved permissions no longer leak in.** Restricted and event runs start with `--setting-sources=` so `~/.claude/settings.json`,
+  the agent's `settings.json` and `settings.local.json` (where "always allow" clicks are saved) are not merged on top of the
+  job's tool list. The agent folder's hooks, `autoMemoryEnabled` and `permissions.deny` are passed back via `--settings`.
+  Checked live: a `Bash(curl:*)` allow planted in `settings.local.json` let an unrestricted-by-settings run execute curl, and a
+  restricted run refused it. Side effect: `CLAUDE.md` is not auto-loaded in such a run.
+- A malformed `restricted` (`"true"`, `1`, `null`) is invalid everywhere (tick, Run now, `jobenv`, the run script) and never runs
+  unrestricted.
+- A restricted run where every tool call was refused, or whose usage record could not be written, is a failure, not a done job;
+  refusals are appended to the report.
+- Default deny list adds `~/.config`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/.pgpass`
+  and the Keychains folder.
+
+- Round 2: hook files are write-protected in restricted/event runs (deny `Edit` on `.claude/`, `.git/`, `.mcp.json` and the hook
+  script folders), because a hook can answer "allow"; `permissions.deny` is merged from the user, project and local files; the
+  user's `apiKeyHelper` is passed back. Checked live: a restricted job with broad Edit created a normal file and was refused
+  `hooks/` and `.claude/`; a claude.ai connector tool named in `allowed_tools` loaded and ran in a restricted run.
+
+**Tests** - 122 -> 144
+
+## 0.2.1 - 2026-10-01
+
+Command jobs, and a quieter installer. Everything from 0.2.0 keeps working unchanged.
+
+**Command jobs** - `"kind": "command"` plus `"command": "<shell command>"` runs a plain command on the clock
+schedule instead of `claude -p`: same atomic claim, done-marker, catch-up, watchdog, log, notice and notify,
+no `prompt.md`, no tokens
+- success is exit code 0 inside the watchdog; the output is the log, its last 40 lines the report
+- runs through `/bin/bash -c` in the workspace; `CHRONOS_JOB` and `CHRONOS_RUN=1` are set; stdin is closed
+- refused for a command job: `triggers`, `clock: false`, `in_session: true` (outside text never reaches a shell)
+- the web UI shows the command read-only, hides the Prompt, Triggers, Model and Guardrails tabs for it, and
+  cannot create or edit one; "Run now" works
+- the Usage page lists the run as `(command)` with zero tokens and zero cost
+
+**Installer**
+- `install.sh --quiet`: warnings and errors plus one summary line, for another installer that calls this one
+- with `--no-load` the closing text no longer prints a UI address as if it were running; it prints the exact
+  commands to start the scheduler and the UI by hand (also in the README)
+- "created an empty jobs.json" now reads "no jobs yet: ..." and says what to do about it
+
+**Docs** - a note about the macOS protected-folders prompt (keep the workspace out of Desktop, Documents and
+Downloads)
+
+**Tests** - 109 -> 122
+
+## 0.2.0 - 2026-10-01
+
+Events, a usage meter and the Control Room. Everything from 0.1.0 keeps working unchanged: a config or
+`jobs.json` written for 0.1.0 loads as is, and every new key is optional.
+
+**Event triggers**
+- A job can carry `triggers`: `file` (new or modified file, settled 30 s), `gmail` (through a `gmail_command`
+  adapter you configure; an IMAP example ships in `examples/gmail/`), `github` (pull requests, issues,
+  releases through `gh api`) and `webhook` (`POST /hook/<id>`)
+- `"clock": false` makes an event-only job
+- The first check of a trigger records a baseline and fires nothing; every event has its own atomic claim,
+  done-marker, log and report; at most 6 event runs per job per hour (`event_rate_per_hour`)
+- Gmail and GitHub triggers degrade cleanly when the adapter or the `gh` CLI is missing: the error is
+  recorded and shown, other triggers and jobs are unaffected
+- Webhook: 127.0.0.1 only, per-job secret (0600, constant-time compare), 64 KB bodies, queue of 20,
+  throttle on wrong secrets, extra tunnel hostnames accepted on `/hook/` only (`hook_hosts`)
+- **Event runs are untrusted and never bypass permissions**: `--permission-mode=default`, a narrow
+  `--allowedTools` list (job setting `allowed_tools`, config `event_allowed_tools`), `--tools`,
+  `--disallowedTools` for secret paths, `--strict-mcp-config`; payloads are sanitised, capped and wrapped in
+  a nonce-marked data block; `claude_args` is ignored for them
+
+**Per-job model** - `model` on a job is passed as `--model` (config `model_denylist` can forbid some)
+
+**Usage meter** - runs use `--output-format=stream-json --verbose`; each run appends a row to `runs.jsonl`
+(tokens, cost, model, turns, denials) and the newest 7-day / 5-hour utilisation goes to `rate-limits.json`.
+New Usage page and a per-job usage panel. The plain-text log is rebuilt from the stream; a truncated or
+unrecognised stream degrades to the raw output
+
+**Control Room** - agents, skills, hooks with on/off switches (for hooks that read a `<name>.off` file),
+configurable workspace health tiles, plugins and MCP servers (read from files, never `claude mcp list`)
+
+**Agent files** - view and edit CLAUDE.md, agents, skills, notes and auto-memory from the browser:
+allowlist rebuilt per request, opaque ids, exclude globs, sha256 conflict guard, history and restore,
+optional ceiling counter and lint command
+
+**Other**
+- `chronos triggers --dry`, `chronos jobenv`, `chronos claim-event`, `chronos record`, `chronos --version`
+- `tools/demo.py` builds a fake workspace for the UI (used for the new screenshots)
+- A config named through `CHRONOS_CONFIG` that is missing is now an error instead of silently becoming the
+  defaults, so a run can never write into the default home by accident
+- Run script validates the job id, event hash and type before doing anything; `eval` of the config output no
+  longer swallows a failed `chronos env`
+- New docs: `docs/triggers.md`, `docs/control-room.md`; new screenshots taken against the demo workspace
+- 109 tests (was 32)
+- `uninstall.sh --purge` deletes the config folder only when it is a folder named `chronos`, and quotes every
+  path (a `CHRONOS_CONFIG` sitting straight in `$HOME` can no longer widen the purge)
+
+## 0.1.0 - 2026-10-01
+
+First public-shaped release, extracted and generalized from a private scheduler.
+
+- launchd tick every 5 minutes; jobs defined in `jobs.json`, one `prompt.md` per job
+- Headless runs through `claude -p` with a 40-minute watchdog
+- Atomic claim (`mkdir`) plus done-markers, so a job runs once per day across every runner
+- Catch-up windows for a machine that was asleep, and a grace period so a live session can take a job first
+- One-shot jobs that switch themselves off after a successful run
+- Failure notifications through a pluggable `notify` command (Telegram and macOS examples included)
+- Telegram/iMessage plugins disabled in the headless child (prevents the second-poller HTTP 409)
+- Web UI on 127.0.0.1: dashboard, prompt editor with history, schedule editor, run now, pause, logs and reports
+- Optional SessionStart hook that arms in-session timers and reports headless runs
+- `install.sh` / `uninstall.sh`, test suite with a fake clock and a fake `claude`

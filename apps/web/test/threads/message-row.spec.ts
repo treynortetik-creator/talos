@@ -4,8 +4,9 @@ import { expect, type Locator, type Page, test } from '@playwright/test'
 
 test.use({ bypassCSP: true, serviceWorkers: 'block' })
 
+const MSG_ID = 'm_01JBF3V7Q8K2M4N6P8R0S1T' // every test message's id is this plus its own letters (A1, C2, ...)
 const msg = (id: string, author: 'agent' | 'owner', text: string, at: string) => ({
-  id: `m_01JBF3V7Q8K2M4N6P8R0S1T${id}`,
+  id: `${MSG_ID}${id}`,
   thread_id: 'general',
   author,
   kind: 'text',
@@ -24,7 +25,9 @@ const MSGS = [
   ),
   msg('R2', 'owner', 'First line of my own message.', '2026-10-28T15:01:00.000Z'),
 ]
-const row = (page: Page, n: number) => page.locator(`[data-msg-id$="R${n}"]`)
+// the whole id, never a suffix: a message the app makes (a queued send, a reply) has a random id that can end in the
+// same letters (a suffix match on "A1" matched two rows about 1 run in 1000: a strict-mode violation)
+const row = (page: Page, n: number) => page.locator(`[data-msg-id="${MSG_ID}R${n}"]`)
 
 async function seed(page: Page) {
   await page.goto('/t/general')

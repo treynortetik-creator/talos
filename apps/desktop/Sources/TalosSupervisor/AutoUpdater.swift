@@ -39,8 +39,6 @@ public final class AutoUpdater: @unchecked Sendable {
     public var checkJitter: Double = AutoUpdate.checkJitter
     public var quietPoll: Double = AutoUpdate.quietPoll
     public var quietCap: Double = AutoUpdate.quietCap
-    /// An Update now waits this long (from the press) for busy thread agents; Main's turn is always waited for.
-    public var threadWait: Double = AutoUpdate.threadWait
     /// The automatic path stops waiting on Main's unsent text once it has been unchanged this long.
     public var draftStaleAfter: Double = AutoUpdate.draftStaleAfter
     public var noticeFor: Double = AutoUpdate.noticeFor
@@ -50,6 +48,11 @@ public final class AutoUpdater: @unchecked Sendable {
     /// install.sh --check-only (Gatekeeper may ask Apple online).
     public var checkTimeout: Double = 300
     public var gitTimeout: Double = 120
+    /// The public repository the release's commit is fetched from, by this address and never by the checkout's own `origin`. https
+    /// only; a local path or file:// address is used only with `allowLocalFeed` (tests).
+    public var repoURL: String = CloneProvisioner.publicRepo
+    /// git by full path; nil: looked for (`HardenedGit.resolve`). A test names one.
+    public var gitPath: String?
     /// The prepare step: the checkout move and `pnpm install`.
     public var prepareTimeout: Double = 1200
     /// The health gate: how long the swap waits for the new app's own healthy report before it puts the previous app back.
@@ -118,6 +121,8 @@ public final class AutoUpdater: @unchecked Sendable {
     public var onStatus: @Sendable (UpdateStatus) -> Void = { _ in }
     /// The build the relay reports on its /healthz now (nil: no relay set, or it did not answer).
     public var relayBuild: @Sendable () -> String? = { nil }
+    /// Tests only: what the stand-ins for open, osascript and install.sh need in the fixed environment (the app adds nothing).
+    public var testScriptEnv: @Sendable () -> [String: String] = { [:] }
     public var run: @Sendable (_ argv: [String], _ env: [String: String], _ timeout: Double) -> RunResult = { a, e, t in
       ProcessRunner.run(a, env: e, timeout: t)
     }
@@ -179,7 +184,9 @@ public final class AutoUpdater: @unchecked Sendable {
   private var saidOff = false
   private var saidNoKey = false
   /// When the swap of this process's own pending update was asked to stop (over `applyCap`).
-  private var stopAskedAt: Double?
+  var stopAskedAt: Double?
+  let repairLock = NSLock()
+  var heldForRepair: AutoUpdate.Pending?  // behind `repairLock`; see `repairHold` (AutoUpdaterRepair.swift)
   /// Since when (awake) a rollback has waited for Main to be restartable onto the previous code.
   private var goingBackSince: Double?
   private let statusLock = NSLock()
@@ -275,7 +282,7 @@ public final class AutoUpdater: @unchecked Sendable {
   }
 
   /// This process moved the checkout (or is about to) and has not handed it to the swap yet: its pending record is its own.
-  private var ownsPending: Bool {
+  var ownsPending: Bool {
     switch phase {
     case .final: return true
     default: return false
@@ -331,9 +338,7 @@ public final class AutoUpdater: @unchecked Sendable {
       case .waiting(let r, _, _), .notice(let r, _, _):
         let now = self.hooks.awake()
         self.forced = true
-        self.forcedThreads.pressedAt = now
-        self.forcedThreads.skip = false
-        self.forcedThreads.busy = []
+        self.forcedThreads = ForcedThreads(pressedAt: now)
         self.forcedWait = QuietWait(since: now)
         self.forcedOwner = self.hooks.ownerActivity()
         self.forcedWhySaid = nil
@@ -652,8 +657,9 @@ public final class AutoUpdater: @unchecked Sendable {
       }
       return refuse(m, .checkout)
     }
-    guard let clean = checkoutClean(co) else { return refuse(m, .checkout) }
-    guard clean else { return refuse(m, .dirty) }
+    // the apply script's own look at the checkout comes before any git call of ours in it
+    guard stageScript(for: co) else { return refuse(m, .install) }
+    if let why = preflight(co) { return refuse(m, why) }
     // the release's public commit, fetched now (nothing moves): the swap later needs no network for the code
     guard fetchCommit(co, m.gitSha) else { return refuse(m, .commit) }
     // the zip, into a folder of the updater's own, from the same feed as the manifest
@@ -676,9 +682,23 @@ public final class AutoUpdater: @unchecked Sendable {
       try? FileManager.default.removeItem(atPath: folder)
       return refuse(m, .sha256)
     }
-    let install = co + "/apps/desktop/scripts/install.sh"
+    // the checkout's own install.sh is never run: HEAD must be in the release's history, and the script that checks the zip is the
+    // RELEASE commit's (read out of the object store by a hardened `git show`), not a file an agent could have edited in the folder
+    if let why = historyProblem(co, m.gitSha) {
+      try? FileManager.default.removeItem(atPath: folder)
+      return refuse(m, why)
+    }
+    guard let install = extractInstallScript(co, m.gitSha, into: folder) else {
+      try? FileManager.default.removeItem(atPath: folder)
+      return refuse(m, .checkout)
+    }
+    // (install.sh finds dirname, tr, cat and more by name: the fixed environment keeps the login PATH's folders out of it)
+    guard let checkEnv = applyEnv(deps: false) else {
+      try? FileManager.default.removeItem(atPath: folder)
+      return refuse(m, .checkout)
+    }
     let r = hooks.run(
-      ["/bin/bash", install, "--from-release", zip, "--sha256", m.zipSha256, "--team", m.teamId, "--check-only"], scriptEnv(),
+      ["/bin/bash", install, "--from-release", zip, "--sha256", m.zipSha256, "--team", m.teamId, "--check-only"], checkEnv,
       options.checkTimeout)
     guard r.ok else {
       try? FileManager.default.removeItem(atPath: folder)
@@ -720,10 +740,9 @@ public final class AutoUpdater: @unchecked Sendable {
     guard let build = hooks.relayBuild(), let hex = AutoUpdate.relayHex(build) else { return nil }
     let sha = r.manifest.gitSha.lowercased()
     if sha.hasPrefix(hex) || hex.hasPrefix(sha) { return nil }
-    let env = scriptEnv()
-    guard hooks.run(["/usr/bin/env", "git", "-C", r.checkout, "cat-file", "-e", hex + "^{commit}"], env, 30).ok else { return nil }
-    let old = hooks.run(["/usr/bin/env", "git", "-C", r.checkout, "merge-base", "--is-ancestor", hex, sha], env, 30)
-    return old.ok ? build : nil
+    guard preflight(r.checkout) == nil else { return nil }  // a folder that is not a plain clone is not asked anything
+    guard gitRun(r.checkout, ["cat-file", "-e", hex + "^{commit}"], timeout: 30)?.ok == true else { return nil }
+    return gitRun(r.checkout, ["merge-base", "--is-ancestor", hex, sha], timeout: 30)?.ok == true ? build : nil
   }
 
   /// A failed release: said once per version and reason, and not tried again for a day.
@@ -736,7 +755,7 @@ public final class AutoUpdater: @unchecked Sendable {
   }
 
   /// A line said once per key (a check runs about every hour); the log has every one.
-  private func sayOnce(_ key: String, _ line: String) {
+  func sayOnce(_ key: String, _ line: String) {
     var said = (FileManager.default.contents(atPath: saidPath).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
     if said[key] != nil { return }
     said[key] = ISOTime.string(hooks.wall())
@@ -755,7 +774,7 @@ public final class AutoUpdater: @unchecked Sendable {
     return o.compactMapValues { ($0 as? NSNumber)?.doubleValue }
   }
 
-  private func noteFailed(_ version: String) {
+  func noteFailed(_ version: String) {
     var r = failedRecord()
     r[version] = hooks.wall()
     if r.count > 20 { r = [version: r[version]!] }
@@ -765,42 +784,8 @@ public final class AutoUpdater: @unchecked Sendable {
     }
   }
 
-  /// nil: not a git checkout that git can read.
-  private func checkoutClean(_ co: String) -> Bool? {
-    // the checkout must be a repository of its own: a folder with no .git inside another repository would otherwise be read as that one
-    guard let top = git(co, ["rev-parse", "--show-toplevel"]), PathUtil.canonical(top) == PathUtil.canonical(co) else { return nil }
-    let r = hooks.run(["/usr/bin/env", "git", "-C", co, "status", "--porcelain"], scriptEnv(), options.gitTimeout)
-    guard r.ok else { return nil }
-    return r.stdout.isEmpty
-  }
-
-  /// The commit in the checkout's object store, fetched from its origin (the public repo) if it is not there yet.
-  private func fetchCommit(_ co: String, _ sha: String) -> Bool {
-    let has = { self.hooks.run(["/usr/bin/env", "git", "-C", co, "cat-file", "-e", sha + "^{commit}"], self.scriptEnv(), 30).ok }
-    if has() { return true }
-    _ = hooks.run(["/usr/bin/env", "git", "-C", co, "fetch", "--quiet", "origin", sha], scriptEnv(), options.gitTimeout)
-    if has() { return true }
-    _ = hooks.run(["/usr/bin/env", "git", "-C", co, "fetch", "--quiet", "--tags", "origin"], scriptEnv(), options.gitTimeout)
-    return has()
-  }
-
-  private func git(_ co: String, _ args: [String]) -> String? {
-    let r = hooks.run(["/usr/bin/env", "git", "-C", co] + args, scriptEnv(), options.gitTimeout)
-    guard r.ok else { return nil }
-    let s = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-    return s.isEmpty ? nil : s
-  }
-
-  /// The login environment without any session's identity (as install.sh scrubs its relaunch), and with git never prompting.
-  private func scriptEnv() -> [String: String] {
-    var e = hooks.env()
-    for k in e.keys where k.hasPrefix("TALOS_APP_WORKER") || k.hasPrefix("CLAUDE_CODE_") || k == "CLAUDECODE" || k == "TALOS_SESSION_ROLE" {
-      e[k] = nil
-    }
-    e["GIT_TERMINAL_PROMPT"] = "0"
-    if let p = BundledTools.appending(toPath: e["PATH"], dir: BundledTools.dir) { e["PATH"] = p }  // the app's own bun, last
-    return e
-  }
+  /// git by full path, looked for once (`Options.gitPath` names one for a test).
+  lazy var resolvedGit: String? = options.gitPath ?? HardenedGit.resolve()
 
   // MARK: the prepare, the last look and the swap
 
@@ -809,15 +794,11 @@ public final class AutoUpdater: @unchecked Sendable {
     let m = r.manifest
     phase = .idle(next: nextCheck(r.checkedAt))
     setStatus(.preparing(version: m.version))
-    guard let clean = checkoutClean(r.checkout) else { return refuseApply(m, .checkout) }
-    guard clean else { return refuseApply(m, .dirty) }
+    // a copy of the script: the checkout it moves may hold the original. Its --preflight comes before any git call of ours in the checkout
+    guard stageScript(for: r.checkout) else { return refuseApply(m, .install) }
+    if let why = preflight(r.checkout) { return refuseApply(m, why) }
     guard let head = git(r.checkout, ["rev-parse", "HEAD"]) else { return refuseApply(m, .checkout) }
     let ref = git(r.checkout, ["symbolic-ref", "--quiet", "--short", "HEAD"]) ?? head
-    // a copy of the script: the checkout it moves may hold the original
-    let source = options.applyScript ?? (r.checkout + "/apps/desktop/scripts/auto-update-apply.sh")
-    try? FileManager.default.removeItem(atPath: scriptPath)
-    guard (try? FileManager.default.copyItem(atPath: source, toPath: scriptPath)) != nil else { return refuseApply(m, .install) }
-    chmod(scriptPath, 0o700)
     for f in [resultPath, preparePath] { try? FileManager.default.removeItem(atPath: f) }
     // written before the checkout moves: a launch after a crash from here on finds it and puts the checkout back
     var p = AutoUpdate.Pending(
@@ -826,17 +807,22 @@ public final class AutoUpdater: @unchecked Sendable {
     p.commit = m.gitSha
     guard writePending(p) else { return refuseApply(m, .install) }
     phase = .final(r, QuietWait(), owner: owner, ref: ref)  // owned from here: `settlePending` leaves it alone
-    let out = hooks.run(
-      ["/bin/bash", scriptPath, "--prepare", "--checkout", r.checkout, "--commit", m.gitSha, "--result", preparePath], scriptEnv(),
-      options.prepareTimeout)
+    let out = runApply(
+      ["--prepare", "--checkout", r.checkout, "--commit", m.gitSha, "--repo-url", options.repoURL, "--result", preparePath], deps: true,
+      timeout: options.prepareTimeout)
     let res = readResult(preparePath)
     guard out.ok, res?.ok == true else {
       // the script puts the checkout back itself; when it could not say so (or never got that far), the app does if it moved
-      if res?.restored != true { restoreCheckout(p) }
-      removePending()
+      let back = checkedBack(p, restore: res?.restored != true)
+      if back { removePending() }
       phase = .idle(next: nextCheck(r.checkedAt))
       let why = res?.why.flatMap(AutoUpdate.Failure.init(rawValue:)) ?? (out.timedOut ? .deps : .checkout)
-      return refuseApply(m, why)
+      if back { refuseApply(m, why) } else {  // not back: the repair line is the only one said
+        audit("apply_refused", ["version": m.version, "why": why.rawValue])
+        noteFailed(m.version)
+        keepForRepair(p)
+      }
+      return
     }
     audit("prepared", ["version": m.version, "commit": String(m.gitSha.prefix(12))])
   }
@@ -848,10 +834,20 @@ public final class AutoUpdater: @unchecked Sendable {
       "/bin/bash", scriptPath, "--swap", "--checkout", r.checkout, "--commit", m.gitSha, "--to", ref, "--zip", r.zip, "--sha256",
       m.zipSha256, "--team", m.teamId, "--dest", r.dest, "--result", resultPath,
       "--health-file", healthPath(m.version), "--health-wait", String(Int(options.healthWait)), "--version", m.version,
-    ]
-    guard var p = readPending(), let pid = hooks.spawn(argv, scriptEnv(), dir + "/apply.log") else {
+    ] + ["--git", resolvedGit ?? ""]  // no resolved git: the preflight below refuses first (an empty --git would be exit 64)
+    // the checkout must be on the release's commit right now (an agent could have moved it since the prepare): else nothing starts
+    var headWhy: AutoUpdate.Failure? = preflight(r.checkout)
+    if headWhy == nil, git(r.checkout, ["rev-parse", "HEAD"])?.lowercased() != m.gitSha.lowercased() { headWhy = .checkout }
+    if let why = headWhy {
+      // `restore` drops the pending record only when the way back worked: otherwise it stays and the next look settles it again
       restore(r, ref: ref)
-      removePending()
+      hooks.draftSettled(m.version, .neverStarted)  // nothing quit: the text is still in Main's box
+      phase = .idle(next: nextCheck(r.checkedAt))
+      // after the prepare the folder is on the new version's code: a folder that cannot be put back has its own words
+      return why == .checkoutConfig ? refuseMoved(m, pending: readPending()) : refuseApply(m, why)
+    }
+    guard var p = readPending(), let swapEnv = applyEnv(deps: true), let pid = hooks.spawn(argv, swapEnv, dir + "/apply.log") else {
+      restore(r, ref: ref)
       hooks.draftSettled(m.version, .neverStarted)  // nothing quit: the text is still in Main's box
       phase = .idle(next: nextCheck(r.checkedAt))
       return refuseApply(m, .install)
@@ -869,9 +865,9 @@ public final class AutoUpdater: @unchecked Sendable {
 
   /// The checkout back where it was (`--restore`), its packages installed again.
   private func restore(_ r: Ready, ref: String) {
-    let out = hooks.run(
-      ["/bin/bash", scriptPath, "--restore", "--checkout", r.checkout, "--to", ref, "--result", dir + "/restore.json"], scriptEnv(),
-      options.prepareTimeout)
+    let out = runApply(
+      ["--restore", "--checkout", r.checkout, "--commit", r.manifest.gitSha, "--to", ref, "--result", dir + "/restore.json"], deps: true,
+      timeout: options.prepareTimeout)
     audit("restore", ["ok": out.ok ? "1" : "0", "exit": "\(out.status)"])
     // called only while this process owns the record; one that could not be put back stays, and the next look settles it
     if out.ok { removePending() }
@@ -885,31 +881,33 @@ public final class AutoUpdater: @unchecked Sendable {
     sayOnce(m.version + "|" + why.rawValue, line)
   }
 
-  private func writePending(_ p: AutoUpdate.Pending) -> Bool {
+  func writePending(_ p: AutoUpdate.Pending) -> Bool {
     guard let d = try? JSONEncoder().encode(p) else { return false }
     return (try? AtomicFile.write(d, to: pendingPath, mode: 0o600)) != nil
   }
 
-  private func readPending() -> AutoUpdate.Pending? {
+  func readPending() -> AutoUpdate.Pending? {
     guard let d = FileManager.default.contents(atPath: pendingPath), d.count < 8192 else { return nil }
     return try? JSONDecoder().decode(AutoUpdate.Pending.self, from: d)
   }
 
-  private func removePending() { try? FileManager.default.removeItem(atPath: pendingPath) }
+  func removePending() { try? FileManager.default.removeItem(atPath: pendingPath) }
 
-  private func readResult(_ path: String) -> AutoUpdate.Result? {
+  func readResult(_ path: String) -> AutoUpdate.Result? {
     FileManager.default.contents(atPath: path).flatMap { $0.count < 4096 ? $0 : nil }
       .flatMap { try? JSONDecoder().decode(AutoUpdate.Result.self, from: $0) }
   }
 
   /// True when nothing is pending (any more). A pending update is settled at most once: its record goes when its line is posted.
-  private func settlePending() -> Bool {
+  func settlePending(retryRepair: Bool = false) -> Bool {
+    if let h = repairHold { return retryRepair ? repairAgain(h) : holdForRepair(h) }  // held in memory too: a disk that cannot be written
     guard FileManager.default.contents(atPath: pendingPath) != nil else { return true }
     guard let p = readPending() else {
       audit("pending_unreadable")
       removePending()
       return true
     }
+    if p.repair == true { return retryRepair ? repairAgain(p) : holdForRepair(p) }  // AutoUpdaterRepair.swift
     let result = readResult(resultPath)
     let wall = hooks.wall()
     var alive = AutoUpdate.helperAlive(p, now: wall, processStart: hooks.processStart)
@@ -930,6 +928,7 @@ public final class AutoUpdater: @unchecked Sendable {
     }
     let healthy = FileManager.default.fileExists(atPath: healthPath(p.version))
     var failedVersion: String?
+    var back = true  // the app and the code are together again (checked, not assumed)
     switch AutoUpdate.settle(pending: p, result: result, running: options.appVersion, helperAlive: alive, healthy: healthy) {
     case .waiting:
       setStatus(.restarting(version: p.version))
@@ -940,8 +939,12 @@ public final class AutoUpdater: @unchecked Sendable {
       hooks.draftSettled(p.version, .updated)
       setStatus(.done(version: p.version))
     case .failed(let why, let restore):
+      if p.moved_untrusted == true {  // told already, when the swap was refused: nothing more is said or tried
+        audit("moved_untrusted_closed", ["version": p.version])
+        break
+      }
       failedVersion = p.version
-      if restore { restoreCheckout(p) }
+      back = checkedBack(p, restore: restore)
       audit("failed", ["version": p.version, "why": why.rawValue, "result": result == nil ? "none" : "read"])
       noteFailed(p.version)
       let old = p.old_version.isEmpty ? (options.appVersion ?? "the previous version") : p.old_version
@@ -950,7 +953,7 @@ public final class AutoUpdater: @unchecked Sendable {
         // the previous app is back; Main may still run the release's bridge (the new app restarted it onto it): back onto the
         // checkout's code too, before the line, or the line says how to finish
         var line = AutoUpdate.unhealthyLine(p.version, old: old)
-        if let head = git(p.checkout, ["rev-parse", "HEAD"]), hooks.bridgeNotOn(head) {
+        if readableForRestore(p.checkout), let head = git(p.checkout, ["rev-parse", "HEAD"]), hooks.bridgeNotOn(head) {
           let r = hooks.restartMainOnto(head)
           audit("rollback_restart_main", ["answer": "\(r)"])
           if r == .notYet {
@@ -963,38 +966,22 @@ public final class AutoUpdater: @unchecked Sendable {
         goingBackSince = nil
         // the health gate put the previous app back: this version is skipped for a week
         skip(p.version)
-        fail(line)
-        sayOnce(p.version + "|" + why.rawValue, line)
+        if back { fail(line); sayOnce(p.version + "|" + why.rawValue, line) }  // not back: the repair line is the only one
       case .rollbackFailed:
         skip(p.version)
         let line = AutoUpdate.rollbackFailedLine(p.version, old: old)
-        fail(line)
-        sayOnce(p.version + "|" + why.rawValue, line)
+        if back { fail(line); sayOnce(p.version + "|" + why.rawValue, line) }
       default:
         let line = AutoUpdate.failedLine(p.version, why: why, old: options.appVersion ?? p.old_version)
-        fail(line)
-        sayOnce(p.version + "|" + why.rawValue, line)
+        if back { fail(line); sayOnce(p.version + "|" + why.rawValue, line) }
       }
     }
     // after any rollback restart of Main above: a swap that started and failed may have restarted Main, so the copy is OFFERED, not dropped
     if let v = failedVersion { hooks.draftSettled(v, .triedAndFailed) }
-    for f in [pendingPath, resultPath, preparePath, scriptPath, dir + "/" + p.version, healthPath(p.version)] {
-      try? FileManager.default.removeItem(atPath: f)
-    }
+    if !back { return keepForRepair(p) }  // the record stays: removing it would forget the app and the code disagree
+    clearUpdateFiles(p)
     stopAskedAt = nil
     phase = .idle(next: nextCheck(hooks.awake()))
     return true
-  }
-
-  /// The swap was stopped before it could say how it ended: the checkout goes back to where it was, if it moved.
-  private func restoreCheckout(_ p: AutoUpdate.Pending) {
-    guard git(p.checkout, ["rev-parse", "HEAD"]) != p.old_head || git(p.checkout, ["symbolic-ref", "--quiet", "--short", "HEAD"]) != p.old_ref
-    else { return audit("restore_not_needed") }
-    // the copy that ran, else the app's own, else the checkout's
-    let script = [scriptPath, options.applyScript, p.checkout + "/apps/desktop/scripts/auto-update-apply.sh"]
-      .compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0) } ?? ""
-    let r = hooks.run(
-      ["/bin/bash", script, "--restore", "--checkout", p.checkout, "--to", p.old_ref, "--result", dir + "/restore.json"], scriptEnv(), 900)
-    audit("restore", ["ok": r.ok ? "1" : "0", "exit": "\(r.status)"])
   }
 }

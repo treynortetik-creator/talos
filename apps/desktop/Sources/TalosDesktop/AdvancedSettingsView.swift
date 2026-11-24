@@ -81,8 +81,8 @@ extension SettingsView {
       SettingsDivider()
       SettingsSwitchRow(title: "Open the Talos window when Talos starts", isOn: bind(\.openWindowAtLaunch), size: 14)
       SettingsDivider()
-      SettingsSwitchRow(title: "Also show reply banners with the Companion", isOn: $replyBanners, size: 14)
-        .help("When Talos is in the background and the Companion can show a reply itself, its bubble replaces the banner. On gives both.")
+      SettingsSwitchRow(title: "Also show reply banners with the Talos character", isOn: $replyBanners, size: 14)
+        .help("When Talos is in the background and the Talos character can show a reply itself, its bubble replaces the banner. On gives both.")
       SettingsDivider()
       SettingsRow(title: MacWords.takeOver, size: 14) {
         Button("Look for one") { model.findSessionToAdopt() }.buttonStyle(SettingsLinkStyle())

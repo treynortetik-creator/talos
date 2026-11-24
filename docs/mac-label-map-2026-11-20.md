@@ -44,7 +44,7 @@ Notices shown under the status lines:
 
 ## 3. Settings tab names, and the Relay address field
 
-Window title stays "Mac settings".
+Window title is now "Talos Settings" (was "Mac settings"). The path text "Mac settings → tab" in sentences still names the window the old way; the web Help quotes it, so it moves together with Help.
 
 | Old tab     | New tab                                                                                                           |
 | ----------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -52,7 +52,7 @@ Window title stays "Mac settings".
 | Connection  | Phone & Mac (this Mac, Claude account) and Advanced (Talos server address, talos-app command, sign-in command)    |
 | Permissions | Privacy & access                                                                                                  |
 | Hotkeys     | General, card "Quick message"                                                                                     |
-| Companion   | General, card "Companion" (and Advanced for "Also show reply banners with the Companion")                         |
+| Companion   | General, card "Talos character" (and Advanced for "Also show reply banners with the Talos character")             |
 | General     | General                                                                                                           |
 | (new)       | Advanced                                                                                                          |
 
@@ -82,10 +82,10 @@ Where each existing setting went:
 | Permissions list (Grant, Open System Settings, Ask now)                                                | Permissions   | Privacy & access: groups Allowed / You said no / Not asked yet; "Grant" is now "Allow…"                                                                                                                      |
 | Apps your agent may control                                                                            | Permissions   | Privacy & access, "See and use the screen"                                                                                                                                                                   |
 | Quick compose hotkey (Record, Reset)                                                                   | Hotkeys       | General, "Quick message": "Change shortcut", "Reset"                                                                                                                                                         |
-| Show Companion, Size (Standard / Mini)                                                                 | Companion     | General, Companion: "Show the Companion", "Size" (Standard / Small)                                                                                                                                          |
-| Rounds and little moments                                                                              | Companion     | General, Companion: "Let it wander now and then"                                                                                                                                                             |
-| Mini Talos delivers thread replies                                                                     | Companion     | General, Companion: "It brings me new replies"                                                                                                                                                               |
-| Also show reply banners                                                                                | Companion     | Advanced, "Also show reply banners with the Companion"                                                                                                                                                       |
+| Show Talos character, Size (Standard / Mini)                                                           | Companion     | General, Talos character: "Show the Talos character", "Size" (Standard / Small)                                                                                                                              |
+| Rounds and little moments                                                                              | Companion     | General, Talos character: "Let it wander now and then"                                                                                                                                                       |
+| Mini Talos delivers thread replies                                                                     | Companion     | General, Talos character: "It brings me new replies"                                                                                                                                                         |
+| Also show reply banners                                                                                | Companion     | Advanced, "Also show reply banners with the Talos character"                                                                                                                                                 |
 | Start Talos when I log in                                                                              | General       | General, "Open Talos when I log in"                                                                                                                                                                          |
 | Show a Dock icon                                                                                       | General       | General, "Show Talos in the Dock"                                                                                                                                                                            |
 | Keep this Mac awake while plugged in                                                                   | General       | General, "Keep my Mac awake while it's plugged in"                                                                                                                                                           |
@@ -138,3 +138,13 @@ screen…, Quick compose… → Quick message…, Sign in… → Connect this Ma
 
 The Terminal window itself, the setup checklist "Use a folder I already have" window, the first-run checklist rows and thread posts
 that quote "This thread's session…" still use the old words. They are Advanced-level screens or posts that go to the web app.
+
+## 2026-11-20 follow-up: plain words from the clean-VM run
+
+| Old                                                                                                                                       | New                                                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Couldn't read your threads (the Talos config.json is missing or damaged). The post goes to the default thread.                            | Talos's settings file is missing. Set up Talos again. The post goes to the default thread.                                                                                  |
+| Companion (General card, menu bar "Show Companion", "Companion: status", toggle "Show the Companion", size label, Advanced banner switch) | Talos character ("Show Talos character", "Talos character: status", "Show the Talos character", "Talos character size", "Also show reply banners with the Talos character") |
+| (no caption)                                                                                                                              | General card hint: "A small Talos figure on your screen that shows what your agent is doing."                                                                               |
+| Window title "Mac settings"                                                                                                               | "Talos Settings"                                                                                                                                                            |
+| This Mac's Talos window is signed in / is not signed in                                                                                   | Signed in on this Mac / Sign in on this Mac                                                                                                                                 |

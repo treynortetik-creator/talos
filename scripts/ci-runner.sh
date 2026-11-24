@@ -226,6 +226,8 @@ ci_plan() {
         { echo "ci-runner: plan: '$INPUT_REF' is no commit of this repository" >&2; return 1; }
       [ -z "${INPUT_JOBS:-}" ] || case ",$INPUT_JOBS," in *,check,*) ;; *) check=0 ;; esac ;;
   esac
+  # a part is never handed to a machine whose runner is not online now (scripts/ci-runner/online.sh); a switch for one that is not is off
+  if [ -r "$HERE/ci-runner/online.sh" ]; then . "$HERE/ci-runner/gh-account.sh" && . "$HERE/ci-runner/online.sh" && ci_plan_online; fi
   if [ "$check" = 1 ]; then
     case "${CI_DELPHI:-}" in on | shadow) delphi=bridge-shard-1,vitest ;; esac
     [ "${CI_DELPHI:-}" != on ] || parts="bridge-shard-1:delphi vitest:delphi"

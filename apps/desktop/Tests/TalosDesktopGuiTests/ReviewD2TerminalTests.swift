@@ -22,6 +22,9 @@ final class TmuxWorld {
     try? FileManager.default.createDirectory(atPath: base + "/bin", withIntermediateDirectories: true)
     setenv("HOME", base, 1)
     setenv("CFFIXED_USER_HOME", base, 1)
+    // A test run started from inside a Talos session inherits that session's Talos home, which names the real one: a manager built
+    // here would then take the real app's lock (held by the running app) and write there. Nothing of the live session may leak in.
+    for k in ["TALOS_APP_HOME", "TALOS_APP_WORKER_NONCE", "TALOS_APP_WORKER_THREAD", "TALOS_SESSION_ROLE", "TALOS_APP_THREAD_STATE"] { unsetenv(k) }
     setenv("PATH", base + "/bin:" + (getenv("PATH").map { String(cString: $0) } ?? "/usr/bin:/bin"), 1)
     writeScript(base + "/bin/tmux", """
       #!/bin/bash

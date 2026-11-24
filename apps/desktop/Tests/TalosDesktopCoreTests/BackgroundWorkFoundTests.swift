@@ -76,16 +76,30 @@ struct BackgroundWorkFoundTests {
     #expect(WorkerPolicy.victims(live).map(\.threadId) == ["b"])
   }
 
-  @Test func whenEveryQuietSessionHasBackgroundWorkTheLongestIdleIsTaken() {
+  /// T7: a session with background work is never the cap's choice; when every quiet one has some, the start goes ahead over the limit.
+  @Test func whenEveryQuietSessionHasBackgroundWorkNoneIsTakenAndTheStartGoesOverTheLimit() {
     let live = [
       L(threadId: "a", busy: false, lastActive: 30, background: true),
       L(threadId: "b", busy: false, lastActive: 20, background: true),
       L(threadId: "c", busy: true, lastActive: 1),
     ]
-    #expect(WorkerPolicy.planStart(live: live, maxLive: 3) == .parkThenStart("b"))
-    #expect(WorkerPolicy.victims(live).map(\.threadId) == ["b", "a"])
-    // a busy one never, background or not
+    #expect(WorkerPolicy.victims(live).isEmpty)
+    #expect(WorkerPolicy.planStart(live: live, maxLive: 3) == .startOverLimit)
+    #expect(WorkerPolicy.planStart(live: live, maxLive: 1) == .startOverLimit, "more than the cap is still full")
+    // a busy one never, background or not: every slot busy is a hold, as before
     let allBusy = live.map { L(threadId: $0.threadId, busy: true, lastActive: $0.lastActive, background: $0.background) }
     #expect(WorkerPolicy.planStart(live: allBusy, maxLive: 3) == .hold)
+    // room is room: no line, no over-limit
+    #expect(WorkerPolicy.planStart(live: Array(live.prefix(2)), maxLive: 3) == .start)
+    // one that has none is still taken first
+    let withClean = live + [L(threadId: "d", busy: false, lastActive: 40)]
+    #expect(WorkerPolicy.planStart(live: withClean, maxLive: 4) == .parkThenStart("d"))
+  }
+
+  /// The line the over-limit start posts, in the owner's words (the bridge's `busyLine` is the same text; a test there reads this file).
+  @Test func theBusyLineIsPlain() {
+    #expect(BackgroundWork.busyKind == "computer busy")
+    #expect(BackgroundWork.busyLine.hasPrefix("Your computer is busy"))
+    #expect(!BackgroundWork.busyLine.contains("/") && !BackgroundWork.busyLine.contains("cap"))
   }
 }

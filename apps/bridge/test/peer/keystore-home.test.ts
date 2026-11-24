@@ -193,8 +193,8 @@ describe('a wrapped code', () => {
   })
 })
 
-describe('no default home on the account: a home made later never takes the real home legacy secret', () => {
-  test('peer list, the send path and peer remove on a non-default home leave the legacy item; the default home made afterwards moves it', async () => {
+describe('no default home on the account: a home made later never moves or deletes the legacy secret, and only copies it for a peer in its own config', () => {
+  test('peer list, the send path and peer remove on a non-default home with a peer entry only copy the legacy item and never delete it; the default home made afterwards moves it', async () => {
     account = mkdtempSync(join(realpathSync(tmpdir()), 'acct-'))
     ACCOUNT_HOME_TEST.home = account // no ~/.config/talos/app under it
     a = await install({ to: byHost })
@@ -206,10 +206,11 @@ describe('no default home on the account: a home made later never takes the real
     const url = 'https://work-inbox.example.com/hook/peer/cn_fakefakefakefakefake0'
     new ConfigFile(join(a.home, 'config.json')).update((c) => ({ ...c, peers: [{ name: 'work', url, daily_cap: 50 }] }))
     const list = await cli(a, ['peer', 'list'])
-    expect(list.out).toContain('secret no')
-    expect(store.data.get(legacyKey)).toBe(FAKE_SECRET)
+    expect(list.out).toContain('secret yes') // copied under this home's own name (the peer is in its config)
+    expect(store.data.get(legacyKey)).toBe(FAKE_SECRET) // and never deleted
     const sent = await a.bridge.callTool('peer_send', { peer: 'work', text: 'hi', label: 'TASK' })
-    expect(sent.isError).toBe(true)
+    expect(sent.isError).not.toBe(true)
+    expect(text(sent)).toContain('queued for work') // the copied secret was found, so the message went into the outbox
     expect(store.data.get(legacyKey)).toBe(FAKE_SECRET)
     await cli(a, ['peer', 'remove', 'work'])
     expect(store.data.get(legacyKey)).toBe(FAKE_SECRET)

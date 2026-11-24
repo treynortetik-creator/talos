@@ -169,7 +169,7 @@ describe('every button that answers a card ignores an agent and obeys the owner'
     expect(resolves(client)).toHaveLength(1)
   })
 
-  it('a permission card: Deny, and Allow inside the approval sheet', async () => {
+  it('a permission card: Deny and Allow on the face and in the Details sheet', async () => {
     const c = composePermissionCard({
       request: {
         request_id: 'abcde',
@@ -184,12 +184,15 @@ describe('every button that answers a card ignores an agent and obeys the owner'
     })
     const client = setup({ cards: [c] })
     renderWith(<LiveCard id={c.id} highlighted />, client)
+    // the Allow on the card face: an agent's click does nothing
+    agentClick(screen.getByRole('button', { name: 'Allow' }))
+    await settle()
+    expect(resolves(client)).toHaveLength(0)
+    humanClick(screen.getByRole('button', { name: 'Details' }))
     const sheet = screen.getByTestId('approval-sheet')
     expect(sheet.hasAttribute('data-talos-protected')).toBe(true)
     agentClick(within(sheet).getByRole('button', { name: 'Deny' }))
-    const allow = within(sheet).getByRole('button', { name: /^Allow/ }) as HTMLButtonElement
-    allow.disabled = false
-    agentClick(allow)
+    agentClick(within(sheet).getByRole('button', { name: /^Allow/ }))
     // the compact card behind the sheet too
     agentClick(screen.getAllByRole('button', { name: 'Deny' })[0] as Element)
     await settle()

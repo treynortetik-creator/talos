@@ -33,6 +33,13 @@ describe('sessionWords', () => {
       'Usage limit · resets 4:00 PM',
     ],
     [
+      'needs you: Talos cannot type into it (the deaf-thread alarm)',
+      { needs_you: { kind: 'something Talos does not type into', since: ago(40), step: 'look at its screen' } },
+      {},
+      'needs',
+      "Needs you · Talos can't send it messages",
+    ],
+    [
       'needs you: usage limit, only the plan window',
       { needs_you: { kind: 'usage limit', since: ago(40) } },
       { aboutResetsAt: '2026-11-13T07:00:00.000Z' },

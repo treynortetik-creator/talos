@@ -80,19 +80,21 @@ export const PERMISSION_MODE_TEXT = {
   restarted:
     'The bridge restarted before this reached the Mac, so the mode may not have changed. Ask your agent again.',
   allowed: (mode: PermissionModeName) =>
-    `Allowed. The Mac is switching Main to ${PERMISSION_MODE_LABEL[mode]} and restarting it. It waits for you to confirm the startup dialog at the Mac.`,
+    `Allowed. Sent to the Mac, which saves ${PERMISSION_MODE_LABEL[mode]} and restarts Main when it has finished what it is doing; the Mac posts whether it saved. If it did, the new start waits for you to confirm the startup dialog at the Mac.`,
   notFromHere: 'This can only be allowed from the card in the app. Nothing was changed.',
   lockedAtApproval: `${SETTINGS_LOCKED} Nothing was changed.`,
   title: (mode: PermissionModeName) => `Allow the agent to switch to ${PERMISSION_MODE_LABEL[mode]}?`,
   summary: (mode: PermissionModeName) =>
     mode === 'bypass'
-      ? 'Nothing would ask first any more, and no permission cards would reach your phone. Talos restarts the agent to apply it. You can change it back in Mac settings → Session → Permission mode.'
-      : 'The agent would run without routine prompts and ask for the rest. Talos restarts the agent to apply it. You can change it back in Mac settings → Session → Permission mode.',
+      ? 'Nothing would ask first any more, and no permission cards would reach your phone. Talos restarts the agent when it has finished what it is doing. You can change it back in Mac settings → Session → Permission mode.'
+      : 'The agent would run without routine prompts and ask for the rest. Talos restarts the agent when it has finished what it is doing. You can change it back in Mac settings → Session → Permission mode.',
   warning: (mode: PermissionModeName) =>
-    mode === 'bypass' ? 'The agent could then do anything without asking you.' : 'Main restarts to apply the change.',
+    mode === 'bypass'
+      ? 'The agent could then do anything without asking you.'
+      : 'Main restarts when it has finished what it is doing.',
   /** What the agent is told after a direct change. */
   done: (mode: PermissionModeName) =>
-    `Asked the Talos app on the Mac to switch Main to ${PERMISSION_MODE_LABEL[mode]}. Main will restart: this session will end within a few seconds. The new start waits at the development-channel dialog until the owner confirms it at the Mac (or on the phone card), so Main is quiet until then. The Mac app tells the owner itself.`,
+    `Asked the Talos app on the Mac to switch Main to ${PERMISSION_MODE_LABEL[mode]}. Sent to the Mac, which saves it and restarts Main when it has finished; the Mac posts whether it saved. If it saves, Main will restart when it has finished what it is doing and this session will end then. The new start waits at the development-channel dialog until the owner confirms it at the Mac (or on the phone card), so Main is quiet until then. The Mac app tells the owner itself.`,
 } as const
 
 function waitWords(ms: number): string {

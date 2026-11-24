@@ -35,8 +35,9 @@ export const WORKER_OPS_READ_OK: readonly string[] = ['errors list', 'errors sho
 /**
  * Read-only commands every thread session may run (Pantheon 2026-11-15: a lead reads status, doctor and logs). `status` and
  * `doctor` say how the setup is; `logs` shows a thread session only its own thread's lines (cli-main.ts `cmdLogs`).
+ * `facts` (the read-only picture of what is true now) is read like `status`.
  */
-export const WORKER_READ_OK: readonly string[] = ['status', 'doctor', 'logs']
+export const WORKER_READ_OK: readonly string[] = ['status', 'doctor', 'logs', 'facts']
 /**
  * Also open to a thread session (owner ruling 2026-11-19, Pantheon's decision C): the commands the agent runs itself unless
  * "Lock Talos settings" is on (agent-cli.ts judges the lock, the outside text and the device lock-out). Everything else in the

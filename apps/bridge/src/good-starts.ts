@@ -4,6 +4,8 @@
 import { realpathSync } from 'node:fs'
 import { readJsonFile, writeJsonAtomic } from './fsutil.ts'
 import { type Run, runCommand } from './run-command.ts'
+import { releaseCheckout } from './source-stamp.ts'
+import { updaterGit } from './updater-git.ts'
 
 export type GoodStart = { commit: string; repo: string; recorded_at: string }
 
@@ -45,15 +47,18 @@ export function recordHealthyStart(o: {
   run?: Run
 }): RecordResult {
   try {
-    const run = o.run ?? ((cmd, cwd) => runCommand(cmd, cwd, 10_000))
-    const git = (...a: string[]) => run(['git', ...a], o.repoDir)
+    const run = o.run ?? ((cmd, cwd, opts) => runCommand(cmd, cwd, { ...opts, timeoutMs: 10_000 }))
+    const git = updaterGit(run, o.repoDir) // hardened: the checkout may be an agent's to write to
     if (!o.started) return { ok: false, why: 'the running commit is unknown' }
+    // a release checkout has no history to roll back through (the Talos app keeps its previous version), and git is not run
+    // there: on a Mac without the developer tools it is Apple's stub, which opens an install dialog at every start
+    if (releaseCheckout(o.repoDir)) return { ok: false, why: 'set up from a release, not a git clone' }
     const top = git('rev-parse', '--show-toplevel')
     const head = git('rev-parse', 'HEAD')
     if (top.code !== 0 || head.code !== 0) return { ok: false, why: 'not a git checkout' }
     if (!FULL_COMMIT.test(head.out) || !head.out.startsWith(o.started))
       return { ok: false, why: 'the checkout moved since this process started' }
-    const dirty = git('status', '--porcelain', '--untracked-files=no')
+    const dirty = git('status', '--porcelain', '--untracked-files=no', '--ignore-submodules=all')
     if (dirty.code !== 0 || dirty.out)
       return { ok: false, why: 'tracked files are edited, so the code is not a commit' }
     const repo = realpathSync(top.out)

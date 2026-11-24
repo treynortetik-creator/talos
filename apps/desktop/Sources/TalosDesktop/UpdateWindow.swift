@@ -72,13 +72,26 @@ final class UpdateController: ObservableObject {
   /// "Check for Updates…" (or "Update to x…" when one is waiting): the window opens, and a check runs unless one is already waiting.
   func menuChoice() {
     show()
+    // a failed update waiting for Try again: its line is shown first (the window's Try again does the repair), no new check starts
+    if let u = updater, u.needsRepair() {
+      u.showRepairLine()
+      return
+    }
     if status.pendingVersion == nil, !status.isBusy {
       if status.allowClone != nil { updater?.checkNow() } else { startCheck() }
     }
   }
 
   /// The update window's Check again / Try again: one check that always ends in an answer (`startCheck`).
-  func checkAgain() { startCheck() }
+  func checkAgain() { ownerTry { self.startCheck() } }
+
+  /// The one owner-press entry for a check (the window's Check again / Try again, and About's button): the UPDATER is asked whether a
+  /// failed update waits for repair, and if so that is retried first; `proceed` (the check) runs only when nothing is left to repair.
+  /// No timer, launch or menu open goes through here, so a failing repair cannot loop.
+  func ownerTry(_ proceed: @escaping @MainActor () -> Void) {
+    guard let u = updater, u.needsRepair() else { return proceed() }
+    u.retryRepair { passed in Task { @MainActor in if passed { proceed() } } }
+  }
 
   /// The updater's own full check, for after the owner has allowed the Talos code folder (the question is answered, the release waits).
   func recheckAfterAllow() { updater?.checkNow() }
@@ -92,7 +105,7 @@ final class UpdateController: ObservableObject {
   func checkFromAbout() {
     guard !status.isBusy, status.pendingVersion == nil, status.allowClone == nil else { return }
     aboutChecks += 1
-    if let f = checkOverride { f() } else { startCheck() }
+    if let f = checkOverride { f() } else { ownerTry { self.startCheck() } }
   }
 
   // MARK: a check that always answers
@@ -195,24 +208,48 @@ final class UpdateController: ObservableObject {
 struct RealClickButton: NSViewRepresentable {
   var title: String
   var accent = false
+  /// A fixed face width; nil is the title's own width (at least 84 pt).
+  var width: CGFloat?
   /// Drawn by `PillRealClickButton` (a borderless button with fixed ink text that reads the same in light and dark appearance).
   var plain = false
   var action: () -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(action: action) }
 
+  /// Never stretched to what the row offers: a button keeps its own face (the proposal made the filled one fill the whole panel).
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> CGSize? {
+    plain ? nil : UpdateFaceButton.faceSize(nsView, width: width)
+  }
+
   func makeNSView(context: Context) -> NSButton {
-    let b = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
+    let b = UpdateFaceButton(title: title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
     b.keyEquivalent = ""
-    b.bezelStyle = .rounded
+    // The panels are cream in light AND dark, so the button must not follow the system appearance: a dark-mode bezel is a translucent
+    // white one with white text, which on cream is unreadable (the "Later" / "Update now" bug). Pinned to light, it is always the
+    // system's light bezel with the system's dark text.
+    b.appearance = NSAppearance(named: .aqua)
     if plain {
       b.isBordered = false
-      b.appearance = NSAppearance(named: .aqua)
       b.attributedTitle = Self.inkTitle(title)
       return b
     }
-    if accent { b.bezelColor = NSColor(red: 0xD9 / 255, green: 0x69 / 255, blue: 0x2B / 255, alpha: 1) }
+    if accent {
+      b.isBordered = false
+      b.wantsLayer = true
+      b.layer?.backgroundColor = UpdatePalette.accentFillNS.cgColor
+      b.layer?.cornerRadius = UpdateFaceButton.faceHeight / 2
+      b.attributedTitle = Self.faceTitle(title, color: .white)
+    } else {
+      b.bezelStyle = .rounded
+      b.controlSize = .large
+    }
     return b
+  }
+
+  static func faceTitle(_ t: String, color: NSColor) -> NSAttributedString {
+    let para = NSMutableParagraphStyle()
+    para.alignment = .center
+    return NSAttributedString(string: t, attributes: [.foregroundColor: color, .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .paragraphStyle: para])
   }
 
   static func inkTitle(_ t: String) -> NSAttributedString {
@@ -224,7 +261,7 @@ struct RealClickButton: NSViewRepresentable {
 
   func updateNSView(_ b: NSButton, context: Context) {
     b.title = title
-    if plain { b.attributedTitle = Self.inkTitle(title) }
+    if plain { b.attributedTitle = Self.inkTitle(title) } else if accent { b.attributedTitle = Self.faceTitle(title, color: .white) }
     context.coordinator.action = action
   }
 
@@ -260,10 +297,60 @@ struct PillRealClickButton: View {
   }
 }
 
+/// A button with a fixed face height, so the filled primary and the system bezel line up.
+final class UpdateFaceButton: NSButton {
+  static let faceHeight: CGFloat = 28
+  static func faceSize(_ b: NSButton, width: CGFloat?) -> CGSize {
+    let w = width ?? max(84, b.fittingSize.width)
+    return CGSize(width: w, height: faceHeight)
+  }
+  override var intrinsicContentSize: NSSize {
+    let s = super.intrinsicContentSize
+    return NSSize(width: isBordered ? s.width : s.width + 28, height: Self.faceHeight)
+  }
+}
+
+/// A plain (not real-click) action button for the update window: Later, Close, Check again. The same pinned-light system bezel as
+/// `RealClickButton`'s secondary look, so it reads the same in light and dark appearance. `escape` makes Esc press it.
+struct UpdateTextButton: NSViewRepresentable {
+  var title: String
+  var escape = false
+  var width: CGFloat?
+  var action: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> CGSize? {
+    UpdateFaceButton.faceSize(nsView, width: width)
+  }
+
+  func makeNSView(context: Context) -> NSButton {
+    let b = UpdateFaceButton(title: title, target: context.coordinator, action: #selector(Coordinator.pressed))
+    b.appearance = NSAppearance(named: .aqua)
+    b.bezelStyle = .rounded
+    b.controlSize = .large
+    b.keyEquivalent = escape ? "\u{1b}" : ""
+    return b
+  }
+
+  func updateNSView(_ b: NSButton, context: Context) {
+    b.title = title
+    context.coordinator.action = action
+  }
+
+  @MainActor final class Coordinator: NSObject {
+    var action: () -> Void
+    init(action: @escaping () -> Void) { self.action = action }
+    @objc func pressed() { action() }
+  }
+}
+
 enum UpdatePalette {
   static let cream = Color(red: 0xF3 / 255, green: 0xE6 / 255, blue: 0xCF / 255)
   static let ink = Color(red: 0x5A / 255, green: 0x4A / 255, blue: 0x3C / 255)
   static let accent = Color(red: 0xD9 / 255, green: 0x69 / 255, blue: 0x2B / 255)
+  /// The fill of a primary button with white text: darker than `accent` (white on D9692B is only 3.5:1), 5.2:1 on white.
+  static let accentFillNS = NSColor(red: 0xB8 / 255, green: 0x4A / 255, blue: 0x12 / 255, alpha: 1)
 }
 
 /// The banner: never key, never main, no default button, eats any key sent to it.
@@ -361,22 +448,22 @@ struct UpdateWindow: View {
   /// No button here is the default: Return does nothing. Esc closes.
   @ViewBuilder private func buttons(_ s: UpdateStatus) -> some View {
     if let clone = s.allowClone {
-      Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction).buttonStyle(PillStyle(kind: .outline, padding: 22, size: 14))
+      UpdateTextButton(title: "Close", escape: true) { NSApp.keyWindow?.close() }
       PillRealClickButton(title: AllowUpdatesCopy.allowButton, primary: true, width: 150) { allow.allowFromWindow(clone: clone) }
     } else if s.offersSkipThreadWait {
       // only thread agents are left: their wait is the line above; Main's own turn never gets this button
-      Button("Later") { controller.later() }.keyboardShortcut(.cancelAction)
-      RealClickButton(title: UpdateStatus.skipThreadWaitButton, accent: true) { controller.skipThreadWait() }.frame(width: 170)
+      UpdateTextButton(title: "Later", escape: true) { controller.later() }
+      RealClickButton(title: UpdateStatus.skipThreadWaitButton, accent: true, width: 170) { controller.skipThreadWait() }
     } else if s.pendingVersion != nil {
-      Button("Later") { controller.later() }.keyboardShortcut(.cancelAction)
-      RealClickButton(title: AboutCopy.installButton, accent: true) { controller.updateNow() }.frame(width: 110)
+      UpdateTextButton(title: "Later", escape: true) { controller.later() }
+      RealClickButton(title: AboutCopy.installButton, accent: true, width: 110) { controller.updateNow() }
     } else if s.isBusy {
-      Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction)
+      UpdateTextButton(title: "Close", escape: true) { NSApp.keyWindow?.close() }
     } else {
-      Button("Close") { NSApp.keyWindow?.close() }.keyboardShortcut(.cancelAction)
+      UpdateTextButton(title: "Close", escape: true) { NSApp.keyWindow?.close() }
       if case .done = s {
       } else {
-        Button(AboutCopy.checkButtonTitle(s) == AboutCopy.checkButton ? "Check again" : AboutCopy.tryAgainButton) { controller.checkAgain() }
+        UpdateTextButton(title: AboutCopy.checkButtonTitle(s) == AboutCopy.checkButton ? "Check again" : AboutCopy.tryAgainButton) { controller.checkAgain() }
       }
     }
   }

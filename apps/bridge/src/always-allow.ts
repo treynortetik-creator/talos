@@ -9,32 +9,43 @@
 //     the later ones come as one silent line with a count when the window ends (the message store cannot edit a line).
 import {
   type AgentConfigT,
+  ALWAYS_KINDS,
+  type AlwaysKind,
   alwaysAllowed,
+  type CardBinding,
   type CardT,
-  isSendKind,
+  cardOffersAlways,
+  isAlwaysKind,
   redact,
-  SEND_KINDS,
-  type SendKind,
 } from '@talos-app/protocol'
+import type { LedgerRow } from './cards-ledger.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from './context.ts'
 import { configSyncFrame } from './frames-out.ts'
 
-const PLURAL: Record<SendKind, string> = {
+const PLURAL: Record<AlwaysKind, string> = {
   email: 'emails',
   message: 'messages',
   deploy: 'deploys',
   publish: 'publishing',
   purchase: 'purchases',
   push: 'pushing code',
+  generic: 'approvals',
+  schedule: 'schedule changes',
+  undo: 'undos',
+  config: 'settings changes',
 }
 /** One and many, for a count ("2 pushes"). */
-const COUNT_WORD: Record<SendKind, readonly [string, string]> = {
+const COUNT_WORD: Record<AlwaysKind, readonly [string, string]> = {
   email: ['email', 'emails'],
   message: ['message', 'messages'],
   deploy: ['deploy', 'deploys'],
   publish: ['publish', 'publishes'],
   purchase: ['purchase', 'purchases'],
   push: ['push', 'pushes'],
+  generic: ['approval', 'approvals'],
+  schedule: ['schedule change', 'schedule changes'],
+  undo: ['undo', 'undos'],
+  config: ['settings change', 'settings changes'],
 }
 /** Passes within this long, in one thread, fold into one line. */
 export const FOLD_WINDOW_MS = 10 * 60_000
@@ -43,7 +54,10 @@ const MAX_LISTED = 5
 export const PASS_RECORD_PREFIX = 'always-allow-pass/'
 const PASS_RECORD_KEEP = 500
 let passSeq = 0
-function recordPass(ctx: BridgeContext, c: { kind: SendKind; title: string; thread_id: string; rule?: string }): void {
+function recordPass(
+  ctx: BridgeContext,
+  c: { kind: AlwaysKind; title: string; thread_id: string; rule?: string },
+): void {
   const at = ctx.clock.now()
   const rec = {
     at: new Date(at).toISOString(),
@@ -63,25 +77,25 @@ function recordPass(ctx: BridgeContext, c: { kind: SendKind; title: string; thre
   // warn, not info: it survives a warn log level
   ctx.log.warn('always-allow pass', rec)
 }
-export const kindPlural = (k: SendKind): string => PLURAL[k]
+export const kindPlural = (k: AlwaysKind): string => PLURAL[k]
 const STOP = 'To stop: Settings → Always allowed, or tell me to stop.'
 
 /** The line in the thread for a send made without a card. */
-export const sentWithoutCardText = (kind: SendKind, title: string): string =>
+export const sentWithoutCardText = (kind: AlwaysKind, title: string): string =>
   `Allowed without a card (you always allow ${kindPlural(kind)}): ${title.slice(0, 200)}. ${STOP}`
 
 /** Is this kind always allowed right now? Reads the config file as it is now, never a copy. */
-export function alwaysAllowedNow(ctx: Pick<BridgeContext, 'config'>, kind: string): kind is SendKind {
-  if (!isSendKind(kind)) return false
+export function alwaysAllowedNow(ctx: Pick<BridgeContext, 'config'>, kind: string): kind is AlwaysKind {
+  if (!isAlwaysKind(kind)) return false
   ctx.config.refresh()
   return alwaysAllowed(ctx.config.config.always_allow, kind)
 }
 
-type Window = { held: Map<SendKind, number>; titles: string[]; timer: unknown }
+type Window = { held: Map<AlwaysKind, number>; titles: string[]; timer: unknown }
 const windows = new WeakMap<BridgeContext, Map<string, Window>>()
 
-const countText = (held: Map<SendKind, number>): string =>
-  SEND_KINDS.filter((k) => held.has(k))
+const countText = (held: Map<AlwaysKind, number>): string =>
+  ALWAYS_KINDS.filter((k) => held.has(k))
     .map((k) => {
       const n = held.get(k) ?? 0
       return `${n} ${COUNT_WORD[k][n === 1 ? 0 : 1]}`
@@ -117,7 +131,7 @@ export async function allowWithoutCard(
   ctx: BridgeContext,
   c: Pick<CardT, 'kind' | 'title' | 'thread_id'> & { rule?: string },
 ): Promise<string> {
-  const kind = c.kind as SendKind
+  const kind = c.kind as AlwaysKind
   // the command is stored, logged and listed in the thread: a credential in it (a -u user:pass, an ?api_key=) goes first
   const title = redact(c.title, { userHome: ctx.env.userHome, appHome: ctx.env.home })
   ctx.log.info('card skipped: always allowed', { kind, thread: c.thread_id })
@@ -144,7 +158,7 @@ export async function allowWithoutCard(
  * signature and the ledger checks passed for that card). Adds the kind once, syncs every app, and says so in the thread.
  */
 export async function addFromOwnerTap(ctx: BridgeContext, kind: string, threadId: string): Promise<void> {
-  if (!isSendKind(kind)) return
+  if (!isAlwaysKind(kind)) return
   const now = ctx.clock.now()
   let changed = false
   const after: AgentConfigT = ctx.config.update((c) => {
@@ -163,4 +177,28 @@ export async function addFromOwnerTap(ctx: BridgeContext, kind: string, threadId
     thread: threadRef(ctx, threadId),
     settingsChanged: true,
   }).catch(() => {})
+}
+
+/**
+ * A card the bridge itself made (a schedule or undo card) for a kind the owner always allows: approved at once, as his tap
+ * would have, with no card shown. `apply` is the same handler his tap would call. False (and the card is left as it is) when
+ * the kind is not granted, the card does not qualify, or the ledger refuses.
+ */
+export async function passBridgeCard(
+  ctx: BridgeContext,
+  card: CardT,
+  apply: (row: LedgerRow, approved: CardBinding) => void | Promise<void>,
+): Promise<boolean> {
+  if (!alwaysAllowedNow(ctx, card.kind) || !cardOffersAlways(card, ctx.config.config)) return false
+  const nowMs = ctx.clock.now()
+  const out = ctx.ledger.resolve(
+    { card_id: card.id, action: 'primary', payload_hash: card.payload_hash, ts: new Date(nowMs).toISOString() },
+    nowMs,
+    { by: 'always_allow' },
+  )
+  if (!out.ok) return false
+  ctx.expiry?.cancel(card.id)
+  await allowWithoutCard(ctx, card)
+  await apply(out.row, out.approved)
+  return true
 }

@@ -744,6 +744,28 @@ export class ScheduleService {
     return v === undefined || v === MAIN_PROPOSER ? null : v
   }
 
+  /**
+   * The router gave this run to Main because the thread's own session could not take it: marked on the run, so its history reads
+   * "Ran in Main, not in <thread>". A run with no id or job is not marked (nothing to mark).
+   */
+  markRanInMain(
+    runId: string | undefined,
+    jobId: string | undefined,
+    ds: string | undefined,
+    thread: string,
+    name: string,
+  ) {
+    if (!runId || !jobId) return
+    // a name is the owner's config: one short line, never control characters
+    const clean =
+      [...name]
+        .map((c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || c === '\u2028' || c === '\u2029' ? ' ' : c))
+        .join('')
+        .trim()
+        .slice(0, 40) || thread
+    this.sidecar.setNote(runId, { id: jobId, ds: ds ?? '', ran_in_main_for: { thread, name: clean } }, this.now())
+  }
+
   /** Can the router hand this job's run to a thread session? Only a plain session job; an unknown job is main's. */
   sessionOnly(jobId: string): boolean {
     const j = this.lastGood?.schedules.find((x) => x.id === jobId)

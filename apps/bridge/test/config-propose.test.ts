@@ -79,7 +79,7 @@ const approve = async (x: Harness, card: CardT) => x.app.resolveCard(card, 'prim
 const noCardMinted = (x: Harness) => expect(cards(x).filter((c) => c.kind === 'config')).toHaveLength(0)
 
 describe('what the list is', () => {
-  test('the agent rows are the ones the table turns on (twenty-one), none of them a device, key, enrollment or security setting', () => {
+  test('the agent rows are the ones the table turns on (twenty-two), none of them a device, key, enrollment or security setting', () => {
     expect([...AGENT_CONFIG_ALLOWLIST]).toEqual([
       'agent.name',
       'owner.display_name',
@@ -99,6 +99,7 @@ describe('what the list is', () => {
       'always_allow',
       'dev.thread_fence',
       'dev.note_lookup',
+      'os_sandbox',
       'settings_lock',
       'dedicated',
       'theme',

@@ -32,14 +32,13 @@ struct WorkerFollowupsCoreTests {
   @Test func everyLineSaysThisThreadsSessionAndTakesNoName() throws {
     let rule = String(repeating: "\u{2500}", count: 60)
     let lines = [
-      WorkerNotice.line(screen: .trust), WorkerNotice.line(screen: .loginExpired), WorkerNotice.draftLine(), WorkerNotice.leftoverLine(),
-      WorkerNotice.noBoxLine(), WorkerNotice.copyModeLine(), WorkerNotice.turnCutLine(limit: 600),
+      WorkerNotice.line(screen: .trust), WorkerNotice.line(screen: .loginExpired), WorkerNotice.leftoverLine(),
+      WorkerNotice.noBoxLine(), WorkerNotice.turnCutLine(limit: 600),
       SupervisorNotice.workerPromptLine(prompt: try #require(PromptDetector.detect([rule, " Do you want to proceed?", " \u{276F} 1. Yes", "   2. No", " Esc to cancel"]))),
     ]
     for l in lines { #expect(l.hasPrefix("This thread's session "), "\(l)") }
     #expect(WorkerNotice.line(screen: .trust) == "This thread's session is waiting on a 'trust this folder' prompt; open this thread in Terminals on the Mac to answer.")
-    #expect(WorkerNotice.noBoxLine() == "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on.")
-    #expect(WorkerNotice.copyModeLine().hasSuffix("Open this thread in Terminals and press q to return to the prompt."))
+    #expect(WorkerNotice.noBoxLine() == "This thread's session isn't showing its input box yet. If it stays that way, restart this thread's session from this thread's settings (Its own agent, then Restart).")
     #expect(WorkerNotice.turnCutLine(limit: 600) == "This thread's session was stopped in the middle of a turn: Talos restarted while it was stopping, and the turn was still running 10 min after the stop was asked for. The conversation is kept.")
   }
 

@@ -379,6 +379,17 @@ const ghBin = (body: string) => {
   return b
 }
 
+// every machine's runner online, as plan asks the repository's runners (scripts/ci-runner/online.sh)
+const planSh = (env: Record<string, string>) =>
+  runnerSh(
+    'ci_plan',
+    { GH_TOKEN: 't', ...env },
+    ghBin(`case "$*" in
+  *"/actions/runners"*)
+    for l in talos-ci talos-ci-delphi talos-ci-cyclops talos-ci-report talos-ci-linux talos-ci-linux-b; do printf 'online\\tself-hosted,%s\\n' "$l"; done ;;
+esac`),
+  )
+
 describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs only on Lemnos', () => {
   const ctxs = ['local-ci/check', 'ci-part/check', 'report-ci/fast', 'report-ci/linux', 'other/x']
   const map = (file: string, env: Record<string, string>) =>
@@ -447,9 +458,9 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
       CI_TITAN_BROWSER: 'e2e',
       CI_BROWSER_E2E_WAIT: '600',
     }
-    const normal = runnerSh('ci_plan', on).stdout
+    const normal = planSh(on).stdout
     expect(normal).toMatch(/^delphi=\S/m) // the nightly does plan them
-    const hostile = runnerSh('ci_plan', { ...on, CI_HOSTILE: '1' })
+    const hostile = planSh({ ...on, CI_HOSTILE: '1' })
     expect(hostile.status, hostile.stderr).toBe(0)
     const out = Object.fromEntries(
       hostile.stdout
@@ -478,7 +489,7 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
       CI_CHECK_WAIT: '900',
     }
     const plan = (env: Record<string, string>) => {
-      const r = runnerSh('ci_plan', env)
+      const r = planSh(env)
       expect(r.status, r.stderr).toBe(0)
       return {
         out: Object.fromEntries(

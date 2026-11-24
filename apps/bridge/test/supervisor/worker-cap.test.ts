@@ -41,6 +41,38 @@ describe('a start under the cap', () => {
   })
 })
 
+describe('T7: background work is never the cap’s choice', () => {
+  const live: Live[] = [
+    { threadId: 'a', busy: false, lastActive: 30, background: true },
+    { threadId: 'b', busy: false, lastActive: 20, background: true },
+    { threadId: 'c', busy: true, lastActive: 1 },
+  ]
+  it('every quiet one with work: start over the limit; every slot in a turn: hold; room: start; one without work is still taken first', () => {
+    expect(planStart(live, 3)).toEqual({ kind: 'startOverLimit' })
+    expect(planStart(live, 1)).toEqual({ kind: 'startOverLimit' })
+    expect(
+      planStart(
+        live.map((l) => ({ ...l, busy: true })),
+        3,
+      ),
+    ).toEqual({ kind: 'hold' })
+    expect(planStart(live.slice(0, 2), 3)).toEqual({ kind: 'start' })
+    expect(planStart([...live, { threadId: 'd', busy: false, lastActive: 40 }], 4)).toEqual({
+      kind: 'parkThenStart',
+      victim: 'd',
+    })
+  })
+  it('a lowered max_live parks none of them either: the count comes down when their work ends', () => {
+    expect(capVictims(live, 1)).toEqual([])
+    expect(
+      capVictims(
+        live.map((l) => ({ ...l, background: false })),
+        2,
+      ),
+    ).toEqual(['b'])
+  })
+})
+
 describe('a lowered max_live', () => {
   const live: Live[] = [
     { threadId: 'a', busy: false, lastActive: 300 },

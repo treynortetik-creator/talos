@@ -51,7 +51,7 @@ public enum DialogMatcher {
     case loginExpired
     /// The computer-use permission dialog: dismissed with Escape, never answered (ComputerUseDismiss).
     case computerUsePermissions
-    /// Claude Code's usage-limit screen: never a key of any kind (one option spends usage credits; UsageLimitScreen).
+    /// Claude Code's usage-limit screen: no row of it is ever pressed (one option spends usage credits); only its card's own Escape, and `/model` after it, may go (UsageLimitScreen, `KeyGuard.Intent.usageLimit`).
     case usageLimit(UsageLimitScreen.Info)
     case resumeMissing
     /// A selection cursor in front of a numbered option we don't know.
@@ -77,7 +77,7 @@ public enum DialogMatcher {
 
     /// A dialog the owner must never be asked to answer: its first row's Enter does something on the Mac (computer use: System Settings)
     /// or spends money (the usage-limit screen). Nothing raises Terminals for it and no line about it says "answer"; the most Talos ever
-    /// sends it is Escape (computer use only: the usage-limit screen gets no key at all).
+    /// sends it is Escape (computer use, and the usage-limit card's own two buttons, from the owner's tap alone).
     public var answerless: Bool {
       switch self {
       case .computerUsePermissions, .usageLimit: return true
@@ -90,7 +90,8 @@ public enum DialogMatcher {
       label == Screen.computerUsePermissions.label || label == UsageLimitScreen.kind
     }
 
-    /// No key of any kind may go to this screen: not Enter, not a digit, not an arrow, not Escape.
+    /// No key of any kind may go to this screen from any sender but its own card's answer (`PaneAnswerDriver`, `KeyGuard.Intent.usageLimit`): not Enter,
+    /// not a digit, not an arrow, not Escape.
     public var takesNoKeys: Bool {
       if case .usageLimit = self { return true }
       return false
@@ -98,7 +99,8 @@ public enum DialogMatcher {
   }
 
   /// The one check every key sender makes on the rows it is about to press into: true when the usage-limit screen is on them, so the key
-  /// is not sent (`UsageLimitScreen`). The dev-warning auto-accept, the dev card and its popup, the tap answerer and the pointer typer.
+  /// is not sent (`UsageLimitScreen`). The dev-warning auto-accept, the dev card and its popup, the other tap answers and the pointer typer; the
+  /// usage-limit card's own Escape is the one key past it, through `KeyGuard`.
   public static func takesNoKeys(_ rows: [String]) -> Bool { UsageLimitScreen.read(rows) != nil }
 
   /// Strips borders and padding a dialog box may draw around a row.

@@ -26,10 +26,15 @@ try:
     import _talos_common as C  # noqa: E402
 except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
     if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-              "permissionDecisionReason": "Talos append-only-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+        _out, _code = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos append-only-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}), 2
     else:
-        print("{}")
+        _out, _code = "{}", 0
+    try:                       # write and flush now; a closed stdout must not become exit 120 (non-blocking) at exit
+        sys.stdout.write(_out + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(_code)
     sys.exit(0)
 
 KILL_NAME = "append-only-guard.off"
@@ -72,35 +77,35 @@ def relpath_in_root(path):
 def main():
     C.arm_guard_timeout("append-only-guard")
     if C.killed(KILL_NAME):
-        print("{}")
+        C.allow()
         return
     d = C.read_stdin()
     ti = d.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("path") or ""
     rel = relpath_in_root(str(path)) if path else None
     if not rel or not is_protected(rel):
-        print("{}")
+        C.allow()
         return
     new = ti.get("content")
     if not isinstance(new, str):          # an Edit (or anything that is not a whole-file write) is surgical
-        print("{}")
+        C.allow()
         return
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(C.ROOT, path))
     if not os.path.exists(full):
-        print("{}")
+        C.allow()
         return
     old_len = os.path.getsize(full)
     new_len = len(new.encode("utf-8"))
     if old_len < MIN_BYTES or new_len >= old_len * SHRINK_TOLERANCE:
-        print("{}")
+        C.allow()
         return
     pct = 100 * (1 - new_len / float(old_len))
-    print(C.pretool_json("ask", (
+    C.say(C.pretool_json("ask", (
         "This overwrite would SHRINK an append-only file by %.0f%% (%d -> %d bytes):\n  %s\n\n"
         "Daily logs, the changelog and the ledgers are history. The usual cause is faking an append by "
         "reading the file, concatenating and overwriting it, which loses everything written since the read.\n\n"
         "Append instead (>> or an Edit that adds a line). If you genuinely mean to rewrite this file, "
-        "confirm here." % (pct, old_len, new_len, rel))))
+        "confirm here." % (pct, old_len, new_len, rel))), True)
 
 
 if __name__ == "__main__":

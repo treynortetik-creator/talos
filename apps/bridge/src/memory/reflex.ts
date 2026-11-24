@@ -2,20 +2,34 @@
 // the bridge does the same lookup for it: find the names an owner message uses, resolve them against the gazetteer the kit already
 // builds from the owner's own wiki (kit/scripts/wiki-gazetteer.py), and hand back up to three POINTERS (root, path, title, one
 // line, the start of the note). The matcher is a faithful port, rule for rule: alias, then exact title, then a unique surname;
-// a name that lands on two notes is dropped; precision over recall. test/memory-reflex-parity.test.ts runs the python hook and
+// a name that lands on two notes is dropped; precision over recall. After those, and ranked LAST, come the looser person forms
+// (reflex-names.ts: "R. Harlow", "Harlow, Robin", a one-letter surname typo); they never replace a strict hit. test/memory-reflex-parity.test.ts runs the python hook and
 // this port over the same cases and requires the same notes in the same order.
 //
 // What it adds over the hook: a pointer is given only for a note the memory browser's scope (scope.ts) says is readable, so the
-// OS fence and every deny rule stay as they are, and a note is pointed at once per process. It reads no model and no index, it
+// OS fence and every deny rule stay as they are, and a note is pointed at once per thread session: the list is kept in the state
+// folder (reflex-sessions/thread-<id>.json, the file the hook's `reset` mode deletes after a compaction or a clear), and a list
+// not written for 6 hours is forgotten, for a thread whose settings do not run that hook. It reads no model and no index, it
 // never throws (any failure is "no pointers"), and it never logs a message.
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { neutralizeControlTags } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
 import { loadMemoryConfig, memoryJsonMtime } from './config.ts'
 import { norm } from './reflex-fold.ts'
+import { looseMatches } from './reflex-names.ts'
+import { defuseNote } from './reflex-sanitize.ts'
 import { asText, MemoryScope, readCapped } from './scope.ts'
 import { splitFrontmatter } from './text.ts'
 
@@ -78,9 +92,15 @@ function cpBefore(text: string, end: number): string {
 
 type Tok = { raw: string; k: string; s: number; e: number; ss: boolean; join: boolean }
 
-function tokenize(input: string): Tok[] {
+/** Code, URLs, e-mail addresses and paths blanked, each by as many spaces as it had characters (offsets stay true). */
+function stripText(input: string): string {
   let text = input
-  for (const rx of STRIP) text = text.replace(rx, (m) => ' '.repeat(m.length)) // same length: offsets stay true
+  for (const rx of STRIP) text = text.replace(rx, (m) => ' '.repeat(m.length))
+  return text
+}
+
+function tokenize(input: string): Tok[] {
+  const text = stripText(input)
   const toks: Tok[] = []
   for (const m of text.matchAll(TOK)) {
     const raw = m[0]
@@ -228,6 +248,13 @@ export function matchNames(text: string, gaz: Gazetteer): number[] {
   const toks = tokenize(head)
   if (!toks.length) return []
   const ranked = resolve(toks, gaz)
+  // the looser person forms, LAST: a note a strict arm found is never added again or moved
+  const have = new Set(ranked.map((r) => r.idx))
+  for (const h of looseMatches(stripText(head), gaz))
+    if (!have.has(h.idx)) {
+      have.add(h.idx)
+      ranked.push({ idx: h.idx, arm: 3, len: 2, pos: 0 })
+    }
   const ent = (r: { idx: number }) => ((gaz.notes[r.idx] as GazNote).e ? 0 : 1)
   ranked.sort((a, b) => a.arm - b.arm || b.len - a.len || ent(a) - ent(b) || a.pos - b.pos)
   const seen = new Set<string>()
@@ -323,7 +350,27 @@ export function loadGazetteer(path: string): Gazetteer | null {
 
 // ---- pointers -------------------------------------------------------------------------------------------------------------
 
-export type NotePointer = { root: string; path: string; title: string; description: string; excerpt: string }
+export type NotePointer = {
+  root: string
+  path: string
+  title: string
+  description: string
+  /** `updated YYYY-MM-DD` (frontmatter `updated:`), else `created YYYY-MM-DD`, else `undated`. */
+  date: string
+  excerpt: string
+}
+
+const DATE_RE = /^(updated|created):[ \t]*["']?(\d{4}-\d{2}-\d{2})/gm
+/** The date a note says about itself, from the first 3,000 characters: the hook's `note_date`. */
+export function noteDate(raw: string): string {
+  const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(raw.slice(0, 3000))
+  if (fm) {
+    const found = new Map<string, string>()
+    for (const m of (fm[1] as string).matchAll(DATE_RE)) found.set(m[1] as string, m[2] as string)
+    for (const k of ['updated', 'created']) if (found.has(k)) return `${k} ${found.get(k)}`
+  }
+  return 'undated'
+}
 
 /** The hook's `clip`: wikilinks and emphasis out, leading bullets out, at most `n` words. */
 function clip(desc: string, n: number): string {
@@ -357,7 +404,30 @@ function rootOf(scope: MemoryScope, p: string): { root: string; rel: string } | 
   return null
 }
 
+/** The most characters a pointer shows of a note's title and of its description (code points), as the python hook does. */
+export const CAP_TITLE = 200
+export const CAP_DESC = 400
+const cut = (s: string, n: number) => [...s].slice(0, n).join('')
+
+/**
+ * A note's title and description as a pointer shows them: sanitised, edited (the description clipped to MAX_DESC_WORDS words), and
+ * sanitised AGAIN, because an edit can rebuild what the first pass broke (`<*system-reminder*>` loses its asterisks in `clip`),
+ * then cut to the caps. The title keeps its parenthetical here (the python hook's line drops it; the parity test strips it).
+ * The python hook's `field()`.
+ */
+export function pointerFields(
+  note: { t: string; d: string },
+  defuse: (s: string) => string = defuseNote,
+): { title: string; description: string } {
+  return {
+    title: cut(defuse(cut(note.t, CAP_TITLE * 4)), CAP_TITLE),
+    description: cut(defuse(clip(defuse(cut(note.d, CAP_DESC * 4)), MAX_DESC_WORDS)), CAP_DESC),
+  }
+}
+
 export type ReflexDeps = {
+  /** The sanitiser (a test injects one that throws: a failure shows no pointers at all). */
+  defuse?: (s: string) => string
   gaz: Gazetteer
   scope: MemoryScope
   /** `root/path` of every note already pointed at in this process; the ones chosen are added. */
@@ -366,31 +436,42 @@ export type ReflexDeps = {
 
 /** Up to three pointers for the notes the words name that the scope says are readable and that were not pointed at before. */
 export function notesFor(text: string, deps: ReflexDeps): NotePointer[] {
+  try {
+    return pointersFor(text, deps)
+  } catch {
+    return [] // sanitising (or anything else) failed: no pointers at all, and none marked as sent
+  }
+}
+
+function pointersFor(text: string, deps: ReflexDeps): NotePointer[] {
+  const defuse = deps.defuse ?? defuseNote
   const out: NotePointer[] = []
   const paths = new Set<string>()
   for (const idx of matchNames(text, deps.gaz)) {
     if (out.length >= MAX_POINTERS) break
     const note = deps.gaz.notes[idx] as GazNote
+    // a file NAME is note text too: one that carries a tag, an order or a hidden character is never pointed at
+    if (defuse(note.p) !== note.p || note.p.includes('===')) continue
     const at = rootOf(deps.scope, note.p)
     if (!at || deps.seen.has(`${at.root}/${at.rel}`) || paths.has(note.p)) continue
     const o = deps.scope.open(at.root, at.rel)
     if (!o) continue
     let body: string | null = null
+    let date = 'undated'
     try {
       const buf = asText(readCapped(o, READ_BYTES), o.size > READ_BYTES)
-      if (buf) body = splitFrontmatter(buf.toString('utf8')).body
+      if (buf) {
+        const raw = buf.toString('utf8')
+        body = splitFrontmatter(raw).body
+        date = noteDate(raw)
+      }
     } finally {
       o.close()
     }
     if (body === null) continue
     paths.add(note.p)
-    out.push({
-      root: at.root,
-      path: at.rel,
-      title: neutralizeControlTags(note.t),
-      description: neutralizeControlTags(clip(note.d, MAX_DESC_WORDS)),
-      excerpt: neutralizeControlTags(excerptOf(body)),
-    })
+    const { title, description } = pointerFields(note, defuse)
+    out.push({ root: at.root, path: at.rel, title, description, date, excerpt: defuse(excerptOf(body)) })
   }
   // marked only once every pointer was made: a read that throws part way gives none, and none are spent
   for (const p of out) deps.seen.add(`${p.root}/${p.path}`)
@@ -403,7 +484,6 @@ const scopes = new WeakMap<
   BridgeContext,
   { mtimeMs: number; scope: MemoryScope | null; agentDir: string; maxBytes: number }
 >()
-const pointed = new WeakMap<BridgeContext, Set<string>>()
 
 /**
  * The memory scope a thread session reads through: the one memory.json describes, built here because `ctx.memory` is only the
@@ -431,8 +511,59 @@ export function scopeFor(ctx: BridgeContext): { scope: MemoryScope; agentDir: st
   }
 }
 
-/** Forgets which notes this process already pointed at (tests, and a restart does it anyway). */
+/** A thread's list of notes already pointed at is forgotten when it was last written this long ago (6 hours). */
+export const SENT_TTL_MS = 6 * 3600_000
+const THREAD_ID = /^[a-z][a-z0-9_]{0,31}$/
+
+type Sent = { set: Set<string>; ts: number; file: string; wrote: boolean }
+const pointed = new WeakMap<BridgeContext, Map<string, Sent>>()
+
+/**
+ * The list of notes already pointed at in one thread session. It lives in the state folder, `reflex-sessions/thread-<id>.json`
+ * ({sent, ts}), the same folder and shape the hook's `reset` mode works in: the hook deletes the file after a compaction or a
+ * clear, and the next lookup finds none and starts again. Where that hook is not registered for the thread, the list expires 6
+ * hours after its last write instead. A file that cannot be written leaves the list in memory only, which is the old behaviour.
+ */
+function sentFor(ctx: BridgeContext, stateDir: string, thread: string): Sent {
+  const file = join(stateDir, 'reflex-sessions', `thread-${thread}.json`)
+  const byThread = pointed.get(ctx) ?? new Map<string, Sent>()
+  pointed.set(ctx, byThread)
+  const mem = byThread.get(thread)
+  const now = ctx.clock.now()
+  let cur: Sent = mem && mem.file === file ? mem : { set: new Set(), ts: now, file, wrote: false }
+  try {
+    if (lstatSync(file).isSymbolicLink()) throw new Error('a link is not a sent list')
+    const d = JSON.parse(readFileSync(file, 'utf8')) as { sent?: unknown; ts?: unknown }
+    const sent = Array.isArray(d.sent) ? d.sent.filter((x): x is string => typeof x === 'string') : []
+    cur = { set: new Set(sent), ts: typeof d.ts === 'number' ? d.ts : 0, file, wrote: true }
+  } catch {
+    // no file: nothing was sent yet, or a reset deleted it after we wrote one
+    if (cur.wrote) cur = { set: new Set(), ts: now, file, wrote: false }
+  }
+  if (now - cur.ts > SENT_TTL_MS) cur = { set: new Set(), ts: now, file, wrote: cur.wrote }
+  byThread.set(thread, cur)
+  return cur
+}
+
+function saveSent(ctx: BridgeContext, s: Sent): void {
+  s.ts = ctx.clock.now()
+  try {
+    const dir = dirname(s.file)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (lstatSync(dir).isSymbolicLink()) return // never written through a link
+    // a temp file made here (never through a link), then renamed over the list: a link planted AT the list is replaced, not followed
+    const tmp = `${s.file}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`
+    writeFileSync(tmp, JSON.stringify({ sent: [...s.set].sort(), ts: s.ts }), { mode: 0o600, flag: 'wx' })
+    renameSync(tmp, s.file)
+    s.wrote = true
+  } catch {
+    // kept in memory only
+  }
+}
+
+/** Forgets which notes this process already pointed at, and the files that hold them (tests, and a restart keeps the file). */
 export function forgetPointers(ctx: BridgeContext): void {
+  for (const s of pointed.get(ctx)?.values() ?? []) rmSync(s.file, { force: true })
   pointed.delete(ctx)
 }
 
@@ -448,7 +579,7 @@ const real = (p: string) => {
  * The pointers for one owner message, or none: any off switch, a missing or stale gazetteer, no readable note, or any error at
  * all gives []. Never throws and never logs the text.
  */
-export function lookupNotes(ctx: BridgeContext, text: string): NotePointer[] {
+export function lookupNotes(ctx: BridgeContext, text: string, thread = 'main'): NotePointer[] {
   try {
     if (ctx.config.config.dev?.note_lookup === false) return []
     if (process.env.TALOS_MEMORY_REFLEX_OFF === '1') return []
@@ -459,9 +590,10 @@ export function lookupNotes(ctx: BridgeContext, text: string): NotePointer[] {
     const gaz = loadGazetteer(path)
     // a gazetteer built for another folder points at nothing here
     if (!gaz || (gaz.repo !== undefined && real(gaz.repo) !== s.agentDir)) return []
-    const seen = pointed.get(ctx) ?? new Set<string>()
-    pointed.set(ctx, seen)
-    return notesFor(text, { gaz, scope: s.scope, seen })
+    const sent = sentFor(ctx, dirname(path), THREAD_ID.test(thread) ? thread : 'main')
+    const out = notesFor(text, { gaz, scope: s.scope, seen: sent.set })
+    if (out.length) saveSent(ctx, sent)
+    return out
   } catch {
     return []
   }

@@ -63,8 +63,10 @@ extension WorkerManager {
   /// unsettled screen changes nothing (the arrows of an answer redraw it), and a settled one with no dialog ends the offer.
   func syncOffer(_ id: String, rows: [String], seen: DialogMatcher.Screen, settled: Bool) {
     guard let r = rt[id] else { return }
-    guard seen.isDialog else {
-      // a tool permission or the agent's question, settled by its own rows (`WorkerPaneOffer.swift`)
+    var onUsageLimit = false
+    if case .usageLimit = seen { onUsageLimit = true }
+    guard seen.isDialog, !onUsageLimit else {
+      // a tool permission, the agent's question or the usage-limit menu, settled by its own rows (`WorkerPaneOffer.swift`)
       if syncPane(id, rows: rows) { return }
       if settled, r.entry.dialog != nil { endOffer(id) }
       return
@@ -88,13 +90,14 @@ extension WorkerManager {
     // under. A record read back from disk after a relaunch is never the same, however exactly it equals the screen: this process did not
     // see what happened on the pane while the app was away (the dialog answered there and another that reads alike in its place, the file
     // edited), so what it sees now is a new sighting with a new id, and a card or a tap for the old id applies to nothing.
+    // An offer whose time ran out (`WorkerReoffer`) with the same dialog still on THIS look's screen is the same: a new sighting, a new id.
     if let o = r.entry.dialog, r.offer.enterUnsentFor == o.id, o.kind == d.kind, ExactText.equal(o.subject, d.subject),
       ExactText.equal(o.options, d.options), awake() < r.offer.enterUnsentUntil
     {
       return  // inside the memory of an Enter that may have landed: neither answerable nor re-offered yet
     }
     if let o = r.entry.dialog, o.kind == d.kind, ExactText.equal(o.subject, d.subject), ExactText.equal(o.options, d.options),
-      !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil
+      !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil, !WorkerReoffer.ranOut(o, wallNow: t)
     {
       if o.cursor != d.cursor {
         rt[id]?.entry.dialog?.cursor = d.cursor

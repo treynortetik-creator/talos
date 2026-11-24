@@ -54,18 +54,38 @@ const TWO: AlwaysAllowEntryT[] = [
 ]
 
 describe('Settings: Always allowed', () => {
+  it('lists the new action kinds by name, and Remove writes the rest of the list', async () => {
+    const list: AlwaysAllowEntryT[] = [
+      { kind: 'generic', destination: null },
+      { kind: 'schedule', destination: null },
+      { kind: 'undo', destination: null },
+      { kind: 'config', destination: null },
+    ]
+    const client = mount({ feature: true, list })
+    for (const name of ['Approvals', 'Schedule changes', 'Undos', 'Settings changes'])
+      expect(screen.getByText(name)).toBeTruthy()
+    await userEvent.click(
+      within(screen.getByTestId('always-allowed').querySelector('[data-kind="undo"]') as HTMLElement).getByRole(
+        'button',
+        { name: /remove/i },
+      ),
+    )
+    await waitFor(() => expect(patches(client)).toHaveLength(1))
+    expect(patches(client)[0]).toMatchObject({ patch: { always_allow: list.filter((e) => e.kind !== 'undo') } })
+  })
+
   it('is hidden from a bridge that does not read the list', () => {
     mount({ feature: false, list: TWO })
     expect(screen.queryByText(ALWAYS_ALLOWED_TITLE)).toBeNull()
     expect(screen.queryByTestId('always-allowed')).toBeNull()
   })
 
-  it('empty: one line saying cards for sends always ask, and how a kind gets here', () => {
+  it('empty: one line saying action cards ask every time, and how a kind gets here', () => {
     mount({ feature: true })
     const box = screen.getByTestId('always-allowed')
     expect(within(box).getByText(ALWAYS_ALLOWED_TITLE)).toBeTruthy()
     expect(box.textContent).toContain(ALWAYS_ALLOWED_EMPTY)
-    expect(ALWAYS_ALLOWED_EMPTY).toMatch(/always ask/)
+    expect(ALWAYS_ALLOWED_EMPTY).toMatch(/ask every time/)
     expect(ALWAYS_ALLOWED_EMPTY).toMatch(/Always allow/)
     expect(screen.queryByRole('button', { name: 'Remove all' })).toBeNull()
   })

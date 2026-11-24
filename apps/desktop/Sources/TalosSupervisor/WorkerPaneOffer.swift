@@ -37,7 +37,7 @@ extension WorkerManager {
   func offerPane(_ id: String, _ s: PaneSelect.Screen) {
     guard let r = rt[id] else { return }
     let offered = PaneSelect.offered(s)
-    let kind: DialogReader.Kind = s.kind == .toolPermission ? .toolPermission : .agentQuestion
+    let kind = DialogReader.Kind(rawValue: s.kind.rawValue) ?? .agentQuestion
     let subject = s.displaySubject
     let free = PaneSelect.freeTextOption(s)
     rt[id]?.offer.misses = 0
@@ -46,9 +46,14 @@ extension WorkerManager {
     }
     // inside the memory of an answer key that may have landed: neither answerable nor re-offered yet
     if let o = r.entry.dialog, r.offer.enterUnsentFor == o.id, same(o), awake() < r.offer.enterUnsentUntil { return }
-    // the same sighting, still there, not answered and not seen to change
-    if let o = r.entry.dialog, same(o), !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil { return }
     let t = now()
+    // the same sighting, still there, not answered, not seen to change and not run out of time (a question left standing is offered
+    // again under a new id once its card's time is up: `WorkerReoffer`)
+    if let o = r.entry.dialog, same(o), !r.offer.disturbed, r.offer.enterSentFor != o.id, r.offer.sinceAwake != nil,
+      !WorkerReoffer.ranOut(o, wallNow: t)
+    {
+      return
+    }
     rt[id]?.entry.dialog = DialogOffer(
       id: DialogOffer.newId(), kind: kind, subject: subject, options: offered, cursor: nil, free_text: free, seen_at: ISOTime.string(t),
       expires_at: ISOTime.string(t + options.cardLifetime))

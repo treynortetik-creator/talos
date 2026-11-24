@@ -1,6 +1,7 @@
 // The installers' bug-hunt findings of 2026-11-10 (docs/audits/2026-11-10-bughunt-triage.md, package P-C1): ./install.sh and
 // kit/install.sh. Each test states the correct behaviour.
 // Same sandbox as root-install.test.ts: a temp HOME, a private PATH of real tools plus stubs, TALOS_INSTALL_OS=Darwin.
+// mac-list: it drives the installers as a Mac (TALOS_INSTALL_OS=Darwin), so CI's Macs run it too.
 // gate-reads: install.sh kit/* scripts/*
 import { spawnSync } from 'node:child_process'
 import {
@@ -93,8 +94,19 @@ function sh(sb: Sandbox, argv: string[], opts: { cwd?: string; input?: string; e
   })
   return { code: r.status, out: `${r.stdout}${r.stderr}`, stdout: r.stdout, stderr: r.stderr }
 }
+// This sandbox's PATH has no plutil, which Chronos's installer needs on a Mac (it died with 127 there), and the tests here are about
+// other things: Chronos is off unless a test names it, as in root-install-harness.ts. /usr/bin stays off this PATH on purpose.
 const rootInstall = (sb: Sandbox, args: string[], opts: { cwd?: string } = {}) =>
-  sh(sb, ['bash', ROOT_INSTALL, ...args], opts)
+  sh(
+    sb,
+    [
+      'bash',
+      ROOT_INSTALL,
+      ...args,
+      ...(args.some((a) => a === '--with-chronos' || a === '--no-chronos') ? [] : ['--no-chronos']),
+    ],
+    opts,
+  )
 
 describe('installers: the 2026-11-10 bug hunt (P-C1)', () => {
   // FINDING C2 (install.sh:357). start-talos.sh ran `bun run …/cli.ts start`: bun loads the .env of the folder it is started from,
@@ -235,7 +247,8 @@ describe('installers: the 2026-11-10 bug hunt (P-C1)', () => {
     copyFileSync(join(REPO, 'scripts', 'install-memory.sh'), join(clone, 'scripts', 'install-memory.sh'))
     copyFileSync(join(REPO, 'scripts', 'install-js.sh'), join(clone, 'scripts', 'install-js.sh'))
     symlinkSync(KIT, join(clone, 'kit'))
-    const r = sh(sb, ['bash', join(clone, 'install.sh'), '--no-app', '--dry-run'], { cwd: clone })
+    // --no-chronos: this fake clone has no apps/chronos, and the finding is about pnpm
+    const r = sh(sb, ['bash', join(clone, 'install.sh'), '--no-app', '--dry-run', '--no-chronos'], { cwd: clone })
     expect(r.code, r.out).toBe(0)
     expect(r.out).not.toContain('already done: pnpm install')
     expect(r.out).toContain('would: pnpm install --frozen-lockfile')

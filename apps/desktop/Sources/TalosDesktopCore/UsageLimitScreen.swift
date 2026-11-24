@@ -3,9 +3,10 @@ import Foundation
 /// Claude Code's usage-limit menu: when the session hits a limit, Claude Code shows a select titled "What do you want to do?" whose options
 /// include ways to wait ("Stop and wait for limit to reset", "Wait here, then continue automatically ...") and ways that cost money or change
 /// the plan ("Add funds to continue with usage credits", "Switch to usage ...", "Adjust monthly spend limit", "Upgrade your plan ...", "Ask your
-/// admin for more usage"). Talos never sends this menu a key of any kind (no Enter, no digit, no arrow, no Escape) and, failing safe, no key
-/// goes to ANY select Talos cannot name (`KeyGuard`). The owner is told which model hit its limit, when it resets if the screen says so, and
-/// how to go on (Esc in the pane, then `/model`).
+/// admin for more usage"). Talos never presses a row of this menu (no Enter, no digit, no arrow) and, failing safe, no key goes to ANY select
+/// Talos cannot name (`KeyGuard`). The ONE exception is an owner's tap on its card (`PaneSelect.Kind.usageLimit`): `Stop and wait` is Escape
+/// (the menu's own `Esc to cancel`), `Switch model` is Escape, then `/model` and Enter on the idle prompt, each key checked by its own
+/// intent (`KeyGuard.Intent.usageLimit`). The card says which limit and when it resets, in Talos's own words.
 ///
 /// Recognised by its STRUCTURE, not its headline (which varies: a model's limit, the weekly or 5-hour limit, a team's shared budget, a trial
 /// that ended), the same rule as the Linux supervisor's reader (apps/bridge/src/supervisor/usage-limit.ts): in the bottom rows, the title row
@@ -44,8 +45,62 @@ public enum UsageLimitScreen {
     "spend limit", "upgrade your plan", "upgrade to", "ask your admin",
   ]
 
+  /// The menu as the card needs it: what it says (`info`), its numbered rows as drawn, the row of the cursor, and whether it says `Esc to cancel`.
+  public struct Menu: Equatable, Sendable {
+    public var info: Info
+    /// Each option as drawn (`1. Stop and wait for limit to reset`), the cursor mark dropped and a wrapped option's rows joined with a space.
+    public var rows: [String]
+    public var cursor: Int
+    /// The menu's own footer says Esc cancels it: the one key a card may press on it.
+    public var escCancels: Bool
+  }
+
+  /// The words on a usage-limit card's two buttons. `Stop and wait` is Escape; `Switch model` is Escape, then `/model`. Neither is a row of the
+  /// menu that spends anything.
+  public static let waitLabel = "Stop and wait"
+  public static let switchLabel = "Switch model"
+  /// How far a Switch model got when it stopped before Enter: Escape went, so it is never "nothing pressed". The words are the card's own
+  /// (`DIALOG_WORDING.usageStopped` in the protocol).
+  public enum Stop: String, Sendable, Equatable {
+    /// The menu is closed; `/model` was not typed (or could not be seen typed).
+    case closed
+    /// `/model` was typed and is still in the box.
+    case typed
+    /// `/model` was typed and Backspaces took it out again.
+    case cleared
+    public var text: String {
+      switch self {
+      case .closed: return "Closed the limit menu. Switch model at the Mac."
+      case .typed: return "Closed the limit menu; /model was typed but not sent. Finish at the Mac or clear it."
+      case .cleared: return "Closed the limit menu; /model was typed and cleared again. Switch model at the Mac."
+      }
+    }
+  }
+
+  /// What `/model` is typed as, and the only text a usage-limit answer ever types.
+  public static let modelCommand = "/model"
+
+  /// The buttons the screen really offers: Escape cancels the menu only when its footer says so; switching a model is offered only when the
+  /// headline names a model (a session, weekly or shared-budget limit is not lifted by another model). Empty: no card.
+  public static func offered(_ m: Menu) -> [String] {
+    guard m.escCancels else { return [] }
+    return buttons(model: m.info.model)
+  }
+
+  /// The two buttons, by whether the headline names a model (the one place that says which a card has).
+  public static func buttons(model: String?) -> [String] { model == nil ? [waitLabel] : [waitLabel, switchLabel] }
+
+  /// What the card says the limit is, in plain words, from Talos's own rebuilt values: never screen text.
+  public static func subject(_ i: Info) -> String {
+    let what = i.model.map { "\($0) limit reached." } ?? "Usage limit reached."
+    let when = i.resets.map { "It resets \($0)." } ?? "The screen doesn't say when it resets."
+    return "\(what) \(when)"
+  }
+
   /// The screen, or nil. `region`: the bottom rows looked at (a narrow pane wraps the menu over more rows).
-  public static func read(_ rows: [String], region: Int = 40) -> Info? {
+  public static func read(_ rows: [String], region: Int = 40) -> Info? { readMenu(rows, region: region)?.info }
+
+  public static func readMenu(_ rows: [String], region: Int = 40) -> Menu? {
     var raw = rows
     while let l = raw.last, l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { raw.removeLast() }
     let tail = Array(raw.suffix(region))
@@ -66,7 +121,7 @@ public enum UsageLimitScreen {
     let cursors = (anchor...last).filter { DialogMatcher.isHighlighted(bottom[$0]) }
     guard cursors.count == 1, options.contains(cursors[0]) else { return nil }
     // each option's text with its wrapped rows (the rows up to the next option, or a blank row)
-    let texts = options.enumerated().map { k, r -> String in
+    let drawn = options.enumerated().map { k, r -> String in
       let stop = k + 1 < options.count ? options[k + 1] : bottom.count
       var parts: [String] = []
       var i = r
@@ -74,8 +129,9 @@ public enum UsageLimitScreen {
         parts.append(bottom[i])
         i += 1
       }
-      return parts.joined(separator: " ").lowercased()
+      return parts.joined(separator: " ")
     }
+    let texts = drawn.map { $0.lowercased() }
     guard texts.contains(where: { t in optionForms.contains { t.contains($0) } }) else { return nil }
     // a menu quoted in the conversation: Claude's own input-box frame is BELOW it, the menu's rows above that frame's top rule. Decided
     // from the menu and that frame alone, never from the rows under the box (they decide whether a key goes, `KeyGuard`, not whether the
@@ -98,8 +154,30 @@ public enum UsageLimitScreen {
       h -= 1
     }
     let headline = lines.joined(separator: " ")
-    return Info(model: model(in: headline), resets: resets(in: headline))
+    let labels = drawn.map { $0.drop { $0 == DialogMatcher.Strings.pointer || $0 == " " } }.map(String.init)
+    let footer = bottom[(last + 1)...].joined(separator: " ").lowercased()
+    return Menu(
+      info: Info(model: model(in: headline), resets: resets(in: headline)), rows: labels, cursor: options.firstIndex(of: cursors[0]) ?? 0,
+      escCancels: footer.contains("esc to cancel"))
   }
+
+  /// The limit the idle prompt still shows once the menu is gone (the headline stays above the input box): the model and the reset of the LAST
+  /// headline, as `limitKey`, or nil when none is on the pane. A key that follows Escape is tied to this being the same limit the card was about.
+  public static func lastLimit(_ rows: [String]) -> String? {
+    let cleaned = rows.map(DialogMatcher.clean)
+    guard let at = cleaned.lastIndex(where: { let l = $0.lowercased(); return l.contains("hit your") || l.contains("reached your") }) else { return nil }
+    var parts: [String] = []
+    var i = at
+    while i < cleaned.count, parts.count < 3, !cleaned[i].isEmpty, !isRule(rows[i], cleaned[i]) {
+      parts.append(cleaned[i])
+      i += 1
+    }
+    let text = parts.joined(separator: " ")
+    return limitKey(Info(model: model(in: text), resets: resets(in: text)))
+  }
+
+  /// A limit as one comparable text (the card's own model and reset words).
+  public static func limitKey(_ i: Info) -> String { "\(i.model ?? "")|\(i.resets ?? "")" }
 
   /// Claude's own input box below row `after`: a solid rule that starts at column 0 with a row starting at column 0 with the pointer under
   /// it (a column-0 rule without one is skipped), then another solid rule at column 0. Claude Code draws its box from column 0 and every status row indented
@@ -242,25 +320,26 @@ public enum UsageLimitScreen {
   // MARK: the lines
 
   static func modelWords(_ i: Info) -> String { i.model ?? "this session's model" }
-  static func resetWords(_ i: Info) -> String { i.resets.map { " It resets \($0)." } ?? "" }
-  static let goOn = "then /model <another model>"
+  static func resetWords(_ i: Info) -> String { i.resets.map { " It resets \($0)." } ?? " The screen doesn't say when it resets." }
+  /// What every line says about the keys: true whether or not a card could be made (a screen that cannot be read whole gets none).
+  static let pressedNothing = "Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
 
-  /// The thread's line (posted into the thread it is about).
+  /// The thread's line (posted into the thread it is about, only when no card came for it).
   public static func threadLine(_ i: Info) -> String {
-    "This thread's session hit the usage limit for \(modelWords(i)).\(resetWords(i)) Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in this thread's pane in Terminals, \(goOn)."
+    "This thread's session hit the usage limit for \(modelWords(i)).\(resetWords(i)) \(pressedNothing)"
   }
 
   /// Main's line (to the default thread, posted as the Mac's own row: nothing in it is screen text).
   public static func mainLine(_ i: Info) -> String {
-    "Main hit the usage limit for \(modelWords(i)).\(resetWords(i)) Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in Main's pane, \(goOn)."
+    "Main hit the usage limit for \(modelWords(i)).\(resetWords(i)) \(pressedNothing)"
   }
 
   /// The menu's needs-you line for Main (it has the label only, no model).
-  public static let menuLine = "Main hit a usage limit; press Esc in its pane, \(goOn) (Talos presses nothing there: one option spends usage credits)"
+  public static let menuLine = "Main hit a usage limit. Talos pressed nothing on that screen; its choices come as a card when Talos can read them."
 
   /// The restart-stall phone line for it.
   public static let stallLine =
-    "Main restarted on request and is on the usage-limit screen at your Mac. Press Esc in Main's pane, \(goOn); Talos presses nothing there."
+    "Main restarted on request and is at the usage limit. Talos pressed nothing on that screen; its choices come as a card when Talos can read them."
 }
 
 /// The usage-limit screen on one session's pane, Main's or a thread's (`UsageLimitScreen`): when an appearance starts and ends, and whether

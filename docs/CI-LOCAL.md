@@ -108,11 +108,14 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    `apps/web/dist` + `apps/relay/dist`, so nothing writes to those once the jobs start. The Playwright suites get
    `SKIP_BUILD=1` and `E2E_SKIP_BUILD=1`. If setup fails, every job that needed it fails, with the reason in its log.
 2. **Jobs:** `check`, `mod` and `image` start together. `desktop` then `mobile` (they share a SwiftPM cache and a build wants
-   every core) wait for `check`'s quiet group. `browser` waits for `check`. Results post as they finish. One red job does not
+   every core) wait for `check`'s quiet group (with check on Titan: for its macOS-only subset). `browser` waits for `check`
+   (with check on Titan: for the subset only). Results post as they finish. One red job does not
    stop the others. A job that dies without a result is red.
 3. **Inside `check`:** the personal-data scan, which only warns, then the quick gates (types, lint, and `pnpm notices:check`: THIRD_PARTY_NOTICES.md must match what setup's web build
    bundles), then the quiet group: the contract suite, then the bridge's
-   `test/schedules/` files, `CI_SCHED_JOBS` at a time (a third of the cores, biggest file first). Then the loud group side by side: the other bridge files 4 at once and
+   `test/schedules/` files, `CI_SCHED_JOBS` at a time (a third of the cores, biggest file first), then Chronos's own suite
+   (`bash apps/chronos/tests/run.sh`, each test file by itself; skipped with a line in the log where python3 is older than 3.9,
+   or for a commit with no `apps/chronos`; no `CHRONOS_PR_BASE`, so its PR-range scan skips). It runs whatever the earlier two said. Then the loud group side by side: the other bridge files 4 at once and
    Vitest. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
    last so the reason is in the tail a failed job prints. Last comes the known-vulnerability audit (`pnpm audit --prod
    --audit-level high`), which also only warns, because an advisory or a registry outage says nothing about this commit's code.
@@ -127,6 +130,29 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    Swift jobs need no slot of their own: the mutex already keeps them one at a time. Gates have the slots above CI's.
    The e2e suite and the web specs don't take the mutex, so they can still sit beside another run's suites.
 5. **Inside `browser`:** `pnpm test:e2e` as ever (relay, web specs, e2e suite), with the e2e suite on `ci_e2e_workers` workers: a worker is a relay, a bridge and a Chromium (about 3 cores and 6 GB), so it is the smaller of cores × 0.3 and GB ÷ 6, between 1 and 8. That is 3 on a 10-core Mac, which also runs builders (what it always ran) and 5 on 18 cores and 128 GB. Each test starts its own relay on its own port inside its worker, and the relay's auth state is per process, so workers share nothing; `E2E_WORKERS` in the environment still wins.
+
+### The macOS-only subset and the machine's load
+
+With `CI_TITAN_CHECK=on` check runs on Lemnos only the macOS-only subset (`step_macos_subset`: the bridge's bun files, then Vitest,
+then the contract files) and folds Titan's `ci-part/check` in. The subset is this run's quiet group: **the Swift jobs and browser
+wait for `quiet-done`, which check writes when the subset has ended** (pass or fail), the way they wait for the quiet group of
+today's check. Before this change check wrote it at once, so the subset ran beside a Swift build and Playwright, and on 18 cores the
+load average reached 40-60. bun's 20 s limit per test then fired across unrelated files (`restart-main`, `talos` "status works",
+the ledger test): 7 timeouts in 4 of the 44 runs of 2026-11-20..21, 3 of them in one run (b340427), and no test is retried any more,
+so each is a red main. The subset's size is not the cause: its Vitest part alone is 1,200-3,400 s of test time summed over its files, run on 7 workers
+(`root-install*`, `ci-local-*`), so a smaller worker cap would only lengthen it. Not overlapping is the fix.
+
+Cost: the desktop job starts when the subset ends (330-450 s alone) and has the cores to itself. Its own steps took about 500-700 s
+before Titan took check (2026-11-14..16: 640-780 s wall) and 1,100-1,250 s with the subset beside them, so the run is expected to
+finish about as before (desktop was already its longest job), with the subset itself faster. Browser's own wall time is 400-570 s,
+shorter than desktop, so it ends before desktop does. The cross-run case is not covered: another run's Swift job (one at a time,
+machine-wide) and another run's Playwright (`pnpm test:browser` and `pnpm test:e2e` take no mutex) can still run beside this run's
+subset. The new load lines will show whether the subset ever needs to wait on the desktop mutex.
+
+To compare before and after from real runs, read-only: `node scripts/ci-subset-report.ts --since 2026-11-20 --until 2026-11-21`
+(one row per run: the subset step's seconds, 20 s timeouts, the slowest tests, Vitest's seconds, check/desktop/browser/mobile wall
+times and the verdict). Runs from this change on also have `subset load start|after the bun files|end:` lines in check's log (the
+load averages from `uptime`), shown as the load column.
 
 ### A job can't outlive its run
 
@@ -191,14 +217,16 @@ jobs, waited, setup, jobs' wall time, failures, then each job that ran as `<job>
 time includes any wait for another job (browser waits for the whole of check), so its own steps are the wall time less that
 wait; the result line says both (`✓ browser (984s: 457s of its own steps, 527s waiting for another job)`). Each step's time
 is in the job log as `[step] <seconds> exit <code>: <command>`, so the next audit needs no detective work. Each job log
-starts with the bun it runs (`bun: 1.4.4 (<path>)`), and the row ends with the run's bun (`bun=1.4.4`; older rows lack it).
+starts with the bun it runs (`bun: 1.4.4 (<path>)`), and the row's eleventh column is the run's bun (`bun=1.4.4`; older rows lack it),
+then a twelfth, the seconds of Chronos's suite inside `check` on this machine (`chronos=118`; `chronos=-` when it did not run here, a
+check taken by another machine's part included; older rows lack it).
 On the runner that bun is a copy of the pinned one kept in the cache (`bun-bin/<version>/`, scripts/ci-runner.sh
 `ci_bun_pinned`), never `~/.bun/bin/bun`, which an upgrade replaces in place while a run is going.
 
 `apps/bridge/scripts/test-parallel.ts` is the `bun test` runner: one process per file, one result per file, green only if every
 file exited 0 and reported at least one test. Its default test timeout is 20 s, not 5: that timeout only catches hangs, and
 fired on tests that passed every assertion but ran slowly beside other files. Explicit timeouts, waits and assertions stay as
-written. A file also has a wall-clock limit, 5 minutes (`--file-timeout <seconds>` or `BUN_TEST_FILE_TIMEOUT`): bun's test
+written. A file also has a wall-clock limit, 5 minutes (`--file-timeout <seconds>` or `BUN_TEST_FILE_TIMEOUT`); this is the bun runner's only: a Vitest file has just its tests' own timeouts, 30 s unless a test declares more (`scripts/root-install-v1-gate.test.ts` declares 900 s). Bun's test
 timeout cannot stop a file stuck in one synchronous call, so past the limit the runner kills that file's process tree, reports
 the file red and carries on; a file still alive 10 s after the kill is red as "did not die after SIGKILL" and left behind.
 `--shard K/N` runs pile K of N: the files (after `--only` and `--skip`) sorted biggest first and dealt each to the lightest pile so far, the same piles on every machine, every file in exactly one (`docs/CI-MACHINES.md`). `scripts/test-parallel.test.ts` also asks `bun test` which files it would run and compares, so a file can't drop
@@ -500,7 +528,7 @@ run slots' 4873 and up), tmux socket prefix and `TALOS_HEAVY_SLOT`, as a gate's 
 `job_tmp`), and the environment is put back when it ends. A gate, a loop or an eval (`heavy-lock.sh run`) takes slots K+1..N (`locks/mutex-suites-<k>`),
 the first free one. By default that is CI's two and two for builders, so at most two gates run beside CI (while a run is active
 the cap is two whatever N is). Each class has its own line: CI's jobs in turn (slots 1..K), the gates in turn (a checked
-`--red-main` jump first, then first come first served), and a waiter of one class never holds back the other. With **one slot** everyone shares it, CI first, as it always did. A dead holder in any slot is taken over
+`--red-main` jump first, then first come first served), and a waiter of one class never holds back the other. **A push run goes before a scheduled run** (the nightly, the hostile nightly: `CI_NIGHTLY=1`, `CI_HOSTILE=1`, "sched" on line 7 of the ticket): within CI's line its tickets go after every other CI ticket, it does not take a free run slot or a free heavy slot while a push run's is queued (the free-slot grace does not apply to it), and a scheduled quiet group that holds one slot lets it go when a push run's comes ahead. A scheduled step that already runs is never stopped. A scheduled run's wait for a queued push run at the run slots is capped as the wait for a gate is: after `CI_TURN_MAX_S` (3000 s) it goes ahead, said in its log. A scheduled run never makes a gate wait (`ci_turn_ahead` leaves its ticket out): the push run waits for the gates queued before it, so a gate that waited for the scheduled run queued before it would close a cycle. **During the changeover** a checkout whose scripts are older (no "sched" on its tickets) can still put a push run's quiet group and a newer scheduled run's ticket in each other's way; the lock timeout bounds that wait, and it ends as worktrees rebase. With **one slot** everyone shares it, CI first, as it always did. A dead holder in any slot is taken over
 like slot 1's. **During the rollout** a checkout whose scripts are older still runs its gate in `mutex-suites`, i.e. slot 1,
 and CI waits for it as before; that goes away as worktrees rebase. **CI's quiet group** (the contract and schedules suites, which give a real bridge and the real Chronos CLI 3 s to answer and
 failed beside anything else) **holds all K of CI's slots** (`ci_mutex_all`: it takes the slots as it finds them free, but only
@@ -538,11 +566,24 @@ _gate_ is a hold of one of the gate slots (K+1..N). Nobody is stopped: a class t
   `HEAVY_LOCK_TIMEOUT` (a push gate four hours) and ends in exit 75 as any lock wait: a gate fails closed. A CI run **fails open**:
   after `CI_TURN_MAX_S` (3000 s) it goes ahead beside the gate, with a loud line in its log and an alert ("ran beside a gate after N
   min"), because an untested main commit is worse than a noisy run; its waits for a run slot keep `CI_LOCK_TIMEOUT`, which does not run while it waits for its turn. The runner's run step
-  has 120 minutes: keep `CI_TURN_MAX_S` plus a normal run well inside it, and the line "ran beside a gate" is said when the run's slot is
+  has 130 minutes: keep `CI_TURN_MAX_S` plus a normal run well inside it, and the line "ran beside a gate" is said when the run's slot is
   taken, not before. A run that waits for load (`CI_MAX_LOAD`) keeps its place in the queue, so gates queued after it go behind it until it
   runs or gives up at `CI_LOCK_TIMEOUT`; a run counts from the moment it holds a run slot, including an idle wait for another run of the
   same commit. After `TALOS_TURN_ALERT_S` (1200 s) of waiting ONE alert file goes to `alerts/` (what waits, for whom, how long). Each
   wait of 1 s or more is a row of `logs/lock-waits.tsv` (kind `turn`), and `heavy-lock.sh status` shows who holds the machine and who waits.
+- **A run that waits only for a part.** When check or browser waits for a part on another machine (`CI_CHECK_PART`,
+  `CI_BROWSER_E2E_PART`, or check's parts on other machines), no heavy step of that job is going, and a waiting gate may go. The fold
+  loops mark it (`ci_fold_wait`: `runs/<nonce>/results/folding-<job>`, with the run's jobs listed in `runs/<nonce>/jobs`); a run is idle, and
+  does not hold the turn, while **every** job of it that has not ended carries the mark (a job that has not started, or runs a heavy step, makes the run
+  hold as before). When the part answers, what follows is light and the mark is simply cleared; when the part is taken back (its job
+  ended with no answer, or `CI_CHECK_WAIT` / `CI_BROWSER_E2E_WAIT` ran out, or a late shard part) the job first takes the turn again
+  (`ci_fold_resume`: under the turn lock it clears the mark at once, so gates that come later wait behind this run, and then it waits,
+  saying so, for the gates that hold the machine now; nothing is stopped); past `CI_TURN_MAX_S` it goes ahead beside the gate, loudly, with an
+  alert ("resumed beside a gate"). A run started inside a holder (a gate's hold) only clears the mark. `heavy-lock.sh status` lists such runs as
+  "CI runs waiting only for a part". The wait of a part is a whole job's only when every other job of the run has ended or waits too (browser
+  waits for check, desktop for check's quiet group): in a run with other work going the run holds as before, so this helps most with check
+  or browser alone waiting for Titan, and little with the 120 s look at check's shard parts. A gate that went while a run was idle, and still
+  holds when the part is taken back, delays that take-back by its remaining hold: never an overlap, short of `CI_TURN_MAX_S`.
 - **A holder that is gone.** A run slot or a gate slot whose owner process is gone counts for nothing (the same check every lock
   makes): a crashed gate never holds CI back, nor a crashed run a gate.
 - **Off switch.** `CI_TURN=0` in the environment or a `turn-off` file in the cache gives the old behaviour (read on every look, by a CI run that already waits too).
@@ -674,7 +715,8 @@ that sets them comes with phase A step 4.
   suite on `CI_PART_WORKERS` workers. `linux` runs the supervisor files and `history-corrupt.test.ts` on 2 processes.
 - `CI_REMOTE_PARTS` (`<part>:<machine> ...`, with `CI_RUN_ID` for the jobs API): `check` folds those parts in instead of running
   them. The quiet group and the loud group become one hold of `suites`; at its end a part whose machine never picked it up
-  runs here; one still working gets `CI_PART_WAIT` (120 s) and then runs here too. A part red on its machine fails `check`
+  runs here; one still working gets `CI_PART_WAIT` (120 s) and then runs here too (a part queued for a lock on its own machine does
+  not use that wait up, up to `CI_PART_LOCK_WAIT_MAX`, 2700 s: `docs/CI-MACHINES.md`, "A part queued for a lock"). A part red on its machine fails `check`
   ("bridge shard 2 failed on cyclops; see its run"); a pass says where each part ran. Without `CI_ATTEMPT_URL` every part
   runs here.
 - `CI_OWNER_MACHINE=1` (Delphi): before its slot the run refuses, naming the reason, if the runner's user is an admin, can list
@@ -714,8 +756,8 @@ today's, with today's links; the run gains the `plan` job and `--sha`.
 
 A run that tests `check` and posts its answers also posts `report-ci/fast`, about 3 minutes in: `pnpm typecheck`, `pnpm lint` and
 the unit tests (every Vitest project but `scripts/`, the CI and install suites) that the change since `check`'s last pass can reach
-(`vitest --changed <that commit>`, by imports; a change to `package.json` or the Vitest config reruns all of them), with one retry
-per failed test and the flake log, as in `check`. With no such pass (a rerun, `--full`, the nightly, none in reach) it runs
+(`vitest --changed <that commit>`, by imports; a change to `package.json` or the Vitest config reruns all of them), with no retry,
+as in `check`. With no such pass (a rerun, `--full`, the nightly, none in reach) it runs
 typecheck and lint only: every unit test took 470 s on 2 workers at nice 15 on a loaded Mac, a second copy of `check`'s beside
 its suites.
 
@@ -741,21 +783,13 @@ a proxy set in System Settings still reaches WebKit. A run by hand changes nothi
 
 ## A test that failed once
 
-A failed test runs once more, on its own where the runner allows it, never the whole job. If it passes then, the job is green,
-but it says so: "passed on retry (N flaky tests, see flakes.tsv)" in its status (a pass, like "with warnings"; `verdict` lists
-these jobs), a `! <job>: passed on retry: <test> (<file>)` line in the run's output, the same line in the job's log, and a row
-in `~/.cache/talos-ci/logs/flakes.tsv`: date, sha, job, test, file. A test that fails twice stays red. Each job gets its own
-`CI_FLAKE_FILE`, where the runners write the tests that passed only on the retry:
-
-| Runner                                            | How it retries                                                                                                                                                                                                                                                     |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Vitest (`check`)                                  | `--retry=1`; `scripts/ci-flake-vitest.ts` reports a test whose retry passed                                                                                                                                                                                        |
-| bun (`check`, the bridge)                         | `test-parallel.ts --retry-failed` runs a failed file once more; a file killed at the file limit is not rerun                                                                                                                                                       |
-| Swift (`desktop`'s main run, `mobile`'s packages) | `scripts/ci-swift-retry.sh` reruns only the failed tests (`--filter`), and passes only if each printed a pass line; not rerun: a crash, a run with no end-of-run summary, an issue no failed test accounts for, a test known only by a display name, a build error |
-| Playwright (`browser`)                            | `retries: 1` in every config when `CI_FLAKE_FILE` is set; `scripts/ci-flake-playwright.ts` reports the flaky ones                                                                                                                                                  |
-
-Not retried: the desktop job's other scripts (starvation, the packed app, the install tests), the iPhone app's own tests
-(`xcodebuild test`) and the mobile package's Vitest. By hand (no `CI_FLAKE_FILE`) nothing retries.
+Nothing retries (the owner's rule, since 2026-11-21): a failed test fails, in every job and in the hostile nightly, so a flake is
+seen and fixed at its cause. Before, a failed test ran once more; on 2026-11-21 that doubled an 862 s test file in the hostile
+run's Vitest step and held a CI slot for two hours. Vitest runs with `--retry=0` (check's step and `report-ci/fast`), the bun runner
+does not have `--retry-failed` any more, `scripts/ci-swift-retry.sh` just runs the
+command once, the gate has no rerun of known flaky tests (`gate-flakes.sh` is gone), and every Playwright config has `retries: 0`. `scripts/ci-no-retries.test.ts` reads these places, so none can come
+back. The flake reporters (`ci-flake-vitest.ts`, `ci-flake-playwright.ts`) and the "passed on retry" status stay, and have
+nothing to report: a `CI_FLAKE_FILE` is still made for each job.
 
 ## git never waits for a person
 

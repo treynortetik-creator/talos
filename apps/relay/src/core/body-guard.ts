@@ -166,6 +166,9 @@ export const idleBodyTimeout = (
   opts: { stopWhenBodyIn?: boolean } = {},
 ): MiddlewareHandler<AppEnv> => timeoutGuard(ms, maxTotalMs, true, opts.stopWhenBodyIn === true)
 
+/** The error a read of a body that outgrew its cap fails with; a route that reads the body itself may turn it into its own 413. */
+export const BODY_TOO_LARGE = 'request body too large'
+
 /** Requests whose body passed `maxSize` while it streamed. The handler was handed an error, so the answer is 413. */
 const overLimit = new WeakSet<Request>()
 
@@ -197,7 +200,7 @@ export function limitBody(maxSize: (c: Context<AppEnv>) => number): MiddlewareHa
           if (size > max) {
             overLimit.add(limitedReq)
             reader.cancel().catch(() => undefined)
-            return controller.error(new Error('request body too large'))
+            return controller.error(new Error(BODY_TOO_LARGE))
           }
           controller.enqueue(value)
         },

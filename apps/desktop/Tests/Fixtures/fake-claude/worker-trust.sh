@@ -11,7 +11,7 @@ mkdir -p "$d"
 # pointer after its Enter would read as an Enter that may have answered something, EnterDetection).
 take_lines_until() {
   local line buf=''
-  until [ -f "$1" ]; do
+  until [ -f "$1" ] || ! fake_alive; do
     if IFS= read -r -t 1 line; then  # whole seconds: the Mac's bash 3.2 takes no fraction
       printf '%s %s\n' "$TALOS_APP_WORKER_THREAD" "$buf$line" >> "${FAKE_TYPED_LOG:-/dev/null}"
       buf=''
@@ -34,7 +34,7 @@ if [ -n "${FAKE_TRUST_FLAP:-}" ]; then
   ready
   printf '\n'; typing_box
   take_lines_until "$FAKE_TRUST_FLAP"
-  while true; do
+  while fake_alive; do
     dialog; sleep 2
     printf '\033[2J\033[H\n'; typing_box; sleep 2
   done

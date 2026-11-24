@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "dialog_id": "Ul7Zq3LmWt5RcXvNa2KdBe",
+  "choice": 0,
+  "label": "Stop and wait",
+  "by": "Alex's iPhone",
+  "at": "2026-11-07T10:00:09.000Z",
+  "control_id": "dc_01M6V2TGWJCH4P49F79Q2317CD",
+  "proof": {
+    "signed": "{\"action\":\"primary\",\"card_id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T410\",\"choice\":0,\"device_id\":\"d_rjxnk4xufxem5xago5zd\",\"id\":\"01JBF3V7Q8K2M4N6P8R0S2T4AA\",\"payload_hash\":\"sha256:698f3709fd4bb85f422d30ee3462989f3afc0756cbbf26a33a8364ce8fb23991\",\"ts\":\"2026-11-07T10:00:09.000Z\",\"type\":\"card.resolve\",\"v\":1}",
+    "osig": "yTiJAZJIY0_5L7hfWS-HAKw3kmkvfI2sjIA1V9E_YG7K_i959qpLGGaH_fupRnic2D_WGK42kuW_tBnJ-ktPBw",
+    "device_id": "d_rjxnk4xufxem5xago5zd",
+    "binding": "{\"allow_edit\":false,\"allow_revise\":false,\"attachments\":[],\"body\":\"Trip's session can't go on until the limit resets or you switch to another model. Stop and wait ends its current turn. Switch model opens the model list in the session. Nothing here spends money.\",\"body_format\":\"plain\",\"destination\":[],\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"fields\":[],\"id\":\"c_01JBF3V7Q8K2M4N6P8R0S2T410\",\"kill_label\":\"\",\"kind\":\"dialog\",\"origin\":\"background\",\"payload\":{\"dialog_id\":\"Ul7Zq3LmWt5RcXvNa2KdBe\",\"dialog_kind\":\"usage_limit\",\"expires_at\":\"2026-11-07T10:15:00.000Z\",\"options\":[\"Stop and wait\",\"Switch model\"],\"subject\":\"Fable limit reached. It resets Aug 8, 4pm (UTC).\",\"thread\":\"trip\"},\"primary_label\":\"Answer\",\"risk\":\"low\",\"summary\":\"Trip's session is waiting for you.\",\"thread_id\":\"trip\",\"title\":\"Trip's session hit its usage limit\"}"
+  }
+}

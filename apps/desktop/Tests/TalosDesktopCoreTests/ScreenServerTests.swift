@@ -30,6 +30,7 @@ final class FakeScreenService: ScreenService, @unchecked Sendable {
   func input(_ request: ScreenInputRequest, allowed: ScreenAllowed) throws(ScreenRefusal) -> Int {
     let start = Date().timeIntervalSince1970
     note(.input(request, allowed.bundleIDs.sorted()))
+    // timing-ok: the fake's slow typing IS the behaviour under test (a request that runs past its time)
     if inputDelay > 0 { usleep(useconds_t(inputDelay * 1_000_000)) }
     lock.withLock { _spans.append((start, Date().timeIntervalSince1970)) }
     if let refusal { throw refusal }
@@ -469,6 +470,13 @@ struct ScreenSocketTests {
   }
 }
 
+final class Flag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var v = false
+  func set() { lock.withLock { v = true } }
+  var isSet: Bool { lock.withLock { v } }
+}
+
 /// R1-6: one request at a time, and a request that runs past its time keeps the next one out until it really ends.
 @Suite("Screen socket: the queue", .serialized)
 struct ScreenSocketQueueTests {
@@ -487,8 +495,14 @@ struct ScreenSocketQueueTests {
     let (d, s) = try start(f, request: 0.3, queue: 5)
     defer { s.stop(); d.cleanup() }
     let path = d.path
-    async let a = Task.detached { roundTrip(path, Data(#"{"op":"type","text":"aaa"}"#.utf8 + [0x0A])) }.value
-    try await Task.sleep(nanoseconds: 450_000_000)
+    let aAnswered = Flag()
+    async let a = Task.detached { () -> String? in
+      let r = roundTrip(path, Data(#"{"op":"type","text":"aaa"}"#.utf8 + [0x0A]))
+      aAnswered.set()
+      return r
+    }.value
+    // the second request goes in once the first has been answered "timed out" while its typing still runs
+    #expect(waitUntil(timeout: 20) { aAnswered.isSet }, "the first request was never answered")
     async let b = Task.detached { () -> (String?, Double) in
       let r = roundTrip(path, Data(#"{"op":"apps"}"#.utf8 + [0x0A]))
       return (r, Date().timeIntervalSince1970)
@@ -507,7 +521,7 @@ struct ScreenSocketQueueTests {
     defer { s.stop(); d.cleanup() }
     let path = d.path
     async let a = Task.detached { roundTrip(path, Data(#"{"op":"type","text":"aaa"}"#.utf8 + [0x0A])) }.value
-    try await Task.sleep(nanoseconds: 150_000_000)
+    #expect(waitUntil(timeout: 20) { !f.calls.isEmpty }, "the first request never started typing")
     let rb = await Task.detached { roundTrip(path, Data(#"{"id":"b","op":"type","text":"bbb"}"#.utf8 + [0x0A])) }.value
     let e = errorOf(lineJSON(rb) ?? [:])
     #expect(e.code == "busy")
@@ -523,7 +537,7 @@ struct ScreenSocketQueueTests {
     defer { s.stop(); d.cleanup() }
     let path = d.path
     async let a = Task.detached { roundTrip(path, Data(#"{"op":"type","text":"aaa"}"#.utf8 + [0x0A])) }.value
-    try await Task.sleep(nanoseconds: 150_000_000)
+    #expect(waitUntil(timeout: 20) { !f.calls.isEmpty }, "the first request never started typing")
     // a client that sends and hangs up while the first still runs
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var addr = ScreenSocket.address(path)
@@ -531,6 +545,7 @@ struct ScreenSocketQueueTests {
     _ = Data(#"{"op":"type","text":"gone"}"#.utf8 + [0x0A]).withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
     close(fd)
     _ = await a
+    // timing-ok: a negative window; nothing may run after the first finished, and no event marks "never"
     try await Task.sleep(nanoseconds: 300_000_000)
     #expect(!f.calls.contains(.input(.type("gone"), [])), "a line whose client left must not run: \(f.calls)")
   }

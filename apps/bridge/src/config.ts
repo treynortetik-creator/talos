@@ -5,6 +5,8 @@ import { join } from 'node:path'
 
 export type BridgeEnv = {
   home: string
+  /** TALOS_APP_BUNDLE: where the Mac app that started this agent is installed (the Mac sets it; status.json's `app_path` is it, checked). */
+  appBundle?: string | undefined
   relayUrl: string | undefined
   live: boolean
   ttsCmd: string[] | undefined
@@ -140,6 +142,7 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
   for (const [k, v] of Object.entries(processEnv)) if (v !== undefined && v !== '') merged[k] = v
   return {
     home,
+    appBundle: merged.TALOS_APP_BUNDLE || undefined,
     relayUrl: merged.TALOS_APP_RELAY_URL?.replace(/\/+$/, ''),
     live: flag('TALOS_APP_BRIDGE', [merged]),
     ttsCmd: parseArgv(merged.TALOS_APP_TTS_CMD),

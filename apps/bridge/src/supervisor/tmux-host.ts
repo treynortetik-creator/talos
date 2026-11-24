@@ -302,6 +302,12 @@ export class TmuxPtyHost implements PtyHost {
     } finally {
       closeSync(fd)
     }
+    // the last step before tmux runs the file: the extra lock's check once more (a link made since the plan refuses the start)
+    const refused = launch.beforeStart?.() ?? null
+    if (refused !== null) {
+      rmSync(file, { force: true })
+      throw new PtyHostError('start_failed', refused)
+    }
     return { argv: ['/usr/bin/env', '-i', '/bin/sh', file], file }
   }
 

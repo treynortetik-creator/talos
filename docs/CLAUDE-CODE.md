@@ -590,17 +590,20 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
   `…`), a part is redacted or unserializable, the call is past 20,000 shown characters, an old Claude Code, or the card is not exactly
   what the bridge composed (the bridge re-checks the body, summary and title it composed, byte for byte). A card for a request with
   no proof says who asked (`[asked by pid N in <cwd>]`).
-- **The approval sheet.** In the thread a permission card is compact: the start of the call, the "Ends with:" line, Deny, and a tap
-  target that opens a full-screen approval sheet (a push or `/card/:id` opens it by itself). The sheet is `position: fixed`, sized
-  from the visual viewport (a keyboard cannot pan it), above every layer, and while it is open one flag (`lib/approvalOpen.ts`)
-  makes the now-playing pill, the new-reply banner and its toast viewport, and the undo strip stand down (they come back when it
-  closes). It shows the whole call in its own scroll area and the pinned "Ends with:" line under it. Deny is always enabled. Allow
-  is enabled once the owner has seen every line: a sentinel after the end of the call is watched by an IntersectionObserver rooted in
-  the sheet's scroll area (a call that fits needs no scroll); once seen it stays enabled while the sheet is open and the call is
-  unchanged; with no IntersectionObserver, or while the page is pinch-zoomed (visual viewport scale over 1), Allow is off. The call, summary,
-  title and tail wrap anywhere (`overflow-wrap: anywhere; word-break: break-all`), and Allow also stays off while the scroll area, the
-  title or the tail is wider than the screen (scrollWidth over clientWidth, re-checked on resize), so nothing runs off the side. Allow
-  still goes through the step-up for risky tools, and the bridge sends `allow` only for an owner-signed answer to this exact card.
+- **One tap, and the optional Details sheet.** In the thread a permission card shows what Claude wants in one plain line (the
+  explanation sentence when there is one, else the title), a preview of the call, the "Ends with:" line, and Deny, Details and Allow
+  (owner, 2026-11-21: "If I click Approve, it's approved"). The preview and the "Ends with:" line are ALWAYS on the card's face,
+  outside any disclosure, whether or not an explanation exists or is still coming: the explanation is an extra sentence, never a
+  stand-in for the call, and Allow does not wait for it. Only the whole body is behind Details. Allow is one tap on the card's face and sends the same signed
+  `card.resolve` with the same hash the sheet's Allow sends; nothing is gated on scrolling, zoom or opening anything. There is no
+  Always allow on it (a rule for a permission needs Claude Code's own suggestion first: phase 2). "Details" opens a full-screen sheet:
+  `position: fixed`, sized from the visual viewport (a keyboard cannot pan it), above every layer, and while it is open one flag
+  (`lib/approvalOpen.ts`) makes the new-reply banner and its toast viewport, and the undo strip stand down (they
+  come back when it closes). It shows the whole call in its own scroll area and the pinned "Ends with:" line under it; Deny and Allow
+  are both enabled at once. A push or `/card/:id` no longer opens it: it scrolls to the card and arms it, as for any card, and
+  Details is there. The call, summary, title and tail wrap anywhere (`overflow-wrap: anywhere; word-break: break-all`). Allow
+  exists only when the card is exactly what the bridge composed (`permissionCardAllowsPrimary`, re-checked by the bridge), and the
+  bridge sends `allow` only for an owner-signed answer to this exact card.
   A notification Approve for a permission card needs the same rule and a call of at most 150 characters on one line
   (`PERMISSION_NOTICE_MAX_CHARS`); anything longer shows Open, which goes to the sheet.
 - **Identity.** A thread session proves itself exactly as `hello` does (the supervisor's nonce, a pid inside the recorded pane's
@@ -630,8 +633,8 @@ own session (a thread session is not a channel). Claude Code does run `Permissio
   path uses). No bridge, no socket, a stand-in listener, a refusal, a garbled or newer answer, an input over 250 KB, an error: no
   output, exit 0, and Claude Code's own prompt and default stay. Kill switch: `permission-relay.off` or `TALOS_PERMISSION_RELAY_OFF=1`.
 - **Tests.** `apps/bridge/test/permission-hook.test.ts` (real bridge, real hook script), `kit/scripts/test-permission-relay.sh`,
-  `apps/web/test/cards/permission-sheet.spec.ts` (the real app on an iPhone SE, an iPhone 15 and a Pixel: scroll-through gate, overlays,
-  zoom),
+  `apps/web/test/cards/permission-sheet.spec.ts` and `one-tap.spec.ts` (the real app on an iPhone SE, an iPhone 15 and a Pixel: the
+  Details sheet, overlays, one tap on the face),
   `WorkerCoreTests`, and the opt-in `apps/bridge/test/real-claude-permission-hook.test.ts` (`TALOS_REAL_CLAUDE=1`: a real Claude
   Code and its dangerous-rm prompt, including the countdown running out). Run the opt-in test with a short `TMPDIR`: the hub socket
   path must stay under about 104 bytes.

@@ -120,7 +120,11 @@ def _refuse(env):
                      "else set that variable.\n" % env)
     if (os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1") and os.path.basename(sys.argv[0]) in GUARD_HOOKS:
         sys.exit(2)
-    sys.stdout.write("{}")
+    try:                        # as say() below (not yet defined here): an unwritable {} must not become exit 120
+        sys.stdout.write("{}")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(0)
     sys.exit(0)
 
 
@@ -147,15 +151,33 @@ def pretool_json(decision, reason):
                                               "permissionDecisionReason": reason}})
 
 
+def say(text, blocking):
+    """Write a hook's verdict and flush it now. When stdout is closed or broken, the write fails here and the hook ends at once,
+    exit 2 for a verdict that blocks (Claude Code blocks on exit 2) and 0 for an allow. os._exit, not sys.exit: Python's
+    exit-time flush would hit the same broken stdout and exit 120, which Claude Code treats as non-blocking."""
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(2 if blocking else 0)
+
+
+def allow():
+    """Let the action through: {} on stdout."""
+    say("{}", False)
+
+
 def guard_failed(name, err):
     """A SAFETY GUARD hit an error it did not expect. Interactive: allow ({} on stdout, exit 0), because a broken
-    guard must never wedge a session. Unattended: BLOCK (deny + exit 0, which Claude Code honours) and report."""
+    guard must never wedge a session. Unattended: BLOCK (deny + exit 0, which Claude Code honours) and report; if that
+    deny cannot be written, exit 2 so it still blocks."""
     if unattended():
-        print(pretool_json("deny", "Talos %s hit an internal error (%s: %s) while this run is unattended, so the "
-                           "action is blocked rather than allowed unchecked. Nothing was written. Fix the guard "
-                           "(or run it interactively) before relying on this job." % (name, type(err).__name__, str(err)[:160])))
+        say(pretool_json("deny", "Talos %s hit an internal error (%s: %s) while this run is unattended, so the "
+                         "action is blocked rather than allowed unchecked. Nothing was written. Fix the guard "
+                         "(or run it interactively) before relying on this job." % (name, type(err).__name__, str(err)[:160])),
+            True)
     else:
-        print("{}")
+        allow()
 
 
 def log_unreadable(name, which, path, err):
@@ -255,16 +277,86 @@ TRUST_BOUNDARY = (
 
 def as_data(text):
     """File text goes inside a data block (data_block), so it must not be able to CLOSE it: `===` is rewritten (zero-width spaces,
-    written as escapes), which makes any `=== end ... ===` terminator unforgeable from inside a file. Measured 2026-09-02: a
-    HANDOFF line carrying a forged `=== end continuity ===` reached the model byte for byte."""
-    return text.replace("===", "=\u200b=\u200b=")
+    written as escapes), which makes any `=== end ... ===` terminator unforgeable from inside a file. A zero-width space goes between
+    EVERY `=` of any run of three or more (`=====` once left a bare `===`), a combining mark after an `=` looked through (`==\u0301=` reads
+    as `===`), so a second pass changes nothing. Measured 2026-09-02: a HANDOFF line carrying a forged `=== end continuity ===` reached
+    the model byte for byte."""
+    import re
+    mark = "[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]*"
+    return re.sub("(?:=%s){3,}" % mark, lambda m: "\u200b".join(re.findall("=" + mark, m.group(0))), text)
 
 
-def data_block(opening, closing, body, intro=""):
+def data_block(opening, closing, body, intro="", boundary=None):
     """The one trust-boundary wrapper for text a hook copies from files (the continuity digest, a thread's state file): the
     `opening` marker, an optional `intro`, the TRUST BOUNDARY paragraph, the `body` (already passed through as_data), the `closing`
-    marker. Only the user, in the conversation, can give instructions; nothing between the markers can."""
-    return opening + "\n" + (intro + "\n\n" if intro else "") + TRUST_BOUNDARY + "\n\n" + body + "\n" + closing
+    marker. Only the user, in the conversation, can give instructions; nothing between the markers can. `boundary` replaces the
+    paragraph with a shorter one for a hook that fires on many prompts (the memory pointers); the markers and the rule are the same."""
+    return (opening + "\n" + (intro + "\n\n" if intro else "") + (TRUST_BOUNDARY if boundary is None else boundary)
+            + "\n\n" + body + "\n" + closing)
+
+
+def u16(s):
+    """Length in UTF-16 code units, which is how Claude Code (JavaScript) counts a hook's output: an emoji is 2 there, 1 in Python."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def prefix_u16(s, n):
+    """The longest prefix of `s` that is at most `n` UTF-16 units."""
+    n = max(0, n)
+    if u16(s) <= n:
+        return s
+    lo, hi = 0, len(s)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if u16(s[:mid]) <= n:
+            lo = mid
+        else:
+            hi = mid - 1
+    return s[:lo]
+
+
+CUT_MIN = 200          # a cut shorter than this is not worth showing: the block is left out instead
+
+
+def fit_blocks(blocks, room):
+    """[(rank, text)] -> [text] that, joined with a blank line, is at most `room` UTF-16 units. The most important blocks (lowest rank first)
+    get the room first. A block that does not fit is cut with a '(cut here: N more characters)' line when at least CUT_MIN of it survives,
+    else left out; anything left out is named in one last line (at most 8 names of 30 characters, then "and N more"), and the room that
+    line needs is held back from its real length. Display order is kept."""
+    def run(left):
+        keep, dropped = {}, []
+        for i in sorted(range(len(blocks)), key=lambda i: (blocks[i][0], i)):
+            text = blocks[i][1]
+            if u16(text) + 2 <= left:
+                keep[i] = text
+                left -= u16(text) + 2
+                continue
+            more = lambda n: "\n(cut here: %d more characters)" % n
+            take = left - 2 - u16(more(len(text)))
+            if take >= CUT_MIN:
+                cut = prefix_u16(text, take)
+                keep[i] = cut + more(len(text) - len(cut))
+                left = 0
+            else:
+                dropped.append(text.split("\n", 1)[0].strip("- ").split(" (")[0])
+        return keep, dropped
+
+    def named(dropped):
+        shown = [d[:30] for d in dropped[:8]] + (["and %d more" % (len(dropped) - 8)] if len(dropped) > 8 else [])
+        return "(left out for space: %s)" % ", ".join(shown) if dropped else ""
+
+    keep, dropped = run(room)
+    reserve = 0
+    for _ in range(6):                                  # the held-back room grows with the dropped set: until it holds the real line
+        need = u16(named(dropped)) + 2 if dropped or any("(cut here:" in t for t in keep.values()) else 0
+        if need <= reserve:
+            break
+        reserve = need
+        keep, dropped = run(room - reserve)
+    out = [keep[i] for i in range(len(blocks)) if i in keep]
+    if dropped:
+        out.append(named(dropped))
+    return out
 
 
 # --------------------------------------------------------------------------- containment

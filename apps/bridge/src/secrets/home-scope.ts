@@ -4,8 +4,9 @@
 //
 // An item written before this (service without the suffix) is moved into the home's own name on the first read that misses, but only
 // by the account's default home (~/.config/talos/app of the password-database home, compared by real path). Any other home never
-// reads, moves or deletes a legacy item, even when no default home exists yet: it is the default home's, and a home made later
-// (TALOS_APP_HOME=/tmp/x) must not take it. The move writes the new item only if it is still missing just before the write, reads
+// moves or deletes a legacy item, even when no default home exists yet: it is the default home's, and a home made later
+// (TALOS_APP_HOME=/tmp/x) must not take it. It may only COPY one when its caller says the item is its own (`copyLegacyFor`;
+// peer/secret-store.ts: the home's config has that peer), and a copy leaves the legacy item as it is. The move writes the new item only if it is still missing just before the write, reads
 // it back, then deletes the legacy one: a newer secret is never overwritten, and a delete that fails loses nothing.
 import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
@@ -61,6 +62,13 @@ export type HomeScopeOptions = {
   log?: (line: string) => void
   /** The account's home (tests); default the real one. */
   account?: string | null
+  /**
+   * A home that is NOT the default may COPY (never move) a legacy item into its own name when this says yes for (service, account).
+   * The legacy item is left as it is. Default: never.
+   */
+  copyLegacyFor?: (service: string, account: string, real: string) => boolean
+  /** Called after a copy was written and read back; if it throws, the copy is removed again and the read fails. */
+  onCopy?: (service: string, account: string, real: string) => void
 }
 
 export function homeScopedStore(store: SecretStore, home: string, opts: HomeScopeOptions): SecretStore {
@@ -71,18 +79,41 @@ export function homeScopedStore(store: SecretStore, home: string, opts: HomeScop
   const resolveCall = (service: string) => {
     const real = realHome(home)
     return {
+      real,
       ns: `${service}.${suffixOfReal(real)}`,
       takes: isDefaultReal(real, opts.account === undefined ? accountHome() : opts.account),
     }
+  }
+  // A non-default home's copy of a legacy item (the caller says which are its own): the new item is written only if still missing,
+  // read back, and the legacy item is never deleted or changed. `ns` and `real` come from the one realpath of this call: the caller's checks use that path, never the raw home.
+  const copyOf = async (service: string, account: string, ns: string, real: string): Promise<string | undefined> => {
+    if (!opts.copyLegacyFor?.(service, account, real)) return undefined
+    const legacy = await store.get(service, account)
+    if (legacy === undefined) return undefined
+    const newer = await store.get(ns, account)
+    if (newer !== undefined) return newer
+    await store.set(ns, account, legacy)
+    if ((await store.get(ns, account)) !== legacy)
+      throw new SecretError('unavailable', 'the copied secret could not be read back')
+    try {
+      opts.onCopy?.(service, account, real)
+    } catch (e) {
+      await store.delete(ns, account).catch(() => undefined)
+      throw e
+    }
+    opts.log?.(
+      `copied the ${opts.kind} secret "${account.replace(/^[a-z]+:/, '')}" to this Talos home's own key store item`,
+    )
+    return legacy
   }
   return {
     backend: store.backend,
     strength: store.strength,
     async get(service, account) {
-      const { ns, takes } = resolveCall(service)
+      const { ns, takes, real } = resolveCall(service)
       const have = await store.get(ns, account)
       if (have !== undefined) return have
-      if (!takes) return undefined
+      if (!takes) return copyOf(service, account, ns, real)
       const legacy = await store.get(service, account)
       if (legacy === undefined) return undefined
       // a secret that appeared since the first read is newer: it stays, and the legacy item is left alone
@@ -100,6 +131,14 @@ export function homeScopedStore(store: SecretStore, home: string, opts: HomeScop
         `moved the ${opts.kind} secret "${account.replace(/^[a-z]+:/, '')}" to this Talos home's own key store item`,
       )
       return legacy
+    },
+    /** Read-only: the home's own item, then the legacy one this home could take or copy. Nothing is read, moved or copied. */
+    async has(service, account) {
+      const { ns, takes, real } = resolveCall(service)
+      const own = await store.has(ns, account)
+      if (own !== false) return own
+      if (!takes && !opts.copyLegacyFor?.(service, account, real)) return false
+      return store.has(service, account)
     },
     async set(service, account, value) {
       await store.set(resolveCall(service).ns, account, value)

@@ -52,15 +52,27 @@ const RECORDER_ROW = /^Talos(?:: [A-Za-z0-9][A-Za-z0-9 .()+-]{0,7}(?: \| 7d: (?:
  */
 const OLD_RECORDER_ROW = /^(?:Opus|Sonnet|Haiku|Fable|Claude)(?: [A-Za-z0-9 .()+-]{0,32})? \| 7d: (?:100|[1-9]?[0-9])%$/
 /**
- * A whole status row of its own shape: the agents panel (real-2.1.322/idle-agents-panel), the main session's row exactly, and a
- * subagent's row with its name, task, time and tokens.
+ * The agents panel Claude Code draws under the footer (real-2.1.322/idle-agents-panel, real-2.1.325-status, real-2.1.329), read by its
+ * BLOCK, never by a row's tail (the tail is the agent's task text and takes any form): an exact unfocused `⏺ main` straight under the
+ * box or under a status row, then contiguous agent rows (at most PANEL_AGENTS_MAX), then at most one `↓ N more`, last, and only after
+ * an agent row. An agent row is an optional tree connector (├ └), `◯ ` and printable text: no hidden character, no `❯` (focus always
+ * draws it), no `⏺`, no option number first ("◯ 1."). Viewing an agent turns the first row into `◯ main`, which opens no block. A row
+ * of these shapes anywhere else refuses, and its shape goes to the audit as `panel <shape>`. BoxFrame.swift, the same.
  */
-const STATUS_ROWS = [
-  /^⏺ main$/,
-  /^◯ [\w.-]+(?: \(\+N\))?\s{2,}\S.*\s{2,}Ns · ↓ N(?:\.N)?k? tokens$/,
-  // 2.1.325's subagent row at 120, 60 and 30 columns (real-2.1.325-status): its task cut, or gone, and its tokens cut
-  /^◯ [A-Za-z0-9_.-]+(?: \(\+N\))?(?:\s{2,}\S.*?)?\s+Ns(?: · [↑↓](?: N(?:\.N)?k? tokens)?)?$/,
-]
+const PANEL_AGENTS_MAX = 5
+const PANEL_MORE = /^↓ N more$/
+function panelRow(row: string): 'main' | 'agent' | 'more' | null {
+  const raw = clean(row)
+  if (HIDDEN.test(raw)) return null
+  if (raw === '⏺ main') return 'main'
+  if (PANEL_MORE.test(raw.replace(/\d+/g, 'N'))) return 'more'
+  const t = /^[├└] /.test(raw) ? raw.slice(2) : raw
+  if (!t.startsWith('◯ ')) return null
+  const body = t.slice(2)
+  return body === '' || body.includes('❯') || body.includes('⏺') || /^[0-9]+[.)]/.test(body) ? null : 'agent'
+}
+/** A row that starts like the panel's (`◯ `, `⏺ `, `↓ `, a tree connector): when it refuses its shape is audited. */
+const startsLikePanel = (row: string): boolean => ['◯ ', '⏺ ', '↓ ', '├ ', '└ '].some((g) => clean(row).startsWith(g))
 
 /**
  * A status row cut at the pane's edge (real-2.1.325-queued at 30 columns: `⏸ manual mode on · esc to…`): only a row's LAST part
@@ -102,11 +114,34 @@ const UNKNOWN_PER_ROW = 2
  */
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}�]/u
 /**
+ * The artifact part Claude Code 2.1.330 draws on the footer row once an Artifact canvas is open (real-2.1.330-canvas: `⏵⏵ bypass
+ * permissions on (shift+tab to cycle) · ⧉ canvas · esc to interrupt`): `⧉` and the artifact's name (file name without its extension,
+ * or its title, cut at 24 characters), or `⧉ N` with several. So the name is any text: 1 to 24 characters (code points; the cut "…"
+ * counts), no hidden character (the row is refused whole for one), and no " · " or double space (a part ends there). Read only on
+ * the row of a mode part (after it, at any place, cut or not), once, never as a row of its own. BoxFrame.swift, the same.
+ */
+const artifactPart = (p: string): boolean => {
+  const t = p.trim()
+  const n = [...t].length - 2
+  return t.startsWith('⧉ ') && n >= 1 && n <= 24
+}
+/**
+ * The symbols that may open an unknown part, an allowlist of the footer symbols seen in 2.1.330 (the artifact mark and the warning
+ * sign): every other symbol refuses and is audited, so a selection list's marks and pointers can never open one.
+ */
+const NEUTRAL_GLYPH = /^[\u29c9\u26a0] /
+/**
  * Pantheon's narrow refusals on top of the shape (2026-11-14, on Fable's probes): not one word of four letters or fewer (an
  * answer), no option number at its start (a digit then `.` or `)`), no `y/n`, and not the word `enter` (the key a prompt asks
  * for; "entering" is another word). Hints shaped "x to y" stay allowed.
  */
-const unknownPart = (t: string): boolean =>
+const unknownPart = (p: string): boolean => {
+  if (!NEUTRAL_GLYPH.test(p) || [...p].length <= 2) return narrowPart(p)
+  // after a symbol an answer word anywhere in it ("⚠ low yes") refuses as well
+  const t = [...p].slice(2).join('')
+  return !/(?<![a-z0-9])(?:yes|no|ok|y|n)(?![a-z0-9])/.test(t) && narrowPart(t)
+}
+const narrowPart = (t: string): boolean =>
   UNKNOWN_SHAPE.test(t) &&
   !/^[a-z]{1,4}$/.test(t) &&
   !/^[0-9]+[.)]/.test(t) &&
@@ -148,7 +183,6 @@ function rowKind(row: string): RowKind {
   if (HIDDEN.test(raw.replace(/\t/g, ' '))) return { kind: null }
   const c = raw.replace(/\d+/g, 'N')
   if (c === '') return { kind: 'claude', unknown: [] }
-  if (STATUS_ROWS.some((r) => r.test(c))) return { kind: 'claude', unknown: [] }
   const parts = raw.split(/\s{2,}| · /).map((p) => p.trim())
   const head = parts[0] as string
   const known = (p: string, i: number) =>
@@ -161,9 +195,17 @@ function rowKind(row: string): RowKind {
   // only a row that is positively a status row may hold parts nobody has captured yet: a known mode, or Talos's own row
   const open = recorder || (!old && known(head, 0) && /^(?:⏸|⏵⏵) /.test(head))
   const unknown: string[] = []
+  let sawMode = open && !recorder
+  let sawArtifact = false
   for (let i = 1; i < parts.length; i++) {
     const p = parts[i] as string
+    if (STATUS_PARTS[0]?.test(p.replace(/\d+/g, 'N'))) sawMode = true
     if (known(p, i)) continue
+    // the artifact part: only after a mode part, once
+    if (open && sawMode && !sawArtifact && artifactPart(p)) {
+      sawArtifact = true
+      continue
+    }
     if (!open) return { kind: null }
     if (!unknownPart(p)) return { kind: null, refused: refusedShape(p) }
     unknown.push(p)
@@ -184,14 +226,44 @@ export function strangeRowUnder(
 ): string | null {
   let recorder = 0
   let open = 0
+  // the agents panel as one block (`panelRow`): `⏺ main` (none yet), its agent rows, "↓ N more" last
+  let inPanel = false
+  let panelDone = false
+  let agents = 0
+  const refuse = (r: string, panelRelated: boolean): string => {
+    if (panelRelated || startsLikePanel(r)) notes?.refused.push(`panel ${refusedShape(clean(r))}`)
+    return clean(r)
+  }
   for (let i = bottomRule + 1; i < rows.length; i++) {
     const r = rows[i] as string
+    const p = panelRow(r)
+    if (p !== null) {
+      // directly under the box or under a status row, with the blank spacer Claude Code draws between them passed over
+      let j = i - 1
+      while (j > bottomRule && clean(rows[j] as string) === '') j--
+      const after = j === bottomRule || rowKind(rows[j] as string).kind !== null
+      if (p === 'main') {
+        if (inPanel || panelDone || !after) return refuse(r, false)
+        inPanel = true
+      } else if (p === 'agent') {
+        if (!inPanel || panelDone || ++agents > PANEL_AGENTS_MAX) return refuse(r, true)
+      } else {
+        if (!inPanel || panelDone || agents < 1) return refuse(r, true)
+        panelDone = true
+      }
+      continue
+    }
+    const inBlock = inPanel && !panelDone
+    if (inPanel) {
+      inPanel = false
+      panelDone = true
+    }
     // a solid rule (another frame; `clean` would read it as blank) is never a status row
     if (isFrameRule(r)) return [...r.trim()].slice(0, 20).join('')
     const k = rowKind(r)
     if (k.kind === null) {
       if (k.refused) notes?.refused.push(k.refused)
-      return clean(r)
+      return refuse(r, inBlock)
     }
     if (k.kind === 'recorder' && ++recorder > 1) return clean(r)
     if (k.unknown.length > 0) {

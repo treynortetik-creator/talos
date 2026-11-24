@@ -183,4 +183,16 @@ public final class GroupSignaller: @unchecked Sendable {
   }
 
   public func alive(_ pgid: Int32) -> Bool { ProcessInspect.groupAlive(pgid) }
+
+  /// The group's LEADER is still the process we recorded: it has a process-table row (or `kill(pid, 0)` does not say ESRCH) and, when its start
+  /// time was recorded, the same one. A dead leader with a child that survives (one that ignores SIGHUP) is gone: the leftover is the
+  /// clean-up's business, not a reason to call the agent alive.
+  public func leaderAlive(_ pgid: Int32) -> Bool {
+    guard let snap = probe.snapshot(pgid) else { return ProcessInspect.alive(pgid) }
+    lock.lock()
+    let start = owned[pgid]
+    lock.unlock()
+    guard let start else { return true }
+    return abs(snap.startTime - start) <= 1
+  }
 }

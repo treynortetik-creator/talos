@@ -51,7 +51,7 @@ public enum OnboardingText {
   public static let firstStartWarning = "Claude is asking about the development channel. Answer in the Talos popup."
   public static let firstStartWaiting = "Waiting for the Talos bridge to come up\u{2026}"
   public static let firstStartDone = "Done. Your agent is running and its Talos bridge is live."
-  public static let firstStartStalled = "Claude has not finished starting. Open Terminals\u{2026} in the menu bar item and look at the pane."
+  public static let firstStartStalled = "Claude has not finished starting. Choose Restart your agent in the menu bar item to try again."
   public static let firstStartTerminal =
     "Claude is showing a question that only you can answer (a folder trust). Open Terminals\u{2026} in the menu bar item and look at the pane."
   public static let firstStartSafety =

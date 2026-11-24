@@ -2,16 +2,20 @@
 // own-session switch) and the newly listed settings go through config_propose with old and new on the card; trust mode applies a
 // LOW change directly and never a HIGH one; a mac row is refused either way; a thread session may propose for its own thread
 // only; every applied change names how to revert it and emits a named event. Real bridge + FakeRelay + a signing FakeApp.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type CardT, CONFIG_PROPOSE_FEATURE } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { createLogger, nullLogger } from '../src/log.ts'
 import { INBOX_MARKER, keptInboxThreadIds, removeGoneInboxes } from '../src/worker/inbox.ts'
 import { eventually, type Harness, pushCardResolvePastRelay, sleep, startHarness, waitFor } from './helpers.ts'
+
+// the waits of one test (the harness start, a card, the owner's answer) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 let worker: Bridge | undefined
@@ -105,146 +109,182 @@ const doneText = async (x: Harness, card: CardT) =>
   ).result?.text ?? ''
 
 describe('rename, retopic, own session and the model list, through a card', () => {
-  test('rename a thread: the card shows old and new, approval writes it, the result names the way back, the event carries ids only', async () => {
-    await start()
-    await ownerAsks(h as Harness)
-    const x = h as Harness
-    const card = await proposeCard(x, [{ path: 'threads.trip.name', value: 'Travel' }])
-    expect(card.body).toContain('Thread trip name: Trip → Travel')
-    expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Trip') // proposing writes nothing
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel'))
-    const result = await doneText(x, card)
-    expect(result).toContain('Saved.')
-    expect(result).toContain('To undo: Thread trip name back to Trip')
-    expect(cfg(x).threads.map((t) => t.id)).toEqual(['general', 'inbox', 'trip', 'garden']) // no other thread lost
-    await x.relay.expectFrame('config.sync', (f) => f.config.threads.some((t) => t.name === 'Travel'), {
-      direction: 'from_bridge',
-    })
-    await eventually(() =>
-      expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'agent_card' }),
-    )
-    expect(JSON.stringify(events())).not.toContain('Travel')
-  })
+  test(
+    'rename a thread: the card shows old and new, approval writes it, the result names the way back, the event carries ids only',
+    async () => {
+      await start()
+      await ownerAsks(h as Harness)
+      const x = h as Harness
+      const card = await proposeCard(x, [{ path: 'threads.trip.name', value: 'Travel' }])
+      expect(card.body).toContain('Thread trip name: Trip → Travel')
+      expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Trip') // proposing writes nothing
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel'))
+      const result = await doneText(x, card)
+      expect(result).toContain('Saved.')
+      expect(result).toContain('To undo: Thread trip name back to Trip')
+      expect(cfg(x).threads.map((t) => t.id)).toEqual(['general', 'inbox', 'trip', 'garden']) // no other thread lost
+      await x.relay.expectFrame('config.sync', (f) => f.config.threads.some((t) => t.name === 'Travel'), {
+        direction: 'from_bridge',
+      })
+      await eventually(() =>
+        expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'agent_card' }),
+      )
+      expect(JSON.stringify(events())).not.toContain('Travel')
+    },
+    t(145_000),
+  )
 
-  test('retopic and notify: the old value is read from the config; an empty topic clears it', async () => {
-    await start()
-    await ownerAsks(h as Harness)
-    const x = h as Harness
-    const card = await proposeCard(x, [
-      { path: 'threads.trip.topic', value: '' },
-      { path: 'threads.garden.notify', value: 'needs_you' },
-      { path: 'threads.garden.icon', value: 'leaf' },
-    ])
-    expect(card.body).toContain('Thread trip topic: Flights → ')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.notify).toBe('needs_you'))
-    expect(cfg(x).threads.find((t) => t.id === 'trip')?.topic).toBeUndefined()
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.icon).toBe('leaf')
-    await eventually(() =>
-      expect(events().filter((e) => e.event === 'setting.changed')).toEqual(
-        expect.arrayContaining([
-          { event: 'setting.changed', setting: 'threads.topic', thread_id: 'trip', source: 'agent_card' },
-          { event: 'setting.changed', setting: 'threads.notify', thread_id: 'garden', source: 'agent_card' },
-          { event: 'setting.changed', setting: 'threads.icon', thread_id: 'garden', source: 'agent_card' },
-        ]),
-      ),
-    )
-  })
+  test(
+    'retopic and notify: the old value is read from the config; an empty topic clears it',
+    async () => {
+      await start()
+      await ownerAsks(h as Harness)
+      const x = h as Harness
+      const card = await proposeCard(x, [
+        { path: 'threads.trip.topic', value: '' },
+        { path: 'threads.garden.notify', value: 'needs_you' },
+        { path: 'threads.garden.icon', value: 'leaf' },
+      ])
+      expect(card.body).toContain('Thread trip topic: Flights → ')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.notify).toBe('needs_you'))
+      expect(cfg(x).threads.find((t) => t.id === 'trip')?.topic).toBeUndefined()
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.icon).toBe('leaf')
+      await eventually(() =>
+        expect(events().filter((e) => e.event === 'setting.changed')).toEqual(
+          expect.arrayContaining([
+            { event: 'setting.changed', setting: 'threads.topic', thread_id: 'trip', source: 'agent_card' },
+            { event: 'setting.changed', setting: 'threads.notify', thread_id: 'garden', source: 'agent_card' },
+            { event: 'setting.changed', setting: 'threads.icon', thread_id: 'garden', source: 'agent_card' },
+          ]),
+        ),
+      )
+    },
+    t(125_000),
+  )
 
-  test('toggle a thread session: always a card, even in trust mode; approval switches it', async () => {
-    for (const trust of [false, true]) {
-      await start({ trust })
+  test(
+    'toggle a thread session: always a card, even in trust mode; approval switches it',
+    async () => {
+      for (const trust of [false, true]) {
+        await start({ trust })
+        const x = h as Harness
+        await ownerAsks(x)
+        const card = await proposeCard(x, [{ path: 'threads.trip.session', value: 'dedicated' }])
+        expect(card.body).toContain('Thread trip own session: shared → dedicated')
+        expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).toBeUndefined()
+        await approve(x, card)
+        await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).toBe('dedicated'))
+        expect(await doneText(x, card)).toContain('To undo: Thread trip own session back to shared')
+        await eventually(() =>
+          expect(events()).toContainEqual({
+            event: 'setting.changed',
+            setting: 'threads.session',
+            thread_id: 'trip',
+            source: 'agent_card',
+          }),
+        )
+        await x.stop()
+        h = undefined
+      }
+    },
+    t(135_000),
+  )
+
+  test(
+    'the thread sessions master switch is a card too, and keeps the limits it already has',
+    async () => {
+      await start({ trust: true, dedicated: false })
       const x = h as Harness
       await ownerAsks(x)
-      const card = await proposeCard(x, [{ path: 'threads.trip.session', value: 'dedicated' }])
-      expect(card.body).toContain('Thread trip own session: shared → dedicated')
-      expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).toBeUndefined()
+      const card = await proposeCard(x, [{ path: 'dedicated', value: true }])
+      expect(card.body).toContain('Thread sessions: off → on')
       await approve(x, card)
-      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).toBe('dedicated'))
-      expect(await doneText(x, card)).toContain('To undo: Thread trip own session back to shared')
+      await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(true))
+      expect(cfg(x).dedicated?.max_live).toBe(2)
+      expect(await doneText(x, card)).toContain('To undo: Thread sessions back to off')
+    },
+    t(125_000),
+  )
+
+  test(
+    'on a config that never wrote the switch, the agent reads it on, as the owner does: off is the card',
+    async () => {
+      await start({ trust: true, dedicated: 'unwritten' })
+      const x = h as Harness
+      await ownerAsks(x)
+      expect((await propose(x, [{ path: 'dedicated', value: true }])).isError).toBe(true)
+      const card = await proposeCard(x, [{ path: 'dedicated', value: false }])
+      expect(card.body).toContain('Thread sessions: on → off')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(false))
+    },
+    t(115_000),
+  )
+
+  test(
+    'change a session model: the list on a card, then applied; the old list is in the result',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x)
+      const card = await proposeCard(x, [{ path: 'session_models', value: ['default', 'sonnet'] }])
+      expect(card.body).toContain('default, opus, sonnet, haiku')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).session_models).toEqual(['default', 'sonnet']))
+      expect(await doneText(x, card)).toContain('To undo: Model list back to default, opus, sonnet, haiku')
       await eventually(() =>
-        expect(events()).toContainEqual({
-          event: 'setting.changed',
-          setting: 'threads.session',
-          thread_id: 'trip',
-          source: 'agent_card',
-        }),
+        expect(events()).toContainEqual({ event: 'setting.changed', setting: 'session_models', source: 'agent_card' }),
       )
-      await x.stop()
-      h = undefined
-    }
-  })
+    },
+    t(135_000),
+  )
 
-  test('the thread sessions master switch is a card too, and keeps the limits it already has', async () => {
-    await start({ trust: true, dedicated: false })
-    const x = h as Harness
-    await ownerAsks(x)
-    const card = await proposeCard(x, [{ path: 'dedicated', value: true }])
-    expect(card.body).toContain('Thread sessions: off → on')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(true))
-    expect(cfg(x).dedicated?.max_live).toBe(2)
-    expect(await doneText(x, card)).toContain('To undo: Thread sessions back to off')
-  })
-
-  test('on a config that never wrote the switch, the agent reads it on, as the owner does: off is the card', async () => {
-    await start({ trust: true, dedicated: 'unwritten' })
-    const x = h as Harness
-    await ownerAsks(x)
-    expect((await propose(x, [{ path: 'dedicated', value: true }])).isError).toBe(true)
-    const card = await proposeCard(x, [{ path: 'dedicated', value: false }])
-    expect(card.body).toContain('Thread sessions: on → off')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).dedicated?.enabled).toBe(false))
-  })
-
-  test('change a session model: the list on a card, then applied; the old list is in the result', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x)
-    const card = await proposeCard(x, [{ path: 'session_models', value: ['default', 'sonnet'] }])
-    expect(card.body).toContain('default, opus, sonnet, haiku')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).session_models).toEqual(['default', 'sonnet']))
-    expect(await doneText(x, card)).toContain('To undo: Model list back to default, opus, sonnet, haiku')
-    await eventually(() =>
-      expect(events()).toContainEqual({ event: 'setting.changed', setting: 'session_models', source: 'agent_card' }),
-    )
-  })
-
-  test('a model list that is empty, too long or carries a shell word is refused with no card', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x)
-    for (const value of [[], ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm'], ['opus; rm -rf /']])
-      expect((await propose(x, [{ path: 'session_models', value }])).isError).toBe(true)
-    noCardMinted(x)
-  })
+  test(
+    'a model list that is empty, too long or carries a shell word is refused with no card',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x)
+      for (const value of [[], ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm'], ['opus; rm -rf /']])
+        expect((await propose(x, [{ path: 'session_models', value }])).isError).toBe(true)
+      noCardMinted(x)
+    },
+    t(95_000),
+  )
 })
 
 describe('the lock off: what the owner asked for is made at once, low or high; the lock on: a card; mac is always refused', () => {
-  test('a rename, after the owner asked, is applied with no card and says how to undo it', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    await ownerAsks(x)
-    const r = await propose(x, [{ path: 'threads.trip.name', value: 'Travel' }])
-    expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toContain('applied: the owner asked')
-    expect(text(r)).toContain('To undo: Thread trip name back to Trip')
-    expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel')
-    noCardMinted(x)
-    expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'agent_asked' })
-  })
+  test(
+    'a rename, after the owner asked, is applied with no card and says how to undo it',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      await ownerAsks(x)
+      const r = await propose(x, [{ path: 'threads.trip.name', value: 'Travel' }])
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(text(r)).toContain('applied: the owner asked')
+      expect(text(r)).toContain('To undo: Thread trip name back to Trip')
+      expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel')
+      noCardMinted(x)
+      expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'agent_asked' })
+    },
+    t(95_000),
+  )
 
-  test('a model list change is applied directly', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    await ownerAsks(x)
-    const r = await propose(x, [{ path: 'session_models', value: ['default', 'opus'] }])
-    expect(text(r)).toContain('applied: the owner asked')
-    expect(cfg(x).session_models).toEqual(['default', 'opus'])
-  })
+  test(
+    'a model list change is applied directly',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      await ownerAsks(x)
+      const r = await propose(x, [{ path: 'session_models', value: ['default', 'opus'] }])
+      expect(text(r)).toContain('applied: the owner asked')
+      expect(cfg(x).session_models).toEqual(['default', 'opus'])
+    },
+    t(95_000),
+  )
 
   test.each([
     ['threads.trip.archived', true],
@@ -256,48 +296,60 @@ describe('the lock off: what the owner asked for is made at once, low or high; t
     // audit 2026-11-10 #5: quiet hours hold every push, approval cards included
     ['quiet_window', { start: '00:00', end: '23:59' }],
     ['timezone', 'Pacific/Kiritimati'],
-  ])('%s (high), asked: made at once with its undo line; the lock on: a card, nothing written', async (path, value) => {
-    await start({ lock: false })
-    const x = h as Harness
-    await ownerAsks(x)
-    const r = await propose(x, [{ path, value }])
-    expect(text(r)).toMatch(/applied: (the owner asked|the settings lock is off and nothing outside)/)
-    expect(text(r)).toContain('To undo:')
-    noCardMinted(x)
-    await x.stop()
-    await start()
-    const y = h as Harness
-    await ownerAsks(y)
-    const before = JSON.stringify(cfg(y))
-    const card = await proposeCard(y, [{ path, value }])
-    expect(card.kind).toBe('config')
-    expect(JSON.stringify(cfg(y))).toBe(before) // nothing written until the owner taps Apply
-  })
+  ])(
+    '%s (high), asked: made at once with its undo line; the lock on: a card, nothing written',
+    async (path, value) => {
+      await start({ lock: false })
+      const x = h as Harness
+      await ownerAsks(x)
+      const r = await propose(x, [{ path, value }])
+      expect(text(r)).toMatch(/applied: (the owner asked|the settings lock is off and nothing outside)/)
+      expect(text(r)).toContain('To undo:')
+      noCardMinted(x)
+      await x.stop()
+      await start()
+      const y = h as Harness
+      await ownerAsks(y)
+      const before = JSON.stringify(cfg(y))
+      const card = await proposeCard(y, [{ path, value }])
+      expect(card.kind).toBe('config')
+      expect(JSON.stringify(cfg(y))).toBe(before) // nothing written until the owner taps Apply
+    },
+    t(195_000),
+  )
 
-  test('turning quiet hours off applies directly', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    x.bridge.ctx.config.update((c) => ({ ...c, quiet_window: { start: '22:00', end: '07:00' } }))
-    await ownerAsks(x)
-    const r = await propose(x, [{ path: 'quiet_window', value: null }])
-    expect(text(r)).toContain('applied: the owner asked')
-    expect(cfg(x).quiet_window ?? null).toBeNull()
-    noCardMinted(x)
-  })
+  test(
+    'turning quiet hours off applies directly',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      x.bridge.ctx.config.update((c) => ({ ...c, quiet_window: { start: '22:00', end: '07:00' } }))
+      await ownerAsks(x)
+      const r = await propose(x, [{ path: 'quiet_window', value: null }])
+      expect(text(r)).toContain('applied: the owner asked')
+      expect(cfg(x).quiet_window ?? null).toBeNull()
+      noCardMinted(x)
+    },
+    t(95_000),
+  )
 
-  test('the lock on: a list of changes is one card, with nothing written', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x)
-    const before = JSON.stringify(cfg(x))
-    const card = await proposeCard(x, [
-      { path: 'threads.trip.name', value: 'Travel' },
-      { path: 'threads.garden.archived', value: true },
-    ])
-    expect(card.body).toContain('Thread trip name: Trip → Travel')
-    expect(card.body).toContain('Thread garden archived: no → yes')
-    expect(JSON.stringify(cfg(x))).toBe(before)
-  })
+  test(
+    'the lock on: a list of changes is one card, with nothing written',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x)
+      const before = JSON.stringify(cfg(x))
+      const card = await proposeCard(x, [
+        { path: 'threads.trip.name', value: 'Travel' },
+        { path: 'threads.garden.archived', value: true },
+      ])
+      expect(card.body).toContain('Thread trip name: Trip → Travel')
+      expect(card.body).toContain('Thread garden archived: no → yes')
+      expect(JSON.stringify(cfg(x))).toBe(before)
+    },
+    t(105_000),
+  )
 
   test.each([false, true])(
     'permission_relay is refused with trust mode %p: no card, nothing written',
@@ -314,68 +366,81 @@ describe('the lock off: what the owner asked for is made at once, low or high; t
       noCardMinted(x)
       expect(JSON.stringify(cfg(x))).toBe(before)
     },
+    t(95_000),
   )
 
-  test('a thread card forged against a mac row is refused again at apply, and nothing is written', async () => {
-    await start({ trust: true })
-    const x = h as Harness
-    await ownerAsks(x)
-    const good = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
-    const { Card, bindingFrom, payloadHash } = await import('@talos-app/protocol')
-    const forged = Card.parse({
-      ...good,
-      id: 'c_01JBF3V7Q8K2M4N6P8R0S9T9T7',
-      payload: {
-        v: 1,
-        base_rev: cfg(x).rev,
-        reason: 'x',
-        changes: [{ path: 'permission_relay', old: true, new: false }],
-      },
-    })
-    forged.payload_hash = payloadHash(bindingFrom(forged))
-    x.bridge.ctx.ledger.create(forged, 'bridge')
-    const before = JSON.stringify(cfg(x))
-    await pushCardResolvePastRelay(x, forged, forged.payload_hash)
-    await eventually(() => expect(x.bridge.ctx.ledger.get(forged.id)?.state).toBe('failed'))
-    expect(JSON.stringify(cfg(x))).toBe(before)
-  })
+  test(
+    'a thread card forged against a mac row is refused again at apply, and nothing is written',
+    async () => {
+      await start({ trust: true })
+      const x = h as Harness
+      await ownerAsks(x)
+      const good = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
+      const { Card, bindingFrom, payloadHash } = await import('@talos-app/protocol')
+      const forged = Card.parse({
+        ...good,
+        id: 'c_01JBF3V7Q8K2M4N6P8R0S9T9T7',
+        payload: {
+          v: 1,
+          base_rev: cfg(x).rev,
+          reason: 'x',
+          changes: [{ path: 'permission_relay', old: true, new: false }],
+        },
+      })
+      forged.payload_hash = payloadHash(bindingFrom(forged))
+      x.bridge.ctx.ledger.create(forged, 'bridge')
+      const before = JSON.stringify(cfg(x))
+      await pushCardResolvePastRelay(x, forged, forged.payload_hash)
+      await eventually(() => expect(x.bridge.ctx.ledger.get(forged.id)?.state).toBe('failed'))
+      expect(JSON.stringify(cfg(x))).toBe(before)
+    },
+    t(115_000),
+  )
 })
 
 describe('create_thread and archive_thread are thin wrappers over the same card', () => {
-  test('create_thread keeps its checks, then shows a card; the thread exists once the owner approves', async () => {
-    await start()
-    const x = h as Harness
-    const r = await x.bridge.callTool('create_thread', { name: 'Release Notes!', topic: 'Changelog drafts' })
-    expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toContain('release_notes')
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(cfg(x).threads.map((t) => t.id)).not.toContain('release_notes')
-    const card = cards(x).find((c) => c.kind === 'config') as CardT
-    expect(card.body).toContain('release_notes')
-    expect(card.body).toContain('Release Notes!')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.map((t) => t.id)).toContain('release_notes'))
-    const made = cfg(x).threads.find((t) => t.id === 'release_notes')
-    expect(made).toMatchObject({ kind: 'agent', notify: 'all', archived: false, topic: 'Changelog drafts' })
-    await x.relay.expectFrame('thread.upsert', (f) => f.thread.id === 'release_notes', { direction: 'from_bridge' })
-    expect(await doneText(x, card)).toMatch(/To undo: .*archive thread release_notes/)
-    await eventually(() =>
-      expect(events()).toContainEqual({ event: 'thread.created', thread_id: 'release_notes', source: 'agent_card' }),
-    )
-  })
+  test(
+    'create_thread keeps its checks, then shows a card; the thread exists once the owner approves',
+    async () => {
+      await start()
+      const x = h as Harness
+      const r = await x.bridge.callTool('create_thread', { name: 'Release Notes!', topic: 'Changelog drafts' })
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(text(r)).toContain('release_notes')
+      expect(text(r)).toMatch(/card c_\S+ pending/)
+      expect(cfg(x).threads.map((t) => t.id)).not.toContain('release_notes')
+      const card = cards(x).find((c) => c.kind === 'config') as CardT
+      expect(card.body).toContain('release_notes')
+      expect(card.body).toContain('Release Notes!')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.map((t) => t.id)).toContain('release_notes'))
+      const made = cfg(x).threads.find((t) => t.id === 'release_notes')
+      expect(made).toMatchObject({ kind: 'agent', notify: 'all', archived: false, topic: 'Changelog drafts' })
+      await x.relay.expectFrame('thread.upsert', (f) => f.thread.id === 'release_notes', { direction: 'from_bridge' })
+      expect(await doneText(x, card)).toMatch(/To undo: .*archive thread release_notes/)
+      await eventually(() =>
+        expect(events()).toContainEqual({ event: 'thread.created', thread_id: 'release_notes', source: 'agent_card' }),
+      )
+    },
+    t(120_000),
+  )
 
-  test('the old refusals stay: reserved ids, names every object has, a taken id, the 20-thread limit', async () => {
-    await start()
-    const x = h as Harness
-    for (const args of [
-      { name: 'Setup', id: 'talos__setup' },
-      { name: 'x', id: 'constructor' },
-      { name: 'Again', id: 'trip' },
-      { name: '   ' },
-    ])
-      expect((await x.bridge.callTool('create_thread', args)).isError, JSON.stringify(args)).toBe(true)
-    noCardMinted(x)
-  })
+  test(
+    'the old refusals stay: reserved ids, names every object has, a taken id, the 20-thread limit',
+    async () => {
+      await start()
+      const x = h as Harness
+      for (const args of [
+        { name: 'Setup', id: 'talos__setup' },
+        { name: 'x', id: 'constructor' },
+        { name: 'Again', id: 'trip' },
+        { name: '   ' },
+      ])
+        expect((await x.bridge.callTool('create_thread', args)).isError, JSON.stringify(args)).toBe(true)
+      noCardMinted(x)
+    },
+    t(85_000),
+  )
 
   test.each(['general', 'garden'])(
     'the lock off, after the owner asked in %s, create_thread creates at once',
@@ -389,72 +454,89 @@ describe('create_thread and archive_thread are thin wrappers over the same card'
       noCardMinted(x)
       await x.relay.expectFrame('thread.upsert', (f) => f.thread.id === 'errands', { direction: 'from_bridge' })
     },
+    t(105_000),
   )
 
-  test('without trust mode the card goes to the thread the owner asked in, not always the default thread', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x, 'garden')
-    const r = await x.bridge.callTool('create_thread', { name: 'Errands' })
-    expect(r.isError, text(r)).toBeFalsy()
-    const card = cards(x).find((c) => c.kind === 'config') as CardT
-    expect(card.thread_id).toBe('garden')
-  })
+  test(
+    'without trust mode the card goes to the thread the owner asked in, not always the default thread',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x, 'garden')
+      const r = await x.bridge.callTool('create_thread', { name: 'Errands' })
+      expect(r.isError, text(r)).toBeFalsy()
+      const card = cards(x).find((c) => c.kind === 'config') as CardT
+      expect(card.thread_id).toBe('garden')
+    },
+    t(95_000),
+  )
 
-  test('an explicit thread_id names where the owner asked', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    await ownerAsks(x, 'trip')
-    await ownerAsks(x, 'garden', 'and something else')
-    const r = await x.bridge.callTool('create_thread', { name: 'Errands', thread_id: 'trip' })
-    expect(text(r)).toContain('created thread errands')
-  })
+  test(
+    'an explicit thread_id names where the owner asked',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      await ownerAsks(x, 'trip')
+      await ownerAsks(x, 'garden', 'and something else')
+      const r = await x.bridge.callTool('create_thread', { name: 'Errands', thread_id: 'trip' })
+      expect(text(r)).toContain('created thread errands')
+    },
+    t(105_000),
+  )
 
-  test('a share in another thread after the owner spoke still cancels it (a card, not a direct create)', async () => {
-    await start({ trust: true })
-    const x = h as Harness
-    await ownerAsks(x, 'garden')
-    x.bridge.ctx.store.addMessage({
-      id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4V6',
-      thread_id: 'inbox',
-      seq: 99,
-      author: 'owner',
-      kind: 'text',
-      text: 'shared text',
-      format: 'plain',
-      attachments: [],
-      via: 'share',
-      created_at: new Date(Date.now() + 1000).toISOString(),
-    } as never)
-    const r = await x.bridge.callTool('create_thread', { name: 'Errands' })
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-  })
+  test(
+    'a share in another thread after the owner spoke still cancels it (a card, not a direct create)',
+    async () => {
+      await start({ trust: true })
+      const x = h as Harness
+      await ownerAsks(x, 'garden')
+      x.bridge.ctx.store.addMessage({
+        id: 'm_01JBF3V7Q8K2M4N6P8R0S2T4V6',
+        thread_id: 'inbox',
+        seq: 99,
+        author: 'owner',
+        kind: 'text',
+        text: 'shared text',
+        format: 'plain',
+        attachments: [],
+        via: 'share',
+        created_at: new Date(Date.now() + 1000).toISOString(),
+      } as never)
+      const r = await x.bridge.callTool('create_thread', { name: 'Errands' })
+      expect(text(r)).toMatch(/card c_\S+ pending/)
+    },
+    t(95_000),
+  )
 
-  test('archive_thread keeps its guards, shows a card even in trust mode, and approval archives and keeps the inbox', async () => {
-    await start({ trust: true })
-    const x = h as Harness
-    await ownerAsks(x)
-    expect((await x.bridge.callTool('archive_thread', { thread_id: 'general' })).isError).toBe(true) // fixed
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false)
-    const inbox = join(x.bridge.ctx.paths.inbox, 'garden')
-    mkdirSync(inbox, { recursive: true })
-    writeFileSync(join(inbox, INBOX_MARKER), '') // as a folder the bridge made carries it
-    writeFileSync(join(inbox, 'note.txt'), 'x')
-    const card = cards(x).find((c) => c.kind === 'config') as CardT
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true))
-    await x.relay.expectFrame('thread.archive', (f) => f.thread_id === 'garden', { direction: 'from_bridge' })
-    // commit() prunes the folders of threads gone from the config after the frame and config.sync sends; an archived one stays
-    await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
-    expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
-    expect(await doneText(x, card)).toContain('To undo: unarchive thread garden')
-    await eventually(() =>
-      expect(events()).toContainEqual({ event: 'thread.archived', thread_id: 'garden', source: 'agent_card' }),
-    )
-  })
+  test(
+    'archive_thread keeps its guards, shows a card even in trust mode, and approval archives and keeps the inbox',
+    async () => {
+      await start({ trust: true })
+      const x = h as Harness
+      await ownerAsks(x)
+      expect((await x.bridge.callTool('archive_thread', { thread_id: 'general' })).isError).toBe(true) // fixed
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(text(r)).toMatch(/card c_\S+ pending/)
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false)
+      const inbox = join(x.bridge.ctx.paths.inbox, 'garden')
+      mkdirSync(inbox, { recursive: true })
+      writeFileSync(join(inbox, INBOX_MARKER), '') // as a folder the bridge made carries it
+      writeFileSync(join(inbox, 'note.txt'), 'x')
+      const card = cards(x).find((c) => c.kind === 'config') as CardT
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true))
+      await x.relay.expectFrame('thread.archive', (f) => f.thread_id === 'garden', { direction: 'from_bridge' })
+      // commit() prunes the folders of threads gone from the config after the frame and config.sync sends; an archived one stays
+      await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
+      expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
+      expect(await doneText(x, card)).toContain('To undo: unarchive thread garden')
+      await eventually(() =>
+        expect(events()).toContainEqual({ event: 'thread.archived', thread_id: 'garden', source: 'agent_card' }),
+      )
+    },
+    t(140_000),
+  )
 })
 
 describe('archive_thread says what really happened, and keeps the saved file copies', () => {
@@ -466,39 +548,51 @@ describe('archive_thread says what really happened, and keeps the saved file cop
     return inbox
   }
 
-  test('the owner asked, lock off: it is archived now, no card, and the saved copies stay', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    const inbox = withInbox(x, 'garden')
-    await ownerAsks(x)
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toContain('Thread garden is archived now; its saved file copies are kept.')
-    expect(text(r)).not.toContain('approves the card')
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true)
-    noCardMinted(x)
-    await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
-    expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
-  })
+  test(
+    'the owner asked, lock off: it is archived now, no card, and the saved copies stay',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      const inbox = withInbox(x, 'garden')
+      await ownerAsks(x)
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(text(r)).toContain('Thread garden is archived now; its saved file copies are kept.')
+      expect(text(r)).not.toContain('approves the card')
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(true)
+      noCardMinted(x)
+      await x.relay.expectFrame('config.sync', () => true, { direction: 'from_bridge' })
+      expect(existsSync(join(inbox, 'note.txt'))).toBe(true)
+    },
+    t(105_000),
+  )
 
-  test('not asked: still a card, and the reply says so', async () => {
-    await start({ lock: false })
-    const x = h as Harness
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(text(r)).toContain('is archived when the owner approves the card.')
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false)
-  })
+  test(
+    'not asked: still a card, and the reply says so',
+    async () => {
+      await start({ lock: false })
+      const x = h as Harness
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(text(r)).toMatch(/card c_\S+ pending/)
+      expect(text(r)).toContain('is archived when the owner approves the card.')
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false)
+    },
+    t(85_000),
+  )
 
-  test('a thread removed from the config altogether still has its inbox removed', async () => {
-    await start()
-    const x = h as Harness
-    const inbox = withInbox(x, 'gone_thread')
-    const kept = withInbox(x, 'garden')
-    removeGoneInboxes(x.bridge.ctx.paths.inbox, keptInboxThreadIds(cfg(x)))
-    expect(existsSync(inbox)).toBe(false)
-    expect(existsSync(kept)).toBe(true)
-  })
+  test(
+    'a thread removed from the config altogether still has its inbox removed',
+    async () => {
+      await start()
+      const x = h as Harness
+      const inbox = withInbox(x, 'gone_thread')
+      const kept = withInbox(x, 'garden')
+      removeGoneInboxes(x.bridge.ctx.paths.inbox, keptInboxThreadIds(cfg(x)))
+      expect(existsSync(inbox)).toBe(false)
+      expect(existsSync(kept)).toBe(true)
+    },
+    t(85_000),
+  )
 })
 
 describe('archiving a thread that has sub-threads', () => {
@@ -519,76 +613,96 @@ describe('archiving a thread that has sub-threads', () => {
       { mode: 0o600 },
     )
 
-  test('archive_thread puts the parent and its live sub-threads on one card, even in trust mode, and approval archives them all', async () => {
-    await start({ trust: true, threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
-    const x = h as Harness
-    macSupportsSubThreads(x)
-    await ownerAsks(x)
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(r.isError, text(r)).toBeFalsy()
-    expect(text(r)).toContain('with its sub-threads seeds')
-    const card = cards(x).find((c) => c.kind === 'config') as CardT
-    expect(card.body).toContain('garden')
-    expect(card.body).toContain('seeds')
-    await approve(x, card)
-    await eventually(() =>
-      expect(
-        cfg(x)
-          .threads.filter((t) => t.archived)
-          .map((t) => t.id),
-      ).toEqual(['garden', 'seeds']),
-    )
-  })
+  test(
+    'archive_thread puts the parent and its live sub-threads on one card, even in trust mode, and approval archives them all',
+    async () => {
+      await start({ trust: true, threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
+      const x = h as Harness
+      macSupportsSubThreads(x)
+      await ownerAsks(x)
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(r.isError, text(r)).toBeFalsy()
+      expect(text(r)).toContain('with its sub-threads seeds')
+      const card = cards(x).find((c) => c.kind === 'config') as CardT
+      expect(card.body).toContain('garden')
+      expect(card.body).toContain('seeds')
+      await approve(x, card)
+      await eventually(() =>
+        expect(
+          cfg(x)
+            .threads.filter((t) => t.archived)
+            .map((t) => t.id),
+        ).toEqual(['garden', 'seeds']),
+      )
+    },
+    t(105_000),
+  )
 
-  test('a sub-thread the owner made stops the agent before any card is drawn', async () => {
-    await start({ threads: [thread('beds', 'Beds', { kind: 'fixed', parent_id: 'garden' })] })
-    const x = h as Harness
-    macSupportsSubThreads(x)
-    await ownerAsks(x)
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/only the owner can archive/)
-    noCardMinted(x)
-  })
+  test(
+    'a sub-thread the owner made stops the agent before any card is drawn',
+    async () => {
+      await start({ threads: [thread('beds', 'Beds', { kind: 'fixed', parent_id: 'garden' })] })
+      const x = h as Harness
+      macSupportsSubThreads(x)
+      await ownerAsks(x)
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(r.isError).toBe(true)
+      expect(text(r)).toMatch(/only the owner can archive/)
+      noCardMinted(x)
+    },
+    t(95_000),
+  )
 
-  test("a sub-thread that is the owner's default thread stops the agent before any card is drawn", async () => {
-    await start({ threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
-    const x = h as Harness
-    macSupportsSubThreads(x)
-    x.bridge.ctx.config.update((c) => ({ ...c, default_thread: 'seeds' }))
-    await ownerAsks(x)
-    const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/default thread/)
-    noCardMinted(x)
-  })
+  test(
+    "a sub-thread that is the owner's default thread stops the agent before any card is drawn",
+    async () => {
+      await start({ threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
+      const x = h as Harness
+      macSupportsSubThreads(x)
+      x.bridge.ctx.config.update((c) => ({ ...c, default_thread: 'seeds' }))
+      await ownerAsks(x)
+      const r = await x.bridge.callTool('archive_thread', { thread_id: 'garden' })
+      expect(r.isError).toBe(true)
+      expect(text(r)).toMatch(/default thread/)
+      noCardMinted(x)
+    },
+    t(95_000),
+  )
 
-  test('config_propose refuses archiving the parent alone before drawing a card the write would refuse', async () => {
-    await start({ threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
-    const x = h as Harness
-    macSupportsSubThreads(x)
-    await ownerAsks(x)
-    const r = await propose(x, [{ path: 'threads.garden.archived', value: true }])
-    expect(r.isError).toBe(true)
-    expect(text(r)).toMatch(/Nothing was proposed: .*archive its sub-threads/)
-    noCardMinted(x)
-  })
+  test(
+    'config_propose refuses archiving the parent alone before drawing a card the write would refuse',
+    async () => {
+      await start({ threads: [thread('seeds', 'Seeds', { parent_id: 'garden' })] })
+      const x = h as Harness
+      macSupportsSubThreads(x)
+      await ownerAsks(x)
+      const r = await propose(x, [{ path: 'threads.garden.archived', value: true }])
+      expect(r.isError).toBe(true)
+      expect(text(r)).toMatch(/Nothing was proposed: .*archive its sub-threads/)
+      noCardMinted(x)
+    },
+    t(95_000),
+  )
 })
 
 describe('the owner changes things from the app: the same events, source owner', () => {
-  test('a config.patch that renames a thread and sets the timezone writes thread.renamed and setting.changed', async () => {
-    await start()
-    const x = h as Harness
-    await x.app.sendConfigPatch(cfg(x).rev, {
-      timezone: 'Europe/Paris',
-      threads: cfg(x).threads.map((t) => (t.id === 'trip' ? { ...t, name: 'Travel' } : t)),
-    })
-    await eventually(() => expect(cfg(x).timezone).toBe('Europe/Paris'))
-    await eventually(() => expect(events().length).toBeGreaterThanOrEqual(2))
-    expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'owner' })
-    expect(events()).toContainEqual({ event: 'setting.changed', setting: 'timezone', source: 'owner' })
-    expect(JSON.stringify(events())).not.toContain('Paris')
-  })
+  test(
+    'a config.patch that renames a thread and sets the timezone writes thread.renamed and setting.changed',
+    async () => {
+      await start()
+      const x = h as Harness
+      await x.app.sendConfigPatch(cfg(x).rev, {
+        timezone: 'Europe/Paris',
+        threads: cfg(x).threads.map((t) => (t.id === 'trip' ? { ...t, name: 'Travel' } : t)),
+      })
+      await eventually(() => expect(cfg(x).timezone).toBe('Europe/Paris'))
+      await eventually(() => expect(events().length).toBeGreaterThanOrEqual(2))
+      expect(events()).toContainEqual({ event: 'thread.renamed', thread_id: 'trip', source: 'owner' })
+      expect(events()).toContainEqual({ event: 'setting.changed', setting: 'timezone', source: 'owner' })
+      expect(JSON.stringify(events())).not.toContain('Paris')
+    },
+    t(270_000),
+  )
 })
 
 describe('a thread session proposes for its own thread only', () => {
@@ -636,188 +750,232 @@ describe('a thread session proposes for its own thread only', () => {
   const asWorker = (w: Bridge, changes: unknown, extra: Record<string, unknown> = {}) =>
     w.callTool('config_propose', { thread_id: 'trip', reason: 'you asked', changes, ...extra })
 
-  test('the tool is in a thread session list; its own thread gets a card in that thread; the card applies on approval', async () => {
-    const { x, w } = await hubWithWorker()
-    expect(w.tools.map((t) => t.name)).toContain('config_propose')
-    await ownerAsks(x, 'trip', 'call this thread Travel')
-    const r = await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }])
-    expect(r.isError, text(r)).toBeFalsy()
-    const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
-    await waitFor(() => cards(x).some((c) => c.id === id), 4000, 'card.create')
-    const card = cards(x).find((c) => c.id === id) as CardT
-    expect(card.thread_id).toBe('trip')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel'))
-  })
+  test(
+    'the tool is in a thread session list; its own thread gets a card in that thread; the card applies on approval',
+    async () => {
+      const { x, w } = await hubWithWorker()
+      expect(w.tools.map((t) => t.name)).toContain('config_propose')
+      await ownerAsks(x, 'trip', 'call this thread Travel')
+      const r = await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }])
+      expect(r.isError, text(r)).toBeFalsy()
+      const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
+      await waitFor(() => cards(x).some((c) => c.id === id), 4000, 'card.create')
+      const card = cards(x).find((c) => c.id === id) as CardT
+      expect(card.thread_id).toBe('trip')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Travel'))
+    },
+    t(115_000),
+  )
 
-  test('another thread, a global setting and a new thread are refused, with no card', async () => {
-    const { x, w } = await hubWithWorker()
-    await ownerAsks(x, 'trip', 'call this thread Travel')
-    for (const changes of [
-      [{ path: 'threads.garden.name', value: 'Plants' }],
-      [{ path: 'timezone', value: 'Europe/Paris' }],
-      [{ path: 'threads.errands', value: { name: 'Errands' } }],
-      [{ path: 'default_thread', value: 'trip' }],
-    ]) {
-      const r = await asWorker(w, changes)
-      expect(r.isError, JSON.stringify(changes)).toBe(true)
-      expect(text(r)).toMatch(/own thread|under it/)
-    }
-    // naming another thread as the place for the card is refused by the lock
-    expect((await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }], { thread_id: 'garden' })).isError).toBe(
-      true,
-    )
-    noCardMinted(x)
-    await sleep(50)
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.name).toBe('Garden')
-  })
+  test(
+    'another thread, a global setting and a new thread are refused, with no card',
+    async () => {
+      const { x, w } = await hubWithWorker()
+      await ownerAsks(x, 'trip', 'call this thread Travel')
+      for (const changes of [
+        [{ path: 'threads.garden.name', value: 'Plants' }],
+        [{ path: 'timezone', value: 'Europe/Paris' }],
+        [{ path: 'threads.errands', value: { name: 'Errands' } }],
+        [{ path: 'default_thread', value: 'trip' }],
+      ]) {
+        const r = await asWorker(w, changes)
+        expect(r.isError, JSON.stringify(changes)).toBe(true)
+        expect(text(r)).toMatch(/own thread|under it/)
+      }
+      // naming another thread as the place for the card is refused by the lock
+      expect(
+        (await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }], { thread_id: 'garden' })).isError,
+      ).toBe(true)
+      noCardMinted(x)
+      await sleep(50)
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.name).toBe('Garden')
+    },
+    t(95_000),
+  )
 
-  test("a thread session's card keeps its scope through the ledger: the owner moves the sub-thread before approving, and apply refuses", async () => {
-    const { x, w } = await hubWithWorker()
-    // the Mac app checks sub-thread folders, so a sub-thread may exist
-    const file = join(x.home, 'workers.json')
-    const mac = JSON.parse(readFileSync(file, 'utf8'))
-    mac.supervisor.subthreads_supported = true
-    writeFileSync(file, JSON.stringify(mac))
-    x.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: 'trip' } : t)),
-    }))
-    const r = await asWorker(w, [{ path: 'threads.garden.topic', value: 'Plants and soil' }])
-    expect(r.isError, text(r)).toBeFalsy()
-    const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
-    await waitFor(() => cards(x).some((c) => c.id === id), 4000, 'card.create')
-    const card = cards(x).find((c) => c.id === id) as CardT
-    expect(card.payload).toMatchObject({ scope: 'trip' })
-    // the owner takes the sub-thread out from under trip meanwhile
-    x.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: undefined } : t)),
-    }))
-    await approve(x, card)
-    const upd = await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'failed', {
-      direction: 'from_bridge',
-    })
-    expect(upd.result?.text).toMatch(/can only change its own thread.*Nothing was changed/)
-    expect(cfg(x).threads.find((t) => t.id === 'garden')?.topic).not.toBe('Plants and soil')
-  })
+  test(
+    "a thread session's card keeps its scope through the ledger: the owner moves the sub-thread before approving, and apply refuses",
+    async () => {
+      const { x, w } = await hubWithWorker()
+      // the Mac app checks sub-thread folders, so a sub-thread may exist
+      const file = join(x.home, 'workers.json')
+      const mac = JSON.parse(readFileSync(file, 'utf8'))
+      mac.supervisor.subthreads_supported = true
+      writeFileSync(file, JSON.stringify(mac))
+      x.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: 'trip' } : t)),
+      }))
+      const r = await asWorker(w, [{ path: 'threads.garden.topic', value: 'Plants and soil' }])
+      expect(r.isError, text(r)).toBeFalsy()
+      const id = /card (c_\S+) pending/.exec(text(r))?.[1] as string
+      await waitFor(() => cards(x).some((c) => c.id === id), 4000, 'card.create')
+      const card = cards(x).find((c) => c.id === id) as CardT
+      expect(card.payload).toMatchObject({ scope: 'trip' })
+      // the owner takes the sub-thread out from under trip meanwhile
+      x.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, parent_id: undefined } : t)),
+      }))
+      await approve(x, card)
+      const upd = await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'failed', {
+        direction: 'from_bridge',
+      })
+      expect(upd.result?.text).toMatch(/can only change its own thread.*Nothing was changed/)
+      expect(cfg(x).threads.find((t) => t.id === 'garden')?.topic).not.toBe('Plants and soil')
+    },
+    t(105_000),
+  )
 
-  test('the owner did not ask in the thread: a thread session cannot change anything itself, only show him a card', async () => {
-    const { x, w } = await hubWithWorker()
-    const r = await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }])
-    expect(text(r)).toMatch(/card c_\S+ pending/)
-    expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Trip')
-  })
+  test(
+    'the owner did not ask in the thread: a thread session cannot change anything itself, only show him a card',
+    async () => {
+      const { x, w } = await hubWithWorker()
+      const r = await asWorker(w, [{ path: 'threads.trip.name', value: 'Travel' }])
+      expect(text(r)).toMatch(/card c_\S+ pending/)
+      expect(cfg(x).threads.find((t) => t.id === 'trip')?.name).toBe('Trip')
+    },
+    t(85_000),
+  )
 })
 
 describe('follow-ups from the review of ffd0e721', () => {
-  test('1. the lock on: alerts off is a card, and so is any alerts change; the lock off: made at once', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x)
-    const before = JSON.stringify(cfg(x))
-    const card = await proposeCard(x, [{ path: 'threads.trip.notify', value: 'off' }])
-    expect(card.body).toContain('Thread trip alerts: all → off')
-    expect(JSON.stringify(cfg(x))).toBe(before)
-    const card2 = await proposeCard(x, [{ path: 'threads.general.notify', value: 'needs_you' }]) // the default thread
-    expect(card2.kind).toBe('config')
-    expect(JSON.stringify(cfg(x))).toBe(before)
-    await x.stop()
-    await start({ lock: false })
-    const y = h as Harness
-    await ownerAsks(y)
-    const r = await propose(y, [{ path: 'threads.trip.notify', value: 'off' }])
-    expect(text(r)).toContain('applied: the owner asked')
-    expect(cfg(y).threads.find((t) => t.id === 'trip')?.notify).toBe('off')
-  })
+  test(
+    '1. the lock on: alerts off is a card, and so is any alerts change; the lock off: made at once',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x)
+      const before = JSON.stringify(cfg(x))
+      const card = await proposeCard(x, [{ path: 'threads.trip.notify', value: 'off' }])
+      expect(card.body).toContain('Thread trip alerts: all → off')
+      expect(JSON.stringify(cfg(x))).toBe(before)
+      const card2 = await proposeCard(x, [{ path: 'threads.general.notify', value: 'needs_you' }]) // the default thread
+      expect(card2.kind).toBe('config')
+      expect(JSON.stringify(cfg(x))).toBe(before)
+      await x.stop()
+      await start({ lock: false })
+      const y = h as Harness
+      await ownerAsks(y)
+      const r = await propose(y, [{ path: 'threads.trip.notify', value: 'off' }])
+      expect(text(r)).toContain('applied: the owner asked')
+      expect(cfg(y).threads.find((t) => t.id === 'trip')?.notify).toBe('off')
+    },
+    t(210_000),
+  )
 
-  test('1. one off among low changes makes the whole proposal a card', async () => {
-    await start({ trust: true })
-    const x = h as Harness
-    await ownerAsks(x)
-    const before = JSON.stringify(cfg(x))
-    await proposeCard(x, [
-      { path: 'threads.trip.name', value: 'Travel' },
-      { path: 'threads.garden.notify', value: 'off' },
-    ])
-    expect(JSON.stringify(cfg(x))).toBe(before)
-  })
+  test(
+    '1. one off among low changes makes the whole proposal a card',
+    async () => {
+      await start({ trust: true })
+      const x = h as Harness
+      await ownerAsks(x)
+      const before = JSON.stringify(cfg(x))
+      await proposeCard(x, [
+        { path: 'threads.trip.name', value: 'Travel' },
+        { path: 'threads.garden.notify', value: 'off' },
+      ])
+      expect(JSON.stringify(cfg(x))).toBe(before)
+    },
+    t(105_000),
+  )
 
-  test('2a. the new-thread card shows the icon it writes', async () => {
-    await start()
-    const x = h as Harness
-    await ownerAsks(x)
-    const card = await proposeCard(x, [
-      { path: 'threads.errands', value: { name: 'Errands', topic: 'Bills', icon: 'bag' } },
-    ])
-    expect(card.body).toContain('bag')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'errands')?.icon).toBe('bag'))
-  })
+  test(
+    '2a. the new-thread card shows the icon it writes',
+    async () => {
+      await start()
+      const x = h as Harness
+      await ownerAsks(x)
+      const card = await proposeCard(x, [
+        { path: 'threads.errands', value: { name: 'Errands', topic: 'Bills', icon: 'bag' } },
+      ])
+      expect(card.body).toContain('bag')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'errands')?.icon).toBe('bag'))
+    },
+    t(115_000),
+  )
 
-  test('2b. archiving a dedicated thread: the card says its session goes to shared, the result can undo both', async () => {
-    await start()
-    const x = h as Harness
-    x.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'dedicated' as const } : t)),
-    }))
-    await ownerAsks(x)
-    const card = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
-    expect(card.body).toContain('Thread trip archived: no → yes')
-    expect(card.body).toContain('Thread trip own session: dedicated → shared')
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.archived).toBe(true))
-    expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).not.toBe('dedicated')
-    const result = await doneText(x, card)
-    expect(result).toContain('unarchive thread trip')
-    expect(result).toContain('Thread trip own session back to dedicated')
-  })
+  test(
+    '2b. archiving a dedicated thread: the card says its session goes to shared, the result can undo both',
+    async () => {
+      await start()
+      const x = h as Harness
+      x.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'dedicated' as const } : t)),
+      }))
+      await ownerAsks(x)
+      const card = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
+      expect(card.body).toContain('Thread trip archived: no → yes')
+      expect(card.body).toContain('Thread trip own session: dedicated → shared')
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.archived).toBe(true))
+      expect(cfg(x).threads.find((t) => t.id === 'trip')?.session).not.toBe('dedicated')
+      const result = await doneText(x, card)
+      expect(result).toContain('unarchive thread trip')
+      expect(result).toContain('Thread trip own session back to dedicated')
+    },
+    t(125_000),
+  )
 
-  test('3. one proposal past 20 agent threads goes ahead, with a warning (Pantheon 2026-11-15)', async () => {
-    await start()
-    const x = h as Harness
-    x.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: [
-        ...c.threads,
-        ...(Array.from({ length: 17 }, (_, i) => thread(`t${i}`, `T${i}`)) as never[]), // trip and garden make 19
-      ],
-    }))
-    await ownerAsks(x)
-    const r = await propose(x, [
-      { path: 'threads.n1', value: { name: 'N1' } },
-      { path: 'threads.n2', value: { name: 'N2' } },
-    ])
-    expect(r.isError).toBeFalsy()
-    expect(text(r)).toMatch(/Warning: this makes 21 active agent threads, more than 20/)
-  })
+  test(
+    '3. one proposal past 20 agent threads goes ahead, with a warning (Pantheon 2026-11-15)',
+    async () => {
+      await start()
+      const x = h as Harness
+      x.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: [
+          ...c.threads,
+          ...(Array.from({ length: 17 }, (_, i) => thread(`t${i}`, `T${i}`)) as never[]), // trip and garden make 19
+        ],
+      }))
+      await ownerAsks(x)
+      const r = await propose(x, [
+        { path: 'threads.n1', value: { name: 'N1' } },
+        { path: 'threads.n2', value: { name: 'N2' } },
+      ])
+      expect(r.isError).toBeFalsy()
+      expect(text(r)).toMatch(/Warning: this makes 21 active agent threads, more than 20/)
+    },
+    t(95_000),
+  )
 
-  test('5. a high change is a card and never applied directly, but the card keeps its risk: a tap is the approval, no passkey step', async () => {
-    await start({ trust: true })
-    const x = h as Harness
-    await ownerAsks(x)
-    const before = JSON.stringify(cfg(x))
-    const card = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
-    expect(card.risk).toBe('low')
-    expect(JSON.stringify(cfg(x))).toBe(before)
-    await approve(x, card) // a plain tap, no step-up token
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.archived).toBe(true))
-  })
+  test(
+    '5. a high change is a card and never applied directly, but the card keeps its risk: a tap is the approval, no passkey step',
+    async () => {
+      await start({ trust: true })
+      const x = h as Harness
+      await ownerAsks(x)
+      const before = JSON.stringify(cfg(x))
+      const card = await proposeCard(x, [{ path: 'threads.trip.archived', value: true }])
+      expect(card.risk).toBe('low')
+      expect(JSON.stringify(cfg(x))).toBe(before)
+      await approve(x, card) // a plain tap, no step-up token
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'trip')?.archived).toBe(true))
+    },
+    t(115_000),
+  )
 
-  test('6. unarchiving writes thread.unarchived', async () => {
-    await start()
-    const x = h as Harness
-    x.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, archived: true } : t)),
-    }))
-    await ownerAsks(x)
-    const card = await proposeCard(x, [{ path: 'threads.garden.archived', value: false }])
-    await approve(x, card)
-    await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false))
-    await eventually(() =>
-      expect(events()).toContainEqual({ event: 'thread.unarchived', thread_id: 'garden', source: 'agent_card' }),
-    )
-  })
+  test(
+    '6. unarchiving writes thread.unarchived',
+    async () => {
+      await start()
+      const x = h as Harness
+      x.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'garden' ? { ...t, archived: true } : t)),
+      }))
+      await ownerAsks(x)
+      const card = await proposeCard(x, [{ path: 'threads.garden.archived', value: false }])
+      await approve(x, card)
+      await eventually(() => expect(cfg(x).threads.find((t) => t.id === 'garden')?.archived).toBe(false))
+      await eventually(() =>
+        expect(events()).toContainEqual({ event: 'thread.unarchived', thread_id: 'garden', source: 'agent_card' }),
+      )
+    },
+    t(125_000),
+  )
 })

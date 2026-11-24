@@ -18,6 +18,7 @@ import { PHONE_QUERY } from '../phone/PhoneChrome.tsx'
 import { PhoneHeader } from '../phone/PhoneHeader.tsx'
 import { usePhonePanel } from '../phone/phoneStore.ts'
 import { ContextView, InboxScreen } from '../registry.ts'
+import { ThreadSearchPanel } from '../search/ThreadSearchPanel.tsx'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { SessionPill } from '../thread-sessions/SessionStatus.tsx'
 import { rowShowsSession, useSessionWords } from '../thread-sessions/useSessionWords.ts'
@@ -64,6 +65,8 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
   const session = rowShowsSession(sessionWords) ? sessionWords : null
   const firstCard = useAwaitingOwner(threadId).find((c) => c.kind === 'permission')
   const [item, setItem] = useState<InboxItemT | null>(null)
+  // the phone's thread search, laid over the thread (which stays mounted, so closing keeps the scroll place)
+  const [searching, setSearching] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const phone = useMediaQuery(PHONE_QUERY)
   // a header too narrow to name its actions (the panes or the session panel took the room) keeps only the thread menu, which
@@ -94,96 +97,113 @@ export function ThreadView({ threadId, highlightCard }: { threadId: string; high
   const isInbox = thread.id === 'inbox'
 
   const chat = (
-    <DropZone threadId={threadId} enabled className="flex h-full min-h-0 flex-col" data-testid="thread-screen">
-      {phone ? (
-        <PhoneHeader thread={thread} state={state} statusLabel={status?.label} />
-      ) : (
-        <>
-          {/* The right padding keeps the title and menu clear of the usage chip in the corner while this column is too narrow
+    <DropZone threadId={threadId} enabled className="relative flex h-full min-h-0 flex-col" data-testid="thread-screen">
+      {/* everything under the search panel in ONE container: while the panel is open it is inert and hidden from a screen reader, whatever mounts in it later (a stopped strip, a banner) */}
+      <div
+        data-testid="thread-under-search"
+        className="contents"
+        inert={phone && searching}
+        aria-hidden={phone && searching ? true : undefined}
+      >
+        {phone ? (
+          <PhoneHeader
+            thread={thread}
+            state={state}
+            statusLabel={status?.label}
+            searching={searching}
+            onSearch={() => setSearching(true)}
+          />
+        ) : (
+          <>
+            {/* The right padding keeps the title and menu clear of the usage chip in the corner while this column is too narrow
               to have room for it beside the 760 px reading column. */}
-          <header
-            ref={headerRef}
-            className="kb-hide-short flex items-center gap-1 pt-[env(safe-area-inset-top)] pr-32 pl-2 @min-[64rem]:pr-2"
-          >
-            <button
-              type="button"
-              aria-label="Back to threads"
-              onClick={() => nav('/threads')}
-              className="grid size-11 place-items-center rounded-pill md:hidden"
+            <header
+              ref={headerRef}
+              className="kb-hide-short flex items-center gap-1 pt-[env(safe-area-inset-top)] pr-32 pl-2 @min-[64rem]:pr-2"
             >
-              <IconBack />
-            </button>
-            <div className="flex min-w-0 flex-1 items-center gap-3 py-2.5 md:pl-2">
-              <ThreadIcon id={thread.id} icon={thread.icon} color={thread.color} size={40} />
-              <h1 className="m-0 min-w-0 truncate font-display text-xl font-semibold leading-tight">{thread.name}</h1>
-              <div aria-live="polite" className="flex min-w-0 items-center gap-2">
-                {session ? (
-                  // the thread's own session says what it is doing; it wins over the agent's own status line
-                  <>
-                    <SessionPill words={session} cardHref={firstCard ? `/card/${firstCard.id}` : undefined} />
-                    <span data-testid="header-session-short" className="min-w-0 truncate text-xs text-text-2">
-                      {session.short}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <StatusWord state={state} pill />
-                    {status?.label ? (
-                      <span className="min-w-0 truncate text-xs text-text-2">{status.label}</span>
-                    ) : null}
-                  </>
-                )}
+              <button
+                type="button"
+                aria-label="Back to threads"
+                onClick={() => nav('/threads')}
+                className="grid size-11 place-items-center rounded-pill md:hidden"
+              >
+                <IconBack />
+              </button>
+              <div className="flex min-w-0 flex-1 items-center gap-3 py-2.5 md:pl-2">
+                <ThreadIcon id={thread.id} icon={thread.icon} color={thread.color} size={40} />
+                <h1 className="m-0 min-w-0 truncate font-display text-xl font-semibold leading-tight">{thread.name}</h1>
+                <div aria-live="polite" className="flex min-w-0 items-center gap-2">
+                  {session ? (
+                    // the thread's own session says what it is doing; it wins over the agent's own status line
+                    <>
+                      <SessionPill words={session} cardHref={firstCard ? `/card/${firstCard.id}` : undefined} />
+                      <span data-testid="header-session-short" className="min-w-0 truncate text-xs text-text-2">
+                        {session.short}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <StatusWord state={state} pill />
+                      {status?.label ? (
+                        <span className="min-w-0 truncate text-xs text-text-2">{status.label}</span>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+                <NeedsYouChip threadId={threadId} />
               </div>
-              <NeedsYouChip threadId={threadId} />
-            </div>
-            <BugHeaderButton />
-            <PaneToolbar threadId={threadId} cramped={cramped} />
-            <ThreadSettings thread={thread} paneRows={cramped} />
-          </header>
-        </>
-      )}
-      <div className="kb-hide-banner kb-hide-short-landscape">
-        <Banners />
-      </div>
-      {thread.id === SETUP_THREAD_ID ? <FirstRunCard /> : null}
-      {/* Gives way to the composer with the keyboard up on a short screen, like the banners above (app.css). */}
-      {thread.archived ? (
+              <BugHeaderButton />
+              <PaneToolbar threadId={threadId} cramped={cramped} />
+              <ThreadSettings thread={thread} paneRows={cramped} />
+            </header>
+          </>
+        )}
         <div className="kb-hide-banner kb-hide-short-landscape">
-          <ArchivedBanner thread={thread} />
+          <Banners />
         </div>
-      ) : null}
-      {isInbox ? (
-        <>
-          {/* Event cards on top (capped so the conversation always has room), the conversation below like any thread. */}
-          <ScrollRegion
-            label="Inbox"
-            className="max-h-[45%] min-h-0 shrink-0 overflow-y-auto border-b border-line [&_[data-inbox-ask]]:hidden"
-          >
-            <Suspense fallback={null}>
-              <InboxScreen />
-            </Suspense>
-          </ScrollRegion>
+        {thread.id === SETUP_THREAD_ID ? <FirstRunCard /> : null}
+        {/* Gives way to the composer with the keyboard up on a short screen, like the banners above (app.css). */}
+        {thread.archived ? (
+          <div className="kb-hide-banner kb-hide-short-landscape">
+            <ArchivedBanner thread={thread} />
+          </div>
+        ) : null}
+        {isInbox ? (
+          <>
+            {/* Event cards on top (capped so the conversation always has room), the conversation below like any thread. */}
+            <ScrollRegion
+              label="Inbox"
+              className="max-h-[45%] min-h-0 shrink-0 overflow-y-auto border-b border-line [&_[data-inbox-ask]]:hidden"
+            >
+              <Suspense fallback={null}>
+                <InboxScreen />
+              </Suspense>
+            </ScrollRegion>
+            <Timeline
+              threadId={threadId}
+              onOpenItem={setItem}
+              scrollRef={scrollRef}
+              footer={<WorkingLine threadId={threadId} />}
+            />
+          </>
+        ) : (
           <Timeline
             threadId={threadId}
+            highlightCard={highlightCard}
             onOpenItem={setItem}
             scrollRef={scrollRef}
             footer={<WorkingLine threadId={threadId} />}
           />
-        </>
-      ) : (
-        <Timeline
-          threadId={threadId}
-          highlightCard={highlightCard}
-          onOpenItem={setItem}
-          scrollRef={scrollRef}
-          footer={<WorkingLine threadId={threadId} />}
-        />
+        )}
+        <StoppedStrip threadId={threadId} />
+        <WorkingRow threadId={threadId} />
+        <Composer threadId={threadId} placeholder={isInbox ? 'Ask about your inbox' : `Message ${agent}`} />
+        <UndoStrip floating />
+        <ItemSheet item={item} onClose={() => setItem(null)} />
+      </div>
+      {phone && searching && (
+        <ThreadSearchPanel threadId={threadId} threadName={thread.name} onClose={() => setSearching(false)} />
       )}
-      <StoppedStrip threadId={threadId} />
-      <WorkingRow threadId={threadId} />
-      <Composer threadId={threadId} placeholder={isInbox ? 'Ask about your inbox' : `Message ${agent}`} />
-      <UndoStrip floating />
-      <ItemSheet item={item} onClose={() => setItem(null)} />
     </DropZone>
   )
   return chat

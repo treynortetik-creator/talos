@@ -134,6 +134,12 @@ export function macosKeychainStore(spawn: SecretSpawn = bunSecretSpawn): SecretS
     backend: 'macos_keychain',
     strength: 'os_keyring',
     get,
+    async has(service, account) {
+      checkNames(service, account)
+      // no -w: the item's attributes are asked for, never its password
+      const r = await run(spawn, [SECURITY, 'find-generic-password', '-s', service, '-a', account])
+      return r.code === 0 ? true : r.code === ERR_SEC_ITEM_NOT_FOUND ? false : undefined
+    },
     async set(service, account, value) {
       checkNames(service, account)
       await get(service, account) // throws for an item that is not ours or a locked Keychain: never replaced blind
@@ -190,6 +196,32 @@ export function secretServiceStore(
     backend: 'secret_service',
     strength: 'os_keyring',
     get,
+    async has(service, account) {
+      checkNames(service, account)
+      // the Secret Service's own SearchItems over D-Bus: it answers with item paths, never a secret; never `secret-tool lookup`
+      try {
+        const r = await sh([
+          'gdbus',
+          'call',
+          '--session',
+          '--timeout',
+          '4',
+          '--dest',
+          'org.freedesktop.secrets',
+          '--object-path',
+          '/org/freedesktop/secrets',
+          '--method',
+          'org.freedesktop.Secret.Service.SearchItems',
+          `{'service': '${service}', 'account': '${account}'}`,
+        ])
+        if (r.code !== 0) return undefined
+        const out = r.stdout.trim()
+        if (/objectpath '\//.test(out)) return true // an unlocked or a locked item path
+        return /^\(@ao \[\], @ao \[\]\)$/.test(out) ? false : undefined
+      } catch {
+        return undefined
+      }
+    },
     async set(service, account, value) {
       checkNames(service, account)
       await get(service, account)
@@ -272,6 +304,16 @@ export function fileSecretStore(dir: string, opts: FileStoreOptions = {}): Secre
   return {
     backend: 'file_0600',
     strength: 'file',
+    async has(service, account) {
+      checkNames(service, account)
+      try {
+        if (!folder(false)) return false
+        lstatSync(fileOf(service, account)) // its existence only: the file is not opened or decoded
+        return true
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === 'ENOENT' ? false : undefined
+      }
+    },
     async get(service, account) {
       checkNames(service, account)
       return read(service, account)
@@ -328,6 +370,8 @@ export type OpenSecretStoreOptions = {
   pathIssue?: (path: string) => 'windows_drive' | null
   /** Where the session bus socket is looked for when the environment names none (default $XDG_RUNTIME_DIR, /run/user/<uid>). */
   runtimeDir?: string
+  /** `talos-app facts`: never choose, probe or write. With no remembered choice the store is one that says so (every call fails `unavailable`). */
+  readOnly?: boolean
 }
 
 const PROBE_SERVICE = 'com.talos.app.probe'
@@ -376,6 +420,7 @@ export async function openSecretStore(opts: OpenSecretStoreOptions): Promise<Sec
   }
   const known = await use(readChoice(choicePath))
   if (known) return known
+  if (opts.readOnly) return unavailableStore('file_0600', 'no key store has been chosen on this computer yet')
 
   // decided from what the keyring itself reports, never from DISPLAY (WSLg sets DISPLAY in every WSL2 shell, and an ssh shell
   // has none on a desktop whose keyring is only locked)
@@ -497,6 +542,7 @@ export function unavailableStore(backend: SecretBackend, why: string): SecretSto
     get: fail,
     set: fail,
     delete: fail,
+    has: fail,
   }
   unavailable.add(store)
   return store

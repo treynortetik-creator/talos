@@ -20,6 +20,7 @@ import { type Discovered, localZone } from './discovery.ts'
 import { proposerKey } from './kv-prune.ts'
 import type { ScheduleService } from './service.ts'
 import { MAIN_PROPOSER, NEEDS_V2, type Of, RUN_NOW_GAP_MS, STALE_MS } from './service-shared.ts'
+import { withMainMark } from './sidecar.ts'
 
 /** One verified owner schedule frame. Never throws; every path answers ack{ref} or error{ref}. */
 export function handleOwnerFrame(this: ScheduleService, f: Frame): Promise<void> {
@@ -121,7 +122,7 @@ export function withRuns(this: ScheduleService, detail: ScheduleDetailT): Schedu
               trigger: n.trigger,
               status: n.status,
               ...(n.duration_s !== undefined ? { duration_s: n.duration_s } : {}),
-              ...(n.summary ? { summary: n.summary.slice(0, 280) } : {}),
+              ...(withMainMark(n) ? { summary: (withMainMark(n) as string).slice(0, 280) } : {}),
               ...(n.late_note ? { late_note: n.late_note.slice(0, 280) } : {}),
               has_report: Boolean(n.report),
             },

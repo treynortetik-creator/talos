@@ -314,10 +314,14 @@ export const WORKER_POINTER_TEXT = 'Talos: new message in this thread. Call read
 export const SUPERVISOR_HEARTBEAT_MS = 5_000
 /** A heartbeat older than this means the supervisor is gone: every dedicated thread falls back to main at once. */
 export const SUPERVISOR_STALE_MS = 15_000
-/** No `read_inbound` claim this long after the wake → the hub claims the message for main. */
-export const CLAIM_DEADLINE_MS = 90_000
-/** The same deadline when the wake had to resume a parked worker. */
-export const CLAIM_DEADLINE_COLD_MS = 120_000
+/**
+ * No `read_inbound` claim this long after the wake → the hub claims the message for main. This is for a session that is alive
+ * (live or busy: mid-turn, compacting, or not typeable right now): the owner asked that it get a little longer before main
+ * answers for it. A thread with no session at all (failed, stopping, not set up) never waits: main takes it at once.
+ */
+export const CLAIM_DEADLINE_MS = 10 * 60_000
+/** The deadline when the wake had to start or resume the thread's session for this message. */
+export const CLAIM_DEADLINE_COLD_MS = 3 * 60_000
 /** All workers busy at the cap: hold a new start this long, then fall back to main with `worker_cap`. */
 export const CAP_HOLD_MS = 120_000
 /** Typing guard: no pointer while an attached tmux client typed within this window. */
@@ -404,6 +408,11 @@ export const WORKER_NEEDS_YOU_KIND_MAX = 80
 export const NEEDS_YOU_COMPUTER_USE = 'computer-use permissions'
 export const NEEDS_YOU_USAGE_LIMIT = 'usage limit'
 /**
+ * The deaf-thread alarm's kind (deaf-thread.ts): the pane shows something Talos does not recognise, so it cannot type there and the
+ * thread's messages go to Main. The Mac's `WorkerNotice.refusedKind` and the Linux supervisor's HOLD_KIND.refused, the same words.
+ */
+export const NEEDS_YOU_UNTYPEABLE = 'something Talos does not type into'
+/**
  * The `needs_you.kind` names a supervisor writes for the prompts it knows (the Mac's SessionSwitcher.promptName; the Linux
  * supervisor uses the same words). Only these go to the app: any other kind is a screen's own title, which can name a file,
  * so `workers.status` says "a prompt" for it and the raw title stays on the Mac for Main's status tool.
@@ -415,6 +424,7 @@ export const WORKER_NEEDS_YOU_KINDS = [
   'sign in',
   NEEDS_YOU_COMPUTER_USE,
   NEEDS_YOU_USAGE_LIMIT,
+  NEEDS_YOU_UNTYPEABLE,
   'development channels',
   'an unknown question',
   'conversation not found',
@@ -431,6 +441,8 @@ const NEEDS_YOU_STEPS: Record<string, (place: string) => string> = {
       : `press Esc in its pane ${place} to close it (Esc only)`,
   [NEEDS_YOU_USAGE_LIMIT]: (place) =>
     `press Esc in its pane ${place}, then /model <another model> (Talos presses nothing there: one option spends usage credits)`,
+  [NEEDS_YOU_UNTYPEABLE]: (place) =>
+    `look at what its screen shows ${place}; if it stays that way, your main agent answers your messages to this thread`,
 }
 /**
  * What the owner does for a `needs_you.kind`, for the kinds that must never read as "answer it"; undefined for any other kind, one
@@ -459,6 +471,35 @@ export const WorkerNeedsYou = z.object({
   resets_at: IsoTs.optional().catch(undefined),
 })
 export type WorkerNeedsYouT = z.infer<typeof WorkerNeedsYou>
+
+/**
+ * `pointer_hold` on a workers.json entry: why a session that is alive cannot take the owner's message right now. The supervisor
+ * (the Mac's and the Linux one write exactly the same) sets it; the hub reads it to say why a waiting message waits.
+ * The exact rules, the same on both sides:
+ *  1. Reasons: `typed_unseen` (our pointer was typed and never showed in the input box), `draft` (unsent text in the box),
+ *     `scrolled` (the pane is scrolled back, tmux copy mode), `refused` (the key guard refused, or the pane shows something
+ *     Talos does not type into). When two apply at once the highest wins: typed_unseen > draft > scrolled > refused.
+ *  2. The supervisor writes it as soon as the hold starts; the hub decides when to show it. `needs_you`, when set, wins over
+ *     `pointer_hold` for the phone line.
+ *  3. `refused` is set from the FIRST refusal.
+ *  4. `since` is the wall-clock ISO-8601 time the hold started, and it stays fixed while the same hold (the same reason)
+ *     continues; a different reason is a new hold with its own `since`.
+ *  5. Readers accept the field being absent and a reason they do not know (kept as the string, shown as the generic
+ *     "<thread> is waiting for you."); a value that does not fit reads as none for this entry only.
+ *  6. It is written only while a pointer is owed AND the session has a pane, and cleared as soon as either stops being true.
+ */
+export const POINTER_HOLD_REASONS = ['typed_unseen', 'draft', 'scrolled', 'refused'] as const
+export type PointerHoldReasonT = (typeof POINTER_HOLD_REASONS)[number]
+/** The highest-precedence reason of those that apply at once (POINTER_HOLD_REASONS order); null for none, or none this build knows. */
+export function strongestPointerHold(applying: readonly string[]): PointerHoldReasonT | null {
+  return POINTER_HOLD_REASONS.find((r) => applying.includes(r)) ?? null
+}
+export const WorkerPointerHold = z.object({
+  /** One of POINTER_HOLD_REASONS; any other string is a reason a newer writer knows. */
+  reason: z.string().min(1).max(40),
+  since: IsoTs,
+})
+export type WorkerPointerHoldT = z.infer<typeof WorkerPointerHold>
 
 export const WorkerEntry = z.object({
   state: WorkerState,
@@ -501,6 +542,8 @@ export const WorkerEntry = z.object({
   stopped_why: WorkerStoppedWhy.catch('unknown').nullish(),
   /** When the turn now running began (a message typed into it); cleared when the turn ends. `last_turn_at` is when the last one ended. */
   turn_started_at: IsoTs.nullish().catch(undefined),
+  /** Why the session cannot take the owner's message right now (see WorkerPointerHold). A value that does not fit reads as none. */
+  pointer_hold: WorkerPointerHold.nullish().catch(undefined),
 })
 export type WorkerEntryT = z.infer<typeof WorkerEntry>
 
@@ -878,6 +921,14 @@ export const WorkerStatusItem = z.object({
   /** What the session waits on the owner for: `kind` one of WORKER_NEEDS_YOU_KINDS, else "a prompt"; `step` what to do at the Mac when "answer it" is wrong. */
   needs_you: StatusNeedsYou.optional().catch(undefined),
   stopped_why: WorkerStoppedWhy.optional().catch(undefined),
+  /**
+   * The deaf-thread alarm (deaf-thread.ts): Talos has not been able to type into this session for `minutes`, and refused
+   * `refusals_1h` keys in the hour. Present only while it holds; an older page strips it, an older bridge sends none.
+   */
+  deaf: z
+    .object({ minutes: z.number().int().min(1).max(100_000), refusals_1h: z.number().int().min(0).max(1_000_000) })
+    .optional()
+    .catch(undefined),
   started_at: IsoTs.optional().catch(undefined),
   turn_started_at: IsoTs.optional().catch(undefined),
   /** Crash restarts in the hour before `at`. */

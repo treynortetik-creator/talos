@@ -206,7 +206,8 @@ export function createSocketDispatch(c: SocketCtx) {
 
   function dispatch(frame: Frame, isCatchup = false) {
     applyFrame(frame, isCatchup)
-    c.emit(frame.type, frame as unknown as Record<string, unknown>)
+    // A replay still reaches the listeners (the stores need the data), marked, so a banner or a pet reaction can skip it.
+    c.emit(frame.type, frame as unknown as Record<string, unknown>, isCatchup ? { catchup: true } : undefined)
   }
 
   c.addSystemRow = addSystemRow

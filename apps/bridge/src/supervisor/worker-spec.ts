@@ -27,6 +27,7 @@ import {
   SESSION_MARKERS,
   stripClaudeMarkers,
 } from '../claude-env.ts'
+import { type OsSandboxPieces, withOsSandbox } from '../guards/os-sandbox.ts'
 import { realFileSync } from '../real-file.ts'
 import { pathIssue } from '../secrets/platform.ts'
 import { CHANNEL_SWITCH_ALWAYS, CHANNEL_SWITCH_NOCHANNEL, NOCHANNEL_SUFFIX, TERMINAL_ONLY } from './launch-env.ts'
@@ -180,6 +181,11 @@ export type WorkerInputs = {
   systemPromptFile?: boolean
   /** Ask rules copied in from the thread folder's own settings (made absolute; they only narrow). */
   settingsAsk?: readonly string[]
+  /**
+   * The opt-in OS sandbox (guards/os-sandbox.ts), built by the supervisor for this start when config.json says `os_sandbox: true`:
+   * its block and environment go into the settings. Absent or null: the switch is off and the launch is as before.
+   */
+  osSandbox?: OsSandboxPieces | null
 }
 
 export type WorkerSpec = {
@@ -208,6 +214,8 @@ export type Trusted = {
   mcp?: WorkerMcpPlan | null
   /** The --setting-sources value the supervisor chose (null: none, Main's own default). */
   settingSources?: string | null
+  /** With the switch on (the supervisor's own read), what it built: the settings must carry exactly this sandbox. Absent or null: off. */
+  osSandbox?: OsSandboxPieces | null
   /**
    * A sub-thread in its own folder outside its parent's: the parent folder's deny rules as the supervisor read them, every one of
    * which must be in the settings (the parent's fence holds in a folder the parent does not contain).
@@ -443,7 +451,7 @@ function addThreadState(base: Json, perms: Json, i: WorkerInputs, script: string
   perms.allow = [
     ...new Set([...((allow as string[] | undefined) ?? []), ...stateFileAllowRules(i.agentDir, i.threadId)]),
   ]
-  // the file's own allow rule also names what is under it (gitignore-style): those paths are denied
+  // the file's own allow rule also names what is under it (gitignore-style): its children are denied (`<file>/*`, never `/**`)
   const deny = Array.isArray(perms.deny) ? (perms.deny as string[]) : []
   perms.deny = [...new Set([...deny, ...stateFileDenyRules(i.agentDir, i.threadId)])]
   return { ...hooked, permissions: perms }
@@ -488,6 +496,7 @@ const WORKER_SETTINGS_KEYS = new Set([
   'permissions',
   'disableSkillShellExecution',
   'statusLine',
+  'sandbox',
 ])
 
 /**
@@ -725,6 +734,8 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
       padding: 0,
     },
   }
+  // the opt-in OS sandbox rides in the same file (the switch is on: the supervisor built it for this start)
+  if (i.osSandbox) settings = withOsSandbox(settings, i.osSandbox)
   // an MCP server of the thread folder the owner has not approved there is not launched
   if (mcp?.refusal) no('escalation', `mcp: ${mcp.refusal}`, 'mcp')
   const spec: WorkerSpec = {
@@ -745,6 +756,7 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
     mcp,
     settingSources: i.settingSources ?? null,
     outsideAgentFolder: i.cwd !== null && i.settingSources !== undefined,
+    osSandbox: i.osSandbox ?? null,
   })
   return spec
 }
@@ -913,6 +925,14 @@ export function validateSpec(spec: WorkerSpec, trusted: Trusted): void {
     const lost = trusted.parentDeny.filter((r) => !have.has(r))
     if (lost.length > 0)
       no('fence_missing', `the parent thread folder's deny rules are not in the settings: ${lost.join(', ')}`)
+  }
+  // the switch is on (the supervisor's own read): the settings carry the sandbox it built, locked, and its environment
+  if (trusted.osSandbox) {
+    const have = JSON.stringify(sortKeys(settings.sandbox ?? null))
+    if (have !== JSON.stringify(sortKeys(trusted.osSandbox.sandbox)))
+      no('fence_missing', 'the OS sandbox block is not in the settings as the supervisor built it')
+    for (const [k, v] of Object.entries(trusted.osSandbox.env))
+      if (senv[k] !== v) no('fence_missing', `the OS sandbox environment ${k} is not in the settings`)
   }
   if (mcp?.refusal) no('escalation', `mcp: ${mcp.refusal}`, 'mcp')
   const d = checkCeiling(spec.args, settings, mcp?.allowed ?? [], Object.keys(mcp?.ownFolder ?? {}), trusted.main)

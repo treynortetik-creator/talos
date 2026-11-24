@@ -26,10 +26,15 @@ try:
     import _talos_common as C  # noqa: E402
 except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
     if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-              "permissionDecisionReason": "Talos check-vault could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+        _out, _code = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos check-vault could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}), 2
     else:
-        print("{}")
+        _out, _code = "{}", 0
+    try:                       # write and flush now; a closed stdout must not become exit 120 (non-blocking) at exit
+        sys.stdout.write(_out + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(_code)
     sys.exit(0)
 
 KILL_NAME = "check-vault.off"
@@ -67,7 +72,7 @@ def strings(v):
 def main():
     C.arm_guard_timeout("check-vault")
     if C.killed(KILL_NAME):
-        print("{}")
+        C.allow()
         return
     vault = vault_dir()
     if not vault and not C.killed(KILL_NAME):
@@ -78,21 +83,21 @@ def main():
             sys.stderr.write("check-vault: %s looks like your vault but ~/.config/talos/vault-dir does not name it, so nothing is guarded. "
                              "Re-run ./install.sh --with-vault %s to record it.\n" % (guess, guess))
     if not vault or not os.path.isdir(vault):
-        print("{}")
+        C.allow()
         return
     terms = load_terms(vault)
     if not terms:
-        print("{}")
+        C.allow()
         return
     d = C.read_stdin()
     ti = d.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("path") or ti.get("notebook_path") or ""
     if not isinstance(path, str) or not path:
-        print("{}")
+        C.allow()
         return
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(os.getcwd(), os.path.expanduser(path)))
     if full == vault or full.startswith(vault + os.sep):
-        print("{}")                 # writing inside the vault is the point of the vault
+        C.allow()                 # writing inside the vault is the point of the vault
         return
     payload = {k: v for k, v in ti.items() if k not in ("file_path", "path", "notebook_path", "old_string")}
     body = "\n".join(strings(payload))     # content, new_string, edits[].new_string, ...: every string, whole
@@ -101,14 +106,14 @@ def main():
         if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", body, re.I):
             hits.append(t)
     if not hits:
-        print("{}")
+        C.allow()
         return
     C.log_jsonl("vault-guard.jsonl", {"event": "ask", "target": os.path.relpath(full, C.ROOT) if full.startswith(C.ROOT + os.sep) else "(outside agent folder)", "n": len(hits)})
-    print(C.pretool_json("ask", (
+    C.say(C.pretool_json("ask", (
         "This write contains %d term%s from your personal vault's guard list (%s) and its destination is outside "
         "the vault:\n  %s\n\nPersonal-vault content may be used as context but must never be copied into work notes, "
         "commits, documents or messages. Allow it only if you are sure this text is not private."
-        % (len(hits), "" if len(hits) == 1 else "s", ", ".join(hits[:5]), path))))
+        % (len(hits), "" if len(hits) == 1 else "s", ", ".join(hits[:5]), path))), True)
 
 
 if __name__ == "__main__":

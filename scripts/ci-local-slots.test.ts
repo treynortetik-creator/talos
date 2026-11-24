@@ -104,6 +104,24 @@ describe('ci-local.sh slots', () => {
     expect(next.out).toContain('got slot 2')
   })
 
+  it('a scheduled run (the nightly, the hostile nightly) leaves a freed run slot to a push run that is queued, though it looks far more often', async () => {
+    const L = join(scratch(), 'locks')
+    const one = { CI_SLOTS: '1', CI_MAX_SUITES: '1' }
+    const h = bgSh(`ci_acquire_slot "${L}" holder && echo "got slot $CI_SLOT"; sleep 60`, one)
+    await until('the holder', () => h.out().includes('got slot'))
+    // the nightly looks every 0.05 s, the push run every second
+    const n = bgSh(`ci_acquire_slot "${L}" nightly && echo "got slot $CI_SLOT"; sleep 60`, { ...one, CI_NIGHTLY: '1' })
+    await until('the nightly to wait', () => n.out().includes('waiting for a free slot'))
+    const p = bgSh(`ci_acquire_slot "${L}" push && echo "got slot $CI_SLOT"; sleep 60`, { ...one, CI_POLL: '1' })
+    await until('the push run to wait', () => p.out().includes('waiting for a free slot'))
+    h.child.kill('SIGKILL') // the holder is gone: its slot is free
+    await until('the push run to get the slot', () => p.out().includes('got slot 1'))
+    expect(n.out()).not.toContain('got slot')
+    expect(n.out()).toContain('a push run is queued')
+    p.child.kill('SIGKILL') // the push run is gone: the nightly goes
+    await until('the nightly to get the slot', () => n.out().includes('got slot 1'))
+  })
+
   it("stale takeover: of many waiters racing for a dead owner's slot, exactly one wins", async () => {
     for (let round = 0; round < 5; round++) {
       const T = scratch()

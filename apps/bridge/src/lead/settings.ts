@@ -120,7 +120,7 @@ const uniq = <T>(...lists: Array<readonly T[] | undefined>) => [...new Set(lists
 const mcpDenyRules = (names: readonly string[]): string[] => uniq(names.map((n) => `mcp__${mcpToolPrefix(n)}__*`))
 
 /** The cache folders a sandboxed lead uses instead of the shared ones, which are outside the sandbox's writable area. */
-const CACHE_ENV = {
+export const CACHE_ENV = {
   npm_config_cache: 'npm',
   npm_config_store_dir: 'pnpm-store',
   BUN_INSTALL_CACHE_DIR: 'bun',

@@ -55,6 +55,14 @@ final class Rig: @unchecked Sendable {
     let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     return here.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/tmux.conf").path
   }()
+  /// Pins a session's window to the size it has, before a test attaches a client to it. By default tmux fits the window to its clients, and
+  /// a test client (`script`, 80x24) shrinks Main's 120x40 window at once. The fakes draw once and never redraw on a resize, so the
+  /// screen is cropped, a dialog on it is no longer read, and the app's offer ends: the 2026-11-21 flakes. (`-w`: window-size is a
+  /// window option; without it tmux 3.8 refuses the command.) Returns whether tmux took it: callers expect true.
+  static func pinWindowSize(socket: String, session: String) -> Bool {
+    guard let tmux = tmuxPath else { return false }
+    return ProcessRunner.run([tmux, "-L", socket, "set-option", "-w", "-t", "=\(session):", "window-size", "manual"], env: ["PATH": "/usr/bin:/bin"]).ok
+  }
   static let tmuxPath: String? = {
     for p in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
     where FileManager.default.isExecutableFile(atPath: p) && TmuxPtyHost.isUsable(p) {
@@ -104,6 +112,8 @@ final class Rig: @unchecked Sendable {
   /// How often the tmux host's own poll reads the pane (it takes a capture each time, from its own thread). A test that logs tmux verbs
   /// sets this before `makeSupervisor()` so the poll cannot land between two verbs it is ordering.
   var hostPollInterval = 0.2
+  /// A tmux host's bounded-read deadline for this rig (seconds); nil keeps the host's own. Per host, never process-wide.
+  var boundedReadDeadline: Double?
   /// Wraps the real host the next `makeSupervisor()` builds (a fault put in front of it; everything else goes to the real one).
   var wrapHost: ((PtyHost) -> PtyHost)?
   /// Changes to the supervisor's options, applied by `makeSupervisor`. Every rig's guards refresh finds the fake bun only, never a real one.
@@ -233,6 +243,7 @@ final class Rig: @unchecked Sendable {
       h = TmuxPtyHost(
         commands: TmuxCommands(tmux: tmuxBin ?? Rig.tmuxPath!, socket: socket, configPath: Rig.tmuxConf), launchDir: launchDir,
         baseEnv: env, pollInterval: hostPollInterval)
+      if let d = boundedReadDeadline { (h as? TmuxPtyHost)?.setBoundedReadDeadline(d) }
     case .direct:
       h = SwiftTermPtyHost()
     }
@@ -387,11 +398,29 @@ final class Rig: @unchecked Sendable {
       .write(toFile: agentsDir + "/\(pid).json", atomically: true, encoding: .utf8)
   }
 
+  /// The pids of tmux servers of this user started with `-L <socket>` (never a client, never another socket).
+  static func serverPids(socket: String) -> [Int32] {
+    let uid = String(getuid())
+    let r = ProcessRunner.run(["/bin/ps", "-u", uid, "-o", "pid=,command="], env: ["PATH": "/usr/bin:/bin"], timeout: 5)
+    guard r.ok, socket.hasPrefix("talos-test-") else { return [] }
+    var pids: [Int32] = []
+    for line in r.out.split(separator: "\n") {
+      let t: [String] = line.split(separator: " ").map { String($0) }
+      guard t.count > 1, let pid = Int32(t[0]) else { continue }
+      let rest: String = t.dropFirst().joined(separator: " ")
+      if TmuxPtyHost.listsServer(rest, socket: socket) { pids.append(pid) }
+    }
+    return pids
+  }
+
   func teardown() {
     sup?.detach()
     if kind == .tmux, let t = Rig.tmuxPath {
       // Only our own test server, by its private socket name.
       _ = ProcessRunner.run([t, "-L", socket, "kill-server"], env: loginEnv, timeout: 5)
+      // A test that deleted or hid the socket file leaves a server that kill-server cannot reach: find it by its own argv (this user, tmux, our
+      // private `-L` name, not a client) and end it by pid.
+      for pid in Rig.serverPids(socket: socket) { kill(pid, SIGKILL) }
       // tmux 3.8 leaves the socket file behind; remove ours (the server behind it is gone).
       unlink(Rig.tmuxSocketPath(socket))
     } else if let pid = host?.childPid, ProcessInspect.alive(pid), ProcessInspect.basic(pid)?.pgid == pid {
@@ -525,3 +554,12 @@ let waitScale: Double = {
   guard let s = ProcessInfo.processInfo.environment["TALOS_TEST_WAIT_SCALE"], let v = Double(s), v > 0 else { return 3 }
   return v
 }()
+
+/// The manager's awake clock, plus a jump the test makes: a minute of the awake clock passes at once, whatever the load is.
+final class SkewClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var skew = 0.0
+  func read() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lock.withLock { skew } }
+  func jump(_ seconds: Double) { lock.withLock { skew += seconds } }
+}
+

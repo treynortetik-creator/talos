@@ -32,20 +32,21 @@ try:
     import _talos_common as C  # noqa: E402
 except Exception as _e:        # the shared helpers will not load: fail open in a live session, CLOSED when unattended
     if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-              "permissionDecisionReason": "Talos timeline-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}))
+        _out, _code = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+              "permissionDecisionReason": "Talos timeline-guard could not load hooks/_talos_common.py (" + type(_e).__name__ + ": " + str(_e)[:120] + ") and this run is unattended, so the action is blocked rather than allowed unchecked."}}), 2
     else:
-        print("{}")
+        _out, _code = "{}", 0
+    try:                       # write and flush now; a closed stdout must not become exit 120 (non-blocking) at exit
+        sys.stdout.write(_out + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(_code)
     sys.exit(0)
 
 KILL_NAME = "timeline-guard.off"
 LINT = os.path.join(C.CODE_ROOT, "scripts", "wiki-lint.py")      # code: from the release, data: from C.ROOT
 SKIP_NAMES = {"README", "CLAUDE", "CONTRIBUTING", "index"}
 MAX_SHOWN = 4
-
-
-def allow():
-    print("{}")
 
 
 def relpath_in_root(path):
@@ -149,34 +150,34 @@ def deny_reason(lint, rel, viol):
 def main():
     C.arm_guard_timeout("timeline-guard")
     if C.killed(KILL_NAME):
-        return allow()
+        return C.allow()
     d = C.read_stdin()
     ti = d.get("tool_input")
     if not isinstance(ti, dict):
-        return allow()
+        return C.allow()
     path = ti.get("file_path") or ti.get("path") or ""
     if not isinstance(path, str) or not path:
-        return allow()
+        return C.allow()
     rel = relpath_in_root(path)
     if not rel or not in_scope(rel):
-        return allow()
+        return C.allow()
     tool = d.get("tool_name")
     if tool not in (None, "Write", "Edit", "MultiEdit"):
-        return allow()
+        return C.allow()
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(C.ROOT, path))
     pair = proposed(tool, ti, full)
     if pair is None:
-        return allow()
+        return C.allow()
     lint = load_lint()
     viol = lint.new_timeline_violations(pair[0], pair[1])
     if not viol:
-        return allow()
+        return C.allow()
     C.log_jsonl("timeline-guard.jsonl", {"path": rel, "tool": tool, "codes": [v[0] for v in viol],
                                           "first": viol[0][2][:160]})
-    print(json.dumps({"hookSpecificOutput": {
+    C.say(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
-        "permissionDecisionReason": deny_reason(lint, rel, viol)}}))
+        "permissionDecisionReason": deny_reason(lint, rel, viol)}}), True)
 
 
 if __name__ == "__main__":

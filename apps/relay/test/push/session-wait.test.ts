@@ -98,6 +98,16 @@ describe('SessionWait', () => {
     expect(s.sent).toHaveLength(1)
   })
 
+  it("the deaf-thread alarm's Needs you (since = when the refusals began) pushes at once when it is already 10 minutes old, once", async () => {
+    const s = setup()
+    const deaf = { kind: 'something Talos does not type into', since: new Date(T0 - 11 * MIN).toISOString() }
+    const st = status([{ thread_id: 'trip', state: 'live', needs_you: deaf }])
+    await look(s, st)
+    expect(s.sent.map((x) => x.intent.template)).toEqual(['session_waiting'])
+    await look(s, st, 5)
+    expect(s.sent).toHaveLength(1)
+  })
+
   it('a new wait (a new since) is a new notice; a wait that ended leaves nothing behind', async () => {
     const s = setup()
     await look(s, status([waiting('trip', 12)]))

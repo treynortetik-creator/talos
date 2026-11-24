@@ -45,3 +45,18 @@ export const DEV_ROWS: readonly DevRow[] = [
 
 /** The settings path of a developer row. */
 export const devPath = (key: DevRow['key']): `dev.${DevRow['key']}` => `dev.${key}`
+
+/**
+ * The OS sandbox row on the Developer page ("Extra lock on protected files", config.json `os_sandbox`, docs/SECURITY.md "The OS sandbox"). It is
+ * EXPERIMENTAL and off by default, and it does not stop everything: this is the one text the page, the agent's hint and `talos-app sandbox on` all say.
+ */
+export const OS_SANDBOX_TITLE = 'Extra lock on protected files (experimental)'
+export const OS_SANDBOX_LEAD = "Experimental. It doesn't stop everything:"
+export const OS_SANDBOX_LIMITS = [
+  'a thread folder that contains the Talos code folder',
+  'MCP servers added with "claude mcp add" (they are kept in ~/.claude.json)',
+  'some newer Claude Code command settings and plugins',
+  "a hook written in a project's own settings",
+] as const
+/** The help as plain lines: the lead, then one bullet each. */
+export const osSandboxHelpLines = (): string[] => [OS_SANDBOX_LEAD, ...OS_SANDBOX_LIMITS.map((l) => `- ${l}`)]

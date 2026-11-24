@@ -5,6 +5,7 @@ exports[`talos-app doctor text prints exactly these lines for a healthy setup 1`
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
 ok    Talos kit: installed in <agent>
 ok    .mcp.json entry: command <bun-path>, points at this checkout
+ok    OS sandbox: off (the extra lock on protected files is not turned on)
 ok    home dir mode: 700 (want 700)
 ok    bridge.key mode: 600 (want 600)
 ok    config.json mode: 600 (want 600)
@@ -36,6 +37,7 @@ exports[`talos-app doctor text prints these lines, and exits 1, when the relay i
 ok    MCP SDK version: <sdk> (must be 1.x, never 2.x)
 FAIL  Talos kit: This folder has no Talos kit: run <repo>/install.sh --agent-dir <a new folder> for an agent with the full Talos kit, or start with --no-kit to connect <agent> as a plain Claude Code folder
 FAIL  .mcp.json entry: no talos-app server in <agent>/.mcp.json (run apps/bridge/scripts/install.sh)
+ok    OS sandbox: off (the extra lock on protected files is not turned on)
 ok    home dir mode: 700 (want 700)
 FAIL  bridge.key mode: missing
 FAIL  config.json mode: missing

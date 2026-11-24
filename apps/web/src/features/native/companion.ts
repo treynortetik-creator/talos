@@ -316,7 +316,9 @@ export function startCompanionFeed(
     }),
     ...(meta ? [meta.subscribe(schedule)] : []),
     subscribeCompanionReplies(schedule), // what the page holds or shows changes the frame
-    client.onFrame('reply', (f) => {
+    client.onFrame('reply', (f, meta) => {
+      // A replay after a reconnect is not a new reply: no pet reaction for it.
+      if (meta?.catchup) return
       // The same filter as the native banner (notify.ts).
       if (f.silent) return
       if (f.message.author !== 'agent') return

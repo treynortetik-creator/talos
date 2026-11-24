@@ -6,6 +6,10 @@
     "apps/bridge/scripts/capture-schedules.ts": 1006,
     "apps/bridge/src/apps/service.ts": 1174,
     "apps/bridge/src/cli-main.ts": 1101,
+    "apps/chronos/lib/chronos_runlog.py": 1072,
+    "apps/chronos/lib/chronoslib.py": 2163,
+    "apps/chronos/ui/server.py": 1251,
+    "apps/chronos/ui/static/app.js": 1186,
     "apps/desktop/Sources/TalosDesktop/CompanionController.swift": 1254,
     "packages/protocol/src/frames.ts": 1145
   },
@@ -24,8 +28,8 @@
     "packages/protocol/src/memory-links.ts::maskNote": 335,
     "plugins/talos-app-mod/hooks/register.ts::register": 313
   },
-  "filesListedCount": 5,
-  "filesListedLines": 5680,
+  "filesListedCount": 9,
+  "filesListedLines": 11352,
   "functionsListedCount": 13,
   "functionsListedLines": 4865
 }

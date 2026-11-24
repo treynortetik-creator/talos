@@ -80,7 +80,7 @@ test('voice speed cycles 1 -> 1.25 -> 1.5 -> 1.75 -> 2 -> 1, sets playbackRate, 
   const player = page.getByTestId('audio')
   await expect(player).toBeVisible()
   const rate = () =>
-    page.locator('#talos-audio-dock').evaluate((el: HTMLAudioElement) => [el.playbackRate, el.preservesPitch])
+    page.locator('#talos-audio').evaluate((el: HTMLAudioElement) => [el.playbackRate, el.preservesPitch])
   for (const s of ['1.25', '1.5', '1.75', '2', '1']) {
     await player.getByRole('button', { name: /Playback speed/ }).click()
     await expect(player.getByRole('button', { name: `Playback speed ${s}x` })).toBeVisible()
@@ -91,5 +91,5 @@ test('voice speed cycles 1 -> 1.25 -> 1.5 -> 1.75 -> 2 -> 1, sets playbackRate, 
   const again = page.getByTestId('audio')
   await expect(again).toBeVisible()
   await expect(again.getByRole('button', { name: 'Playback speed 1.25x' })).toBeVisible()
-  expect(await page.locator('#talos-audio-dock').evaluate((el: HTMLAudioElement) => el.playbackRate)).toBe(1.25)
+  expect(await page.locator('#talos-audio').evaluate((el: HTMLAudioElement) => el.playbackRate)).toBe(1.25)
 })

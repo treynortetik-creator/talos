@@ -486,6 +486,12 @@ export const ScheduleCardPayload = z.strictObject({
   proposed_by: z.enum(['agent', 'owner_form']),
   client_ref: Ulid.nullable(), // echoes schedule.patch.id so the app opens the card it asked for
   preview: SchedulePreview,
+  /**
+   * The change's own risk, before trust mode lowers the card's (`riskForTrust`). Written by the bridge when it composes the card,
+   * never by the agent; "Always allow schedule changes" is judged on this, so trust mode cannot pass a high-risk schedule.
+   * Absent on an older card: read as high.
+   */
+  own_risk: z.enum(['low', 'high']).optional(),
 })
 
 /** One entry of `schedule.status.changed`: ids and hashes only, never a name or prompt (S2.2). */

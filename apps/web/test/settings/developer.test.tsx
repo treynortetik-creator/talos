@@ -1,7 +1,7 @@
 // Settings > Developer: the rows are drawn from DEV_ROWS, each switch is one owner-signed config patch, and Developer mode moves
 // only the rows whose open setting differs from the default. Uses the fake client's own patchConfig (it changes the store).
 // Neutral fixtures only.
-import { DEV_ROWS } from '@talos-app/protocol'
+import { DEV_ROWS, OS_SANDBOX_LIMITS, OS_SANDBOX_TITLE } from '@talos-app/protocol'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -46,7 +46,7 @@ const checked = (el: HTMLElement) => el.getAttribute('aria-checked')
 describe('Developer page', () => {
   it('lists exactly the DEV_ROWS titles, in order', () => {
     mount()
-    const titles = screen.getAllByRole('switch').slice(1) // the first is Developer mode
+    const titles = screen.getAllByRole('switch').slice(1, -1) // the first is Developer mode, the last the experimental lock (its own row)
     expect(titles.map((t) => document.querySelector(`label[for="${t.id}"]`)?.textContent)).toEqual(
       DEV_ROWS.map((r) => r.title),
     )
@@ -117,7 +117,8 @@ describe('Developer page', () => {
     mount()
     for (const sw of screen.getAllByRole('switch')) {
       const line = document.getElementById(sw.getAttribute('aria-describedby') ?? '')
-      expect(line?.tagName).toBe('P')
+      // the experimental lock's line has bullets, so it is a block; every other row's is one paragraph
+      expect(line?.tagName).toBe(line?.closest('[data-testid="dev-row-os_sandbox"]') ? 'DIV' : 'P')
       expect(line?.closest('[data-testid]')?.contains(sw)).toBe(true)
     }
   })
@@ -178,5 +179,36 @@ describe('Developer page', () => {
     await act(async () => userEvent.click(rowSwitch('thread_fence')))
     expect((await screen.findByRole('alert')).textContent).toBe('Update Talos on your Mac to change this.')
     expect(checked(rowSwitch('thread_fence'))).toBe('true')
+  })
+})
+
+describe('Developer page: the experimental extra lock', () => {
+  const sw = () => within(screen.getByTestId('dev-row-os_sandbox')).getByRole('switch')
+
+  it('is there, says experimental, is off by default, and lists what it does not stop', () => {
+    mount()
+    const row = screen.getByTestId('dev-row-os_sandbox')
+    expect(row.querySelector('label')?.textContent).toBe(OS_SANDBOX_TITLE)
+    expect(OS_SANDBOX_TITLE.toLowerCase()).toContain('experimental')
+    expect(checked(sw())).toBe('false')
+    expect(row.textContent).toContain("Experimental. It doesn't stop everything:")
+    for (const l of OS_SANDBOX_LIMITS) expect(row.textContent).toContain(l)
+    // it is not one of the dev.* rows, so Developer mode and the row list leave it alone
+    expect(DEV_ROWS.map((r) => r.key as string)).not.toContain('os_sandbox')
+  })
+
+  it('one tap sends exactly os_sandbox true, and back sends false', async () => {
+    const { patch } = mount()
+    await act(async () => userEvent.click(sw()))
+    expect(patch).toHaveBeenLastCalledWith({ os_sandbox: true })
+    await waitFor(() => expect(checked(sw())).toBe('true'))
+    await act(async () => userEvent.click(sw()))
+    expect(patch).toHaveBeenLastCalledWith({ os_sandbox: false })
+  })
+
+  it('Developer mode never touches it', async () => {
+    const { patch } = mount()
+    await act(async () => userEvent.click(master()))
+    expect(JSON.stringify(patch.mock.calls)).not.toContain('os_sandbox')
   })
 })

@@ -16,6 +16,7 @@ import {
   type DialogKindT,
   FreeText,
   LaunchChanged,
+  usageLimitOptionsFit,
   type WorkerDialogT,
 } from './dialog-files.ts'
 import { IsoTs, ThreadId } from './ids.ts'
@@ -61,6 +62,7 @@ export const DIALOG_WORDING = {
     bypass: 'Run with permission checks off?',
     tool_permission: 'Allow this tool request?',
     agent_question: "A question from {thread}'s session",
+    usage_limit: "{thread}'s session hit its usage limit",
   },
   /** The heading when the server is known: `Use github?`. `{server}` is the name as read (hidden characters shown, cut at 60). */
   titleNamed: { mcp_consent: 'Use {server}?' },
@@ -75,6 +77,17 @@ export const DIALOG_WORDING = {
     tool_permission:
       "{thread}'s session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac.",
     agent_question: "{thread}'s session is asking you to choose. Your answer goes straight into the session.",
+    usage_limit:
+      "{thread}'s session can't go on until the limit resets or you switch to another model. Stop and wait ends its current turn. Switch model opens the model list in the session. Nothing here spends money.",
+  },
+  /** The sentence when the card has no Switch model button (a limit another model does not lift). */
+  sentenceUsageLimitWaitOnly:
+    "{thread}'s session can't go on until the limit resets. Stop and wait ends its current turn. Nothing here spends money.",
+  /** What a usage-limit answer that stopped part way says (the Mac's `UsageStop`): never "nothing pressed", because Escape went. */
+  usageStopped: {
+    closed: 'Closed the limit menu. Switch model at the Mac.',
+    typed: 'Closed the limit menu; /model was typed but not sent. Finish at the Mac or clear it.',
+    cleared: 'Closed the limit menu; /model was typed and cleared again. Switch model at the Mac.',
   },
   /** The sentence for a thread session's development-channels question (Main's is `sentence.dev_channels`). */
   sentenceThreadDevChannels:
@@ -110,6 +123,7 @@ const DIALOG_PROMPT: Record<DialogKindT, string> = {
   bypass: 'run with permission checks off',
   tool_permission: 'allow a tool request',
   agent_question: 'answer a question',
+  usage_limit: 'choose what to do at the usage limit',
 }
 
 /** What a dialog card binds: the dialog, nothing else. */
@@ -131,6 +145,10 @@ export const DialogCardPayload = z
   .refine((d) => d.free_text === undefined || (d.dialog_kind === 'agent_question' && d.free_text < d.options.length), {
     path: ['free_text'],
     message: 'only a question has a free-text option, and it is one of its options',
+  })
+  .refine(usageLimitOptionsFit, {
+    path: ['options'],
+    message: 'a usage-limit dialog offers only Stop and wait and Switch model',
   })
 export type DialogCardPayloadT = z.infer<typeof DialogCardPayload>
 
@@ -182,12 +200,20 @@ const devChannelsOf = (subject: string | null): string[] =>
 export function dialogBody(
   kind: DialogKindT,
   threadName: string,
-  more: { subject?: string | null; launch_changed?: readonly string[] | undefined; main?: boolean } = {},
+  more: {
+    subject?: string | null
+    launch_changed?: readonly string[] | undefined
+    main?: boolean
+    options?: readonly string[]
+  } = {},
 ): string {
+  // a usage-limit card only talks of switching model when that button is on it
   const sentence =
     kind === 'dev_channels' && more.main === false
       ? DIALOG_WORDING.sentenceThreadDevChannels
-      : DIALOG_WORDING.sentence[kind]
+      : kind === 'usage_limit' && more.options !== undefined && !more.options.includes('Switch model')
+        ? DIALOG_WORDING.sentenceUsageLimitWaitOnly
+        : DIALOG_WORDING.sentence[kind]
   const lines = [fill(sentence, name(threadName))]
   if (kind === 'dev_channels') {
     const w = DIALOG_WORDING.devChannels
@@ -212,7 +238,7 @@ export function dialogNothingPressedText(threadName: string): string {
 export type DialogWhere = { kind: 'mac' } | { kind: 'linux'; machine: string; attach: string }
 
 /**
- * The one thread line when a dialog waits out its 15 minutes. It is posted IN the thread, so it says "This thread's session" and
+ * The one thread line when a dialog waits out its day (and is not offered again). It is posted IN the thread, so it says "This thread's session" and
  * never names the thread; the rest is the supervisor's own wording for the same prompt (SupervisorNotice.swift on the Mac,
  * worker-notices.ts on Linux), so the owner reads one meaning wherever the session runs.
  */
@@ -230,7 +256,8 @@ export function dialogFallbackLine(kind: DialogKindT, where: DialogWhere): strin
     kind === 'dev_channels' ||
     kind === 'bypass' ||
     kind === 'tool_permission' ||
-    kind === 'agent_question'
+    kind === 'agent_question' ||
+    kind === 'usage_limit'
   )
     return `${what}. Its card expired without an answer, so nothing was pressed.`
   return where.kind === 'mac'
@@ -249,6 +276,10 @@ export function dialogAnswerText(kind: DialogKindT, subject: string | null, labe
       ? 'Accepted: running with permission checks off'
       : 'Exited: the session was stopped'
   if (kind === 'tool_permission') return label === 'Allow once' ? 'Allowed once' : 'Denied'
+  if (kind === 'usage_limit')
+    return label === 'Switch model'
+      ? 'Asked the session to switch model'
+      : 'Stopped. Send a message after the limit resets to go on.'
   return dialogVisibleText(label)
 }
 
@@ -318,6 +349,7 @@ export function composeDialogCard(input: ComposeDialogCardInput): CardT | null {
       subject: d.subject,
       launch_changed: d.launch_changed,
       main: input.main ?? d.kind === 'dev_channels',
+      options: d.options,
     }),
     body_format: 'plain',
     fields: [],

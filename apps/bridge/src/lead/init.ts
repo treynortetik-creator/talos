@@ -21,6 +21,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { checkWorkerCwd } from '@talos-app/protocol'
+import { osSandboxPreflight, readOsSandboxSwitch } from '../guards/os-sandbox.ts'
 import { real } from '../guards/rules.ts'
 import { say } from '../owner-words.ts'
 import { defaultLeadRoots, LEAD_SECRET_PATHS, readOwnerMcp } from './fence.ts'
@@ -237,6 +238,12 @@ export function initLeadFolder(o: LeadInitOpts): LeadInitResult {
   const priorMarker = existsSync(join(folder, LEAD_MARKER)) ? (markerOf(folder) ?? {}) : null
   const profile: LeadProfile = o.profile ?? (priorMarker ? profileOfMarker(priorMarker) : 'light')
   const switched = priorMarker !== null && profileOfMarker(priorMarker) !== profile
+  // the extra lock on protected files (os_sandbox) is on: a sandbox lead is made only while every protected file has one name
+  // (guards/os-sandbox.ts); the sandbox block itself rides in the worker's own settings at each start (worker-spec.ts)
+  if (profile === 'sandbox' && readOsSandboxSwitch(o.talosHome)) {
+    const bad = osSandboxPreflight(o.talosHome)
+    if (bad) throw new LeadError(`the extra lock on protected files is on, so no sandbox lead is made now: ${bad}`)
+  }
   const ownerMcp = readOwnerMcp(o.home, agent, o.claudeDir)
   const fresh = leadSettings({
     profile,

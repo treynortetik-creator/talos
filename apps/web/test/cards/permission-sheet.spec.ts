@@ -1,7 +1,7 @@
-// The owner's rule: if he can see what an approval is for, he can approve it from his phone. In the REAL app (thread view with its
-// header, composer and overlays), opened from /card/:id on an iPhone SE (320 pt), an iPhone 15 and a Pixel, a permission card opens a
-// full-screen approval sheet that owns the screen. Allow stays disabled until the owner has scrolled to the end of the call, nothing
-// else draws over the sheet, and a pinch zoom turns Allow off.
+// The optional "Details" sheet of a permission card (owner, 2026-11-21: one tap approves; reading is up to him). In the REAL app
+// (thread view with its header, composer and overlays), opened from /card/:id on an iPhone SE (320 pt), an iPhone 15 and a Pixel,
+// the card is scrolled to and armed, not covered; Details opens a full-screen sheet that owns the screen with the whole call and
+// Allow enabled at once (no scroll gate, no zoom gate), and nothing else draws over the sheet.
 
 import { expect, type Page, test } from '@playwright/test'
 import { composePermissionCard } from '@talos-app/protocol'
@@ -23,7 +23,7 @@ const cardFor = (tool: string, preview: string) =>
     client_version: '2.1.312',
   })
 
-/** Seeds one permission card into the real fake-mode app and opens it the way a push does: /card/:id, client-side. */
+/** Seeds one permission card into the real fake-mode app, opens it the way a push does (/card/:id, client-side) and taps Details. */
 async function openCard(page: Page, preview: string, tool = 'Bash') {
   const card = cardFor(tool, preview)
   await page.clock.install({ time: new Date('2026-10-28T16:00:00.000Z') })
@@ -36,17 +36,14 @@ async function openCard(page: Page, preview: string, tool = 'Bash') {
     window.history.pushState({}, '', `/card/${c.id}`)
     window.dispatchEvent(new PopStateEvent('popstate'))
   }, card)
+  await expect(page.getByTestId('approval-sheet')).toHaveCount(0) // a push no longer forces the sheet
+  await page.getByTestId('permission-open').click()
   const sheet = page.getByTestId('approval-sheet')
   await expect(sheet).toBeVisible()
   return { card, sheet }
 }
 
 const allow = (sheet: ReturnType<Page['getByTestId']>) => sheet.getByRole('button', { name: /^Allow/ })
-const scrollTo = (page: Page, y: number | 'end') =>
-  page.evaluate((to) => {
-    const el = document.querySelector('[data-testid="approval-scroll"]') as HTMLElement
-    el.scrollTop = to === 'end' ? el.scrollHeight : to
-  }, y)
 const settle = (page: Page) =>
   page
     .evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
@@ -59,6 +56,8 @@ const longCall = Array.from(
 
 test('the sheet owns the screen: fixed to the visual viewport, above the thread and its chrome', async ({ page }) => {
   const { sheet } = await openCard(page, 'rm -rf /srv/x')
+  // for its first frame the dialog layer takes no pointer (it is visible before its layer effect ran): measure once it does
+  await expect.poll(() => sheet.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('auto')
   const m = await sheet.evaluate((el) => {
     const r = el.getBoundingClientRect()
     const v = window.visualViewport
@@ -80,7 +79,7 @@ test('the sheet owns the screen: fixed to the visual viewport, above the thread 
   expect(m.pos).toBe('fixed')
   expect(Math.abs(m.r.width - m.vv.w)).toBeLessThan(2)
   expect(Math.abs(m.r.height - m.vv.h)).toBeLessThan(2)
-  expect(m.corners, 'the sheet is the top layer at the corners and where the now-playing pill sits').toEqual([
+  expect(m.corners, 'the sheet is the top layer at the corners and under the header').toEqual([
     true,
     true,
     true,
@@ -89,29 +88,15 @@ test('the sheet owns the screen: fixed to the visual viewport, above the thread 
   ])
 })
 
-test('a long call (320 steps): Allow stays disabled until the end has been scrolled to, then enables, and stays enabled', async ({
+test('a long call (320 steps): Allow is enabled at once, unread, and the whole call is in the page', async ({
   page,
 }) => {
   const { sheet } = await openCard(page, longCall)
   const scroller = page.getByTestId('approval-scroll')
   const dims = await scroller.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
   expect(dims.sh, 'the call really does need scrolling here').toBeGreaterThan(dims.ch * 1.5)
-  await expect(allow(sheet)).toBeDisabled()
-  await expect(sheet.getByTestId('approval-hint')).toContainText('Scroll to the end')
-  // every position short of the end keeps Allow off
-  for (const f of [0, 0.25, 0.5, 0.75]) {
-    await scrollTo(page, Math.floor((dims.sh - dims.ch) * f))
-    await settle(page)
-    await expect(allow(sheet), `scrolled to ${f * 100}%`).toBeDisabled()
-  }
-  await scrollTo(page, 'end')
-  await settle(page)
   await expect(allow(sheet)).toBeEnabled()
   await expect(sheet.getByTestId('approval-hint')).toHaveCount(0)
-  // once seen it stays enabled while the sheet is open
-  await scrollTo(page, 0)
-  await settle(page)
-  await expect(allow(sheet)).toBeEnabled()
   // the pinned tail is outside the scroll area and shows the end of the call at every position
   await expect(sheet.getByTestId('permission-tail')).toContainText('step 319')
   await expect(sheet.getByTestId('permission-call')).toContainText('echo line 0:')
@@ -119,7 +104,7 @@ test('a long call (320 steps): Allow stays disabled until the end has been scrol
   await expect(sheet.getByRole('button', { name: 'Deny' })).toBeEnabled()
 })
 
-test('a CJK and emoji call is shown as it is; Allow waits for the end, then enables', async ({ page }) => {
+test('a CJK and emoji call is shown as it is, and Allow is enabled', async ({ page }) => {
   const call = `${'漢字のテスト '.repeat(2300)}\u{1F600}\u{1F680} done`
   const { sheet } = await openCard(page, call)
   await expect(sheet.getByTestId('permission-call')).toContainText('漢字のテスト')
@@ -128,15 +113,10 @@ test('a CJK and emoji call is shown as it is; Allow waits for the end, then enab
     .getByTestId('approval-scroll')
     .evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
   expect(dims.sh).toBeGreaterThan(dims.ch)
-  await expect(allow(sheet)).toBeDisabled()
-  await scrollTo(page, 'end')
-  await settle(page)
   await expect(allow(sheet)).toBeEnabled()
 })
 
-test('a call with hidden and bidi characters shows each as a marker, and Allow unlocks at the end', async ({
-  page,
-}) => {
+test('a call with hidden and bidi characters shows each as a marker, and Allow is enabled', async ({ page }) => {
   const call = `echo start ‮​⁦ ${'padding word '.repeat(1300)}; rm -rf ~ ‮ done`
   const { sheet } = await openCard(page, call)
   const text = (await sheet.getByTestId('permission-call').textContent()) ?? ''
@@ -144,9 +124,6 @@ test('a call with hidden and bidi characters shows each as a marker, and Allow u
   expect(text).toContain('[U+200B]')
   expect(text).toContain('[U+2066]')
   expect(text).not.toMatch(/[‮​⁦]/)
-  await expect(allow(sheet)).toBeDisabled()
-  await scrollTo(page, 'end')
-  await settle(page)
   await expect(allow(sheet)).toBeEnabled()
   await expect(sheet.getByTestId('permission-tail')).toContainText('[U+202E] done')
 })
@@ -157,19 +134,10 @@ test('a short call needs no scrolling: Allow is enabled at once', async ({ page 
   await expect(allow(sheet)).toBeEnabled()
 })
 
-test('the now-playing pill, a new-reply banner and the toast viewport do not render over the open sheet (and are not lost)', async ({
+test('a new-reply banner and the toast viewport do not render over the open sheet (and are not lost)', async ({
   page,
 }) => {
   const { sheet, card } = await openCard(page, longCall)
-  // raise the now-playing pill: a clip in the audio dock (the file will not load; the pill shows either way)
-  await page.evaluate(() => {
-    const w = window as unknown as {
-      __talosDock: { open: (item: object, src: string, rest: unknown[], opts: object) => void }
-    }
-    w.__talosDock.open({ key: 'm1', mediaId: 'md_X', title: 'A voice note', threadId: 'general' }, '/x.wav', [], {
-      play: false,
-    })
-  })
   // the thread lists draw an unread count as an element labelled "N unread" (the sheet covers them, the page still renders them)
   const unreadCount = page.locator('[aria-label$=" unread"]')
   await expect(unreadCount).toHaveCount(0)
@@ -198,11 +166,10 @@ test('the now-playing pill, a new-reply banner and the toast viewport do not ren
     })
   }, card.id)
   // the page took the reply in: the unread count rose (the banner's own trigger), so it has had its chance to show the
-  // banner and the pill, and the sheet kept both back
+  // banner, and the sheet kept it back
   await expect(unreadCount.first()).toBeAttached()
   // the count is drawn at sync priority; the banner's own render comes in a later task: let two frames pass first
   await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
-  await expect(page.getByTestId('now-playing')).toHaveCount(0)
   await expect(page.getByTestId('thread-banner')).toHaveCount(0)
   const covered = await page.evaluate(() => {
     const top = (x: number, y: number) =>
@@ -210,29 +177,24 @@ test('the now-playing pill, a new-reply banner and the toast viewport do not ren
     return [top(innerWidth / 2, 56), top(innerWidth / 2, 20), top(innerWidth / 2, innerHeight - 20)]
   })
   expect(covered).toEqual([true, true, true])
-  // closing the sheet gives the screen back: the pill and the banner it held back appear
+  // closing the sheet gives the screen back: the banner it held back appears
   await sheet.getByTestId('approval-close').click()
-  await expect(page.getByTestId('now-playing')).toBeVisible()
   await expect(page.getByTestId('thread-banner')).toBeVisible()
 })
 
-test('a pinch zoom turns Allow off until the page is back to 1x (Deny stays)', async ({ page, browserName }) => {
-  test.skip(
-    browserName !== 'chromium',
-    'WebKit gives Playwright no way to set the page scale; the zoom rule is unit-tested there',
-  )
+test('a pinch zoom does not turn Allow off (Chromium only: WebKit gives no way to set the page scale)', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'WebKit gives Playwright no way to set the page scale')
   const { sheet } = await openCard(page, 'rm -rf /srv/x')
-  await settle(page)
   await expect(allow(sheet)).toBeEnabled()
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 })
   await expect.poll(() => page.evaluate(() => window.visualViewport?.scale ?? 1)).toBeGreaterThan(1.5)
-  await expect(allow(sheet)).toBeDisabled()
-  await expect(sheet.getByTestId('approval-hint')).toContainText('Zoom back out')
-  await expect(sheet.getByRole('button', { name: 'Deny' })).toBeEnabled()
-  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 })
-  await expect.poll(() => page.evaluate(() => window.visualViewport?.scale ?? 1)).toBeLessThan(1.01)
   await expect(allow(sheet)).toBeEnabled()
+  await expect(sheet.getByTestId('approval-hint')).toHaveCount(0)
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 })
 })
 
 test('Allow from the sheet sends a primary resolve with the card hash', async ({ page }) => {
@@ -255,55 +217,23 @@ test('Allow from the sheet sends a primary resolve with the card hash', async ({
   })
 })
 
-test('a call Claude Code cut short: the sheet says what is not shown, above the call, and Allow comes at the end', async ({
+test('a call Claude Code cut short: the sheet says what is not shown, above the call, and Allow is enabled', async ({
   page,
 }) => {
   const { sheet } = await openCard(page, '{"command":"rsync -av ./dist/ server:/srv/app/ && echo done …')
   await expect(sheet.getByTestId('approval-note')).toHaveText(
     'Not all of this call is shown: its end is cut off (…). Allow approves the call as Claude Code holds it.',
   )
-  await scrollTo(page, 'end')
-  await settle(page)
   await expect(allow(sheet)).toBeEnabled()
 })
 
-test('a run of Hangul conjoining jamo (one grapheme cluster, nothing to break): off the side it says so, and Allow still comes at the end', async ({
+test('a run of Hangul conjoining jamo (one grapheme cluster, nothing to break): nothing blocks Allow, and the tail shows the end', async ({
   page,
 }) => {
   const { sheet } = await openCard(page, `echo ${'\u1100'.repeat(300)}SECRETTAIL`)
   await settle(page)
-  const m = await page.evaluate(() => {
-    const sc = document.querySelector('[data-testid="approval-scroll"]') as HTMLElement
-    const call = document.querySelector('[data-testid="approval-sheet"] [data-testid="permission-call"]') as HTMLElement
-    const tail = document.querySelector('[data-testid="permission-tail"]') as HTMLElement
-    const title = document.querySelector(
-      '[data-testid="approval-sheet"] h2, [data-testid="approval-sheet"] [role="dialog"] h2, [data-testid="approval-sheet"] h1',
-    ) as HTMLElement | null
-    const wide = (e: HTMLElement | null) => (e ? e.scrollWidth > e.clientWidth + 1 : false)
-    return {
-      sideways: wide(sc) || wide(tail) || wide(title),
-      scrollW: sc.scrollWidth,
-      clientW: sc.clientWidth,
-      callRight: call.getBoundingClientRect().right,
-      vw: window.innerWidth,
-    }
-  })
-  if (m.sideways) {
-    // part of the call is off the side: a hint says to scroll sideways, and Allow is not taken away (the owner's rule, 2026-11-13)
-    await expect(sheet.getByTestId('approval-hint')).toHaveText(
-      'Part of this call runs off the side of the screen: scroll sideways to see all of it.',
-    )
-    await scrollTo(page, 'end')
-    await settle(page)
-    await expect(allow(sheet)).toBeEnabled()
-  } else {
-    // it wrapped: every character is inside the screen, and Allow comes once the end has been reached
-    expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1)
-    expect(m.callRight).toBeLessThanOrEqual(m.vw + 1)
-    await scrollTo(page, 'end')
-    await settle(page)
-    await expect(allow(sheet)).toBeEnabled()
-    await expect(sheet.getByTestId('permission-tail')).toContainText('SECRETTAIL')
-  }
+  await expect(allow(sheet)).toBeEnabled()
+  await expect(sheet.getByTestId('approval-hint')).toHaveCount(0)
+  await expect(sheet.getByTestId('permission-tail')).toContainText('SECRETTAIL')
   await expect(sheet.getByRole('button', { name: 'Deny' })).toBeEnabled()
 })

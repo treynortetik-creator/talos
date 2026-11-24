@@ -28,6 +28,7 @@ import {
   DIALOG_SENT_UNCONFIRMED_TEXT,
   DIALOG_UNCONFIRMED_TEXT,
   DIALOG_UNVERIFIED_TEXT,
+  DIALOG_WORDING,
   DialogAnswer,
   type DialogAnswerT,
   DialogCardFile,
@@ -76,6 +77,13 @@ const NOT_HANDED_OVER = () =>
 /** Who pressed the dialog's key, as the card says it. */
 const PRESSED_BY = () => say({ mac: 'this Mac', linux: 'this computer' })
 const KEY = 'dlg:'
+/**
+ * After a card runs out, how long the bridge waits for the Mac to offer the same question again (a new dialog id) before it says the
+ * question is waiting at the Mac. The Mac looks every second or so; this is slack for a busy one.
+ */
+export const REOFFER_GRACE_MS = 30_000
+/** A replacement card owed for a card that ended without an answer is only made within this long of it ending (a Mac that is away for longer gets a new id anyway). */
+const REDO_WINDOW_MS = 10 * 60_000
 
 type Phase = 'waiting' | 'answering' | 'done' | 'closed' | 'expired'
 type Rec = {
@@ -97,6 +105,13 @@ type Rec = {
   line?: true
   /** The dialog is Main's own (`supervisor.main_dialog`), answered through Main's answer file; any other is the thread session's. */
   main?: true
+  /** The card ended WITHOUT an answer taking effect (no report from the Mac, nothing pressed, an answer that could not be handed over, or a tap
+   * too old for the card) before its time was up: if this very dialog id is still on the pane, ONE replacement card is owed (`remint`). */
+  redo?: true
+  /** This card is that one replacement: there is never a second. */
+  again?: true
+  /** The dialog was gone or replaced by the time its expiry line was due: no line is owed for it. */
+  noLine?: true
 }
 
 export type DialogPrecheck =
@@ -118,8 +133,13 @@ const dialogWhere = (thread: string): DialogWhere =>
 const answerFile = (main: boolean | undefined): string =>
   main ? WORKER_FILES.mainDialogAnswer : WORKER_FILES.dialogAnswer
 
-/** The dialogs Main publishes as `supervisor.main_dialog`: its development-channels warning, and a tool permission or question on its pane. */
-const MAIN_DIALOG_KINDS: ReadonlySet<DialogKindT> = new Set(['dev_channels', 'tool_permission', 'agent_question'])
+/** The dialogs Main publishes as `supervisor.main_dialog`: its development-channels warning, and a tool permission, question or usage-limit menu on its pane. */
+const MAIN_DIALOG_KINDS: ReadonlySet<DialogKindT> = new Set([
+  'dev_channels',
+  'tool_permission',
+  'agent_question',
+  'usage_limit',
+])
 
 export class DialogCards {
   private relayOk = false
@@ -252,10 +272,20 @@ export class DialogCards {
     for (const [id, rec] of records) {
       if (rec.phase === 'waiting') this.progressWaiting(id, rec, file, fresh)
       else if (rec.phase === 'answering') this.progressAnswering(id, rec, now)
-      else if (now - rec.at > KEEP_MS) ctx.store.kvDelete(KEY + id)
+      else if (rec.redo && now - rec.at <= REDO_WINDOW_MS) this.remint(id, file, fresh)
+      else if (rec.phase === 'expired' && !rec.line && !rec.noLine) {
+        if (now - rec.at >= REOFFER_GRACE_MS) void this.expiryLine(id)
+      } else if (now - rec.at > KEEP_MS) ctx.store.kvDelete(KEY + id)
     }
     if (fresh && file && this.relayOk) this.mintNew(file)
-    this.watch(records.some(([, r]) => r.phase === 'waiting' || r.phase === 'answering'))
+    this.watch(
+      records.some(
+        ([, r]) =>
+          r.phase === 'waiting' ||
+          r.phase === 'answering' ||
+          (r.phase === 'expired' && !r.line && !r.noLine && !r.redo),
+      ),
+    )
   }
 
   private watch(wanted: boolean): void {
@@ -289,7 +319,7 @@ export class DialogCards {
   /**
    * A dialog on a thread's pane in this workers.json, by id: the worker's own, or, on the default thread, Main's (`supervisor.main_dialog`:
    * Main has no entry of its own, and its card goes to the default thread). Looked up side by side, so a worker's dialog on the default
-   * thread never hides Main's. Main publishes only `dev_channels`, `tool_permission` and `agent_question` (the source decides which answer file a
+   * thread never hides Main's. Main publishes only `dev_channels`, `tool_permission`, `agent_question` and `usage_limit` (the source decides which answer file a
    * tap goes to, never the kind: a thread session can ask the same question).
    */
   private liveDialog(file: WorkersFileT | null, thread: string, id: string): Dialog | undefined {
@@ -317,13 +347,39 @@ export class DialogCards {
     if (main && MAIN_DIALOG_KINDS.has(main.kind)) found.push([this.ctx.config.config.default_thread, main, true])
     for (const [thread, d, isMain] of found) {
       if (this.rec(d.id) || !this.ctx.config.thread(thread)) continue
-      this.mint(thread, d, isMain).catch((e) =>
+      this.mint(thread, d, isMain, false).catch((e) =>
         this.ctx.log.warn('dialog card not made', { thread, error: (e as Error).message }),
       )
     }
   }
 
-  private async mint(thread: string, d: Dialog, isMain: boolean): Promise<void> {
+  /**
+   * A card ended without an answer taking effect, but its question may still be on the pane under the same id with time left (an offer that
+   * nobody ends: the Mac was away, or an older Mac that never ends one). ONE replacement card is made for that same dialog id: an answer is still
+   * only taken for the id on the pane now, the old card is over, so two are never live. Nothing is made for a dialog that is gone, one on its
+   * last seconds (the Mac offers it again under a new id and the poll makes that card), a stale file, or a relay without the card kind.
+   */
+  private remint(id: string, file: WorkersFileT | null, fresh: boolean): void {
+    if (!fresh || !file || !this.relayOk) return
+    const owed = this.rec(id)
+    if (!owed?.redo || owed.again) return
+    const { redo: _owed, ...rest } = owed
+    const src = this.liveSource(file, owed.thread, id)
+    if (
+      !src ||
+      Date.parse(src.dialog.expires_at) - this.ctx.clock.now() <= REOFFER_GRACE_MS ||
+      !this.ctx.config.thread(owed.thread)
+    ) {
+      this.save(id, rest)
+      return
+    }
+    this.save(id, rest) // the debt is paid before the card is made: a second look finds nothing owed
+    this.mint(owed.thread, src.dialog, src.main, true).catch((e) =>
+      this.ctx.log.warn('replacement dialog card not made', { thread: owed.thread, error: (e as Error).message }),
+    )
+  }
+
+  private async mint(thread: string, d: Dialog, isMain: boolean, again: boolean): Promise<void> {
     const { ctx } = this
     const now = ctx.clock.now()
     const card = composeDialogCard({
@@ -345,6 +401,7 @@ export class DialogCards {
       phase: 'waiting',
       at: now,
       ...(isMain ? { main: true as const } : {}),
+      ...(again ? { again: true as const } : {}),
     })
     ctx.ledger.create(card, 'bridge')
     try {
@@ -358,6 +415,7 @@ export class DialogCards {
         phase: 'closed',
         at: now,
         ...(isMain ? { main: true as const } : {}),
+        ...(again ? { again: true as const } : {}),
       })
       throw e
     }
@@ -512,7 +570,8 @@ export class DialogCards {
       this.writeFile(d.thread, answerFile(found.main), checked)
     } catch (e) {
       ctx.log.warn('dialog answer not written', { thread: d.thread, error: (e as Error).message })
-      this.save(d.dialog_id, { ...(this.rec(d.dialog_id) ?? found), phase: 'done' })
+      const was = this.rec(d.dialog_id) ?? found
+      this.save(d.dialog_id, { ...was, phase: 'done', ...(was.again ? {} : { redo: true as const }) })
       this.fail(row, NOT_HANDED_OVER())
       return
     }
@@ -639,6 +698,11 @@ export class DialogCards {
     if (!result) {
       text = DIALOG_UNCONFIRMED_TEXT
       ran = 'unknown'
+    } else if (result.outcome === 'partial') {
+      // Escape went and the answer stopped before it was done: said as it is, never as "nothing pressed"
+      const why = (['closed', 'typed', 'cleared'] as const).find((k) => k === result.reason) ?? 'closed'
+      text = DIALOG_WORDING.usageStopped[why]
+      ran = 'unknown'
     } else if (result.outcome === 'nothing_pressed' && result.reason === 'unconfirmed') {
       text = DIALOG_SENT_UNCONFIRMED_TEXT
       ran = 'unknown'
@@ -672,15 +736,19 @@ export class DialogCards {
         result: { ok, text, at, ran },
       }),
     )
-    this.save(id, { ...rec, phase: 'done' })
+    // No report at all leaves the question with no card: one replacement is owed while it is still on the pane. A REPORTED "nothing pressed" does
+    // not: the Mac that said so ends its own offer and makes a new id (a new card by the poll), and an older one keeps the card it had.
+    this.save(id, { ...rec, phase: 'done', ...(result === null && !rec.again ? { redo: true as const } : {}) })
   }
 
   // ---- expiry --------------------------------------------------------------------------------------------------
 
   /**
-   * A dialog card nobody answered in time (CardExpiry calls this after it sent `expired`). If the dialog is still on the pane
-   * the owner gets the thread line the Mac used to post: AT MOST ONE per dialog (the record is marked before the post, and a
-   * post that fails is logged, not retried); the worker is never stopped.
+   * A dialog card nobody answered in time (CardExpiry calls this after it sent `expired`). The thread line the Mac used to post
+   * ("open this thread in Terminals on the Mac") is NOT posted at once: a Mac that offers a question again when its time is up
+   * replaces the dialog's id within moments, and a fresh card follows, so the line would be false. It is posted REOFFER_GRACE_MS
+   * later, and only if that very dialog id is still on the pane (an older Mac never offers again; the id stays). AT MOST ONE per
+   * dialog (the record is marked before the post, and a post that fails is logged, not retried); the worker is never stopped.
    */
   async onCardExpired(row: LedgerRow): Promise<void> {
     const { ctx } = this
@@ -688,10 +756,25 @@ export class DialogCards {
     if (!found) return
     const [id, rec] = found
     if (rec.phase !== 'waiting') return
-    const still = this.liveDialog(this.reader.read(), rec.thread, id) !== undefined
-    this.save(id, { ...rec, phase: 'expired', ...(still ? { line: true as const } : {}) })
+    // gone before its time was up (a tap that waited too long for the Mac): the question may still be on the pane with no card
+    const early = Date.parse(row.expires_at) - ctx.clock.now() > REOFFER_GRACE_MS
+    this.save(id, { ...rec, phase: 'expired', ...(early && !rec.again ? { redo: true as const } : {}) })
     this.writeCardFile(rec.thread, id, rec.card_id, { status: 'expired' })
-    if (!still) return
+    // the line itself is the poll's to post, once REOFFER_GRACE_MS has passed (`tick`): it is in the record, so a bridge restart in between loses nothing
+    this.watch(true)
+  }
+
+  private async expiryLine(id: string): Promise<void> {
+    const { ctx } = this
+    const rec = this.rec(id)
+    if (this.stopped || !rec || rec.phase !== 'expired' || rec.line || rec.noLine) return
+    // the same dialog id still on the pane: nothing offered it again, so the owner has to go to the Mac. Gone or replaced: no line, ever
+    // (a replacement has its own card, and a gone dialog needs nobody)
+    if (this.liveDialog(this.reader.read(), rec.thread, id) === undefined) {
+      this.save(id, { ...rec, noLine: true as const })
+      return
+    }
+    this.save(id, { ...rec, line: true as const })
     try {
       await postSystemNotice(ctx, dialogFallbackLine(rec.kind, dialogWhere(rec.thread)), {
         thread: threadRef(ctx, rec.thread),

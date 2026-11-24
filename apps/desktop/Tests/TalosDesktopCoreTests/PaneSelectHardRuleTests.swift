@@ -41,7 +41,7 @@ struct PaneSelectHardRuleTests {
     let file = try String(contentsOf: Self.sources.appendingPathComponent("TalosSupervisor/SupervisorPanePrompt.swift"), encoding: .utf8)
     // the one place that reads an answer file, and what it does with it: a proof check before any key
     #expect(file.components(separatedBy: "DialogAnswerFile.read(").count - 1 == 1)
-    #expect(file.contains("DialogProofCheck.verify(") && file.contains("case .no(let why, _): return .nothing(why)"))
+    #expect(file.contains("DialogProofCheck.verify(") && file.contains("case .no(let why, _): return (.nothing(why), false)"))
     let verify = try #require(file.range(of: "DialogProofCheck.verify("))
     let press = try #require(file.range(of: "switch pressPane(offer, choice, text: DialogProofCheck.signedText(a)"))
     #expect(verify.lowerBound < press.lowerBound, "the proof is checked before the key")

@@ -2,7 +2,8 @@ import type { MessageT } from '@talos-app/protocol'
 import { useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconPause, IconPlay } from '../../ui/icons.tsx'
-import { audioDock, useDock } from './audioDock.ts'
+import { AudioLine, useAudioLine } from './AudioLines.tsx'
+import { audioPlayer, useAudio } from './audioPlayer.ts'
 import { REVEAL } from './messageRow.ts'
 import { cancelSpeak, speakKey, startSpeak, useSpeak } from './speak.ts'
 
@@ -15,9 +16,10 @@ export function SpeakButton({ m }: { m: MessageT }) {
   const client = useTalosClient()
   const key = speakKey(m.id)
   const view = useSpeak(m.id)
-  const mine = useDock((s) => s.item?.key === key)
-  const playing = useDock((s) => s.item?.key === key && s.playing)
-  const dockFailed = useDock((s) => s.item?.key === key && s.failed)
+  const mine = useAudio((s) => s.item?.key === key)
+  const playing = useAudio((s) => s.item?.key === key && s.playing)
+  const dockFailed = useAudio((s) => s.item?.key === key && s.failed)
+  const audioLine = useAudioLine(key)
   const loading = view.status === 'loading'
   const failed = view.status === 'failed' || dockFailed
   const label = loading
@@ -31,7 +33,7 @@ export function SpeakButton({ m }: { m: MessageT }) {
           : 'Listen'
   const onClick = () => {
     if (loading) return cancelSpeak(m.id)
-    if (mine && !dockFailed) return playing ? audioDock.pause() : audioDock.resume()
+    if (mine && !dockFailed) return playing ? audioPlayer.pause() : audioPlayer.resume()
     startSpeak(client, m)
   }
   const shown = loading ? 'Preparing audio…' : label
@@ -64,6 +66,11 @@ export function SpeakButton({ m }: { m: MessageT }) {
         )}
         <span>{shown}</span>
       </button>
+      {/* A refusal says so in the hint when the first start was refused; every other refusal and a wait for data say it here. */}
+      <AudioLine
+        line={audioLine === 'refused' && view.hint ? null : audioLine}
+        className="m-0 w-full font-sans text-sm text-text-2"
+      />
       {(failed && (view.message || dockFailed)) || view.note || (view.hint && !playing) ? (
         <p
           data-testid="speak-status"

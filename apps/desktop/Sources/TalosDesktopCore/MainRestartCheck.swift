@@ -391,6 +391,9 @@ public enum MainRestartCheck {
     case refused
     /// "Main restarted on request and is waiting at your Mac (...)": the first hold of a restart a request began.
     case stalled
+    /// Row 12: Main's start did not finish, its last conversation can't be resumed, or its start could not be made (`SupervisorNotice`'s
+    /// start lines). Spaced on their own clock (`RecoveryState.startLines`), so a request line in flight never drops one.
+    case startStalled, resumeFailed, couldNotStart
   }
 
   /// At most one line of each kind per this many seconds on the awake clock (the request gap's own clock and number).

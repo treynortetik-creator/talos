@@ -9,7 +9,7 @@ import TalosDesktopCore
 /// never by cutting into the owner: only while it is quiet (no turn, nothing owed or held for it, nothing on the pane asking the owner,
 /// no draft in its box, no key in an attached client lately, the pane silent and readable), so one that is always busy just waits. The
 /// spec is written down BEFORE the try (`update_tried_hash`, kept across the start it gives, published at once), so no spec is tried
-/// twice. It holds while the bridge's fresh status.json does not say the usage governor is `ok` or `off`, and does nothing while
+/// twice. It holds while the bridge's fresh status.json does not say the usage governor is `ok`, `off` or `unknown` (no usage reading yet: a start is allowed then too), and does nothing while
 /// `dedicated.restart_on_update` is off. A dry plan refused, a start that fails or a restart that never comes back leaves the session
 /// alone (never retried). The owner gets one line in the default thread (`UpdateRestartLine`, the protocol's words), and a result after
 /// that line gets a line of its own. None of these restarts count as crashes.
@@ -96,9 +96,10 @@ extension WorkerManager {
   private func runUpdateQueue(_ settings: DedicatedSettings) {
     settleUpdate(settings)
     if updateState.current != nil || updateState.queue.isEmpty { return sayUpdate(settings) }
-    // the governor: only while a live bridge says ok or off (a paused governor must not have sessions started into it)
+    // the governor: only while a live bridge says ok, off or unknown (no usage reading yet: a start is allowed then, so a restart is too);
+    // a paused governor must not have sessions started into it, and a status that is missing or stale ("missing") is no reading at all
     let g = (updateRestart.governor ?? { [weak self] in self?.statusGovernor() })() ?? "missing"
-    guard g == "ok" || g == "off" else {
+    guard g == "ok" || g == "off" || g == "unknown" else {
       if updateState.heldSaid != g { audit("update_restart_held governor=\(g)") }
       updateState.heldSaid = g
       return
@@ -150,6 +151,7 @@ extension WorkerManager {
     let name = updateName(head.id)
     guard let r = rt[head.id], !r.adoptPending, r.entry.state == "live" || r.entry.state == "busy", settings.threads[head.id] != nil else {
       updateState.queue.removeFirst()  // gone, parked or stopped meanwhile: its next start takes the new spec anyway
+      updateState.hookGone.remove(head.id)
       updateState.waitingNow.removeAll { $0 == name }
       return
     }
@@ -191,7 +193,10 @@ extension WorkerManager {
       guard let r = rt[id], r.entry.state == "live" || r.entry.state == "busy", !r.adoptPending, let s = settings.threads[id] else { continue }
       let file = options.talosHome + "/workers/\(id)/settings.json"
       guard let pins = GuardsRefresh.pins(settings: FileManager.default.contents(atPath: file)) else { continue }
-      if FileManager.default.isExecutableFile(atPath: pins.bun) && FileManager.default.fileExists(atPath: pins.cli) { continue }
+      if FileManager.default.isExecutableFile(atPath: pins.bun) && FileManager.default.fileExists(atPath: pins.cli) {
+        updateState.hookGone.remove(id)  // its hook works again: an ordinary restart from here on
+        continue
+      }
       let key = id + "|" + pins.bun + "|" + pins.cli
       if !updateState.hookGoneSaid.contains(key) {
         updateState.hookGoneSaid.insert(key)
@@ -202,9 +207,10 @@ extension WorkerManager {
           Thread.detachNewThread { _ = post(thread, text) }
         }
       }
-      guard currentWorks, updateState.current?.id != id, !updateState.queue.contains(where: { $0.id == id }) else { continue }
+      guard currentWorks, updateState.current?.id != id else { continue }
       guard case .hash(let hash?) = dryPlan(id, s), r.entry.launched?.update_tried_hash != hash else { continue }
-      updateState.hookGone.insert(id)
+      updateState.hookGone.insert(id)  // also when it was queued as an ordinary restart first: it no longer waits for background work
+      if updateState.queue.contains(where: { $0.id == id }) { continue }
       updateState.queue.append((id, hash))
       audit("update_restart_queued thread=\(id) why=guard_hook_gone")
     }
@@ -212,7 +218,8 @@ extension WorkerManager {
 
   /// Quiet as the idle park reads it, and more: live and not in a turn, no park or stop under way, nothing on the pane or in its notes
   /// asking the owner, no pointer owed or held, nothing in its input box, no key in an attached client for `keysQuiet`, and the pane
-  /// silent. Anything that cannot be read is not quiet.
+  /// silent, and no background work under it (a Bash tool command still going): a restart would cut it, except for a gone guard hook.
+  /// Anything that cannot be read, the process table included, is not quiet.
   func updateQuiet(_ id: String) -> Bool {
     guard let r = rt[id], r.entry.state == "live", !r.adoptPending, r.pgid > 0 else { return false }
     if r.entry.turn_started_at != nil || r.pendingPointer || r.enterOwed || r.owed.leftover || r.heldSince != nil { return false }
@@ -220,6 +227,9 @@ extension WorkerManager {
     if r.parkDeadline != nil || r.stopDeadline != nil || r.afterPark != nil { return false }
     let t = now()
     if isBusy(id, now: t) { return false }  // the pane read, and silent on both clocks
+    // work running, or a table that could not be read (WorkerBackground.swift): an ordinary update restart waits. Not one for a gone guard
+    // hook (`hookGone`): every guarded call of that session is denied, so waiting behind work that may never end would leave it stuck.
+    if !updateState.hookGone.contains(id), (backgroundWork(id)?.count ?? 1) > 0 { return false }
     let capture = run(tmux(id).capturePane())
     guard capture.ok else { return false }
     let rows = TmuxCommands.parseCapture(capture.out)

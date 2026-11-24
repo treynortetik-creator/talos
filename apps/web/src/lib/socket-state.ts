@@ -91,8 +91,8 @@ export function createSocketState(c: SocketCtx) {
   store.subscribe(scheduleSave)
 
   // ---- state helpers -------------------------------------------------------------------------------------------
-  const emit = (type: string, frame: Record<string, unknown>) => {
-    for (const l of listeners.get(type) ?? []) (l as (f: unknown) => void)(frame)
+  const emit = (type: string, frame: Record<string, unknown>, meta?: { catchup?: boolean }) => {
+    for (const l of listeners.get(type) ?? []) (l as (f: unknown, m?: { catchup?: boolean }) => void)(frame, meta)
   }
   /** A thread's rows. Own keys only: `constructor` or `__proto__` as a thread id must not find an inherited value. */
   const rowsOf = (messages: Record<string, MessageT[]>, threadId: string): MessageT[] =>

@@ -29,6 +29,8 @@ struct PaneAnswerDriverTests {
         case .number(let n): name = "DIGIT:\(n.value)"
         case .text(let t): name = "TEXT:\(t.text)"
         case .enter: name = "ENTER"
+        case .escape: name = "ESC"
+        case .backspaces(let n): name = "BSPACE:\(n)"
         }
         if outcome == .sent || outcome == .unknown { sent.append(name) }
         if let n = advance[name], screens.count > 1 {
@@ -193,5 +195,110 @@ struct PaneAnswerDriverTests {
     let tool = try Self.rows("bash-permission")
     let p = Pane([tool])
     #expect(driver(p, try screen(tool)).run(option: 0, text: "x") == .changed && p.sent.isEmpty)
+  }
+
+  // MARK: the usage-limit card (row 7)
+
+  static func usage(_ n: String) throws -> [String] { try rows(n, synthetic: true) }
+  static func typed(_ rows: [String], _ text: String) -> [String] { rows.map { r in r.hasPrefix("❯") && r.dropFirst().allSatisfy { $0 == " " || $0 == "\u{00A0}" } ? "❯\u{00A0}" + text : r } }
+
+  @Test func waitForResetIsOneEscapeOnTheMenuItWasMadeFor() throws {
+    let menu = try Self.usage("usage-limit"), idle = try Self.usage("usage-limit-after-esc"), s = try screen(menu)
+    let p = Pane([menu, idle])
+    p.advance = ["ESC": 1]
+    #expect(driver(p, s).run(option: 0, text: nil) == .delivered)
+    #expect(p.sent == ["ESC"], "one Escape: no digit, no arrow, no Enter, no text")
+  }
+
+  @Test func switchModelIsEscapeThenSlashModelThenEnterEachOnItsOwnLook() throws {
+    let menu = try Self.usage("usage-limit"), idle = try Self.usage("usage-limit-after-esc"), s = try screen(menu)
+    let p = Pane([menu, idle, Self.typed(idle, "/model"), idle])
+    p.advance = ["ESC": 1, "TEXT:/model": 1, "ENTER": 1]
+    #expect(driver(p, s).run(option: 1, text: nil) == .delivered)
+    #expect(p.sent == ["ESC", "TEXT:/model", "ENTER"])
+  }
+
+  @Test func aMenuThatChangedPressesNothingAndNoDigitIsEverSent() throws {
+    let menu = try Self.usage("usage-limit"), other = try Self.usage("usage-limit-session"), s = try screen(menu)
+    let p = Pane([other])
+    #expect(driver(p, s).run(option: 0, text: nil) == .changed && p.sent.isEmpty)
+    // an option the card does not have (the credits row's number, a third button, a negative index) has no key
+    for bad in [2, 3, -1] {
+      let q = Pane([menu])
+      #expect(driver(q, s).run(option: bad, text: nil) == .changed && q.sent.isEmpty, "\(bad)")
+    }
+    // and no words travel with a usage-limit answer
+    let r = Pane([menu])
+    #expect(driver(r, s).run(option: 1, text: "rm -rf /") == .changed && r.sent.isEmpty)
+    // a screen with no model has no Switch model button
+    let session = try Self.usage("usage-limit-session"), sSession = try screen(session)
+    let t = Pane([session])
+    #expect(driver(t, sSession).run(option: 1, text: nil) == .changed && t.sent.isEmpty)
+  }
+
+  @Test func someoneTypingStopsItBeforeTheEscape() throws {
+    let menu = try Self.usage("usage-limit"), s = try screen(menu)
+    let p = Pane([menu])
+    p.typing = .typing
+    #expect(driver(p, s).run(option: 0, text: nil) == .blocked(.typing) && p.sent.isEmpty)
+  }
+
+  @Test func anEscapeThatTookNoEffectIsUnknownAndASwitchStopsAfterIt() throws {
+    let menu = try Self.usage("usage-limit"), s = try screen(menu)
+    // the menu is still there after a confirmed Escape: not an answer that stood
+    let stuck = Pane([menu])
+    #expect(driver(stuck, s).run(option: 0, text: nil) == .unknown && stuck.sent == ["ESC"])
+    // a Switch model whose Escape did not take sends nothing more, and says so as unconfirmed (the menu may not be closed)
+    let sw = Pane([menu])
+    #expect(driver(sw, s).run(option: 1, text: nil) == .unknown && sw.sent == ["ESC"])
+    // an Escape whose delivery is unknown: no second key
+    let slow = Pane([menu, try Self.usage("usage-limit-after-esc")])
+    slow.outcome = .unknown
+    #expect(driver(slow, s).run(option: 1, text: nil) == .unknown && slow.sent == ["ESC"])
+  }
+
+  @Test func theTypingAndTheEnterAreRefusedWhenThePromptAfterEscapeIsNotThatLimits() throws {
+    let menu = try Self.usage("usage-limit"), s = try screen(menu)
+    // after Escape the pane shows another limit's headline: /model is not typed
+    let otherIdle = try Self.usage("usage-limit-after-esc").map { $0.replacingOccurrences(of: "Fable", with: "Opus") }
+    let p = Pane([menu, otherIdle])
+    p.advance = ["ESC": 1]
+    #expect(driver(p, s).run(option: 1, text: nil) == .usageStopped(.closed) && p.sent == ["ESC"])
+    // the words never reached the box: no Enter
+    let idle = try Self.usage("usage-limit-after-esc")
+    let q = Pane([menu, idle])
+    q.advance = ["ESC": 1]
+    #expect(driver(q, s).run(option: 1, text: nil) == .usageStopped(.closed) && q.sent == ["ESC", "TEXT:/model"])
+  }
+
+  /// R1-2: the Enter was refused (the cursor of Claude's list is on /memory), `/model` is in the box: guarded Backspaces take it out, and it is said as it is.
+  @Test func anEnterThatIsRefusedIsFollowedByBackspacesAndSaidAsClosedAndCleared() throws {
+    let menu = try Self.usage("usage-limit"), idle = try Self.usage("usage-limit-after-esc"), s = try screen(menu)
+    let memory = ["  ❯ /memory       Edit memory files", "    /model        Set the AI model"]
+    func withList(_ r: [String]) -> [String] { Array(r[...r.lastIndex(where: { $0.hasPrefix("────") })!]) + memory }
+    let typedList = withList(Self.typed(idle, "/model"))
+    let p = Pane([menu, idle, typedList, idle])
+    p.advance = ["ESC": 1, "TEXT:/model": 1, "BSPACE:6": 1]
+    #expect(driver(p, s).run(option: 1, text: nil) == .usageStopped(.cleared))
+    #expect(p.sent == ["ESC", "TEXT:/model", "BSPACE:6"], "no Enter, and the Backspaces once: \(p.sent)")
+    // the Backspaces went and the words are still there
+    let stuck = Pane([menu, idle, typedList])
+    stuck.advance = ["ESC": 1, "TEXT:/model": 1]
+    #expect(driver(stuck, s).run(option: 1, text: nil) == .usageStopped(.typed))
+    #expect(stuck.sent == ["ESC", "TEXT:/model", "BSPACE:6"])
+    // someone typing in the pane after the words went in: no Enter and no Backspace, and it says /model is still there
+    let busy = Pane([menu, idle, Self.typed(idle, "/model")])
+    busy.advance = ["ESC": 1, "TEXT:/model": 1]
+    var d = driver(busy, s)
+    final class Calls: @unchecked Sendable { var n = 0 }
+    let c = Calls()
+    d.typing = { c.n += 1; return c.n >= 4 ? .typing : nil }
+    #expect(d.run(option: 1, text: nil) == .usageStopped(.typed))
+    #expect(busy.sent == ["ESC", "TEXT:/model"], "\(busy.sent)")
+    // the box holds something else by then (the owner typed): the guard refuses the Backspaces, so nothing of theirs is deleted
+    let theirs = Pane([menu, idle, withList(Self.typed(idle, "/model and my own words"))])
+    theirs.advance = ["ESC": 1, "TEXT:/model": 1]
+    #expect(driver(theirs, s).run(option: 1, text: nil) == .usageStopped(.closed))
+    #expect(theirs.sent == ["ESC", "TEXT:/model"], "no Enter and no Backspace on words that are not ours: \(theirs.sent)")
   }
 }

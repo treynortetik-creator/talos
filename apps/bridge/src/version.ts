@@ -3,17 +3,25 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json' with { type: 'json' }
 import { say } from './owner-words.ts'
+import { releaseCheckout } from './source-stamp.ts'
+import { updaterGitArgv, updaterGitEnv } from './updater-git.ts'
 
 export const MCP_SERVER_NAME = 'talos-app'
 export const CHANNEL_CAPABILITY = 'claude/channel'
 export const BRIDGE_CLIENT_NAME = 'talos-app-bridge'
 
-/** Runs a command, returns its trimmed stdout, or undefined on any failure. Injectable for tests. */
-export type VersionRun = (cmd: string, args: string[], cwd: string) => string | undefined
+/** Runs a command (in the environment it is given, when it is given one), returns its trimmed stdout, or undefined on any failure. Injectable for tests. */
+export type VersionRun = (cmd: string, args: string[], cwd: string, env?: Record<string, string>) => string | undefined
 
-const realRun: VersionRun = (cmd, args, cwd) => {
+const realRun: VersionRun = (cmd, args, cwd, env) => {
   try {
-    const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 })
+    const r = spawnSync(cmd, args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      ...(env ? { env } : {}),
+    })
     if (r.status !== 0) return undefined
     return r.stdout.trim() || undefined
   } catch {
@@ -39,13 +47,26 @@ export function resolveVersion(
 ): ResolvedVersion {
   const run = opts.run ?? realRun
   const exists = opts.exists ?? existsSync
-  const top = run('git', ['rev-parse', '--show-toplevel'], repoDir)
-  const ours = top !== undefined && exists(join(top, 'apps', 'bridge', 'src', 'version.ts'))
-  const commit = ours ? run('git', ['rev-parse', '--short=7', 'HEAD'], repoDir) : undefined
   const fromEnv = (opts.env ?? process.env).APP_VERSION?.trim()
+  // A checkout set up from a release's source tarball (no .git): its stamp says the release and the commit, and git is not run
+  // at all (on a Mac without the developer tools it is Apple's stub, which opens an install dialog).
+  const stamp = releaseCheckout(repoDir)
+  if (stamp) return { version: fromEnv || stamp.version, commit: stamp.gitSha.slice(0, 7) }
+  // hardened git (updater-git.ts): the checkout may be an agent's to write to, and this runs at every start
+  const git = (...a: string[]) => run('git', updaterGitArgv(repoDir, ...a).slice(1), repoDir, updaterGitEnv())
+  // (no plain-clone check here, unlike update and rollback: this only reads a version, and a developer's worktree, whose .git is a
+  // file, must still have one. The hardened command and environment still apply.)
+  const top = git('rev-parse', '--show-toplevel')
+  const ours = top !== undefined && exists(join(top, 'apps', 'bridge', 'src', 'version.ts'))
+  const commit = ours ? git('rev-parse', '--short=7', 'HEAD') : undefined
   if (fromEnv) return { version: fromEnv, commit }
+  // --dirty reads files through the checkout's own filters (.git/info/attributes with a filter.*.clean in its config), which would run
+  // a program the checkout names: with any filter.* or include key in its own config the version is never marked dirty
+  // (without --local: a key in .git/config.worktree is seen too; global and system config are /dev/null in this environment)
+  const keys = ours ? (git('config', '--no-includes', '--name-only', '--list') ?? '') : ''
+  const steered = keys.split('\n').some((k) => /^(filter\.|include|extensions\.worktreeconfig)/i.test(k.trim()))
   const described = ours
-    ? run('git', ['describe', '--tags', '--exclude=archive/*', '--always', '--dirty'], repoDir)
+    ? git('describe', '--tags', '--exclude=archive/*', '--always', ...(steered ? [] : ['--dirty']))
     : undefined
   return { version: described ?? pkg.version, commit }
 }

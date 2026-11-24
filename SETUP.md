@@ -130,7 +130,7 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
 - **`--no-tmux`**: install the Mac app without tmux. The agent then stops when the app quits, and thread sessions are off.
 - **`--with-vault DIR`** makes a private vault. It must be outside this clone (the installer refuses a path in it) and outside any
   git repository whose remote is GitHub. A vault this installer made earlier is recognised on a re-run, so the same flags can be
-  repeated with `--with-chronos` added.
+  repeated with the new flag added.
 - Another folder: `--agent-dir <path>`. Keep it out of `~/Desktop`, `~/Documents`, `~/Downloads` and cloud-synced folders. The
   agent folder name `~/talos-agent` is used everywhere in this guide.
 - **Kit options pass straight through to the kit installer** (`kit/install.sh`): `--with-vault DIR` (a private vault),
@@ -140,7 +140,8 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
   model (about 571 MB) comes with the search by default too, except on a computer with under 3 GiB of memory; `--no-reranker`
   skips it. An agent
   that already exists is not changed. See [`kit/README.md`](kit/README.md), "Optional extras".
-- The scheduler (Chronos) is off unless you pass `--with-chronos`. You can add it later; see step 9.1.
+- The scheduler (Chronos) comes with Talos: on a Mac the installer sets it up from `apps/chronos` in this clone, with its
+  Claude jobs off until you enable them (step 9.1).
 - **If you already have the relay address** (a re-install, or step 4 is done), add `--relay-url https://relay.example.com` to
   the command to run the bridge step now. Otherwise leave it out: step 5 does it, and the installer prints the exact command.
 
@@ -267,23 +268,27 @@ Each is independent and off until you switch it on. Do them in any order.
 
 ### 9.1 Scheduled jobs (Chronos)
 
-Needs macOS and the agent from step 3. Chronos is public on GitHub; the installer fetches a pinned commit of it. One sequence,
-whether or not the agent already exists:
+Needs macOS and the agent from step 3. Chronos lives in this repository (`apps/chronos`), and step 3's install already set it
+up: nothing is fetched, and there is no flag. An agent made before Chronos came with Talos gets it the next time you run
+`./install.sh`. A Chronos you set up yourself (a config in `~/.config/chronos` that Talos did not make) or run from a folder of your
+own is never taken over: the installer leaves it alone, adds no jobs or hook to it, and tells you that `./install.sh --reinstall-chronos`
+moves it to this clone's copy (its config and jobs are kept). To have job reports arrive in the app, and to choose your jobs:
 
 ```bash
-./install.sh --yes --no-app --with-chronos --notify talos
+./install.sh --yes --no-app --notify talos
 python3 ~/talos-agent/scripts/talos-jobs.py list
 python3 ~/talos-agent/scripts/talos-jobs.py enable talos-morning-brief --time 07:30 --days weekdays
 ```
 
-1. The first command adds Chronos to the existing agent (it runs `kit/install.sh --add-to-existing`: no copy, your `CLAUDE.md`
-   and memory untouched), sets Chronos's workspace to the agent folder, registers the Talos jobs **disabled**, registers the
-   session hook, and sets `notify` so job reports arrive in the app. `--notify talos` needs `talos-app` on your PATH, so do step 5
-   first. On a brand new machine the same flags work together with step 3. Add `--no-load` to write Chronos's launchd files
-   without starting them.
+1. The install sets Chronos's workspace to the agent folder, registers the Talos jobs with every Claude job **disabled** (only
+   the weekly snapshot and the weekly wiki check, plain commands with no Claude usage, run by themselves), registers the session
+   hook, and with `--notify talos` sets `notify` so job reports arrive in the app. On an agent that exists it runs
+   `kit/install.sh --add-to-existing`: no copy, your `CLAUDE.md` and memory untouched. `--notify talos` needs `talos-app` on your
+   PATH, so do step 5 first. Add `--no-load` to write Chronos's launchd files without starting them. An older install's clone in
+   `~/.local/share/talos/chronos` is no longer used; the installer says so, and you may remove it.
 2. Read the list, then enable only the jobs you want. Shipped jobs are tool-restricted by default.
 3. Restart the agent (step 6): the bridge looks for the scheduler at start.
-4. [YOU] Run `talos-app schedules adopt` in a terminal and answer the y/N question for each job. It is what lets the Schedules tab
+4. [YOU] Run `talos-app schedules adopt` and answer the y/N question for each job (`--yes` approves them all as they are). It is what lets the Schedules tab
    manage jobs, and it asks before it switches anything on.
 
 **CHECKPOINT 9.1:** the app's Schedules tab lists the jobs, Settings, Health shows the scheduler as healthy, and

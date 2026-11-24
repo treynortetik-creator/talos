@@ -118,6 +118,7 @@ describe('every settings row has a risk', () => {
       'always_allow',
       'dev.thread_fence',
       'dev.note_lookup',
+      'os_sandbox',
       'settings_lock',
       'dedicated',
       'theme',
@@ -130,6 +131,7 @@ describe('every settings row has a risk', () => {
       'notifications.show_thread_names',
       'always_allow',
       'dev.thread_fence',
+      'os_sandbox',
       'dedicated',
       'theme',
     ])

@@ -225,7 +225,7 @@ struct DevChannelsPopupTests {
     #expect(r.phonePosts == ["post general Main is waiting at your Mac: answer the Talos popup there."], "\(r.phonePosts)")
   }
 
-  // MARK: the offer outlives its 15 minutes while the warning stays on screen
+  // MARK: the offer outlives its day while the warning stays on screen
 
   private func quietTimings() -> Supervisor.Timings {
     var t = Supervisor.Timings()
@@ -252,7 +252,7 @@ struct DevChannelsPopupTests {
     try phoneRestart(r)
     #expect(r.wait(30) { r.sup.tickNow(); return r.starts.count == 2 && r.phonePosts.count == 1 }, "posts \(r.posts) audit \(r.audit)")
     let first = try #require(r.waitForPopup(), "audit: \(r.audit)")
-    r.clock.advance(901)
+    r.clock.advance(Supervisor.devCardLifetime + 1)
     #expect(r.mainPopup == nil, "expired: no popup before the next look")
     let again = try #require(r.waitForPopup(), "a fresh offer while the warning is still up: audit \(r.audit)")
     #expect(again.dialog.id != first.dialog.id)

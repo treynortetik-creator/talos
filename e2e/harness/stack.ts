@@ -15,10 +15,12 @@ import { pathToFileURL } from 'node:url'
 import { type AgentDriverOptions, FakeClaude } from '@talos-app/testkit'
 import { clockEnv, worldOffsetMs } from './clock.ts'
 import { BRIDGE_CLI, BRIDGE_DIR, BRIDGE_SERVER, RELAY_DIST, STUBS_DIR, WEB_DIST } from './paths.ts'
+import { reservePort } from './port.ts'
 
 type RelayModule = typeof import('../../apps/relay/src/index.ts')
 export type RunningRelay = Awaited<ReturnType<RelayModule['startRelay']>>
 
+/** A port free right now, and free for anyone: for a CHILD process's relay only. In-process, hold it with reservePort (port.ts). */
 export async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const s = createServer()
@@ -136,7 +138,10 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
   const dataDir = join(root, 'relay-data')
   const home = join(root, 'bridge-home')
   mkdirSync(dataDir, { recursive: true })
-  const port = await freePort()
+  // Held from here until the relay listens: `talos-app init` below takes about a second, and a port freed at once could be
+  // handed to another worker meanwhile (port.ts).
+  const reserved = await reservePort()
+  const port = reserved.port
   const origin = `http://localhost:${port}`
 
   // Mac side, step 1: `talos-app init` creates the key, config and bridge.env, and prints BRIDGE_PUBKEY.
@@ -146,7 +151,10 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
     encoding: 'utf8',
   })
   const pubkey = /BRIDGE_PUBKEY=([A-Za-z0-9_-]{43})/.exec(init.stdout)?.[1]
-  if (init.status !== 0 || !pubkey) throw new Error(`talos-app init failed: ${init.stdout} ${init.stderr}`)
+  if (init.status !== 0 || !pubkey) {
+    await reserved.release()
+    throw new Error(`talos-app init failed: ${init.stdout} ${init.stderr}`)
+  }
 
   // Relay: the built bundle, with a clock the tests can skew and a log recorder.
   const relayLog: string[] = []
@@ -200,6 +208,7 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
   })
   const boot = () => mod.startRelay({ env, port, host: '127.0.0.1', webDir: WEB_DIST, clock, log: rec('info', {}) })
   // `let`: stopRelay/startRelay swap it. Everything below reads the variable at call time, never a captured copy.
+  await reserved.release()
   let relay = await boot()
   let relayUp = true
   const bridgeOnline = (): boolean => relayUp && relay.services.bus.bridgeOnline()

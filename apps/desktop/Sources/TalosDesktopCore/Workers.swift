@@ -91,6 +91,36 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     }
   }
 
+  /// Why a pointer the session is owed is held back right now (`pointer_hold` in the protocol's WorkerEntry, `WorkerPointerHold`):
+  /// `reason` is one of `PointerHold.reasons` and `since` (ISO time) is when this hold began, fixed while the same reason goes on. A
+  /// reason this build does not know is kept as it is (a newer peer's), never dropped; a hold that is not a reason and a time is none,
+  /// for that entry alone.
+  public struct PointerHold: Codable, Equatable, Sendable {
+    public var reason: String
+    public var since: String
+    /// Highest first: a line typed and never seen, an owner's draft, a pane scrolled back, a key the typing guard refused.
+    public static let reasons = ["typed_unseen", "draft", "scrolled", "refused"]
+    public static let reasonUnits = 40
+    /// The one reason that is told when several hold: `reasons` in that order. nil when none does.
+    public static func pick(unseen: Bool, draft: Bool, scrolled: Bool, refused: Bool) -> String? {
+      unseen ? reasons[0] : draft ? reasons[1] : scrolled ? reasons[2] : refused ? reasons[3] : nil
+    }
+    public init(reason: String, since: String) {
+      self.reason = TerminalSessions.clamp(reason, units: Self.reasonUnits)
+      self.since = since
+    }
+    enum CodingKeys: String, CodingKey { case reason, since }
+    public init(from d: Decoder) throws {
+      let c = try d.container(keyedBy: CodingKeys.self)
+      let r = try c.decode(String.self, forKey: .reason)
+      let s = try c.decode(String.self, forKey: .since)
+      guard !r.isEmpty, ISOTime.parse(s) != nil else {
+        throw DecodingError.dataCorruptedError(forKey: .since, in: c, debugDescription: "not a hold")
+      }
+      self.init(reason: r, since: s)
+    }
+  }
+
   /// What a session waits on the owner for (`needs_you` in the protocol's WorkerEntry): a dialog's or prompt's name, clipped to
   /// `kindUnits`, and since when (ISO time). Main's own is in `main-restart-check.json`, in the same shape.
   /// `resets_at` (ISO time): the usage-limit screen's reset, the next such moment after it was read (`UsageLimitScreen.resetsAt`);
@@ -223,6 +253,9 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     public var stopped_why: String?
     /// When the running turn began (a pointer typed into it, ISO time); cleared when it ends, when `last_turn_at` takes the end.
     public var turn_started_at: String?
+    /// Why the pointer it is owed is held back (`PointerHold`). Absent when nothing is held, in a file an older build wrote, and when
+    /// what is there can't be read.
+    public var pointer_hold: PointerHold?
 
     /// Whether the conversation `session_id` has had a turn (a message typed into it). One that has, and whose file is not found,
     /// is lost, not unsaved: it is resumed (and fails as `resume_missing`), never quietly started over under the same id.
@@ -235,7 +268,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
       case state, session_id, previous_ids, tmux, pane_pid, cwd, model, started_at, last_turn_at, parked_at, restarts, error
       case pointer_owed_until, enter_owed, enter_uncertain, last_active_at, dialog, launched, turn_session, stopping_since
-      case needs_you, stopped_why, turn_started_at
+      case needs_you, stopped_why, turn_started_at, pointer_hold
     }
 
     /// The id moves to `previous_ids` (last 5) and the next start makes a new one: [Start fresh], and a conversation file that
@@ -272,6 +305,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       needs_you = nil
       stopped_why = nil
       turn_started_at = nil
+      pointer_hold = nil
     }
 
     public init(from d: Decoder) throws {
@@ -303,6 +337,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       needs_you = ((try? c.decodeIfPresent(NeedsYou.self, forKey: .needs_you)) ?? nil).flatMap { $0.isValid ? $0 : nil }
       stopped_why = ((try? c.decodeIfPresent(String.self, forKey: .stopped_why)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
       turn_started_at = ((try? c.decodeIfPresent(String.self, forKey: .turn_started_at)) ?? nil).flatMap { ISOTime.parse($0) == nil ? nil : $0 }
+      pointer_hold = (try? c.decodeIfPresent(PointerHold.self, forKey: .pointer_hold)) ?? nil  // an unreadable hold is none, never an unreadable entry
     }
 
     /// Explicit nulls, like the protocol's schema writes them.
@@ -331,6 +366,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       try c.encodeIfPresent(needs_you, forKey: .needs_you)
       try c.encodeIfPresent(stopped_why, forKey: .stopped_why)
       try c.encodeIfPresent(turn_started_at, forKey: .turn_started_at)
+      try c.encodeIfPresent(pointer_hold, forKey: .pointer_hold)
     }
   }
 
@@ -603,6 +639,9 @@ public enum WorkerPolicy {
     case parkThenStart(String)
     /// Every slot is busy: hold the wake.
     case hold
+    /// Every slot is taken by a quiet session that still has background work: stop none of them, start this one over the limit (and
+    /// say the computer is busy). The count comes back down in `enforceCap` once that work has ended.
+    case startOverLimit
   }
 
   public struct Live: Equatable, Sendable {
@@ -611,7 +650,7 @@ public enum WorkerPolicy {
     /// Seconds since 1970 of the last pointer, change on the screen above the input box, or key from an attached client.
     public var lastActive: Double
     /// Background work runs under it (a Bash tool command still going, or a table that could not be read): never the cap's choice
-    /// while a quiet one without any is there (`victims`).
+    /// (`victims`).
     public var background: Bool
     public init(threadId: String, busy: Bool, lastActive: Double, background: Bool = false) {
       self.threadId = threadId
@@ -621,19 +660,25 @@ public enum WorkerPolicy {
     }
   }
 
-  /// The cap's choices, in order: the quiet ones with no background work, longest idle first; only when every quiet one has some,
-  /// those, longest idle first (a park then cuts that work, and its thread is told).
+  /// The cap's choices, in order: the quiet ones with no background work, longest idle first. One with background work (or a process
+  /// table that could not be read) is never a choice: a park would cut that work.
   public static func victims(_ live: [Live]) -> [Live] {
-    let quiet = live.filter { !$0.busy }.sorted { ($0.lastActive, $0.threadId) < ($1.lastActive, $1.threadId) }
-    let clean = quiet.filter { !$0.background }
-    return clean.isEmpty ? quiet : clean
+    live.filter { !$0.busy && !$0.background }.sorted { ($0.lastActive, $0.threadId) < ($1.lastActive, $1.threadId) }
   }
 
-  /// Room for one more worker? Parks the longest-idle non-busy one when full (OPTION-C 2.6), one with no background work first.
+  /// How many holders are over the limit and may be parked: the count over `maxLive`, not counting the quiet ones whose background
+  /// work (or an unreadable process table) forced the overflow, which no park may touch. Those do not take a slot from the rest: a
+  /// session started over the limit, or a clean one, is not parked while that work runs; when it ends, the longest idle goes.
+  public static func capExcess(_ live: [Live], maxLive: Int) -> Int {
+    live.count - maxLive - live.filter { !$0.busy && $0.background }.count
+  }
+
+  /// Room for one more worker? Parks the longest-idle non-busy one with no background work when full (OPTION-C 2.6). When the only
+  /// quiet ones have background work it starts over the limit; when every slot is busy it holds.
   public static func planStart(live: [Live], maxLive: Int) -> StartPlan {
     if live.count < maxLive { return .start }
     if let victim = victims(live).first { return .parkThenStart(victim.threadId) }
-    return .hold
+    return live.contains { !$0.busy } ? .startOverLimit : .hold
   }
 
   /// A crash counts toward the loop cap; 5 in 15 min = `failed: crash_loop` (OPTION-C 2.5).
@@ -649,10 +694,11 @@ public enum PointerTyper {
   public static let text = "Talos: new message in this thread. Call read_inbound."
   public static let quietSeconds: Double = 10
   /// How long the hub waits for a `read_inbound` claim before it gives the message to main (the protocol's CLAIM_DEADLINE_MS and
-  /// CLAIM_DEADLINE_COLD_MS, in seconds; `CLAIM_DEADLINE_COLD_MS` when the wake had to start the worker). A test reads the protocol file.
-  public static let claimDeadline: Double = 90
-  public static let claimDeadlineCold: Double = 120
-  /// The longest any message waits for its claim: a hand-off from main to a lead (the bridge's `HANDOFF_CLAIM_MS`), which has no 90/120 s
+  /// CLAIM_DEADLINE_COLD_MS, in seconds): 10 minutes for a session that is live or busy, 3 minutes (`CLAIM_DEADLINE_COLD_MS`) when the
+  /// wake had to start the worker. A test reads the protocol file.
+  public static let claimDeadline: Double = 600
+  public static let claimDeadlineCold: Double = 180
+  /// The longest any message waits for its claim: a hand-off from main to a lead (the bridge's `HANDOFF_CLAIM_MS`), which has no 10/3 min
   /// deadline. A wake older than this names only messages the hub has given back to main.
   public static let longestClaim: Double = 900
 

@@ -4,7 +4,7 @@ import { newId } from '@talos-app/protocol'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AudioPlayer } from '../src/features/threads/Attachments.tsx'
-import { __resetDockForTests, dockElement } from '../src/features/threads/audioDock.ts'
+import { __resetAudioForTests, audioElement } from '../src/features/threads/audioPlayer.ts'
 import { ClientProvider } from '../src/lib/client.ts'
 import { createFakeClient } from '../src/lib/fakeClient.ts'
 
@@ -21,12 +21,12 @@ const att = {
 
 afterEach(() => {
   cleanup()
-  __resetDockForTests()
+  __resetAudioForTests()
   vi.restoreAllMocks()
 })
 
-// Playback lives in the app-level dock (D37), not in the row: the row is a view of it, so the test starts the clip and then
-// drives the dock's element, as the browser would.
+// Playback lives in the shared player (D37), not in the row: the row is a view of it, so the test starts the clip and then
+// drives the player's element, as the browser would.
 function renderPlayer() {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
     this.dispatchEvent(new Event('play'))
@@ -43,7 +43,7 @@ function renderPlayer() {
   act(() => {
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
   })
-  return { ...r, audio: dockElement() }
+  return { ...r, audio: audioElement() }
 }
 
 describe('PR8 voice-note player', () => {

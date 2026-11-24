@@ -196,7 +196,7 @@ final class StatusCoordinator: ObservableObject {
     lastPhase = st.phase
     let next = HealthModel.summarize(
       .init(
-        session: session, sessionNeedsYou: st.needsYou != nil, badge: WebController.shared.needsYou, bridge: bridge,
+        session: session, sessionNeedsYou: st.needsYou != nil || st.agentUnreachable, badge: WebController.shared.needsYou, bridge: bridge,
         relayReachable: relayOK, relayConfigured: WebController.shared.hasRelay, host: st.host == .tmux ? "tmux" : "owned pty"))
     setIfChanged(\.summary, to: next)  // @Published fires on every set: the menu bar scene rebuilds only on a real change
     companionInputs = Self.companionInputs(

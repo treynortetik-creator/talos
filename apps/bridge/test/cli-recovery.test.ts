@@ -6,6 +6,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -18,6 +19,7 @@ import { renderUnicodeCompact } from 'uqr'
 import { type CliDeps, runCli } from '../src/cli.ts'
 import { formatLogLine } from '../src/cli-main.ts'
 import { paths } from '../src/config.ts'
+import { mcpEntry } from '../src/mcp-config.ts'
 import { redact } from '../src/redact.ts'
 import { STATUS_KEYS } from '../src/status-file.ts'
 import { type Harness, startHarness, tempHome, waitFor, writeKit } from './helpers.ts'
@@ -262,6 +264,37 @@ describe('D54 talos-app start', () => {
     rmSync(settings)
     const none = (await run([])).cmd
     expect(none.slice(1, 3)).toEqual(['--settings', '{"deniedMcpServers":[{"serverName":"computer-use"}]}'])
+  })
+
+  test('with the extra lock on, a link made after the first check and before the spawn refuses the start; nothing is spawned', async () => {
+    const dir = agent()
+    const home = tempHome()
+    // the entry as Talos writes it now (the one project MCP server the lock allows, by what Talos recorded about its bridge)
+    writeFileSync(
+      join(dir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { 'talos-app': mcpEntry(join(import.meta.dir, '..'), home, dir) } }),
+    )
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ os_sandbox: true }))
+    writeFileSync(join(home, 'devices.json'), '{}')
+    const run = async (between?: () => void) => {
+      const c = cliIO()
+      let spawned = false
+      const code = await runCli(['start', '--agent-dir', dir], c.io, envOf(home), {
+        which: () => '/opt/bin/claude',
+        spawn: async () => {
+          spawned = true
+          return 0
+        },
+        ...(between ? { beforeSandboxRecheck: between } : {}),
+      })
+      return { code, spawned, err: c.err.join('\n') }
+    }
+    const clear = await run()
+    expect(clear).toMatchObject({ code: 0, spawned: true })
+    const late = await run(() => linkSync(join(home, 'devices.json'), join(tempHome(), 'extra')))
+    expect(late.spawned).toBe(false)
+    expect(late.code).toBe(1)
+    expect(late.err).toContain('has another name')
   })
 
   test('a real child process gets the env and the cwd (a fake claude on PATH)', async () => {

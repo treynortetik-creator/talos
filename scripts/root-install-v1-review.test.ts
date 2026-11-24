@@ -402,7 +402,13 @@ describe("R2-3: adopt's own refusals are checked before anything is written, and
       expect(r.code, r.out).toBe(0)
       const servers = JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf8')).mcpServers
       expect(Object.keys(servers).sort()).toEqual(['my-own-server', 'talos-app'])
-      expect(servers['talos-app'].args).toContain(join(REPO, 'apps', 'bridge'))
+      // the entry form of the OS sandbox: bun with both folder-loading flags off, then THIS clone's bridge script (no other clone's path)
+      const bridge = join(REPO, 'apps', 'bridge')
+      expect(servers['talos-app'].args).toEqual([
+        '--no-env-file',
+        `--config=${join(bridge, 'bunfig.toml')}`,
+        join(bridge, 'src', 'server.ts'),
+      ])
     },
     180_000,
   )

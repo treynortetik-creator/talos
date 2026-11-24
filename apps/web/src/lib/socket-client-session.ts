@@ -3,6 +3,7 @@
 import { isArchivedVoice } from './archivedVoice.ts'
 import { type ClientState, NoAnswerError, TalosClientError } from './client.ts'
 import { deleteDeviceKey, loadDeviceKey } from './deviceKey.ts'
+import { releaseAllAcks } from './reloadHold.ts'
 import { ACTIVITY_EVENTS, SNAPSHOT } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import { pickSnapshot } from './socket-state.ts'
@@ -125,6 +126,7 @@ export function createClientSession(
       if (c.flushRetryTimer) clearTimeout(c.flushRetryTimer)
       c.flushRetryTimer = null
       writtenOn.clear()
+      releaseAllAcks()
       // Ends with the session: a read mark or an undo note from before a sign-out is not carried into the next one.
       c.readQueue.clear()
       c.unreadSeqs.clear()

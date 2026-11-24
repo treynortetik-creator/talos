@@ -1,10 +1,13 @@
 // The live permission card (docs/CLAUDE-CODE.md C3.2, C3.9). Claude Code asked to run a tool; the bridge turned the request into
-// this card. The rule: an approval that can be seen in full can be approved from the phone, so Allow lives in a FULL-SCREEN
-// APPROVAL SHEET that owns the screen and shows the whole call, and it unlocks once the end of the call has been scrolled to.
-// In the thread the card is a compact summary with a tap target that opens the sheet (a push or /card/:id opens it at once).
-// Allow exists only when the card is exactly what the bridge composed and nothing cuts or hides a part of the call
-// (permissionCardAllowsPrimary, the same function the bridge re-checks). Hidden and direction-changing characters are shown as
-// visible markers. Deny is always there. Everything is plain text. There is no Edit and no revise.
+// this card. One tap (owner, 2026-11-21: "If I click Approve, it's approved"): the card in the thread shows what Claude wants in
+// one plain line, with Deny and Allow on its face. "Details" opens a full-screen sheet with the whole call for anyone who wants
+// to read it; Allow there is enabled at once. Nothing is gated on scrolling or zoom, and a push or /card/:id only scrolls to the
+// card and arms it. Allow exists only when the card is exactly what the bridge composed and nothing cuts or hides a part of the
+// call (permissionCardAllowsPrimary, the same function the bridge re-checks). Hidden and direction-changing characters are shown
+// as visible markers. Deny is always there. What Claude wants to run is ALWAYS on the card's face (the start of the call and its
+// "Ends with:" line), never inside a disclosure: the explanation is an extra sentence, never a stand-in for the call, and Allow
+// does not wait for it. Only the whole body is behind Details. No Always allow here: a permission rule needs Claude Code's own suggestion first
+// (phase 2). Everything is plain text. There is no Edit and no revise.
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   type CardT,
@@ -19,7 +22,7 @@ import {
   permissionCallTail,
   permissionCardAllowsPrimary,
 } from '@talos-app/protocol'
-import { type ReactNode, type Ref, useEffect, useRef, useState } from 'react'
+import { type ReactNode, type Ref, useEffect, useState } from 'react'
 import { enterApproval } from '../../lib/approvalOpen.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconAlert } from '../../ui/icons.tsx'
@@ -36,7 +39,7 @@ type Props = {
   titleId: string
   rootRef: Ref<HTMLElement>
   pulse: boolean
-  /** Opened from a push or /card/:id: the sheet opens by itself. */
+  /** Opened from a push or /card/:id: the card is scrolled to and armed (CardView), the sheet stays shut. */
   highlighted?: boolean | undefined
   hash: string
   now: number
@@ -51,9 +54,9 @@ type Props = {
 const LEGACY_TOO_LONG_BODY = 'This call is too long to show here whole. Approve or deny it at the Mac.'
 
 export function PermissionCardLive(props: Props) {
-  const { card, header, titleId, rootRef, pulse, highlighted, hash, now, busy, error, timeZone, onDeny } = props
+  const { card, header, titleId, rootRef, pulse, hash, now, busy, error, timeZone, onDeny } = props
   const allowable = permissionCardAllowsPrimary(card)
-  const [open, setOpen] = useState(Boolean(highlighted) && allowable)
+  const [open, setOpen] = useState(false)
   const summary = card.fields.find((f) => f.key === 'summary')
   const maybeAnswered = now - Date.parse(card.created_at) >= PERMISSION_MAYBE_ANSWERED_MS
   const reason = card.warning ?? (allowable ? null : "This card can't approve the call.")
@@ -63,34 +66,19 @@ export function PermissionCardLive(props: Props) {
   const preview = [...body].length > PREVIEW_CHARS ? `${[...body].slice(0, PREVIEW_CHARS).join('')}…` : body
   const shown = explainShown(card.explain, card.created_at, now)
   const mismatch = shown.kind === 'ready' && shown.explain.mismatch
-  // With an explanation the command sits behind "Show the command". It opens by itself when there is nothing to read instead
-  // (the explainer failed) or when Allow is not on offer, so the reason is never behind a click. After that the element belongs
-  // to the owner: React does not set `open`, so a re-render never fights a toggle.
-  const commandRef = useRef<HTMLDetailsElement>(null)
-  const commandForcedOpen = shown.kind === 'failed' || !allowable
-  // biome-ignore lint/correctness/useExhaustiveDependencies: shown.kind decides whether the element exists
-  useEffect(() => {
-    if (commandForcedOpen && commandRef.current) commandRef.current.open = true
-  }, [commandForcedOpen, shown.kind])
   const call = (
     <>
       <p className="mt-2 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">The call</p>
       {allowable ? (
-        // the compact card: a start of the call and a way in. Allow is not here; it is in the sheet, behind the whole call.
-        <button
-          type="button"
-          data-testid="permission-open"
-          onClick={() => setOpen(true)}
-          className="mt-1 block w-full rounded-button bg-surface-2 p-2 text-left font-mono text-sm text-text"
-        >
+        // the compact card: the start of the call; the whole of it is behind Details
+        <div className="mt-1 rounded-button bg-surface-2 p-2 font-mono text-sm text-text">
           <span
             data-testid="permission-preview"
             className="block whitespace-pre-wrap [overflow-wrap:anywhere] break-all"
           >
             {revealHidden(preview)}
           </span>
-          <span className="mt-1 block font-sans text-xs text-text-2 underline">Review the whole call and decide</span>
-        </button>
+        </div>
       ) : (
         <pre
           data-testid="permission-call"
@@ -123,14 +111,7 @@ export function PermissionCardLive(props: Props) {
         {revealHidden(card.title)}
       </h3>
       <ExplainBlock shown={shown} />
-      {shown.kind === 'none' ? (
-        call
-      ) : (
-        <details ref={commandRef} data-testid="permission-command" className="mt-2">
-          <summary className="cursor-pointer text-sm text-text-2 underline">Show the command</summary>
-          {call}
-        </details>
-      )}
+      {call}
       {summary && !allowable ? <SummaryBlock label={summary.label} value={summary.value} /> : null}
       {reason ? (
         <p role="status" className="mt-3 flex items-start gap-1.5 text-sm text-warn">
@@ -149,14 +130,20 @@ export function PermissionCardLive(props: Props) {
           {card.kill_label}
         </Button>
         {allowable ? (
-          <Button
-            variant={mismatch ? 'outline' : 'primary'}
-            className="ml-auto"
-            disabled={busy}
-            onClick={() => setOpen(true)}
-          >
-            {mismatch ? 'Allow anyway' : 'Review to allow'}
-          </Button>
+          <>
+            <Button variant="ghost" disabled={busy} onClick={() => setOpen(true)} data-testid="permission-open">
+              Details
+            </Button>
+            <Button
+              variant={mismatch ? 'outline' : 'primary'}
+              className="ml-auto"
+              disabled={busy}
+              onClick={props.onAllow}
+              data-card-primary=""
+            >
+              {mismatch ? 'Allow anyway' : card.primary_label}
+            </Button>
+          </>
         ) : null}
       </div>
       <p className="mt-2 font-mono text-xs text-text-2" data-testid="card-expiry">
@@ -222,13 +209,9 @@ function SummaryBlock({ label, value }: { label: string; value: string }) {
   )
 }
 
-function TailLine({ body, elRef }: { body: string; elRef?: Ref<HTMLParagraphElement> }) {
+function TailLine({ body }: { body: string }) {
   return (
-    <p
-      ref={elRef}
-      data-testid="permission-tail"
-      className="mt-1 [overflow-wrap:anywhere] break-all font-mono text-xs text-text-2"
-    >
+    <p data-testid="permission-tail" className="mt-1 [overflow-wrap:anywhere] break-all font-mono text-xs text-text-2">
       <span className="font-sans font-semibold uppercase tracking-[var(--tracking-caps)]">Ends with:</span>{' '}
       {revealHidden(permissionCallTail(body))}
     </p>
@@ -236,11 +219,9 @@ function TailLine({ body, elRef }: { body: string; elRef?: Ref<HTMLParagraphElem
 }
 
 /**
- * The full-screen approval sheet. position: fixed, sized from the visual viewport (a keyboard or a pan cannot move it off the
- * screen), above everything, with every other floating thing suppressed while it is open (lib/approvalOpen.ts). The call is shown
- * whole in its own scroll area, with the tail pinned under it. Allow stays disabled until the end of the call has been in view
- * (a sentinel after the last line, watched by an IntersectionObserver rooted in the scroll area; once seen it stays seen for as
- * long as this sheet is open and the body is the same) and while the page is pinch-zoomed. Deny is always enabled.
+ * The full-screen approval sheet, the optional "Details" view. position: fixed, sized from the visual viewport (a keyboard or a pan
+ * cannot move it off the screen), above everything, with every other floating thing suppressed while it is open
+ * (lib/approvalOpen.ts). The whole call is in its own scroll area with the tail pinned under it. Allow is enabled at once.
  */
 function ApprovalSheet({
   card,
@@ -255,51 +236,9 @@ function ApprovalSheet({
 }: Props & { summaryValue: string | undefined; onClose: () => void }) {
   const shown = explainShown(card.explain, card.created_at, now)
   const mismatch = shown.kind === 'ready' && shown.explain.mismatch
-  // state, not refs: the dialog's content mounts in the portal one render after this component, so a ref is still empty here
-  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null)
-  const [endEl, setEndEl] = useState<HTMLDivElement | null>(null)
-  const [titleEl, setTitleEl] = useState<HTMLElement | null>(null)
-  const [tailEl, setTailEl] = useState<HTMLParagraphElement | null>(null)
-  const [sideways, setSideways] = useState(true) // until measured
-  const [seenBody, setSeenBody] = useState<string | null>(null)
   const vv = useVisualViewport()
   const body = card.body ?? ''
-  const seen = seenBody === body
-  const zoomed = vv.scale > 1.001
   useEffect(() => enterApproval(), [])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new body starts the reading again
-  useEffect(() => {
-    const root = scrollEl
-    const end = endEl
-    if (!root || !end || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setSeenBody(body)
-      },
-      { root, threshold: 1 },
-    )
-    io.observe(end)
-    return () => io.disconnect()
-  }, [body, scrollEl, endEl])
-  // Belt and braces for the wrapping rule above: if the scroll area, the title or the tail still sticks out sideways (a run of
-  // characters no wrapping rule can break), part of the call is off screen, so Allow stays off. Re-checked on every resize.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new body or a new width is a reason to measure again
-  useEffect(() => {
-    const els = [scrollEl, titleEl, tailEl]
-    if (els.some((e) => !e)) return
-    const measure = () =>
-      setSideways(els.some((e) => (e as HTMLElement).scrollWidth > (e as HTMLElement).clientWidth + 1))
-    measure()
-    const ro = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure)
-    for (const e of els) ro?.observe(e as HTMLElement)
-    window.addEventListener('resize', measure)
-    return () => {
-      ro?.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [scrollEl, titleEl, tailEl, body, vv.width])
-  // running off the side is a hint, not a refusal: the call scrolls sideways, and a tap still approves it
-  const canAllow = seen && !zoomed
   return (
     <DialogPrimitive.Root open onOpenChange={(o) => !o && onClose()}>
       <DialogPrimitive.Portal>
@@ -321,7 +260,6 @@ function ApprovalSheet({
         >
           <div className="flex items-start gap-2 border-b border-line py-3 pt-[max(0.75rem,env(safe-area-inset-top))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
             <DialogPrimitive.Title
-              ref={setTitleEl}
               id={`${titleId}-sheet`}
               className="min-w-0 flex-1 [overflow-wrap:anywhere] break-all font-display text-lg font-semibold"
             >
@@ -332,7 +270,6 @@ function ApprovalSheet({
             </Button>
           </div>
           <section
-            ref={setScrollEl}
             data-testid="approval-scroll"
             // biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll area must be reachable by keyboard
             tabIndex={0}
@@ -355,23 +292,9 @@ function ApprovalSheet({
               {revealHidden(body)}
             </pre>
             {summaryValue !== undefined ? <SummaryBlock label="Claude's summary" value={summaryValue} /> : null}
-            <div ref={setEndEl} data-testid="approval-end" aria-hidden className="h-px" />
           </section>
           <div className="border-t border-line pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
-            <TailLine body={body} elRef={setTailEl} />
-            {!seen ? (
-              <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
-                Scroll to the end of the call to enable Allow.
-              </p>
-            ) : zoomed ? (
-              <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
-                Zoom back out to enable Allow.
-              </p>
-            ) : sideways ? (
-              <p data-testid="approval-hint" className="mt-2 text-sm text-text-2">
-                Part of this call runs off the side of the screen: scroll sideways to see all of it.
-              </p>
-            ) : null}
+            <TailLine body={body} />
             {error ? (
               <p role="alert" className="mt-2 text-sm text-danger">
                 {error}
@@ -381,12 +304,7 @@ function ApprovalSheet({
               <Button variant={mismatch ? 'primary' : 'danger'} disabled={busy} onClick={onDeny}>
                 {card.kill_label}
               </Button>
-              <Button
-                variant={mismatch ? 'outline' : 'primary'}
-                className="ml-auto"
-                disabled={busy || !canAllow}
-                onClick={onAllow}
-              >
+              <Button variant={mismatch ? 'outline' : 'primary'} className="ml-auto" disabled={busy} onClick={onAllow}>
                 {mismatch ? 'Allow anyway' : card.primary_label}
               </Button>
             </div>

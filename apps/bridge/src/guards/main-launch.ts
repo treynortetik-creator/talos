@@ -4,9 +4,18 @@
 // `--settings` stays in place: the deny rides beside it as `--disallowedTools` (review R2-4), and the guards
 // stay off for that launch, as before, with a warning. The owner's file is never read or copied.
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { MCP_ALWAYS_DENIED } from '@talos-app/protocol'
 import { writeFileAtomic } from '../fsutil.ts'
+import {
+  type OsSandboxPieces,
+  osSandboxRecheck,
+  prepareOsSandbox,
+  readOsSandboxSwitch,
+  SWITCH_UNREADABLE_NOTE,
+  withOsSandbox,
+} from './os-sandbox.ts'
 import { supervisorDenyRules } from './rules.ts'
 
 type Json = Record<string, unknown>
@@ -20,6 +29,12 @@ export const DISALLOWED_TOOLS_ARGS = ['--disallowedTools', ...MCP_ALWAYS_DENIED.
 
 export type LaunchIo = {
   cwd?: string
+  /** Claude Code's config folder (default CLAUDE_CONFIG_DIR, else `~/.claude`), whose user settings are checked for sandbox keys. */
+  claudeDir?: string
+  /** The owner's home (default: this user's), for his own git excludes. */
+  userHome?: string
+  /** The owner's own git excludes entries (default: read from his global git excludes file). */
+  ownerExcludes?: (userHome: string) => string[]
   read?: (path: string) => string | null
   write?: (path: string, data: string) => void
 }
@@ -53,11 +68,24 @@ const sorted = (v: unknown): unknown =>
         )
       : v
 
-export function mainLaunchArgs(
-  args: string[],
-  talosHome: string,
-  io: LaunchIo = {},
-): { args: string[]; warnings: string[] } {
+/** `recheck`: set when the OS sandbox is applied to this launch; run it right before the process starts (a line refuses the start). */
+export type MainLaunch = {
+  args: string[]
+  warnings: string[]
+  refusal?: string
+  recheck?: () => string | null
+  /** The plain line for the owner when config.json could not be read and the lock was therefore kept on (it was on at the last good reading) (audit it, tell the owner). */
+  note?: string
+  /** config.json could not be read: why, and which way the lock was kept (audited either way; only a lock kept on has a `note`). */
+  unreadable?: { why: string; keptOn: boolean }
+  /** The lock is on, but that could not be written down as the last good reading: a later damaged config.json would read as off (audit it). */
+  notRecorded?: true
+}
+
+/** The words that say why the extra lock is not on for a launch that has the switch on. */
+const SANDBOX_NOT_ON = 'the extra lock on protected files (OS sandbox) is NOT active'
+
+export function mainLaunchArgs(args: string[], talosHome: string, io: LaunchIo = {}): MainLaunch {
   const read =
     io.read ??
     ((p: string) => {
@@ -74,6 +102,21 @@ export function mainLaunchArgs(
   // only the owner's flags count: past the first `--` every word is the prompt (review R3-4)
   const end = args.indexOf('--')
   const i = args.findIndex((a, n) => (end < 0 || n < end) && (a === '--settings' || a.startsWith('--settings=')))
+  // the opt-in OS sandbox (os-sandbox.ts): only when the switch is on, and then the preflight may refuse the launch
+  let note: string | undefined
+  let unreadable: MainLaunch['unreadable']
+  let notRecorded = false
+  const sandboxOn = readOsSandboxSwitch(
+    talosHome,
+    io.read,
+    (why, keptOn) => {
+      unreadable = { why, keptOn }
+      if (keptOn) note = SWITCH_UNREADABLE_NOTE
+    },
+    () => {
+      notRecorded = true
+    },
+  )
   if (i >= 0) {
     // theirs stays exactly where and what it is (a copy would change what its relative paths mean, and later edits would stop
     // reaching Main); the deny goes in as --disallowedTools right before it, so the next word is an option and ends the list
@@ -81,27 +124,60 @@ export function mainLaunchArgs(
       guards !== null
         ? [`guards installed (${file}) but the launch args already include --settings: the guards are NOT active`]
         : []
-    return { args: [...args.slice(0, i), ...DISALLOWED_TOOLS_ARGS, ...args.slice(i)], warnings: w }
-  }
-  if (guards === null) return { args: ['--settings', JSON.stringify(denyingComputerUse({})), ...args], warnings: [] }
-  const g = object(guards)
-  if (!g)
+    if (sandboxOn) w.push(`the launch args already include --settings: ${SANDBOX_NOT_ON}`)
     return {
-      args: ['--settings', file, ...args],
-      warnings: [`the guards' file cannot be read: ${MAIN_LAUNCH_NOT_DENIED}`],
+      args: [...args.slice(0, i), ...DISALLOWED_TOOLS_ARGS, ...args.slice(i)],
+      warnings: w,
+      ...(unreadable ? { unreadable } : {}),
+      ...(notRecorded ? { notRecorded: true as const } : {}),
     }
+  }
+  let pieces: OsSandboxPieces | undefined
+  if (sandboxOn) {
+    const r = prepareOsSandbox(
+      {
+        talosHome,
+        userHome: io.userHome ?? homedir(),
+        folder: io.cwd ?? process.cwd(),
+        launchArgs: args,
+        ...(io.claudeDir ? { claudeDir: io.claudeDir } : {}),
+      },
+      { ...(io.ownerExcludes ? { ownerExcludes: io.ownerExcludes } : {}), write },
+    )
+    if ('refusal' in r) return { args, warnings: [], refusal: r.refusal }
+    pieces = r.pieces
+  }
+  const sandboxed = (s: Json): Json => (pieces ? withOsSandbox(s, pieces) : s)
+  const recheck = {
+    ...(pieces ? { recheck: osSandboxRecheck(talosHome, io.cwd ?? process.cwd()) } : {}),
+    ...(note ? { note } : {}),
+    ...(unreadable ? { unreadable } : {}),
+    ...(notRecorded ? { notRecorded: true as const } : {}),
+  }
+  if (guards === null)
+    return {
+      args: ['--settings', JSON.stringify(sandboxed(denyingComputerUse({}))), ...args],
+      warnings: [],
+      ...recheck,
+    }
+  const g = object(guards)
+  if (!g) {
+    const why = `the guards' file cannot be read: ${MAIN_LAUNCH_NOT_DENIED}`
+    // with the switch on, a launch that cannot carry the sandbox does not start
+    if (pieces) return { args, warnings: [], refusal: `${why}; and ${SANDBOX_NOT_ON}, so Main is not started` }
+    return { args: ['--settings', file, ...args], warnings: [why] }
+  }
   // the installed rules, with any this version adds that they lack (guards installed by an older Talos)
   const perms = (typeof g.permissions === 'object' && g.permissions !== null ? g.permissions : {}) as Json
   const had = Array.isArray(perms.deny) ? (perms.deny as unknown[]) : []
   const deny = [...had, ...supervisorDenyRules(talosHome).filter((r) => !had.includes(r))]
   const current = { ...g, permissions: { ...perms, deny } }
   try {
-    write(launch, JSON.stringify(sorted(denyingComputerUse(current))))
+    write(launch, JSON.stringify(sorted(sandboxed(denyingComputerUse(current)))))
   } catch (e) {
-    return {
-      args: ['--settings', file, ...args],
-      warnings: [`${launch} could not be written (${(e as Error).message}): ${MAIN_LAUNCH_NOT_DENIED}`],
-    }
+    const why = `${launch} could not be written (${(e as Error).message}): ${MAIN_LAUNCH_NOT_DENIED}`
+    if (pieces) return { args, warnings: [], refusal: `${why}; and ${SANDBOX_NOT_ON}, so Main is not started` }
+    return { args: ['--settings', file, ...args], warnings: [why] }
   }
-  return { args: ['--settings', launch, ...args], warnings: [] }
+  return { args: ['--settings', launch, ...args], warnings: [], ...recheck }
 }

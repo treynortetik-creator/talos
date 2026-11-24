@@ -1,6 +1,7 @@
 # A thread session that shows REAL Claude Code screens: the files in ../real-2.1.318 (and ../real-2.1.322) are captures, printed back as they are.
 # FAKE_REAL_START=trust|empty|draft|screen:<fixture>: the first screen (screen:<name> shows ../real-2.1.318/<name>.txt and then writes the hub's ready file, unless FAKE_REAL_NOT_READY is set). With trust, the screen becomes `empty` after the owner's Enter and the hub's ready file is written then (with
 # FAKE_REAL_READY_FIRST it is written as soon as the dialog is drawn, before the Enter).
+# FAKE_REAL_TICK=1 repaints the first row every second (the pane never goes quiet).
 # FAKE_REAL_SWITCH=<file> with FAKE_REAL_THEN=<screen>: when that file appears, the screen changes to the named one. FAKE_REAL_SWITCH2 and
 # FAKE_REAL_THEN2 do the same once more afterwards.
 # An Enter while the trust dialog is up answers it. Every line typed into the pane is logged (FAKE_TYPED_LOG), and what is typed is drawn in
@@ -18,7 +19,7 @@ show() {  # one whole screen, rows joined by CR LF, no final newline (the pane i
   local row=0
   [ -z "${2:-}" ] || row="$(LC_ALL=C grep -n $'\xe2\x9d\xaf\xc2\xa0' "$f" | tail -1 | cut -d: -f1)"
   printf '\033[2J\033[H'
-  awk -v row="${row:-0}" -v t="${2:-}" 'NR>1{printf "\r\n"} NR==row {printf "\342\235\257\302\240%s", t; next} {printf "%s", $0}' "$f" | head -c 100000
+  awk -v row="${row:-0}" -v t="${2:-}" -v tick="${tick:-}" 'NR>1{printf "\r\n"} NR==35 && tick!="" {printf "sub-agent working %s", tick; next} NR==row {printf "\342\235\257\302\240%s", t; next} {printf "%s", $0}' "$f" | head -c 100000
 }
 # The screen is drawn BEFORE the ready file is written, as in real use (the bridge connects after Claude's UI is up, and a draft cannot
 # exist before it). FAKE_REAL_DRAW_DELAY=<seconds> puts a pause between the two, so a manager that acts on ready alone sees a blank pane.
@@ -35,8 +36,14 @@ case "$start" in
   screen:*) show "${start#screen:}"; [ -n "${FAKE_REAL_NOT_READY:-}" ] || ready_after_draw ;;
   *) if [ "$start" = draft ]; then show draft-input; else show empty-input; fi; ready_after_draw ;;
 esac
-switched=; switched2=; buf=""
+switched=; switched2=; buf=""; tick=
+# The loop ends by itself: a runner that was killed never tears its tmux server down, and this loop (repainting forever with FAKE_REAL_TICK)
+# would keep that server alive. FAKE_MAX_LIFETIME seconds at most (the rig sets 120).
+started=$SECONDS
+# FAKE_REAL_TICK=1: a row above the box (the 35th) changes every second (a sub-agent's row ticking), so the pane is always being repainted
 while true; do
+  [ $((SECONDS - started)) -lt "${FAKE_MAX_LIFETIME:-600}" ] || exit 0
+  if [ -n "${FAKE_REAL_TICK:-}" ]; then tick=$((tick+1)); show "$cur" "$buf"; fi
   if [ -z "$switched" ] && [ -n "${FAKE_REAL_SWITCH:-}" ] && [ -f "$FAKE_REAL_SWITCH" ]; then show "${FAKE_REAL_THEN:-empty-input}"; switched=1; fi
   if [ -n "$switched" ] && [ -z "$switched2" ] && [ -n "${FAKE_REAL_SWITCH2:-}" ] && [ -f "$FAKE_REAL_SWITCH2" ]; then show "${FAKE_REAL_THEN2:-empty-input}"; switched2=1; fi
   if IFS= read -rsn1 -t 1 ch; then

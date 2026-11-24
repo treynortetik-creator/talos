@@ -257,4 +257,91 @@ describe('ci-local.sh gates', () => {
     expect(await r.start([...noStatus, '--jobs', 'check']).done).toBe(0)
     expect(r.calledLines().some((l) => l.startsWith('pnpm test:bun'))).toBe(true)
   })
+
+  // Chronos's own suite (apps/chronos/tests/run.sh: each test file by itself; a bare `python3 -m unittest` in apps/chronos finds
+  // none). It waits on real clocks and processes, so it runs in the quiet hold, after the schedules tests, and needs Python 3.9+.
+  describe('check: the Chronos suite', () => {
+    type Repo = ReturnType<typeof repo>
+    const withChronos = (r: Repo, body = 'exit 0') => {
+      mkdirSync(join(r.clone, 'apps/chronos/tests'), { recursive: true })
+      writeFileSync(
+        join(r.clone, 'apps/chronos/tests/run.sh'),
+        `#!/bin/bash\necho "chronos-run $* PR_BASE=\${CHRONOS_PR_BASE:-}" >> "$CALLS"\n${body}\n`,
+      )
+      r.git(r.clone, 'add', '-A')
+      r.git(r.clone, 'commit', '-qm', 'chronos')
+    }
+    // the version test the step makes (`python3 -c` with sys.version_info), answered as FAKE_PY says: `old` is Python 3.8
+    const python3 = {
+      python3:
+        'case "$1" in -c) [ "${FAKE_PY:-}" = old ] && exit 1; exit 0 ;; --version) if [ "${FAKE_PY:-}" = old ]; then echo "Python 3.8.2"; else echo "Python 3.12.1"; fi ;; esac',
+    }
+    const runs = (r: Repo) => r.calledLines().filter((l) => l.startsWith('chronos-run'))
+    const row = (r: Repo) =>
+      (readFileSync(join(r.home, '.cache/talos-ci/logs/timings.tsv'), 'utf8').trim().split('\n').pop() as string).split(
+        '\t',
+      )
+
+    it("runs Chronos's own runner once, after the schedules tests, without a PR base, and the job passes", async () => {
+      const r = repo('', python3)
+      withChronos(r)
+      // a CHRONOS_PR_BASE in the runner's environment must not reach it: the range scan skips in CI
+      expect(await r.start([...noStatus, '--jobs', 'check'], { CHRONOS_PR_BASE: 'origin/main' }).done).toBe(0)
+      expect(runs(r)).toEqual(['chronos-run  PR_BASE='])
+      const log = r.log('check')
+      expect(log).toContain('+ step_chronos')
+      expect(log.indexOf('+ step_chronos')).toBeGreaterThan(log.indexOf('+ step_bun_schedules'))
+      expect(log).toMatch(/\[step\] \d+s exit 0: step_chronos/)
+    })
+
+    it('a failing Chronos test fails the check job', async () => {
+      const r = repo('', python3)
+      withChronos(r, 'echo "FAIL: test_x"; exit 1')
+      const run = r.start([...noStatus, '--jobs', 'check'])
+      expect(await run.done).toBe(1)
+      expect(run.out()).toContain('✗ check')
+      expect(r.log('check')).toContain('FAIL: test_x')
+    })
+
+    it('a red Chronos suite in a check part (ci-part/) is a red, never "not tested"', async () => {
+      const r = repo('', python3)
+      withChronos(r, 'exit 1')
+      const run = r.start([...noStatus, '--jobs', 'check'], { CI_STATUS_PREFIX: 'ci-part' })
+      expect(await run.done).toBe(1)
+      expect(runs(r)).toHaveLength(1) // it ran: the red is Chronos's, not an early stop
+      expect(r.log('check')).not.toContain('not tested')
+    })
+
+    it('a failing contract or schedules suite does not hide the Chronos suite', async () => {
+      const r = repo('', python3)
+      withChronos(r)
+      expect(await r.start([...noStatus, '--jobs', 'check'], { FAIL_ON: 'test:contract' }).done).toBe(1)
+      expect(runs(r)).toHaveLength(1)
+    })
+
+    it('is skipped, and said so, where python3 is older than 3.9; the job still passes', async () => {
+      const r = repo('', python3)
+      withChronos(r)
+      expect(await r.start([...noStatus, '--jobs', 'check'], { FAKE_PY: 'old' }).done).toBe(0)
+      expect(runs(r)).toEqual([])
+      expect(r.log('check')).toContain('the Chronos suite skipped: python3 3.9 or newer is needed')
+    })
+
+    it('is skipped, and said so, by a commit that has no apps/chronos', async () => {
+      const r = repo('', python3)
+      expect(await r.start([...noStatus, '--jobs', 'check']).done).toBe(0)
+      expect(r.log('check')).toContain('the Chronos suite skipped: this commit has no apps/chronos')
+    })
+
+    it('its time is a column of timings.tsv, appended after the bun column; - when it did not run', async () => {
+      const a = repo('', python3)
+      withChronos(a)
+      expect(await a.start([...noStatus, '--jobs', 'check']).done).toBe(0)
+      expect(row(a)[10]).toMatch(/^bun=/)
+      expect(row(a)[11]).toMatch(/^chronos=\d+$/)
+      const b = repo('', python3)
+      expect(await b.start([...noStatus, '--jobs', 'check']).done).toBe(0)
+      expect(row(b)[11]).toBe('chronos=-')
+    })
+  })
 })

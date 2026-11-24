@@ -3,12 +3,12 @@
 // the bridge sends {thread_id, script, run_id, signed_by} to the Mac app's own socket, and whatever short of ok comes back is a
 // line the owner reads in the thread. Real inbound, real signed frames, real workers; the Mac app is a stand-in that refuses what
 // the real one refuses (its identity rule is the Swift side's own test, `ShellRunChannelTests`).
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { newId, RUN_MAX_AGE_MS, RUN_PANE_FEATURE, runText } from '@talos-app/protocol'
-import { FakeApp } from '@talos-app/testkit'
+import { FakeApp, t } from '@talos-app/testkit'
 import { bridgeFeatures } from '../src/handshake.ts'
 import {
   PANE_APP_CLOSED,
@@ -20,7 +20,10 @@ import {
   sendPaneRun,
 } from '../src/pane-run.ts'
 import { screenRequest, screenSockPath } from '../src/screen.ts'
-import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { type Harness, sleep, startHarness, systemNotices, waitFor } from './helpers.ts'
+
+// one test's waits (the harness start, the request, the line for the owner, the queue barrier) add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 let phone: FakeApp | undefined
@@ -46,18 +49,13 @@ const paneFrame = (x: FakeApp, script = SCRIPT, extra: Record<string, unknown> =
     ...extra,
   })
 
-const notices = (x: Harness) =>
-  x.relay.frames
-    .filter((f) => f.direction === 'from_bridge' && f.raw.type === 'reply')
-    .map((f) => (f.raw as { message: { author: string; text: string } }).message)
-    .filter((m) => m.author === 'system')
-    .map((m) => m.text)
+const notices = systemNotices
 
 /** Everything sent before this has been handled when it returns: frames are taken in order. */
 async function afterQueue(x: Harness) {
   const word = `sentinel ${newId('m')}`
   x.app.send(await x.app.buildMessage('general', word))
-  await waitFor(() => x.notes.some((n) => n.content === word), 8000, 'the queue to reach the last message')
+  await waitFor(() => x.notes.some((n) => n.content === word), t(8000), 'the queue to reach the last message')
 }
 
 type Seen = Record<string, unknown>
@@ -101,138 +99,193 @@ async function second(x: Harness): Promise<FakeApp> {
 }
 
 describe('a pane Run', () => {
-  test('goes to the Mac app once, with the signed tap own message id, and never to the agent', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    const f = await paneFrame(hh().app)
-    hh().app.send(f)
-    await waitFor(() => seen.length === 1, 5000, 'the request to the Mac app')
-    expect(seen[0]).toMatchObject({
-      op: 'pane_run',
-      thread_id: 'general',
-      script: SCRIPT,
-      client_msg_id: f.client_msg_id,
+  test(
+    'goes to the Mac app once, with the signed tap own message id, and never to the agent',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      const f = await paneFrame(hh().app)
+      hh().app.send(f)
+      await waitFor(() => seen.length === 1, t(5000), 'the request to the Mac app')
+      expect(seen[0]).toMatchObject({
+        op: 'pane_run',
+        thread_id: 'general',
+        script: SCRIPT,
+        client_msg_id: f.client_msg_id,
+      })
+      await afterQueue(hh())
+      expect(hh().notes.filter((n) => n.meta.run === 'tap' || n.content.includes('echo hello'))).toHaveLength(0)
+      expect(notices(hh())).toEqual([])
+    },
+    t(120_000),
+  )
+
+  test(
+    'a replay, and the same tap under a new frame id, reaches the Mac app once',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      const f = await paneFrame(hh().app)
+      hh().app.send(f)
+      await waitFor(() => seen.length === 1, t(5000), 'the first request')
+      hh().relay.sendToBridge(f as never)
+      hh().relay.sendToBridge((await paneFrame(hh().app, SCRIPT, { client_msg_id: f.client_msg_id })) as never)
+      await afterQueue(hh())
+      expect(seen).toHaveLength(1)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    t(120_000),
+  )
+
+  test(
+    'a fresh tap on the same block is a new Run',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      const block = blockRef()
+      hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
+      await waitFor(() => seen.length === 1, t(5000), 'the first request')
+      hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
+      await waitFor(() => seen.length === 2, t(5000), 'the second request')
+      expect(seen[0]?.client_msg_id).not.toBe(seen[1]?.client_msg_id)
+    },
+    t(115_000),
+  )
+
+  test(
+    'signed on a phone, with no click in the Mac app: the app refuses for want of a witness, the owner is told, the agent hears nothing',
+    async () => {
+      h = await startHarness()
+      phone = await second(hh())
+      const seen = macApp([]) // nothing was clicked in the Mac app
+      const f = await paneFrame(phone)
+      phone.send(f)
+      await waitFor(() => seen.length === 1, t(5000), 'the request')
+      // the bridge passed the phone's message id unchanged; it cannot make the app believe it
+      expect(seen[0]?.client_msg_id).toBe(f.client_msg_id)
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(notices(hh())[0]).toBe(paneFailLine("your click in the Mac app didn't come with that Run"))
+      await afterQueue(hh())
+      expect(hh().notes.some((n) => n.content.includes('echo hello') || n.meta.run === 'tap')).toBe(false)
+    },
+    t(145_000),
+  )
+
+  test(
+    'the Mac app is not open: not routed, a visible refusal in the thread, never the agent, the tap is spent',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL, { down: true })
+      const f = await paneFrame(hh().app)
+      hh().app.send(f)
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      // the exact words the owner reads (and the web app's status line is built on)
+      expect(notices(hh())[0]).toBe(
+        "Run couldn't reach the terminal pane: the Talos Mac app isn't open on this Mac. Nothing was run.",
+      )
+      expect(notices(hh())[0]).toBe(paneFailLine(PANE_APP_CLOSED))
+      hh().relay.sendToBridge(f as never)
+      await afterQueue(hh())
+      expect(seen).toHaveLength(0) // run-pane/1 is not listed: the Run is not even sent
+      expect(notices(hh())).toHaveLength(1)
+      expect(hh().notes.some((n) => n.content.includes('echo hello') || n.meta.run === 'tap')).toBe(false)
+    },
+    t(120_000),
+  )
+
+  test(
+    'the channel dies between the look and the Run: the app is asked, answers nothing, and the owner is told the same words',
+    async () => {
+      h = await startHarness()
+      const seen: Record<string, unknown>[] = []
+      paneTransport.request = async (_ctx, req) => {
+        if (req.op === 'pane_status') return { ok: true, body: { ok: true } }
+        seen.push(req)
+        return { ok: false, code: 'not_running', text: '' }
+      }
+      hh().app.send(await paneFrame(hh().app))
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(seen).toHaveLength(1)
+      expect(notices(hh())[0]).toBe(paneFailLine(PANE_APP_CLOSED))
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    t(100_000),
+  )
+
+  test(
+    'every answer short of ok is a line, an unknown code included',
+    async () => {
+      h = await startHarness()
+      macApp(ALL, { code: 'brand_new_code' })
+      hh().app.send(await paneFrame(hh().app))
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(notices(hh())[0]).toContain("Run couldn't reach the terminal pane: Talos.app refused (brand_new_code)")
+    },
+    t(100_000),
+  )
+
+  test(
+    'a transport that throws is a line, not a lost tap',
+    async () => {
+      h = await startHarness()
+      paneTransport.request = async (_ctx, req) => {
+        if (req.op === 'pane_status') return { ok: true, body: { ok: true } }
+        throw new Error('socket exploded')
+      }
+      hh().app.send(await paneFrame(hh().app))
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(notices(hh())[0]).toContain('socket exploded')
+    },
+    t(100_000),
+  )
+
+  test(
+    'no answer in time: the line does not say nothing was run, and says to look before running it again',
+    async () => {
+      h = await startHarness()
+      const f = await paneFrame(hh().app)
+      paneTransport.request = async (_ctx, req) =>
+        req.op === 'pane_status' ? { ok: true, body: { ok: true } } : { ok: false, code: 'no_answer', text: '' }
+      hh().app.send(f)
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(notices(hh())[0]).toBe(
+        "Run couldn't reach the terminal pane: Talos.app didn't answer in time; check the terminal pane before running it again.",
+      )
+      expect(notices(hh())[0]).not.toContain('Nothing was run')
+      expect(paneFailLine('x', true)).not.toContain('Nothing was run')
+      expect(paneFailLine('x')).toContain('Nothing was run')
+    },
+    t(100_000),
+  )
+
+  test(
+    'an answer that cannot be read is not "nothing was run" either',
+    async () => {
+      h = await startHarness()
+      paneTransport.request = async (_ctx, req) =>
+        req.op === 'pane_status' ? { ok: true, body: { ok: true } } : { ok: false, code: 'bad_answer', text: '' }
+      hh().app.send(await paneFrame(hh().app))
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the line for the owner')
+      expect(notices(hh())[0]).toBe(
+        "Run couldn't reach the terminal pane: Talos.app's answer couldn't be read; check the terminal pane before running it again.",
+      )
+    },
+    t(100_000),
+  )
+
+  test('a line the bridge resent after a redial is still one line (the receiver dedupes on id; so does the count)', () => {
+    const reply = (id: string, author: string, text: string) => ({
+      direction: 'from_bridge',
+      raw: { type: 'reply', message: { id, author, text } },
     })
-    await afterQueue(hh())
-    expect(hh().notes.filter((n) => n.meta.run === 'tap' || n.content.includes('echo hello'))).toHaveLength(0)
-    expect(notices(hh())).toEqual([])
-  })
-
-  test('a replay, and the same tap under a new frame id, reaches the Mac app once', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    const f = await paneFrame(hh().app)
-    hh().app.send(f)
-    await waitFor(() => seen.length === 1, 5000, 'the first request')
-    hh().relay.sendToBridge(f as never)
-    hh().relay.sendToBridge((await paneFrame(hh().app, SCRIPT, { client_msg_id: f.client_msg_id })) as never)
-    await afterQueue(hh())
-    expect(seen).toHaveLength(1)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
-
-  test('a fresh tap on the same block is a new Run', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    const block = blockRef()
-    hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
-    await waitFor(() => seen.length === 1, 5000, 'the first request')
-    hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
-    await waitFor(() => seen.length === 2, 5000, 'the second request')
-    expect(seen[0]?.client_msg_id).not.toBe(seen[1]?.client_msg_id)
-  })
-
-  test('signed on a phone, with no click in the Mac app: the app refuses for want of a witness, the owner is told, the agent hears nothing', async () => {
-    h = await startHarness()
-    phone = await second(hh())
-    const seen = macApp([]) // nothing was clicked in the Mac app
-    const f = await paneFrame(phone)
-    phone.send(f)
-    await waitFor(() => seen.length === 1, 5000, 'the request')
-    // the bridge passed the phone's message id unchanged; it cannot make the app believe it
-    expect(seen[0]?.client_msg_id).toBe(f.client_msg_id)
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(notices(hh())[0]).toBe(paneFailLine("your click in the Mac app didn't come with that Run"))
-    await afterQueue(hh())
-    expect(hh().notes.some((n) => n.content.includes('echo hello') || n.meta.run === 'tap')).toBe(false)
-  })
-
-  test('the Mac app is not open: not routed, a visible refusal in the thread, never the agent, the tap is spent', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL, { down: true })
-    const f = await paneFrame(hh().app)
-    hh().app.send(f)
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    // the exact words the owner reads (and the web app's status line is built on)
-    expect(notices(hh())[0]).toBe(
-      "Run couldn't reach the terminal pane: the Talos Mac app isn't open on this Mac. Nothing was run.",
-    )
-    expect(notices(hh())[0]).toBe(paneFailLine(PANE_APP_CLOSED))
-    hh().relay.sendToBridge(f as never)
-    await afterQueue(hh())
-    expect(seen).toHaveLength(0) // run-pane/1 is not listed: the Run is not even sent
-    expect(notices(hh())).toHaveLength(1)
-    expect(hh().notes.some((n) => n.content.includes('echo hello') || n.meta.run === 'tap')).toBe(false)
-  })
-
-  test('the channel dies between the look and the Run: the app is asked, answers nothing, and the owner is told the same words', async () => {
-    h = await startHarness()
-    const seen: Record<string, unknown>[] = []
-    paneTransport.request = async (_ctx, req) => {
-      if (req.op === 'pane_status') return { ok: true, body: { ok: true } }
-      seen.push(req)
-      return { ok: false, code: 'not_running', text: '' }
-    }
-    hh().app.send(await paneFrame(hh().app))
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(seen).toHaveLength(1)
-    expect(notices(hh())[0]).toBe(paneFailLine(PANE_APP_CLOSED))
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
-
-  test('every answer short of ok is a line, an unknown code included', async () => {
-    h = await startHarness()
-    macApp(ALL, { code: 'brand_new_code' })
-    hh().app.send(await paneFrame(hh().app))
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(notices(hh())[0]).toContain("Run couldn't reach the terminal pane: Talos.app refused (brand_new_code)")
-  })
-
-  test('a transport that throws is a line, not a lost tap', async () => {
-    h = await startHarness()
-    paneTransport.request = async (_ctx, req) => {
-      if (req.op === 'pane_status') return { ok: true, body: { ok: true } }
-      throw new Error('socket exploded')
-    }
-    hh().app.send(await paneFrame(hh().app))
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(notices(hh())[0]).toContain('socket exploded')
-  })
-
-  test('no answer in time: the line does not say nothing was run, and says to look before running it again', async () => {
-    h = await startHarness()
-    const f = await paneFrame(hh().app)
-    paneTransport.request = async (_ctx, req) =>
-      req.op === 'pane_status' ? { ok: true, body: { ok: true } } : { ok: false, code: 'no_answer', text: '' }
-    hh().app.send(f)
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(notices(hh())[0]).toBe(
-      "Run couldn't reach the terminal pane: Talos.app didn't answer in time; check the terminal pane before running it again.",
-    )
-    expect(notices(hh())[0]).not.toContain('Nothing was run')
-    expect(paneFailLine('x', true)).not.toContain('Nothing was run')
-    expect(paneFailLine('x')).toContain('Nothing was run')
-  })
-
-  test('an answer that cannot be read is not "nothing was run" either', async () => {
-    h = await startHarness()
-    paneTransport.request = async (_ctx, req) =>
-      req.op === 'pane_status' ? { ok: true, body: { ok: true } } : { ok: false, code: 'bad_answer', text: '' }
-    hh().app.send(await paneFrame(hh().app))
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the line for the owner')
-    expect(notices(hh())[0]).toBe(
-      "Run couldn't reach the terminal pane: Talos.app's answer couldn't be read; check the terminal pane before running it again.",
-    )
+    const frames = [
+      reply('m_1', 'system', 'first line'),
+      { direction: 'to_bridge', raw: { type: 'message', message: { id: 'm_9', author: 'owner', text: 'x' } } },
+      reply('m_1', 'system', 'first line'), // the same frame, resent after the reconnect, before its ack
+      reply('m_2', 'agent', 'not a notice'),
+      reply('m_3', 'system', 'second line'),
+    ]
+    expect(systemNotices({ relay: { frames } })).toEqual(['first line', 'second line'])
   })
 
   test('the bridge waits longer than the app can take: its whole budget and at least two seconds more', () => {
@@ -241,48 +294,56 @@ describe('a pane Run', () => {
     expect(1_500 + 5_000 + 3_000).toBeLessThan(PANE_RUN_APP_BUDGET_MS)
   })
 
-  test('the same checks as any Run: a tap signed too long ago is refused and never sent', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    hh().app.send(
-      await paneFrame(hh().app, SCRIPT, { ts: new Date(Date.now() - RUN_MAX_AGE_MS - 3600_000).toISOString() }),
-    )
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the refusal')
-    expect(notices(hh())[0]).toContain('signed more than a day ago')
-    expect(seen).toHaveLength(0)
-  })
+  test(
+    'the same checks as any Run: a tap signed too long ago is refused and never sent',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      hh().app.send(
+        await paneFrame(hh().app, SCRIPT, { ts: new Date(Date.now() - RUN_MAX_AGE_MS - 3600_000).toISOString() }),
+      )
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the refusal')
+      expect(notices(hh())[0]).toContain('signed more than a day ago')
+      expect(seen).toHaveLength(0)
+    },
+    t(100_000),
+  )
 
-  test('a thread with its own session takes a pane Run (no agent is involved) but still refuses a plain one', async () => {
-    h = await startHarness({
-      config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
-        ...c,
-        threads: [
-          ...c.threads,
-          {
-            id: 'trip',
-            name: 'Trip',
-            kind: 'fixed',
-            order: 5,
-            notify: 'all',
-            archived: false,
-            created_at: '2026-10-28T00:00:00.000Z',
-            session: 'dedicated',
-          },
-        ],
-        dedicated: { enabled: true },
-      })) as never,
-    })
-    const seen = macApp(ALL)
-    hh().app.send(await paneFrame(hh().app, SCRIPT, {}, 'trip'))
-    await waitFor(() => seen.length === 1, 5000, 'the request')
-    expect(seen[0]?.thread_id).toBe('trip')
-    hh().app.send(
-      await hh().app.buildMessage('trip', runText(SCRIPT, 'sh') as string, { intent: 'run', run_block: blockRef() }),
-    )
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the refusal of the plain one')
-    expect(notices(hh())[0]).toContain("has its own session, so Run isn't available here")
-    expect(seen).toHaveLength(1)
-  })
+  test(
+    'a thread with its own session takes a pane Run (no agent is involved) but still refuses a plain one',
+    async () => {
+      h = await startHarness({
+        config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
+          ...c,
+          threads: [
+            ...c.threads,
+            {
+              id: 'trip',
+              name: 'Trip',
+              kind: 'fixed',
+              order: 5,
+              notify: 'all',
+              archived: false,
+              created_at: '2026-10-28T00:00:00.000Z',
+              session: 'dedicated',
+            },
+          ],
+          dedicated: { enabled: true },
+        })) as never,
+      })
+      const seen = macApp(ALL)
+      hh().app.send(await paneFrame(hh().app, SCRIPT, {}, 'trip'))
+      await waitFor(() => seen.length === 1, t(5000), 'the request')
+      expect(seen[0]?.thread_id).toBe('trip')
+      hh().app.send(
+        await hh().app.buildMessage('trip', runText(SCRIPT, 'sh') as string, { intent: 'run', run_block: blockRef() }),
+      )
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the refusal of the plain one')
+      expect(notices(hh())[0]).toContain("has its own session, so Run isn't available here")
+      expect(seen).toHaveLength(1)
+    },
+    t(115_000),
+  )
 })
 
 describe('a place the schema does not know', () => {
@@ -292,52 +353,65 @@ describe('a place the schema does not know', () => {
       h = await startHarness()
       const seen = macApp(ALL)
       hh().app.send(await paneFrame(hh().app, SCRIPT, { run_where: v }))
-      await sleep(300)
       await afterQueue(hh())
+      await sleep(t(150)) // timing-ok: negative window: after the frame was handled, a refused place still sends nothing
       expect(seen).toHaveLength(0)
       expect(hh().notes.some((n) => n.content.includes('echo hello') || n.meta.run === 'tap')).toBe(false)
     },
+    t(105_000),
   )
 
-  test('a refused place spends nothing: the same block, asked for properly, runs', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    const block = blockRef()
-    hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block, run_where: 'nowhere' }))
-    await sleep(300)
-    hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
-    await waitFor(() => seen.length === 1, 5000, 'the request')
-  })
+  test(
+    'a refused place spends nothing: the same block, asked for properly, runs',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      const block = blockRef()
+      hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block, run_where: 'nowhere' }))
+      await afterQueue(hh()) // the refused frame is handled before the proper one goes
+      hh().app.send(await paneFrame(hh().app, SCRIPT, { run_block: block }))
+      await waitFor(() => seen.length === 1, t(5000), 'the request')
+    },
+    t(120_000),
+  )
 })
 
 describe('the normal Run is unchanged', () => {
-  test('no run_where: the agent gets it once as run=tap, and the Mac app is never asked', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    const f = await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, {
-      intent: 'run',
-      run_block: blockRef(),
-    })
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    expect(hh().notes[0]?.meta).toMatchObject({ kind: 'text', trust: 'owner', run: 'tap', thread_id: 'general' })
-    expect(hh().notes[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
-    expect(seen).toHaveLength(0)
-    expect(notices(hh())).toEqual([])
-  })
+  test(
+    'no run_where: the agent gets it once as run=tap, and the Mac app is never asked',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      const f = await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, {
+        intent: 'run',
+        run_block: blockRef(),
+      })
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      expect(hh().notes[0]?.meta).toMatchObject({ kind: 'text', trust: 'owner', run: 'tap', thread_id: 'general' })
+      expect(hh().notes[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
+      expect(seen).toHaveLength(0)
+      expect(notices(hh())).toEqual([])
+    },
+    t(95_000),
+  )
 
-  test('a message with run_where but no intent run is refused in the thread, not routed and not read as text', async () => {
-    h = await startHarness()
-    const seen = macApp(ALL)
-    hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, { run_where: 'pane' }))
-    await waitFor(() => notices(hh()).length === 1, 5000, 'the refusal')
-    expect(notices(hh())[0]).toBe(
-      'That message was not run: it asked for the terminal pane but is not a Run. Nothing was run.',
-    )
-    await afterQueue(hh())
-    expect(seen).toHaveLength(0)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
+  test(
+    'a message with run_where but no intent run is refused in the thread, not routed and not read as text',
+    async () => {
+      h = await startHarness()
+      const seen = macApp(ALL)
+      hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, { run_where: 'pane' }))
+      await waitFor(() => notices(hh()).length === 1, t(5000), 'the refusal')
+      expect(notices(hh())[0]).toBe(
+        'That message was not run: it asked for the terminal pane but is not a Run. Nothing was run.',
+      )
+      await afterQueue(hh())
+      expect(seen).toHaveLength(0)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    t(120_000),
+  )
 })
 
 // The client itself, against a real Unix socket answered the way the app answers (TalosDesktopCore ScreenSocket).
@@ -434,7 +508,7 @@ describe('the run-pane/1 feature', () => {
     expect(bridgeFeatures({ paneRun: ch })).not.toContain(RUN_PANE_FEATURE)
     paneTransport.request = async () => ({ ok: true, body: { ok: true } })
     ch.start()
-    await waitFor(() => bridgeFeatures({ paneRun: ch }).includes(RUN_PANE_FEATURE), 3000, 'the channel to answer')
+    await waitFor(() => bridgeFeatures({ paneRun: ch }).includes(RUN_PANE_FEATURE), t(3000), 'the channel to answer')
     expect(changes).toBe(1)
     paneTransport.request = async () => ({ ok: false, code: 'not_running', text: '' })
     const ctx = ctxWith(home, { paneRun: ch })
@@ -452,9 +526,9 @@ describe('the run-pane/1 feature', () => {
       up ? { ok: true, body: { ok: true } } : { ok: false, code: 'not_running', text: '' }
     const ch = new PaneChannel(ctxWith(home), () => {}, 20)
     ch.start()
-    await waitFor(() => ch.available, 3000, 'up')
+    await waitFor(() => ch.available, t(3000), 'up')
     up = false
-    await waitFor(() => !ch.available, 3000, 'down')
+    await waitFor(() => !ch.available, t(3000), 'down')
     ch.stop()
     rmSync(home, { recursive: true, force: true })
   })

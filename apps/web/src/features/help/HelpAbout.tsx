@@ -17,7 +17,7 @@ export function whereRunning(): Running {
   return detectShell() === 'desktop' ? 'Mac app' : isNativeShell() ? 'iPhone app' : 'Browser'
 }
 
-/** The build identifiers this page can see. The Mac app's own build number is in Mac settings → Advanced; the page cannot read it. */
+/** The build identifiers this page can see. The Mac app's own build number is in Talos Settings → Advanced; the page cannot read it. */
 export function buildRows(input: {
   app: string
   running: Running
@@ -69,7 +69,7 @@ export function AboutBuild() {
       </dl>
       {running === 'Mac app' && (
         <p className="m-0 text-sm text-text-2">
-          The Mac app&rsquo;s own build number is under Mac settings → Advanced.
+          The Mac app&rsquo;s own build number is under Talos Settings → Advanced.
         </p>
       )}
       {signedOut && (

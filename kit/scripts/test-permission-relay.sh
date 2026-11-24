@@ -478,7 +478,8 @@ start_hub allow "$SB/rec-sh"
 OUT="$(printf '%s' "$CALL" | CLAUDE_PROJECT_DIR="$AG" TALOS_APP_HOME="$TH" sh -c "$CMD" 2>"$SB/err")"; RC=$?
 wait "$HUBPID" 2>/dev/null; HUBPID=""
 { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ]; } && ok "the registered command, run through sh the way Claude Code runs it, returns the decision" || no "registered command wrong" "rc=$RC out=$OUT"
-OUT="$(printf '%s' "$CALL" | CLAUDE_PROJECT_DIR="$SB/no-such-agent" TALOS_APP_HOME="$TH" sh -c "$CMD" 2>&1)"; RC=$?
+# not a pipe: the command exits without reading, and a printf still writing would make the status 141 (pipefail)
+OUT="$(CLAUDE_PROJECT_DIR="$SB/no-such-agent" TALOS_APP_HOME="$TH" sh -c "$CMD" 2>&1 <<<"$CALL")"; RC=$?
 { [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "the registered command with the script missing: exit 0, no output (the settings never wedge a session)" || no "missing-script case wrong" "rc=$RC out=$OUT"
 
 # an existing settings.json from before this hook: settings-merge adds it and touches nothing else

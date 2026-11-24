@@ -12,7 +12,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type CardT, permissionCardAllowsPrimary } from '@talos-app/protocol'
-import { tmuxTestPrefix } from '@talos-app/testkit'
+import { t, tmuxTestPrefix } from '@talos-app/testkit'
 import { installWorkerHook, releaseHook } from '../src/supervisor/worker-hook.ts'
 import { INSTRUCTION_FILES_MODE } from '../src/supervisor/worker-policy.ts'
 import { withPermissionHook } from '../src/supervisor/worker-spec.ts'
@@ -310,7 +310,7 @@ function launch(
 
 async function ready(sb: Sandbox) {
   await waitFor(() => sb.screen().includes('Claude Code v'), 30_000, 'claude to start')
-  await sleep(1500)
+  await sleep(t(1500)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here)
   sb.type('do it')
 }
 
@@ -377,208 +377,245 @@ const writeWorkers = (home: string, pane: number) =>
 describe.skipIf(!ENABLED)(
   'REAL Claude Code: the dangerous-rm prompt reaches the phone and the answer is honoured',
   () => {
-    test('the main session: the card shows the exact rm, Deny leaves the folder and closes the prompt', async () => {
-      const x = await bridge()
-      const api = fakeApi()
-      const sb = launch(api, x.home)
-      await ready(sb)
-      const card = await permCard(x, 'rm -rf')
-      await waitFor(() => sb.screen().includes('Dangerous rm operation'), 20_000, "Claude Code's own prompt")
-      expect(card.body?.replace(/\n/g, '')).toBe(`rm -rf ${sb.home}`)
-      expect(card.risk).toBe('high')
-      expect(card.thread_id).toBe(x.bridge.ctx.config.config.default_thread)
-      expect(permissionCardAllowsPrimary(card)).toBe(true)
-      await x.app.resolveCard(card, 'kill', card.payload_hash)
-      await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
-      expect(existsSync(sb.home)).toBe(true)
-      expect(api.log.results[0]).toMatch(/den|permission|reject|block/i)
-      expect(sb.screen()).not.toContain('Do you want to proceed?')
-    }, 120_000)
-
-    test('the main session: Allow with step-up runs the rm exactly once', async () => {
-      const x = await bridge()
-      const api = fakeApi()
-      const sb = launch(api, x.home)
-      await ready(sb)
-      const card = await permCard(x, 'rm -rf')
-      expect(existsSync(sb.home)).toBe(true)
-      await x.app.resolveCard(card, 'primary', card.payload_hash, {
-        stepup_token: x.relay.mintStepup(`card:${card.id}`),
-      })
-      await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
-      expect(existsSync(sb.home)).toBe(false)
-      expect(api.log.toolCalls).toBe(1)
-      expect(
-        x.relay.frames.filter(
-          (f) => f.direction === 'from_bridge' && f.frame.type === 'card.create' && f.frame.card.kind === 'permission',
-        ),
-      ).toHaveLength(1)
-    }, 120_000)
-
-    test('answered at the Mac first: the card closes by itself and the folder is untouched', async () => {
-      const x = await bridge()
-      const api = fakeApi()
-      const sb = launch(api, x.home)
-      await ready(sb)
-      const card = await permCard(x, 'rm -rf')
-      await waitFor(() => sb.screen().includes('Do you want to proceed?'), 20_000, "Claude Code's own prompt")
-      await sleep(1500) // the dialog ignores keys for a moment after it appears
-      sb.type('2') // "No" at the terminal
-      await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'expired', {
-        direction: 'from_bridge',
-      })
-      // "No" at the terminal interrupts the turn (Claude Code sends no tool result), and nothing was deleted
-      await waitFor(() => sb.screen().includes('Interrupted'), 20_000, 'Claude Code to show the interrupt')
-      expect(existsSync(sb.home)).toBe(true)
-      expect(api.log.results).toHaveLength(0)
-      expect(x.bridge.ctx.permission.openCount).toBe(0)
-    }, 120_000)
-
-    test('a thread session: the same prompt lands in the thread, proven by the nonce and the pane', async () => {
-      const x = await bridge()
-      const nonce = 'real-run-nonce-0123456789abcdef'
-      mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
-      writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
-      const api = fakeApi()
-      const sb = launch(api, x.home, { worker: { thread: 'trip', nonce } })
-      writeWorkers(x.home, sb.panePid())
-      await ready(sb)
-      const card = await permCard(x, 'rm -rf')
-      expect(card.thread_id).toBe('trip')
-      // the shell the hook's command ran in: /bin/sh -c, in POSIX mode (where /proc can say)
-      if (existsSync('/proc/self/cmdline')) {
-        await waitFor(() => existsSync(join(sb.root, 'hook-shell.txt')), 10_000, 'the shell recorder')
-        const shell = readFileSync(join(sb.root, 'hook-shell.txt'), 'utf8')
-        expect(shell.startsWith('/bin/sh -c ')).toBe(true)
-        if (/^posix/m.test(shell)) expect(shell).toMatch(/^posix\s+on$/m) // bash; dash has no such option and no imported functions
-      }
-      await x.app.resolveCard(card, 'kill', card.payload_hash)
-      await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
-      expect(existsSync(sb.home)).toBe(true)
-    }, 120_000)
-
-    test('a thread folder’s session (only user settings): Claude Code loads none of its instruction files; the three handed over all reach the model', async () => {
-      const x = await bridge()
-      const nonce = 'real-run-nonce-0123456789abcdef'
-      mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
-      writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
-      const bodies = async (inject: boolean) => {
+    test(
+      'the main session: the card shows the exact rm, Deny leaves the folder and closes the prompt',
+      async () => {
+        const x = await bridge()
         const api = fakeApi()
-        const sb = launch(api, x.home, { worker: { thread: 'trip', nonce }, instructions: { inject } })
-        writeWorkers(x.home, sb.panePid())
+        const sb = launch(api, x.home)
         await ready(sb)
-        await waitFor(() => api.log.bodies.some((b) => b.includes('do it')), 60_000, 'the first request to the model')
-        return api.log.bodies.join('\n')
-      }
-      // control: with --setting-sources=user alone, none of the three reaches the model
-      const without = await bodies(false)
-      for (const w of CODEWORDS) expect(without.includes(w), w).toBe(false)
-      const withFiles = await bodies(true)
-      for (const w of CODEWORDS) expect(withFiles.includes(w), w).toBe(true)
-    }, 240_000)
+        const card = await permCard(x, 'rm -rf')
+        await waitFor(() => sb.screen().includes('Dangerous rm operation'), 20_000, "Claude Code's own prompt")
+        expect(card.body?.replace(/\n/g, '')).toBe(`rm -rf ${sb.home}`)
+        expect(card.risk).toBe('high')
+        expect(card.thread_id).toBe(x.bridge.ctx.config.config.default_thread)
+        expect(permissionCardAllowsPrimary(card)).toBe(true)
+        await x.app.resolveCard(card, 'kill', card.payload_hash)
+        await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
+        expect(existsSync(sb.home)).toBe(true)
+        expect(api.log.results[0]).toMatch(/den|permission|reject|block/i)
+        expect(sb.screen()).not.toContain('Do you want to proceed?')
+      },
+      t(445_000),
+    )
 
-    test('a resumed thread session gets the system prompt this start wrote, not the first one (the snapshot is off)', async () => {
-      const x = await bridge()
-      const nonce = 'real-run-nonce-0123456789abcdef'
-      mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
-      writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
-      const id = crypto.randomUUID()
-      const run = async (root: string | undefined, resume: boolean, word: string, snapshot: 'on' | 'off') => {
+    test(
+      'the main session: Allow with step-up runs the rm exactly once',
+      async () => {
+        const x = await bridge()
         const api = fakeApi()
-        const sb = launch(api, x.home, {
-          worker: { thread: 'trip', nonce },
-          ...(root ? { root } : {}),
-          session: { id, resume, prompt: `The instruction word is ${word}.`, snapshot },
+        const sb = launch(api, x.home)
+        await ready(sb)
+        const card = await permCard(x, 'rm -rf')
+        expect(existsSync(sb.home)).toBe(true)
+        await x.app.resolveCard(card, 'primary', card.payload_hash, {
+          stepup_token: x.relay.mintStepup(`card:${card.id}`),
         })
+        await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
+        expect(existsSync(sb.home)).toBe(false)
+        expect(api.log.toolCalls).toBe(1)
+        expect(
+          x.relay.frames.filter(
+            (f) =>
+              f.direction === 'from_bridge' && f.frame.type === 'card.create' && f.frame.card.kind === 'permission',
+          ),
+        ).toHaveLength(1)
+      },
+      t(385_000),
+    )
+
+    test(
+      'answered at the Mac first: the card closes by itself and the folder is untouched',
+      async () => {
+        const x = await bridge()
+        const api = fakeApi()
+        const sb = launch(api, x.home)
+        await ready(sb)
+        const card = await permCard(x, 'rm -rf')
+        await waitFor(() => sb.screen().includes('Do you want to proceed?'), 20_000, "Claude Code's own prompt")
+        await sleep(t(1500)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here): the dialog ignores keys for a moment after it appears
+        sb.type('2') // "No" at the terminal
+        await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'expired', {
+          direction: 'from_bridge',
+        })
+        // "No" at the terminal interrupts the turn (Claude Code sends no tool result), and nothing was deleted
+        await waitFor(() => sb.screen().includes('Interrupted'), 20_000, 'Claude Code to show the interrupt')
+        expect(existsSync(sb.home)).toBe(true)
+        expect(api.log.results).toHaveLength(0)
+        expect(x.bridge.ctx.permission.openCount).toBe(0)
+      },
+      t(425_000),
+    )
+
+    test(
+      'a thread session: the same prompt lands in the thread, proven by the nonce and the pane',
+      async () => {
+        const x = await bridge()
+        const nonce = 'real-run-nonce-0123456789abcdef'
+        mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
+        writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
+        const api = fakeApi()
+        const sb = launch(api, x.home, { worker: { thread: 'trip', nonce } })
         writeWorkers(x.home, sb.panePid())
         await ready(sb)
-        await waitFor(() => api.log.bodies.some((b) => b.includes('do it')), 60_000, 'the first request to the model')
-        await sleep(1000)
-        tmux(sb.sock, 'kill-server')
-        return { root: sb.root, bodies: api.log.bodies.join('\n') }
-      }
-      // control: with the snapshot on (Claude Code's default), a resume replays the first prompt
-      const first = await run(undefined, false, 'SNAP-ONE-71', 'on')
-      const replayed = await run(first.root, true, 'SNAP-TWO-72', 'on')
-      expect(replayed.bodies).toContain('SNAP-ONE-71')
-      expect(replayed.bodies).not.toContain('SNAP-TWO-72')
-      // as every worker starts: off, so the resume carries this start's text
-      const fresh = await run(first.root, true, 'SNAP-THREE-73', 'off')
-      expect(fresh.bodies).toContain('SNAP-THREE-73')
-      expect(fresh.bodies).not.toContain('SNAP-ONE-71')
-    }, 300_000)
+        const card = await permCard(x, 'rm -rf')
+        expect(card.thread_id).toBe('trip')
+        // the shell the hook's command ran in: /bin/sh -c, in POSIX mode (where /proc can say)
+        if (existsSync('/proc/self/cmdline')) {
+          await waitFor(() => existsSync(join(sb.root, 'hook-shell.txt')), 10_000, 'the shell recorder')
+          const shell = readFileSync(join(sb.root, 'hook-shell.txt'), 'utf8')
+          expect(shell.startsWith('/bin/sh -c ')).toBe(true)
+          if (/^posix/m.test(shell)) expect(shell).toMatch(/^posix\s+on$/m) // bash; dash has no such option and no imported functions
+        }
+        await x.app.resolveCard(card, 'kill', card.payload_hash)
+        await waitFor(() => api.log.results.length > 0, 30_000, 'Claude Code to report the tool result')
+        expect(existsSync(sb.home)).toBe(true)
+      },
+      t(415_000),
+    )
 
-    test("a thread session's background sub-agent: Claude Code's own rm check in a `bash -c` script becomes a card in the thread", async () => {
-      // the owner's case (Delphi, 2026-11-11): a builder sub-agent ran `cd … && bash -c 'unset …; … rm …'`, Claude Code showed
-      // "Bash command · from the … agent … Do you want to proceed?" in the pane, and no card reached the thread
-      const x = await bridge()
-      const nonce = 'real-run-nonce-0123456789abcdef'
-      mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
-      writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
-      const api = fakeApi({ viaAgent: true })
-      const sb = launch(api, x.home, { worker: { thread: 'trip', nonce } })
-      // `$D` is unset, so the script would run `rm -rf /build`: Claude Code cannot rule out a critical path and asks, in every mode
-      const ran = join(sb.root, 'ran')
-      api.script.command = `cd ${join(sb.root, 'thread')} && bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`
-      writeWorkers(x.home, sb.panePid())
-      await ready(sb)
-      const card = await permCard(x, 'unset D')
-      expect(api.log.agentCalls).toBe(1)
-      expect(card.thread_id).toBe('trip')
-      // Claude Code drops a leading `cd` into the session's own folder from the input it hands on
-      expect(card.body?.replace(/\n/g, '')).toBe(`bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`)
-      await x.app.resolveCard(card, 'kill', card.payload_hash)
-      // a denied call ends a background sub-agent without another model turn, so the denial is seen in the pane, not the API
-      await waitFor(() => sb.screen().includes('Agent "cleanup" finished'), 30_000, 'the sub-agent to end')
-      expect(existsSync(ran)).toBe(false)
-      expect(api.log.toolCalls).toBe(1)
-      expect(x.bridge.ctx.permission.openCount).toBe(0)
-    }, 120_000)
+    test(
+      'a thread folder’s session (only user settings): Claude Code loads none of its instruction files; the three handed over all reach the model',
+      async () => {
+        const x = await bridge()
+        const nonce = 'real-run-nonce-0123456789abcdef'
+        mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
+        writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
+        const bodies = async (inject: boolean) => {
+          const api = fakeApi()
+          const sb = launch(api, x.home, { worker: { thread: 'trip', nonce }, instructions: { inject } })
+          writeWorkers(x.home, sb.panePid())
+          await ready(sb)
+          await waitFor(() => api.log.bodies.some((b) => b.includes('do it')), 60_000, 'the first request to the model')
+          return api.log.bodies.join('\n')
+        }
+        // control: with --setting-sources=user alone, none of the three reaches the model
+        const without = await bodies(false)
+        for (const w of CODEWORDS) expect(without.includes(w), w).toBe(false)
+        const withFiles = await bodies(true)
+        for (const w of CODEWORDS) expect(withFiles.includes(w), w).toBe(true)
+      },
+      t(355_000),
+    )
 
-    test('the hub restarts under a running thread session: its next prompt still becomes a card in the thread', async () => {
-      // Delphi, 2026-11-11: the thread session started on 11-10, the hub bridge restarted at 07:58, and every prompt after it stayed
-      // in the pane. The proof is read from disk on each request (workers.json, the nonce file, the pane's group), so a new hub on the
-      // same home must accept the session the old one launched.
-      const first = await bridge()
-      const home = first.home
-      const nonce = 'real-run-nonce-0123456789abcdef'
-      mkdirSync(join(home, 'workers', 'trip'), { recursive: true })
-      writeFileSync(join(home, 'workers', 'trip', 'nonce'), nonce)
-      const api = fakeApi({ viaAgent: true })
-      const sb = launch(api, home, { worker: { thread: 'trip', nonce } })
-      const ran = join(sb.root, 'ran')
-      api.script.command = `cd ${join(sb.root, 'thread')} && bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`
-      writeWorkers(home, sb.panePid())
-      await waitFor(() => sb.screen().includes('Claude Code v'), 30_000, 'claude to start')
-      // the hub goes and a new one takes the same home (new relay connection, a new bridge.pid)
-      await first.stop()
-      h = undefined
-      const x = await bridge(home)
-      writeWorkers(home, sb.panePid())
-      await sleep(1500)
-      sb.type('do it')
-      const card = await permCard(x, 'unset D')
-      expect(card.thread_id).toBe('trip')
-      await x.app.resolveCard(card, 'kill', card.payload_hash)
-      await waitFor(() => sb.screen().includes('Agent "cleanup" finished'), 30_000, 'the sub-agent to end')
-      expect(existsSync(ran)).toBe(false)
-    }, 120_000)
+    test(
+      'a resumed thread session gets the system prompt this start wrote, not the first one (the snapshot is off)',
+      async () => {
+        const x = await bridge()
+        const nonce = 'real-run-nonce-0123456789abcdef'
+        mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
+        writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
+        const id = crypto.randomUUID()
+        const run = async (root: string | undefined, resume: boolean, word: string, snapshot: 'on' | 'off') => {
+          const api = fakeApi()
+          const sb = launch(api, x.home, {
+            worker: { thread: 'trip', nonce },
+            ...(root ? { root } : {}),
+            session: { id, resume, prompt: `The instruction word is ${word}.`, snapshot },
+          })
+          writeWorkers(x.home, sb.panePid())
+          await ready(sb)
+          await waitFor(() => api.log.bodies.some((b) => b.includes('do it')), 60_000, 'the first request to the model')
+          await sleep(t(1000)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here)
+          tmux(sb.sock, 'kill-server')
+          return { root: sb.root, bodies: api.log.bodies.join('\n') }
+        }
+        // control: with the snapshot on (Claude Code's default), a resume replays the first prompt
+        const first = await run(undefined, false, 'SNAP-ONE-71', 'on')
+        const replayed = await run(first.root, true, 'SNAP-TWO-72', 'on')
+        expect(replayed.bodies).toContain('SNAP-ONE-71')
+        expect(replayed.bodies).not.toContain('SNAP-TWO-72')
+        // as every worker starts: off, so the resume carries this start's text
+        const fresh = await run(first.root, true, 'SNAP-THREE-73', 'off')
+        expect(fresh.bodies).toContain('SNAP-THREE-73')
+        expect(fresh.bodies).not.toContain('SNAP-ONE-71')
+      },
+      t(355_000),
+    )
 
-    test('the dangerous-rm countdown runs out: Claude Code blocks the call itself, the hook sees the call result in the transcript and ends, and the card closes (hook_gone)', async () => {
-      const x = await bridge()
-      const api = fakeApi()
-      const sb = launch(api, x.home)
-      await ready(sb)
-      const card = await permCard(x, 'rm -rf')
-      await waitFor(() => /block this request in \d:\d\d/.test(sb.screen()), 20_000, 'the countdown row')
-      const gone = await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'expired', {
-        direction: 'from_bridge',
-        timeoutMs: 170_000,
-      } as never)
-      expect(gone.reason).toBe('hook_gone')
-      expect(existsSync(sb.home)).toBe(true)
-      expect(x.bridge.ctx.permission.openCount).toBe(0)
-    }, 240_000)
+    test(
+      "a thread session's background sub-agent: Claude Code's own rm check in a `bash -c` script becomes a card in the thread",
+      async () => {
+        // the owner's case (Delphi, 2026-11-11): a builder sub-agent ran `cd … && bash -c 'unset …; … rm …'`, Claude Code showed
+        // "Bash command · from the … agent … Do you want to proceed?" in the pane, and no card reached the thread
+        const x = await bridge()
+        const nonce = 'real-run-nonce-0123456789abcdef'
+        mkdirSync(join(x.home, 'workers', 'trip'), { recursive: true })
+        writeFileSync(join(x.home, 'workers', 'trip', 'nonce'), nonce)
+        const api = fakeApi({ viaAgent: true })
+        const sb = launch(api, x.home, { worker: { thread: 'trip', nonce } })
+        // `$D` is unset, so the script would run `rm -rf /build`: Claude Code cannot rule out a critical path and asks, in every mode
+        const ran = join(sb.root, 'ran')
+        api.script.command = `cd ${join(sb.root, 'thread')} && bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`
+        writeWorkers(x.home, sb.panePid())
+        await ready(sb)
+        const card = await permCard(x, 'unset D')
+        expect(api.log.agentCalls).toBe(1)
+        expect(card.thread_id).toBe('trip')
+        // Claude Code drops a leading `cd` into the session's own folder from the input it hands on
+        expect(card.body?.replace(/\n/g, '')).toBe(`bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`)
+        await x.app.resolveCard(card, 'kill', card.payload_hash)
+        // a denied call ends a background sub-agent without another model turn, so the denial is seen in the pane, not the API
+        await waitFor(() => sb.screen().includes('Agent "cleanup" finished'), 30_000, 'the sub-agent to end')
+        expect(existsSync(ran)).toBe(false)
+        expect(api.log.toolCalls).toBe(1)
+        expect(x.bridge.ctx.permission.openCount).toBe(0)
+      },
+      t(385_000),
+    )
+
+    test(
+      'the hub restarts under a running thread session: its next prompt still becomes a card in the thread',
+      async () => {
+        // Delphi, 2026-11-11: the thread session started on 11-10, the hub bridge restarted at 07:58, and every prompt after it stayed
+        // in the pane. The proof is read from disk on each request (workers.json, the nonce file, the pane's group), so a new hub on the
+        // same home must accept the session the old one launched.
+        const first = await bridge()
+        const home = first.home
+        const nonce = 'real-run-nonce-0123456789abcdef'
+        mkdirSync(join(home, 'workers', 'trip'), { recursive: true })
+        writeFileSync(join(home, 'workers', 'trip', 'nonce'), nonce)
+        const api = fakeApi({ viaAgent: true })
+        const sb = launch(api, home, { worker: { thread: 'trip', nonce } })
+        const ran = join(sb.root, 'ran')
+        api.script.command = `cd ${join(sb.root, 'thread')} && bash -c 'unset D; rm -rf "$D"/build; touch ${ran}'`
+        writeWorkers(home, sb.panePid())
+        await waitFor(() => sb.screen().includes('Claude Code v'), 30_000, 'claude to start')
+        // the hub goes and a new one takes the same home (new relay connection, a new bridge.pid)
+        await first.stop()
+        h = undefined
+        const x = await bridge(home)
+        writeWorkers(home, sb.panePid())
+        await sleep(t(1500)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here)
+        sb.type('do it')
+        const card = await permCard(x, 'unset D')
+        expect(card.thread_id).toBe('trip')
+        await x.app.resolveCard(card, 'kill', card.payload_hash)
+        await waitFor(() => sb.screen().includes('Agent "cleanup" finished'), 30_000, 'the sub-agent to end')
+        expect(existsSync(ran)).toBe(false)
+      },
+      t(465_000),
+    )
+
+    test(
+      'the dangerous-rm countdown runs out: Claude Code blocks the call itself, the hook sees the call result in the transcript and ends, and the card closes (hook_gone)',
+      async () => {
+        const x = await bridge()
+        const api = fakeApi()
+        const sb = launch(api, x.home)
+        await ready(sb)
+        const card = await permCard(x, 'rm -rf')
+        await waitFor(() => /block this request in \d:\d\d/.test(sb.screen()), 20_000, 'the countdown row')
+        const gone = await x.relay.expectFrame('card.update', (f) => f.card_id === card.id && f.state === 'expired', {
+          direction: 'from_bridge',
+          timeoutMs: 170_000,
+        } as never)
+        expect(gone.reason).toBe('hook_gone')
+        expect(existsSync(sb.home)).toBe(true)
+        expect(x.bridge.ctx.permission.openCount).toBe(0)
+      },
+      t(865_000),
+    )
   },
 )
 
@@ -740,11 +777,11 @@ async function folderConfigLoads(user: boolean) {
   cleanups.push(() => tmux(sock, 'kill-server'))
   const screen = () => tmux(sock, 'capture-pane', '-p', '-J', '-t', 's')
   await waitFor(() => screen().includes('Claude Code v'), 30_000, 'claude to start')
-  await sleep(3000)
+  await sleep(t(3000)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here)
   tmux(sock, 'send-keys', '-t', 's', '-l', 'do the probe')
   tmux(sock, 'send-keys', '-t', 's', 'Enter')
   await waitFor(() => turn >= 3 || bodies.length >= 4, 40_000, 'the scripted turns')
-  await sleep(4000)
+  await sleep(t(4000)) // timing-ok: settle, can't be polled without a TUI ready marker (opt-in test, not run here)
   const all = bodies.join('\n')
   const seen = (cw: string) => all.includes(cw)
   return {
@@ -767,13 +804,17 @@ async function folderConfigLoads(user: boolean) {
 describe.skipIf(!ENABLED)(
   'REAL Claude Code: a thread folder’s own configuration under --setting-sources=user (Fable R1-5)',
   () => {
-    test('control (every source): each marker is seen; --setting-sources=user: none of them', async () => {
-      const control = await folderConfigLoads(false)
-      for (const [k, v] of Object.entries(control)) expect(v, `control: ${k}`).toBe(true)
-      const { skillToolOffered, ...thread } = await folderConfigLoads(true)
-      // the Skill tool itself is Claude Code's own (it is there either way); what matters is that no folder skill ran
-      void skillToolOffered
-      for (const [k, v] of Object.entries(thread)) expect(v, `--setting-sources=user: ${k}`).toBe(false)
-    }, 240_000)
+    test(
+      'control (every source): each marker is seen; --setting-sources=user: none of them',
+      async () => {
+        const control = await folderConfigLoads(false)
+        for (const [k, v] of Object.entries(control)) expect(v, `control: ${k}`).toBe(true)
+        const { skillToolOffered, ...thread } = await folderConfigLoads(true)
+        // the Skill tool itself is Claude Code's own (it is there either way); what matters is that no folder skill ran
+        void skillToolOffered
+        for (const [k, v] of Object.entries(thread)) expect(v, `--setting-sources=user: ${k}`).toBe(false)
+      },
+      t(440_000),
+    )
   },
 )

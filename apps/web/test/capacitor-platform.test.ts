@@ -91,4 +91,52 @@ describe('capacitorPlatform adapter', () => {
     expect(spy).toHaveBeenCalledTimes(1)
     spy.mockRestore()
   })
+
+  describe('audioSession.set hands back the native answer (the player waits for it before play())', () => {
+    const withSetMode = (setMode: unknown) =>
+      createCapacitorPlatform({ Capacitor: { Plugins: { TalosAudio: { setMode } } } })
+
+    it('returns the plugin call as a promise that settles when the plugin answers', async () => {
+      let answer: () => void = () => {}
+      const p = withSetMode(
+        () =>
+          new Promise<void>((r) => {
+            answer = r
+          }),
+      )
+      const r = p.audioSession.set('playback')
+      expect(r).toBeInstanceOf(Promise)
+      let settled = false
+      void (r as Promise<void>).then(() => {
+        settled = true
+      })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      answer()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(settled).toBe(true)
+    })
+
+    it('a native error is an answer too: the promise resolves, it never rejects', async () => {
+      const p = withSetMode(() => Promise.reject(new Error('session refused')))
+      const r = p.audioSession.set('paused')
+      expect(r).toBeInstanceOf(Promise)
+      await expect(r).resolves.toBeUndefined()
+    })
+
+    it('returns nothing when there is no plugin, it throws, or it does not hand back a promise', () => {
+      expect(createCapacitorPlatform({ Capacitor: { Plugins: {} } }).audioSession.set('playback')).toBeUndefined()
+      expect(
+        withSetMode(() => {
+          throw new Error('boom')
+        }).audioSession.set('playback'),
+      ).toBeUndefined()
+      expect(withSetMode(() => 'done').audioSession.set('playback')).toBeUndefined()
+    })
+
+    it('the browser adapter returns nothing: a browser has no native answer to wait for', () => {
+      expect(webPlatform.audioSession.set('playback')).toBeUndefined()
+    })
+  })
 })

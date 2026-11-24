@@ -159,7 +159,7 @@ export type SocketCtx = {
   client: SocketClient
 
   // socket-state.ts
-  emit: (type: string, frame: Record<string, unknown>) => void
+  emit: (type: string, frame: Record<string, unknown>, meta?: { catchup?: boolean }) => void
   rowsOf: (messages: Record<string, MessageT[]>, threadId: string) => MessageT[]
   upsertMessage: (m: MessageT) => void
   patchMessage: (id: string, fn: (m: MessageT) => MessageT) => void

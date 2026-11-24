@@ -86,11 +86,17 @@ public enum GuardsSettings {
   /// the deny goes in as `--disallowedTools` right before it, and the guards stay off for that launch, with a warning. When the
   /// guards' file cannot be read or the merged one written, the guards' file goes in as before, so the guards are never dropped
   /// for the deny's sake, and the warning ends with `notDenied` (the Supervisor tells the phone).
+  ///
+  /// With the OS sandbox switch on (`sandbox`, a closure the caller gives only then: it runs the preflight and builds the pieces, OsSandbox.swift),
+  /// the sandbox block and its environment ride in the same one settings text. A launch that cannot carry it does not start (`refusal`: the
+  /// preflight's line, or the settings file that could not be made), and the owner's own `--settings` is left alone with a warning that the lock
+  /// is not active, as for the guards (os-sandbox.ts in main-launch.ts is the twin).
   public static func applyingToMain(
     to args: [String], talosHome: String, cwd: String? = nil,
+    sandbox: (() -> OsSandbox.Prepared)? = nil,
     read: (String) -> Data? = { FileManager.default.contents(atPath: $0) },
     write: (Data, String) throws -> Void = { try AtomicFile.write($0, to: $1) }
-  ) -> (args: [String], warnings: [String]) {
+  ) -> (args: [String], warnings: [String], refusal: String?) {
     let file = path(talosHome: talosHome)
     let guards = read(file)
     let launch = mainLaunchPath(talosHome: talosHome)
@@ -100,25 +106,44 @@ public enum GuardsSettings {
     if let i = flags.firstIndex(where: { $0 == "--settings" || $0.hasPrefix("--settings=") }) {
       var w: [String] = []
       if guards != nil { w.append("guards installed (\(file)) but the launch args already include --settings: the guards are NOT active") }
+      if sandbox != nil { w.append("the launch args already include --settings: \(sandboxNotOn)") }
       // right before their --settings, so the next word is an option and the rule list ends there
       var out = args
       out.insert(contentsOf: disallowedToolsArgs, at: i)
-      return (out, w)
+      return (out, w, nil)
     }
+    var pieces: OsSandbox.Pieces?
+    if let sandbox {
+      switch sandbox() {
+      case .refused(let why): return (args, [], why)
+      case .ready(let p): pieces = p
+      }
+    }
+    let carrying = { (o: [String: Any]) in pieces.map { OsSandbox.with(o, $0) } ?? o }
     var obj: [String: Any] = [:]
     if let guards {
       guard let o = SettingsJSON.object(guards) else {
-        return (["--settings", file] + args, ["the guards' file cannot be read: \(notDenied)"])
+        let why = "the guards' file cannot be read: \(notDenied)"
+        // with the switch on, a launch that cannot carry the sandbox does not start
+        if pieces != nil { return (args, [], "\(why); and \(sandboxNotOn), so Main is not started") }
+        return (["--settings", file] + args, [why], nil)
       }
       obj = o
     }
-    guard let data = encode(denyingComputerUse(obj)) else {
-      return (guards == nil ? args : ["--settings", file] + args, ["the main settings could not be made: \(notDenied)"])
+    guard let data = encode(carrying(denyingComputerUse(obj))) else {
+      let why = "the main settings could not be made: \(notDenied)"
+      if pieces != nil { return (args, [], "\(why); and \(sandboxNotOn), so Main is not started") }
+      return (guards == nil ? args : ["--settings", file] + args, [why], nil)
     }
-    guard guards != nil else { return (["--settings", String(decoding: data, as: UTF8.self)] + args, []) }
+    guard guards != nil else { return (["--settings", String(decoding: data, as: UTF8.self)] + args, [], nil) }
     do { try write(data, launch) } catch {
-      return (["--settings", file] + args, ["\(launch) could not be written (\(error)): \(notDenied)"])
+      let why = "\(launch) could not be written (\(error)): \(notDenied)"
+      if pieces != nil { return (args, [], "\(why); and \(sandboxNotOn), so Main is not started") }
+      return (["--settings", file] + args, [why], nil)
     }
-    return (["--settings", launch] + args, [])
+    return (["--settings", launch] + args, [], nil)
   }
+
+  /// The words that say why the extra lock on protected files (the OS sandbox) is not on for a launch that has the switch on.
+  public static let sandboxNotOn = "the extra lock on protected files (OS sandbox) is NOT active"
 }

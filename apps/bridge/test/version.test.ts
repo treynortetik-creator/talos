@@ -3,10 +3,12 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { UPDATER_GIT_OPTS_LEN } from '../src/updater-git.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, REPO_DIR, resolveVersion, shaOf, versionSkew } from '../src/version.ts'
 
+// the git command is hardened (updater-git.ts): the fake answers by the command itself, after the -c options
 const fake = (answers: Record<string, string | undefined>) => (cmd: string, args: string[]) =>
-  answers[`${cmd} ${args.join(' ')}`]
+  answers[`${cmd} ${(cmd === 'git' ? args.slice(UPDATER_GIT_OPTS_LEN) : args).join(' ')}`]
 const ours = () => true
 
 describe('resolveVersion', () => {

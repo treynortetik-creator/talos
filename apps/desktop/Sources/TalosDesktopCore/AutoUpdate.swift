@@ -25,11 +25,10 @@ public enum AutoUpdate {
   public static let mainDraftReason = "main has a draft"
   /// An automatic update that waits on unsent text in Main's box goes anyway once the text has been the same this long (a copy is saved).
   public static let draftStaleAfter: Double = 2 * 3600
-  /// How long an Update now waits for the thread agents (not Main's turn) before it goes anyway, counted from the press.
-  public static let threadWait: Double = 300
   /// The quiet look's words for background work under a thread's session (`thread <id> busy` names a busy thread).
   public static let threadBackgroundReason = "thread background work"
-  /// A reason of the quiet look that belongs to the thread agents (never to Main): an Update now gives these a limited wait.
+  /// A reason of the quiet look that belongs to the thread agents (never to Main): an Update now waits for these like for Main (the same
+  /// 2 hours, then it says so), and only the owner's "Update now anyway" goes past them sooner.
   public static func isThreadReason(_ why: String) -> Bool {
     why.hasPrefix("thread ") || why == "a thread restart is under way"
   }
@@ -108,6 +107,14 @@ public enum AutoUpdate {
   public static func busyLine(_ version: String, old: String) -> String {
     "Talos couldn\u{2019}t update to \(oneLine(version)): your agent was busy for 2 hours. Still on \(oneLine(old)). Try Update now again when it is idle."
   }
+  /// An Update now anyway that could not save the list of the threads it would cut off: it stops before it changes anything.
+  public static func interruptedListLine(_ version: String, old: String) -> String {
+    "Talos didn\u{2019}t update to \(oneLine(version)): it couldn\u{2019}t save the list of the threads it would interrupt, so it stopped before changing anything. Still on \(oneLine(old)). Try Update now again."
+  }
+  /// An update failed and Talos could not check that the app and its code went back together: the record stays until Try again passes.
+  public static func repairLine(_ version: String, old: String) -> String {
+    "Talos couldn\u{2019}t update to \(oneLine(version)), and it couldn\u{2019}t check that everything went back to \(oneLine(old)), so Talos may not work properly. Choose Check for Updates in the Talos menu, then press Try again."
+  }
   public static func pausedLine(_ version: String, old: String) -> String {
     "Talos \(oneLine(version)) didn\u{2019}t start properly on this Mac, so updates to it are paused for a week. Still on \(oneLine(old))."
   }
@@ -167,6 +174,7 @@ public enum AutoUpdate {
   public enum Failure: String, Sendable, CaseIterable {
     case signature, manifest, fetch, download, sha256, notarized = "app_check", tooOld = "too_old", dirty, checkout, deps, relay, commit
     case install, notQuit = "not_quit", identity, stopped, location, busy, unhealthy, rollbackFailed = "rollback_failed"
+    case checkoutConfig = "checkout-config", localCommits = "local-commits", olderRelease = "older-release"
     public var words: String {
       switch self {
       case .signature: return "the release's signature did not check out"
@@ -178,6 +186,9 @@ public enum AutoUpdate {
       case .tooOld: return "this version is too old to update itself; install the new one by hand"
       case .dirty: return "the Talos code folder has changes of its own"
       case .checkout: return "the Talos code folder could not be moved to the new version"
+      case .checkoutConfig: return "the Talos code folder has settings of its own that Talos does not trust, so it was left alone"
+      case .localCommits: return "the Talos code folder has changes of its own that are not in the new version"
+      case .olderRelease: return "the new version is older than the Talos code folder"
       case .commit: return "the new version's code is not in the public repository yet"
       case .deps: return "the new version's packages could not be installed"
       case .relay: return "the relay is not on the new version yet"
@@ -191,6 +202,12 @@ public enum AutoUpdate {
       case .rollbackFailed: return "the new version didn't start properly, and going back failed"
       }
     }
+  }
+
+  /// The folder was already on the new version's code when it turned out to have settings of its own that Talos does not trust: Talos
+  /// leaves it alone, so it cannot be put back for the owner.
+  public static func movedAndUntrustedLine(_ version: String, old: String) -> String {
+    "Talos couldn\u{2019}t finish updating to \(oneLine(version)). The Talos code folder has settings of its own that Talos does not trust, so it was left alone, and its files are now on the new version\u{2019}s code while Talos is still on \(oneLine(old)). To put it back, move that folder aside (for example to talos.old) and open Talos again: it downloads a fresh copy."
   }
 
   /// install.sh's exit codes as a failure (its header lists them).
@@ -225,6 +242,12 @@ public enum AutoUpdate {
     public var helper_started: Double?
     /// The release's commit (the public one), which the new app's bridge must run before it counts as healthy.
     public var commit: String?
+    /// The checkout was found untrusted after the prepare and could not be put back: the owner has been told (once), so the next look
+    /// only closes the record and tries nothing again.
+    public var moved_untrusted: Bool?
+    /// The update failed and the check that the app and the code went back together did not pass: the record stays, the owner has been
+    /// told, and nothing looks again until the owner presses Try again (a restart keeps it too).
+    public var repair: Bool?
     public var started_at: String
     public init(
       version: String, old_version: String, checkout: String, old_ref: String, old_head: String, helper_pid: Int32, started_at: String,
@@ -282,13 +305,15 @@ public enum AutoUpdate {
   /// never calls itself updated before that. `healthy`: this app's own health report for the pending version is written.
   public static func settle(pending: Pending, result: Result?, running: String?, helperAlive: Bool, healthy: Bool = false) -> Settled {
     let isNew = running.map { ReleaseManifest.compare($0, pending.version) == 0 } ?? false
+    if pending.moved_untrusted == true { return .failed(.checkoutConfig, restoreCheckout: false) }
     if let result {
       // ok, yet this app is not the new version: the swap said done and something else is running; the checkout matches the app on disk
       if result.ok { return isNew ? .updated : .failed(.install, restoreCheckout: false) }
       let why = result.why.flatMap(Failure.init(rawValue:)) ?? .stopped
       // restored nil: the checkout never moved; false: the script could not put it back, so the app tries once more. Never after a
-      // failed rollback: the checkout then belongs with the app that is still installed.
-      return .failed(why, restoreCheckout: result.restored == false && why != .rollbackFailed)
+      // failed rollback: the checkout then belongs with the app that is still installed. Never for checkout-config either: the swap
+      // refused a folder it will not touch (restored:false), and the way back would refuse it just the same.
+      return .failed(why, restoreCheckout: result.restored == false && why != .rollbackFailed && why != .checkoutConfig)
     }
     if helperAlive { return .waiting }
     // the new version running with its swap gone and no result (the swap was killed): it counts once it reports healthy itself

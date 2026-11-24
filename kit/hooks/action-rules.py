@@ -62,11 +62,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import _talos_common as C  # noqa: E402
 except Exception as _e:        # helpers will not load: fail open live, CLOSED unattended
-    if os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1":
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-              "permissionDecisionReason": "Talos action-rules could not load hooks/_talos_common.py (%s) and this run is unattended, so the action is blocked rather than allowed unchecked." % type(_e).__name__}}))
-    else:
-        print("{}")
+    _unatt = os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1"
+    try:
+        if _unatt:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                  "permissionDecisionReason": "Talos action-rules could not load hooks/_talos_common.py (%s) and this run is unattended, so the action is blocked rather than allowed unchecked." % type(_e).__name__}}))
+        else:
+            print("{}")
+        sys.stdout.flush()
+    except Exception:            # stdout cannot be written (its reader is gone): the exit code must still block a deny
+        os._exit(2 if _unatt else 0)
     sys.exit(0)
 
 KILL_NAME = "action-rules.off"
@@ -376,20 +381,35 @@ def tell_owner(e):
 
 
 # --------------------------------------------------------------------------- the hook
+def say(text, blocking):
+    """Write the hook's answer and flush it NOW. A stdout that cannot be written (Claude Code, or a test's reader, has closed
+    its end) must not end in Python's own exit-time flush error, which exits 120: a non-blocking hook error, so a deny or an
+    ask would let the call through. Like the timeout path: a verdict that blocks exits 2 (which blocks), an allow exits 0."""
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except Exception:
+        os._exit(2 if blocking else 0)
+
+
+def allow():
+    say("{}", False)
+
+
 def verdict(decision, reason):
-    print(C.pretool_json(decision, reason))
+    say(C.pretool_json(decision, reason), True)
 
 
 def check():
     C.arm_guard_timeout("action-rules")
     if C.killed(KILL_NAME):
-        print("{}")
+        allow()
         return
     data = C.read_stdin()
     tool = str(data.get("tool_name") or "")
     ti = data.get("tool_input") or {}
     if not tool or not isinstance(ti, dict):
-        print("{}")
+        allow()
         return
     text = None
     if tool == "Bash":
@@ -415,7 +435,7 @@ def check():
         rid, dec, why = r["id"], r["decision"], r.get("why", "")
         if dec == "allow":
             if pending is None:
-                print("{}")
+                allow()
                 return
             continue
         if dec == "never":
@@ -426,7 +446,7 @@ def check():
         if pending is None:
             pending = (rid, why)
     if pending is None:
-        print("{}")
+        allow()
         return
     rid, why = pending
     # ask
@@ -440,11 +460,11 @@ def check():
         if got and got.get("decision") == "allow":
             C.log_jsonl("action-rules.jsonl", {"rule": rid, "tool": tool,
                         "decision": "allow-always" if got.get("reason") == "always" else "allow-tapped"})
-            print("{}")
+            allow()
             return
     elif not problem and take_approval(rid):    # a moved HOME: no file counts
         C.log_jsonl("action-rules.jsonl", {"rule": rid, "tool": tool, "decision": "allow-approved"})
-        print("{}")
+        allow()
         return
     C.log_jsonl("action-rules.jsonl", {"rule": rid, "tool": tool, "decision": "ask"})
     note_ask(rid, call)
@@ -741,7 +761,11 @@ if __name__ == "__main__":
         raise
     except Exception as e:
         if role == "check":
-            C.guard_failed("action-rules", e)
+            try:
+                C.guard_failed("action-rules", e)
+                sys.stdout.flush()       # now, not at exit: a closed stdout must not turn a deny into exit 120
+            except Exception:
+                os._exit(2 if C.unattended() else 0)
         else:
             print("action-rules: %s" % e)
             sys.exit(1)

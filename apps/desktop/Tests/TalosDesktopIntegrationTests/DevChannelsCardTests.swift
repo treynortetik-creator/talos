@@ -450,6 +450,9 @@ struct DevChannelsCardTests {
     #expect(r.result?["outcome"] as? String == "nothing_pressed" && r.result?["reason"] as? String == "screen_changed", "\(String(describing: r.result))")
     #expect(!FileManager.default.fileExists(atPath: sends), "no key was sent")
     #expect(r.config.confirmedLaunch == nil)
+    // L14: the owner's own tap pressed nothing, so the offer is over; once the warning reads as itself again the next look makes a new id and a new card
+    unlink(swap)
+    #expect(r.wait(40) { r.sup.tickNow(); return r.offer.map { $0.id != o.id } ?? false }, "no new offer: \(String(describing: r.offer)), audit: \(r.audit)")
   }
 }
 
@@ -494,7 +497,8 @@ extension DevChannelsCardTests {
     #expect(r.wait(30) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_1" }, "no result")
     #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
     unlink(block)
-    #expect(r.offer?.id == o.id, "control: the same offer stands")
+    // L14: a verified tap that pressed nothing ends the offer: the next look makes a new id (the copy below is for the OLD one)
+    #expect(r.wait(40) { r.sup.tickNow(); return r.offer.map { $0.id != o.id } ?? false }, "no new offer: \(String(describing: r.offer))")
     var proof = try #require(first["proof"] as? [String: Any])
     let osig = try #require(proof["osig"] as? String)
     proof["osig"] = respelledSignature(osig)
@@ -502,7 +506,8 @@ extension DevChannelsCardTests {
     first["control_id"] = "ctl_2"
     try r.writeAnswerRaw(first)
     #expect(r.wait(30) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_2" }, "no result for the copy")
-    #expect(r.result?["reason"] as? String == "already_answered", "\(String(describing: r.result))")
+    // the offer it was signed for is gone (a new id stands), so the copy is for nothing on the pane; it is in the used list besides
+    #expect(r.result?["outcome"] as? String == "nothing_pressed" && ["unverified", "already_answered"].contains(r.result?["reason"] as? String ?? ""), "\(String(describing: r.result))")
     #expect(!FileManager.default.fileExists(atPath: sends), "the respelled copy pressed a key")
     let used = DialogProofsUsed.read(path: r.generalDir + "/" + DialogProofsUsed.mainFileName)
     #expect(used.count == 1 && used.first?.hasPrefix(o.id + "|") == true, "the used tap is not on disk: \(used)")

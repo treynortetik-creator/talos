@@ -10,6 +10,9 @@ import type { Storage } from '../../lib/storage.ts'
 /** How many reports wait at once. Past this the oldest AUTOMATIC one is dropped (and counted); owner reports are kept. */
 export const QUEUE_MAX = 50
 export const OWNER_QUEUE_MAX = 5
+/** Audio traces waiting at once: a fourth drops the oldest TRACE, never another report. They also go first when the queue is full. */
+export const AUDIO_TRACE_QUEUE_MAX = 3
+export const isAudioTrace = (p: ProblemT): boolean => p.kind === 'auto' && p.name.startsWith('Audio trace: ')
 
 export type QueuedProblem = {
   problem: ProblemT
@@ -82,7 +85,16 @@ export class ProblemQueue {
       await this.storage.del('problems', KEY(r.problem))
       this.dropped++
     }
-    const autos = rows.filter((r) => r.problem.kind === 'auto')
+    const traces = rows.filter((r) => isAudioTrace(r.problem))
+    for (const r of traces.slice(0, Math.max(0, traces.length - AUDIO_TRACE_QUEUE_MAX))) {
+      await this.storage.del('problems', KEY(r.problem))
+      this.dropped++
+    }
+    const kept = new Set(traces.slice(-AUDIO_TRACE_QUEUE_MAX).map((r) => KEY(r.problem)))
+    // A full queue loses traces before it loses an error.
+    const autos = rows
+      .filter((r) => r.problem.kind === 'auto' && (!isAudioTrace(r.problem) || kept.has(KEY(r.problem))))
+      .sort((a, b) => Number(isAudioTrace(b.problem)) - Number(isAudioTrace(a.problem)) || a.queued_at - b.queued_at)
     for (const r of autos.slice(0, Math.max(0, autos.length - QUEUE_MAX))) {
       await this.storage.del('problems', KEY(r.problem))
       this.dropped++

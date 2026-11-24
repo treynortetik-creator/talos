@@ -2,7 +2,7 @@
 // that opens the session panel. Everything else the old header carried lives one tap away: other threads in the left
 // menu, status, usage and agents in the session panel, thread settings in the menu.
 import type { ThreadStatusT, ThreadT } from '@talos-app/protocol'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { useTalos } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
@@ -12,8 +12,6 @@ import { BugHeaderButton } from '../bugreport/BugButton.tsx'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { FilesSheet } from '../files/FilesSheet.tsx'
 import { SENT_TEXT } from '../files/sentLogic.ts'
-import { usePalette } from '../palette/store.ts'
-import { PALETTE_TEXT } from '../palette/text.ts'
 import { chipParts, phaseOf, usageLabel } from '../session/logic.ts'
 import { useSessionSupported } from '../session/SessionTrigger.tsx'
 import { useSessionController } from '../session/store.ts'
@@ -113,11 +111,22 @@ export function PhoneHeader({
   thread,
   state,
   statusLabel,
+  searching = false,
+  onSearch = () => {},
 }: {
   thread: ThreadT
   state: ThreadStatusT['state'] | undefined
   statusLabel?: string | undefined
+  /** The thread search is open over the thread; the button that opened it takes the focus back when it closes. */
+  searching?: boolean | undefined
+  onSearch?: (() => void) | undefined
 }) {
+  const searchRef = useRef<HTMLButtonElement>(null)
+  const wasSearching = useRef(false)
+  useEffect(() => {
+    if (wasSearching.current && !searching) searchRef.current?.focus()
+    wasSearching.current = searching
+  }, [searching])
   const set = usePhonePanel((s) => s.set)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const supported = useSessionSupported()
@@ -196,12 +205,15 @@ export function PhoneHeader({
         onClick={() => setLibraryOpen(true)}
       />
       <FilesSheet threadId={thread.id} open={libraryOpen} onOpenChange={setLibraryOpen} />
+      {/* Search in THIS thread (owner, 2026-11-22: it used to open the command palette). The palette is on the list screens'
+          pull-down and the keyboard's Cmd/Ctrl+K. */}
       <button
+        ref={searchRef}
         type="button"
-        aria-label={PALETTE_TEXT.searchButton}
+        aria-label="Search this thread"
         aria-haspopup="dialog"
-        data-testid="palette-button"
-        onClick={(e) => usePalette.getState().open('palette', e.currentTarget)}
+        data-testid="thread-search-button"
+        onClick={onSearch}
         className="grid size-11 shrink-0 place-items-center rounded-pill text-on-chrome hover:bg-chrome-hover"
       >
         <IconSearch width={20} height={20} />

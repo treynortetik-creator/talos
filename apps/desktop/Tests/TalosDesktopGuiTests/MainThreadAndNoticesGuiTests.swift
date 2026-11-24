@@ -115,7 +115,7 @@ struct MainThreadAndNoticesGuiTests {
       w.model.saveSetting { $0.keepAwakeOnAC = !was.keepAwakeOnAC }
       w.model.saveSetting { $0.autoRestart.toggle() }
       w.model.saveSetting { $0.autoRestart.toggle() }  // an edit that is not the same twice: laid on once each
-      #expect(w.model.editLaunchLine("claude --one --two") == .updated(claudePath: "auto", args: ["--one", "--two"]))
+      #expect(w.model.editLaunchLine("claude --one --two") == .updated(claudePath: "auto", args: MainChannelFlag.ensured(["--one", "--two"])))
       #expect(w.model.useAgentFolder("/home/alex/elsewhere", launchArgs: []) == nil)
       #expect(w.model.terminalCommand.contains("--one --two"))
     }
@@ -290,7 +290,7 @@ struct MainThreadAndNoticesGuiTests {
     #expect(w.model.notice.contains("folder trust"), "the restart line replaced Main's needs-you line: \(w.model.notice)")
     w.model.notice = ""
     w.model.refreshNow()
-    try await Task.sleep(nanoseconds: 300_000_000)
+    await w.settle(15) { w.model.notice == TalosHomeChange.restartNotice(to: home) }
     #expect(w.model.notice == TalosHomeChange.restartNotice(to: home), "\(w.model.notice)")
     #expect(w.model.workers === first && w.model.workersHome == before, "a running session is never orphaned by a move")
 
@@ -319,6 +319,7 @@ extension MainThreadAndNoticesGuiTests {
     let gate = DispatchSemaphore(value: 0)
     first.queue.async { _ = gate.wait(timeout: .now() + 3) }
     w.model.refreshNow()
+    // timing-ok: no event shows a detach blocked on a queue; the held gate keeps the move from finishing whatever the wait
     try await Task.sleep(nanoseconds: 300_000_000)  // the move's detach is now waiting on that queue
     #expect(w.model.workers === first, "control: the move has not finished")
     #expect(w.model.importCommand("TALOS_APP_HOME=\(home) claude --two") == nil)  // a second setup, mid-move
@@ -327,6 +328,7 @@ extension MainThreadAndNoticesGuiTests {
     #expect(w.model.workersHome == home)
     let now = try #require(w.model.workers)
     defer { first.detach() }
+    // timing-ok: a negative window; the manager must not tick again within it
     try await Task.sleep(nanoseconds: 2_500_000_000)  // two of its ticks, had it been started again
     #expect(!first.isActive, "the manager that was let go took its lock again and runs with nobody holding it")
     #expect(now !== first && now.options.talosHome == home)

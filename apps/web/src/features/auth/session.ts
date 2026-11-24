@@ -9,7 +9,7 @@ import { resetAgentDraft } from '../agent-config/draftStore.ts'
 import { resetComposer } from '../composer/composerStore.ts'
 import { forgetNativeChoices } from '../pwa/nativeChoice.ts'
 import { clearRecent } from '../search/logic.ts'
-import { audioDock } from '../threads/audioDock.ts'
+import { audioPlayer } from '../threads/audioPlayer.ts'
 import { resetSpeak } from '../threads/speak.ts'
 import { clearThreadDescriptions } from '../threads/threadMeta.ts'
 
@@ -85,7 +85,7 @@ function resetTabMemory(): void {
   let failure: unknown
   // Audio keeps playing across routes now (D37): a signed-out phone must go quiet, and what was listened to goes with the chats.
   // Read aloud: asks still going to the Mac stop, and the notes and failures it kept for the previous owner's messages go.
-  for (const reset of [() => audioDock.resetForSignOut(), resetSpeak, resetAgentDraft, resetComposer]) {
+  for (const reset of [() => audioPlayer.resetForSignOut(), resetSpeak, resetAgentDraft, resetComposer]) {
     try {
       reset()
     } catch (e) {

@@ -14,37 +14,47 @@ export const SLOT_STATES: readonly WorkerStateT[] = ['starting', 'live', 'busy',
 
 /**
  * One slot holder: busy (never the cap's choice), its last activity (worker-idle.ts), and whether background work runs under it
- * (bg-work.ts; a table that could not be read counts): never the choice while a quiet one without any is there.
+ * (bg-work.ts; a table that could not be read counts): never the cap's choice.
  */
 export type Live = { threadId: string; busy: boolean; lastActive: number; background?: boolean }
 
-export type StartPlan = { kind: 'start' } | { kind: 'parkThenStart'; victim: string } | { kind: 'hold' }
+export type StartPlan =
+  | { kind: 'start' }
+  | { kind: 'parkThenStart'; victim: string }
+  | { kind: 'hold' }
+  /** Every slot is taken by a quiet session with background work: stop none, start over the limit and say the computer is busy. */
+  | { kind: 'startOverLimit' }
 
 /**
- * The quiet holders with no background work, longest idle first (a tie goes by thread id); only when every quiet one has some,
- * those (a park then cuts that work, and its thread is told).
+ * The quiet holders with no background work, longest idle first (a tie goes by thread id). One with background work (or a table
+ * that could not be read) is never a choice: a park would cut that work.
  */
 export function quietest(live: Live[]): Live[] {
-  const quiet = live
-    .filter((l) => !l.busy)
+  return live
+    .filter((l) => !l.busy && !l.background)
     .sort((a, b) => a.lastActive - b.lastActive || (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0))
-  const clean = quiet.filter((l) => !l.background)
-  return clean.length > 0 ? clean : quiet
 }
 
-/** Room for one more worker? When full, park the longest-idle worker that is not busy first; when every slot is busy, hold. */
+/**
+ * Room for one more worker? When full, park the longest-idle worker that is not busy and has no background work first. When the only
+ * quiet ones have background work, start over the limit (enforceCap brings the count down once that work ends); when every slot is
+ * busy, hold.
+ */
 export function planStart(live: Live[], maxLive: number): StartPlan {
   if (live.length < maxLive) return { kind: 'start' }
   const victim = quietest(live)[0]
-  return victim ? { kind: 'parkThenStart', victim: victim.threadId } : { kind: 'hold' }
+  if (victim) return { kind: 'parkThenStart', victim: victim.threadId }
+  return live.some((l) => !l.busy) ? { kind: 'startOverLimit' } : { kind: 'hold' }
 }
 
 /**
  * A lowered max_live, or more adopted workers than the cap: the longest idle of the extras go; busy ones wait. `staying` is the
- * live-state holders only: one on its way out has already made its room (counted, each tick would pick one more).
+ * live-state holders only: one on its way out has already made its room (counted, each tick would pick one more). A quiet one with
+ * background work (or a table that could not be read) is never parked and is not counted against the rest, so a session started over
+ * the limit stays while that work runs; when it ends, the longest idle goes.
  */
 export function capVictims(staying: Live[], maxLive: number): string[] {
-  const excess = staying.length - maxLive
+  const excess = staying.length - maxLive - staying.filter((l) => !l.busy && l.background === true).length
   return excess > 0
     ? quietest(staying)
         .slice(0, excess)

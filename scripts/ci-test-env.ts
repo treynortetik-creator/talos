@@ -47,6 +47,7 @@ export const RUNNER_VARS = [
   'CI_SHARD_TOOLS',
   'CI_TOOLS_DELPHI',
   'CI_TOOLS_CYCLOPS',
+  'CI_RUNNERS_TOKEN',
   'CI_FALLBACK',
   'CI_RUN_PREFIX',
   'CI_TITAN_IMAGE',
@@ -116,6 +117,17 @@ export const RUNNER_VARS = [
   'TALOS_CI_SETTLE_MAX_S',
   'TALOS_CI_SETTLE_POLL_S',
   'TALOS_CI_SETTLE_STALE_S',
+  // an outer heavy-lock hold (a suite run inside a gate) and the machine's own slot settings: a test's copy of ci-local.sh or
+  // heavy-lock.sh must have the slots its test says (a one-slot machine turns the gate/CI turn rule off), never the outer hold's marker
+  'TALOS_HEAVY_SLOTS',
+  'TALOS_CI_SLOTS',
+  'TALOS_HELD_LOCKS',
+  'TALOS_HEAVY_SLOT',
+  'TALOS_HEAVY_PW_PORT',
+  'TALOS_HEAVY_TMP',
+  'CI_TURN',
+  'CI_TURN_MAX_S',
+  'TALOS_TURN_ALERT_S',
 ] as const
 
 export function cleanEnv(): Record<string, string> {
@@ -136,6 +148,8 @@ export function copyRunnerMainQueue(scriptsDir: string): void {
   mkdirSync(dir, { recursive: true })
   cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', 'main-queue.sh'), join(dir, 'main-queue.sh'))
   cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', 'schedule.sh'), join(dir, 'schedule.sh')) // plan reads the dispatch marker
+  for (const f of ['online.sh', 'gh-account.sh'])
+    cpSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-runner', f), join(dir, f)) // plan asks which runners are online
 }
 
 /**

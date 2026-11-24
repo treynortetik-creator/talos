@@ -7,7 +7,7 @@
 // older version has a tracked file: the checkout runs with --no-overwrite-ignore, which refuses before changing anything. It asks y/N unless told --yes. The question is not tied to a terminal: --yes
 // or piped input answers it, and an empty answer (nothing to read) declines.
 //
-// It must load when the rest of the CLI cannot (a pull, then a failed install), so it imports node builtins and four small
+// It must load when the rest of the CLI cannot (a pull, then a failed install), so it imports node builtins and a few small
 // files only, and cli.ts dispatches it before cli-main.ts is loaded.
 import { existsSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -17,6 +17,8 @@ import { IN_PROGRESS } from './git-in-progress.ts'
 import { readGoodStarts } from './good-starts.ts'
 import { say } from './owner-words.ts'
 import { type Run, runCommand } from './run-command.ts'
+import { releaseCheckout } from './source-stamp.ts'
+import { checkoutProblemVia, NO_GIT, updaterGit } from './updater-git.ts'
 import { REPO_DIR } from './version.ts'
 
 export type RollbackDeps = { repoDir?: string; run?: Run }
@@ -84,7 +86,20 @@ export async function cmdRollback(
   })
   const repo = deps.repoDir ?? REPO_DIR
   const run = deps.run ?? runCommand
-  const git = (...a: string[]) => run(['git', ...a], repo)
+  const git = updaterGit(run, repo) // hardened: no fsmonitor, no hook, a clean environment (updater-git.ts)
+  // Set up from a release's source tarball (no .git; git is not run): there is no history here to step back through. The Talos
+  // app keeps the version before its last update and puts it back itself when the new one does not come up healthy.
+  const stamp = releaseCheckout(repo)
+  if (stamp)
+    throw new Error(
+      `this Talos was set up from release ${stamp.tag} (commit ${stamp.gitSha.slice(0, 7)}), not from a git clone, so there is no history here to roll back through. The Talos app keeps the release before its last update beside this folder as ${repo}.previous, and restores it by itself when an update does not come up healthy.`,
+    )
+  const problem = checkoutProblemVia(run, repo)
+  if (problem && problem !== NO_GIT) {
+    throw new Error(
+      `${repo} is not a plain git clone (${problem}), so it was left alone: git would read files in it that an agent could have written. Use a fresh clone, or ask whoever set it up.`,
+    )
+  }
   const top = git('rev-parse', '--show-toplevel')
   if (
     top.code !== 0 ||
@@ -103,7 +118,7 @@ export async function cmdRollback(
       `${repo} is in the middle of ${busy[1]} (it is in progress), so it was left alone. Finish it or abort it with git, then run this again.`,
     )
   }
-  const dirty = git('status', '--porcelain', '--untracked-files=no')
+  const dirty = git('status', '--porcelain', '--untracked-files=no', '--ignore-submodules=all')
   if (dirty.code !== 0) throw new Error(`could not read the state of ${repo}: ${dirty.out}`)
   if (dirty.out) {
     throw new Error(
@@ -158,7 +173,7 @@ export async function cmdRollback(
   }
   // git can exit 0 with some files not updated: look, before anything is installed on top of a half-done switch
   const now = git('rev-parse', 'HEAD')
-  const left = git('status', '--porcelain', '--untracked-files=no')
+  const left = git('status', '--porcelain', '--untracked-files=no', '--ignore-submodules=all')
   if (now.out !== target.commit || left.code !== 0 || left.out) {
     throw new Error(
       `git did not finish the switch (HEAD is at ${short(now.out)}${left.out ? ', with files that differ' : ''}), so nothing was installed. Look at git status in ${repo}.`,

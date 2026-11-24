@@ -168,9 +168,15 @@ describe('the dialog card', () => {
     expect(dialogOf(compose(trust({ subject: null })))?.subject).toBeNull()
   })
 
-  it('never outlives 15 minutes from now, whatever the file says', () => {
-    const c = compose(trust({ expires_at: iso(NOW + 24 * 3600_000) }))
-    expect(Date.parse(c.expires_at)).toBe(NOW + DIALOG_TTL_S * 1000)
+  it('never outlives a day from now, whatever the file says', () => {
+    expect(DIALOG_TTL_S).toBe(24 * 3600)
+    const c = compose(trust({ expires_at: iso(NOW + 48 * 3600_000) }))
+    expect(Date.parse(c.expires_at)).toBe(NOW + 24 * 3600_000)
+  })
+
+  it('a Mac that still offers for 15 minutes gets a 15-minute card, and one that offers for a day gets a day', () => {
+    expect(Date.parse(compose(trust({ expires_at: iso(NOW + 900_000) })).expires_at)).toBe(NOW + 900_000)
+    expect(Date.parse(compose(trust({ expires_at: iso(NOW + 24 * 3600_000) })).expires_at)).toBe(NOW + 24 * 3600_000)
   })
 
   it('uses the dialog expiry when it is sooner', () => {
@@ -513,8 +519,9 @@ describe('the fixtures the Mac side is built against', () => {
     expect(w?.threads.trip?.dialog).toMatchObject({ kind: 'trust', subject: '/home/alex/trip', cursor: 1 })
     expect(w?.threads.garden?.dialog?.options).toHaveLength(3)
     expect(w?.threads.inbox2?.dialog).toMatchObject({ kind: 'login', subject: null, options: [], cursor: null })
+    // the captured file is an older Mac's (15 minutes): it still parses whole, a day is only what a newer Mac writes
     for (const t of Object.values(w?.threads ?? {}))
-      expect(Date.parse(t.dialog?.expires_at ?? '') - Date.parse(t.dialog?.seen_at ?? '')).toBe(DIALOG_TTL_S * 1000)
+      expect(Date.parse(t.dialog?.expires_at ?? '') - Date.parse(t.dialog?.seen_at ?? '')).toBe(900_000)
   })
   it.each([
     ['dialog-card.json', DialogCardFile],
@@ -896,5 +903,120 @@ describe('the owner words for the free-text option', () => {
     expect(CardResolveFrame.safeParse({ ...base, text: 'x'.repeat(120) }).success).toBe(true)
     // an older app sends no text at all
     expect(CardResolveFrame.safeParse(base).success).toBe(true)
+  })
+})
+
+// ---- the usage-limit menu (pane-prompts row 7) ----
+const usage = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+  trust({
+    id: 'Ul5Qm8ZtRx3Cw9PkNa2HdB',
+    kind: 'usage_limit',
+    subject: 'Fable limit reached. It resets Aug 8, 4pm (Europe/Paris).',
+    options: ['Stop and wait', 'Switch model'],
+    cursor: null,
+    ...over,
+  })
+
+describe('the usage limit card', () => {
+  it('says when the limit resets in plain words and offers Stop and wait and Switch model only', () => {
+    const card = compose(usage())
+    expect(Card.safeParse(card).success && validateCard(card)).toEqual([])
+    expect(card.title).toBe("Work's session hit its usage limit")
+    expect(card.body).toBe(DIALOG_WORDING.sentence.usage_limit.replaceAll('{thread}', 'Work'))
+    expect(dialogOf(card)).toMatchObject({
+      dialog_kind: 'usage_limit',
+      subject: 'Fable limit reached. It resets Aug 8, 4pm (Europe/Paris).',
+      options: ['Stop and wait', 'Switch model'],
+    })
+    expect(dialogOf(card)?.free_text).toBeUndefined()
+    // nothing on it spends money or names a terminal
+    expect(JSON.stringify(card)).not.toMatch(/terminal|tmux|pane|funds|credits/i)
+  })
+  it('is bound: another reset time or another option list is another card', () => {
+    const a = compose(usage()).payload_hash
+    expect(a).not.toBe(compose(usage({ subject: 'Fable limit reached. It resets Aug 9, 4pm.' })).payload_hash)
+    expect(a).not.toBe(compose(usage({ options: ['Stop and wait'] })).payload_hash)
+  })
+  it('only ever offers the two real choices: any other option is no card (a forged workers.json, a payload)', () => {
+    for (const options of [
+      ['Stop and wait', 'Add funds to continue with usage credits'],
+      ['Switch to usage credits'],
+      ['Switch model', 'Stop and wait', 'Stop and wait'],
+      ['Stop and wait', 'Switch model', 'Upgrade'],
+    ])
+      expect(WorkerDialog.safeParse(usage({ options })).success).toBe(false)
+    expect(WorkerDialog.safeParse(usage({ options: ['Stop and wait'] })).success).toBe(true)
+    expect(WorkerDialog.safeParse(usage({ options: ['Switch model', 'Stop and wait'] })).success).toBe(true)
+    expect(WorkerDialog.safeParse(usage({ free_text: 0 })).success).toBe(false)
+    expect(
+      DialogCardPayload.safeParse({ ...(compose(usage()).payload as object), options: ['Add funds'] }).success,
+    ).toBe(false)
+  })
+  it('an unreadable reset is said plainly, and a card with none still parses', () => {
+    const card = compose(usage({ subject: "Usage limit reached. The screen doesn't say when it resets." }))
+    expect(dialogOf(card)?.subject).toMatch(/doesn't say when it resets/)
+  })
+  it('says what happened after the answer, and the expired-card line names no terminal', () => {
+    expect(dialogAnswerText('usage_limit', null, 'Stop and wait')).toBe(
+      'Stopped. Send a message after the limit resets to go on.',
+    )
+    expect(dialogAnswerText('usage_limit', null, 'Switch model')).toBe('Asked the session to switch model')
+    for (const where of [{ kind: 'mac' }, { kind: 'linux', machine: 'devbox', attach: 'x' }] as const)
+      expect(dialogFallbackLine('usage_limit', where)).toMatch(/card expired without an answer, so nothing was pressed/)
+  })
+  it('workers.json: an older Mac that writes no usage_limit is unaffected, and one with a bad option degrades that dialog only', () => {
+    const file = (dialog: unknown) =>
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: iso(NOW), workers_supported: true },
+        threads: { work: { state: 'live', tmux: 't-work', cwd: '/home/alex/work', dialog } },
+      })
+    expect(parseWorkersFile(file(usage()))?.threads.work?.dialog).toMatchObject({ kind: 'usage_limit' })
+    const bad = parseWorkersFile(file({ ...usage(), options: ['Add funds'] }))
+    expect(bad?.threads.work?.dialog).toBeUndefined()
+    expect(bad?.threads.work?.state).toBe('live')
+  })
+})
+
+describe('the usage limit card tells the truth about what each button does (review R1-3, R1-4, R1-2)', () => {
+  const only = (options: string[]) =>
+    trust({
+      id: 'Ul5Qm8ZtRx3Cw9PkNa2HdB',
+      kind: 'usage_limit',
+      subject: 'Usage limit reached. It resets 4pm.',
+      options,
+      cursor: null,
+    })
+  it('the sentence talks of switching model only when Switch model is on the card', () => {
+    const both = compose(only(['Stop and wait', 'Switch model'])).body ?? ''
+    expect(both).toMatch(/switch to another model/)
+    expect(both).toMatch(/Switch model opens/)
+    const wait = compose(only(['Stop and wait'])).body ?? ''
+    expect(wait).toBe(DIALOG_WORDING.sentenceUsageLimitWaitOnly.replaceAll('{thread}', 'Work'))
+    expect(wait).toMatch(/can't go on until the limit resets\./)
+    expect(wait).not.toMatch(/model/i)
+  })
+  it('Stop and wait says it stopped the turn and does not promise a resume', () => {
+    const said = dialogAnswerText('usage_limit', null, 'Stop and wait')
+    expect(said).toBe('Stopped. Send a message after the limit resets to go on.')
+    expect(said).not.toMatch(/automatic|resume|continue/i)
+    expect(compose(only(['Stop and wait'])).body).toMatch(/ends its current turn/)
+  })
+  it('a result that stopped part way is its own outcome with its own reason, from the card only', () => {
+    const base = { v: 1, dialog_id: 'Ul5Qm8ZtRx3Cw9PkNa2HdB', source: 'card', control_id: 'c1', at: iso(NOW) }
+    for (const reason of ['closed', 'typed', 'cleared'])
+      expect(DialogResult.safeParse({ ...base, outcome: 'partial', reason }).success).toBe(true)
+    // no reason, a reason of another outcome, or from a popup: not a result
+    expect(DialogResult.safeParse({ ...base, outcome: 'partial' }).success).toBe(false)
+    expect(DialogResult.safeParse({ ...base, outcome: 'partial', reason: 'unverified' }).success).toBe(false)
+    expect(DialogResult.safeParse({ ...base, outcome: 'nothing_pressed', reason: 'typed' }).success).toBe(false)
+    expect(
+      DialogResult.safeParse({ ...base, source: 'mac', control_id: undefined, outcome: 'partial', reason: 'typed' })
+        .success,
+    ).toBe(false)
+    expect(DIALOG_WORDING.usageStopped.typed).toBe(
+      'Closed the limit menu; /model was typed but not sent. Finish at the Mac or clear it.',
+    )
+    for (const t of Object.values(DIALOG_WORDING.usageStopped)) expect(t).not.toMatch(/nothing pressed/i)
   })
 })

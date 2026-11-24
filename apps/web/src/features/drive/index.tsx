@@ -8,7 +8,7 @@ import { useStore } from 'zustand'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import type { DriveScreenProps } from '../contracts.ts'
-import { audioDock } from '../threads/audioDock.ts'
+import { audioPlayer } from '../threads/audioPlayer.ts'
 import { loadSpeed, nextSpeed, type Speed } from '../threads/speed.ts'
 import { IDLE_END_MS } from './controller.ts'
 import { DRIVING_FAILED, setDriving, useDrivingState } from './driving.ts'
@@ -44,7 +44,7 @@ export function DriveScreen(_props: DriveScreenProps) {
   useEffect(() => {
     if (!active) return
     const p = getPlatform()
-    audioDock.pause({ handOver: true }) // Drive takes the audio route: a clip playing in the dock waits (the pill stays, paused)
+    audioPlayer.pause({ handOver: true }) // Drive takes the audio route: a clip playing in the message player waits (paused)
     p.audioSession.set('playback')
     let release: () => void = () => {}
     let gone = false
@@ -66,7 +66,7 @@ export function DriveScreen(_props: DriveScreenProps) {
       // Driving ended or the screen closed: let go of the audio route (the iPhone shell releases AVAudioSession so the
       // user's music can resume; the browser adapter just sets the type back to auto).
       p.audioSession.set('auto')
-      audioDock.reclaimSession() // a clip still loaded in the dock keeps its lock-screen controls
+      audioPlayer.reclaimSession() // a clip still loaded in the message player keeps its lock-screen controls
     }
   }, [active])
 
@@ -84,7 +84,7 @@ export function DriveScreen(_props: DriveScreenProps) {
     )
     return () => {
       p.mediaSession.clear()
-      audioDock.reclaimSession()
+      audioPlayer.reclaimSession()
     }
   }, [active, agent, queue, q.current?.label])
 
@@ -139,7 +139,7 @@ export function DriveScreen(_props: DriveScreenProps) {
   const cycleSpeed = () => {
     const next = nextSpeed(speed)
     setSpeed(next)
-    audioDock.setSpeed(next) // saves it and moves the dock's rows and element to the same speed
+    audioPlayer.setSpeed(next) // saves it and moves the message players to the same speed
     queue.applySpeed()
   }
 

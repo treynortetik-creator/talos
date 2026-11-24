@@ -4,6 +4,8 @@
 #   default            Main starts as usual (the dev-channel warning, its Enter, the notice and the input box), then the screen is drawn when
 #                      $FAKE_STATE_DIR/ul appears
 #   FAKE_UL_UNLISTED=1  with the screen up, the session drops out of `agents --json` (still alive), as a session stuck on it may
+#   FAKE_UL_ESC_ENDS=1  a lone Escape does what the menu's own `Esc to cancel` does: the screen goes to the idle box (../synthetic/usage-limit-after-esc.txt),
+#                      where each typed character is logged (CHAR:<c>) and drawn in the box, and Enter is logged (ENTER) and clears the box
 #   FAKE_UL_AT_START=mixed   the start shows the dev-channel warning's words with the usage-limit screen drawn under them, at the bottom:
 #                      the auto-accept must not press its Enter (it would land on the usage-limit screen)
 . "$(dirname "$0")/lib.sh"
@@ -17,11 +19,12 @@ if [ "${FAKE_UL_AT_START:-}" = mixed ]; then
   awk 'NR>9 && NR<=24{printf "%s\r\n", $0}' "$here/../synthetic/usage-limit.txt"
 else
   show_dialog; wait_enter; print_notice
-  while [ ! -f "$FAKE_STATE_DIR/ul" ]; do sleep 0.1; done
+  while [ ! -f "$FAKE_STATE_DIR/ul" ] && fake_alive; do sleep 0.1; done
   stty -echo -icanon min 1 time 0 2>/dev/null
   draw "$here/../synthetic/usage-limit.txt"
   [ -z "${FAKE_UL_UNLISTED:-}" ] || unregister
 fi
+idle=; typed=
 while :; do
   IFS= read -rsn1 k || exit 0
   if [ "$k" = $'\e' ]; then
@@ -33,4 +36,14 @@ while :; do
     k="CHAR:$k"
   fi
   keylog "$k"
+  if [ "$k" = ESC ] && [ -n "${FAKE_UL_ESC_ENDS:-}" ] && [ -z "$idle" ]; then idle=1; typed=; draw "$here/../synthetic/usage-limit-after-esc.txt"; continue; fi
+  if [ -n "$idle" ]; then
+    case "$k" in
+      ENTER) typed=; draw "$here/../synthetic/usage-limit-after-esc.txt" ;;
+      CHAR:*)
+        typed="$typed${k#CHAR:}"
+        printf '\033[2J\033[H'
+        awk -v t="$typed" 'NR>1{printf "\r\n"} { if ($0 == "\342\235\257\302\240") printf "%s", $0 t; else printf "%s", $0 }' "$here/../synthetic/usage-limit-after-esc.txt" ;;
+    esac
+  fi
 done

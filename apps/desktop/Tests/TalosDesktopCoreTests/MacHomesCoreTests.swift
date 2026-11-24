@@ -295,7 +295,7 @@ struct ThreadChoicesTests {
     for data in [nil, Data("[]".utf8), Data("{\"threads\": ".utf8), Data()] as [Data?] {
       let l = ThreadChoices.read(data)
       #expect(!l.readable)
-      #expect(ThreadChoices.note(l).contains("Couldn't read your threads"))
+      #expect(ThreadChoices.note(l).contains("settings file is missing"))
     }
     #expect(ThreadChoices.options(.unreadable, current: nil).count == 1)
     #expect(ThreadChoices.options(.unreadable, current: "daily").count == 2, "a saved choice is kept even when unreadable")
@@ -665,7 +665,7 @@ struct WordingTests {
   }
 
   @Test func theCharacterIsTheCompanionAndTheWindowIsMacSettings() {
-    #expect(MacSettingsText.windowTitle == "Mac settings" && MacSettingsText.companionName == "Companion")
+    #expect(MacSettingsText.windowTitle == "Talos Settings" && MacSettingsText.companionName == "Talos character")
     for (p, t) in sources() where !p.hasSuffix("CompanionController.swift") && !p.hasSuffix("CompanionPanels.swift") {
       #expect(!t.contains("Show Talos on screen"), "\(p)")
       #expect(!t.contains("Talos on screen: status"), "\(p)")

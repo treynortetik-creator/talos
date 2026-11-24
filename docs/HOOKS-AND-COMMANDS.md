@@ -14,7 +14,7 @@ Two extension seams:
   needs_terminal? }`. A name is one word or `word sub`.
 - There is ONE source: `export const COMMANDS` in `talos.ts`. The same list drives `terminalOnly()` and `terminalOnlyNames()` (the
   permission deny rules) and the worker fence.
-- `WORKER_COMMANDS_OK` (and `WORKER_READ_OK`: `status`, `doctor`, `logs` filtered to the thread's own lines) in `apps/bridge/src/worker/cli-refusal.ts` is a second, hand-kept list of what a thread session may run.
+- `WORKER_COMMANDS_OK` (and `WORKER_READ_OK`: `status`, `doctor`, `facts`, `logs` filtered to the thread's own lines) in `apps/bridge/src/worker/cli-refusal.ts` is a second, hand-kept list of what a thread session may run.
 - `talos-app` itself: `apps/bridge/src/cli-main.ts` has a hand-kept `USAGE` string and a `switch` of `case '<cmd>':`.
 - Existing honesty tests (`apps/bridge/test/talos.test.ts`): every COMMANDS name has one probe and every probe is listed; every listed
   command reaches its handler through the real CLI; every listed top-level name has a `case` in `cli-main.ts`.

@@ -18,6 +18,8 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { mainLaunchArgs } from '../guards/main-launch.ts'
 import { realFileSync } from '../real-file.ts'
+import { sayLaunch } from './launch-notes.ts'
+import type { MainEvent } from './notices.ts'
 
 type Json = Record<string, unknown>
 
@@ -329,22 +331,23 @@ export function workerFilesDenyRules(talosHome: string): string[] {
 }
 
 /**
- * The rules that let a thread's session edit its own live state file (`<agentDir>/threads/<id>.state.md`) without a prompt:
- * that exact path, as given and as it really is, as Edit( ) (which covers the Write tool too: FENCE_TOOLS). No glob, no folder: a sibling (another thread's file, a
- * `.bak`, a `..` path) is not covered. A folder name that holds a rule metacharacter, a quote or a control character gets none
- * (the session then asks, the safe side), as `fenceSafe` refuses such a home.
+ * The rules that let a thread's session edit its own live state file (`<agentDir>/threads/<id>.state.md`) without a prompt: that
+ * exact path, as given and as it really is, as Edit( ) (covers Write too: FENCE_TOOLS). No glob, no folder. Claude Code matches a rule
+ * without regard to case, so a case variant of the name is covered too (a different file on a case-sensitive disk, still allowed). A
+ * folder name with a rule metacharacter, a quote or a control character gets none (the session asks, the safe side), as `fenceSafe` does.
  */
 export function stateFileAllowRules(agentDir: string, threadId: string): string[] {
   return stateFileRules(agentDir, threadId, '')
 }
 
 /**
- * The matching deny rules: Claude Code reads a path rule gitignore-style, where a pattern that names a file also names everything
- * under it, so the allow rule would let a session write `<id>.state.md/anything` (Write makes parent folders). Deny wins over allow,
- * and `<file>/**` leaves the file itself alone.
+ * The matching deny rules, `<file>/*`: the allow also names everything under the file (gitignore-style) and Write makes parent folders,
+ * so a missing file could become a folder with planted files. The suffix is `/*`, never `/**`: Claude Code (2.1.330) strips only a
+ * trailing `/**`, so that deny names the file itself too (Edit: "File is in a directory that is denied", `sed -i` refused; deny beats
+ * allow). `<file>/*` names every child and neither the file nor `<file>/`.
  */
 export function stateFileDenyRules(agentDir: string, threadId: string): string[] {
-  return stateFileRules(agentDir, threadId, '/**')
+  return stateFileRules(agentDir, threadId, '/*')
 }
 
 function stateFileRules(agentDir: string, threadId: string, tail: string): string[] {
@@ -451,9 +454,18 @@ export function mainArgsWithGuards(
   args: string[],
   talosHome: string,
   cwd?: string,
-): { args: string[]; warning: string | null } {
+  d?: { audit: (e: string, f?: Record<string, string>) => void; tell?: (e: MainEvent) => void },
+): { args: string[]; warning: string | null; start: { beforeStart?: () => string | null } } {
   const r = mainLaunchArgs(args, talosHome, cwd ? { cwd } : {})
-  return { args: r.args, warning: r.warnings.length ? r.warnings.join('; ') : null }
+  if (d) sayLaunch(r, d)
+  // the extra lock (os_sandbox) is on and this launch cannot carry it: a throw is a launch that did not happen (main.ts says why and
+  // backs off), never a Main that starts without the lock that was asked for
+  if (r.refusal) throw new Error(r.refusal)
+  return {
+    args: r.args,
+    warning: r.warnings.length ? r.warnings.join('; ') : null,
+    start: r.recheck ? { beforeStart: r.recheck } : {},
+  }
 }
 
 // ---- AGENTS.md next to CLAUDE.md ----------------------------------------------------------------------------------------------

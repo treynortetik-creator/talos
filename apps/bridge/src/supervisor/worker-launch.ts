@@ -5,6 +5,7 @@
 // Pure but for the folder's realpath; workers.ts acts on what this decides.
 import { realpathSync } from 'node:fs'
 import { WORKER_TIMING, WorkerLaunched, type WorkerLaunchedT } from '@talos-app/protocol'
+import { osSandboxRecheck, SWITCH_UNREADABLE_NOTE } from '../guards/os-sandbox.ts'
 import { subThreadFence, subThreadTarget } from './worker-policy.ts'
 import type { UnreadOpt, WorkerRuntime, WorkerThread } from './worker-types.ts'
 
@@ -259,4 +260,24 @@ export function inOneFamily(a: WorkerThread, known: readonly WorkerThread[], oth
   const pa = a.sub?.shares && !a.sub.refusal ? a.sub.parentId : undefined
   const pb = b.sub?.shares && !b.sub.refusal ? b.sub.parentId : undefined
   return (pa !== undefined && (pa === b.id || pa === pb)) || (pb !== undefined && pb === a.id)
+}
+
+/** One start's launch; with the extra lock on it carries the check the host runs as its last step before the process starts. */
+export function workerLaunch(
+  thread: string,
+  argv: string[],
+  spec: { cwd: string; env: Record<string, string> },
+  lock: { home: string; folder: string } | null,
+  unreadable = false,
+) {
+  return {
+    launch: {
+      session: `t-${thread}`,
+      argv,
+      cwd: spec.cwd,
+      env: spec.env,
+      ...(lock ? { beforeStart: osSandboxRecheck(lock.home, lock.folder) } : {}),
+    },
+    ...(unreadable ? { lockNote: SWITCH_UNREADABLE_NOTE } : {}),
+  }
 }

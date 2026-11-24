@@ -14,7 +14,10 @@ export type SearchHitsState =
 
 const PAGE = 20
 
-export function useSearchHits(text: string): SearchHitsState {
+/** `threadId` limits the search to one thread; `limit` is the page size (20 for the sidebar's short list). */
+export function useSearchHits(text: string, opts: { threadId?: string; limit?: number } = {}): SearchHitsState {
+  const threadId = opts.threadId ?? ''
+  const limit = opts.limit ?? PAGE
   const client = useTalosClient()
   const feature = useFeature('search/1')
   const macOnline = useTalos((s) => s.presence.bridge_online)
@@ -35,16 +38,16 @@ export function useSearchHits(text: string): SearchHitsState {
       return
     }
     setState({ kind: 'loading' })
-    const filters = filtersFor({ threadId: '', from: 'any', hasFile: false, range: 'any' }, Date.now())
+    const filters = filtersFor({ threadId, from: 'any', hasFile: false, range: 'any' }, Date.now())
     const local = () => {
-      const hits = searchCached(cachedRef.current, q, filters, 'relevance', PAGE)
+      const hits = searchCached(cachedRef.current, q, filters, 'relevance', limit)
       return { kind: 'done', hits, total: hits.length, offline: true } as const
     }
     const t = setTimeout(async () => {
       try {
         if (offline) return setState(local())
         if (!client.search) throw new TalosClientError('search_unavailable', 'Search is not available in this build.')
-        const r = await client.search.search({ q, filters, sort: 'relevance', cursor: null, limit: PAGE })
+        const r = await client.search.search({ q, filters, sort: 'relevance', cursor: null, limit })
         if (mine === gen.current) setState({ kind: 'done', hits: r.hits, total: r.totalEstimate, offline: false })
       } catch (e) {
         if (mine !== gen.current) return
@@ -56,7 +59,7 @@ export function useSearchHits(text: string): SearchHitsState {
       }
     }, DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [q, offline])
+  }, [q, offline, threadId, limit])
 
   return state
 }

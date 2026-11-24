@@ -84,6 +84,12 @@ describe('a waiting dialog card', () => {
     )
   })
 
+  it('a card that lives a day says which day it runs out, so "Expires 14:00" never reads as past at 15:00 with 23 hours left', () => {
+    show(dialogCard(trustDialog({ expires_at: iso(NOW + 24 * 3600_000) })))
+    expect(screen.getByTestId('card-expiry').textContent).toMatch(/^Expires tomorrow \d/)
+    expect(screen.getByTestId('card-expiry').textContent).toMatch(/ if nobody answers$/)
+  })
+
   it('has one real button per option, in screen order, each at least 44 px tall', () => {
     show(dialogCard())
     const b = buttons()
@@ -281,7 +287,7 @@ describe('expired', () => {
   })
 
   it('a pending card past its time reads the same without waiting for the relay', () => {
-    show(dialogCard(trustDialog(), {}, NOW - 1_000_000))
+    show(dialogCard(trustDialog(), {}, NOW - 86_401_000))
     expect(screen.getByTestId('dialog-result').textContent).toMatch(/^Expired/)
     expect(screen.queryByTestId('dialog-buttons')).toBeNull()
   })
@@ -429,5 +435,72 @@ describe('the agent question card with a free-text option', () => {
     const f = client.sent.find((x) => x.type === 'card.resolve') as Record<string, unknown>
     expect(f.choice).toBe(1)
     expect('text' in f).toBe(false)
+  })
+})
+
+describe('the usage limit card (pane-prompts row 7)', () => {
+  const limit = (over: Partial<WorkerDialogT> = {}): WorkerDialogT =>
+    trustDialog({
+      id: 'Ul5Qm8ZtRx3Cw9PkNa2HdB',
+      kind: 'usage_limit',
+      subject: 'Fable limit reached. It resets 4pm (Europe/Paris).',
+      options: ['Stop and wait', 'Switch model'],
+      cursor: null,
+      ...over,
+    })
+
+  it('says when it resets in plain words, offers the two choices and names no terminal', () => {
+    show(dialogCard(limit()))
+    expect(screen.getByRole('heading', { name: "General's session hit its usage limit" })).toBeTruthy()
+    const subject = screen.getByTestId('dialog-subject')
+    expect(subject.textContent).toBe('Fable limit reached. It resets 4pm (Europe/Paris).')
+    // words, not a command: no monospace box
+    expect(subject.className).not.toContain('font-mono')
+    expect(buttons().map((x) => x.textContent)).toEqual(['Stop and wait', 'Switch model'])
+    const text = screen.getByRole('article').textContent ?? ''
+    expect(text).not.toMatch(/terminal|tmux|\bpane\b|Esc\b|\/model|credits|funds/i)
+  })
+
+  it('a card with no reset time on the screen says so', () => {
+    show(
+      dialogCard(
+        limit({ subject: "Usage limit reached. The screen doesn't say when it resets.", options: ['Stop and wait'] }),
+      ),
+    )
+    expect(screen.getByTestId('dialog-subject').textContent).toMatch(/doesn't say when it resets/)
+    expect(buttons().map((x) => x.textContent)).toEqual(['Stop and wait'])
+  })
+
+  it.each([
+    [0, 'Stop and wait'],
+    [1, 'Switch model'],
+  ])('a tap on %s sends that choice index and the card hash', async (choice, label) => {
+    const card = dialogCard(limit())
+    const client = show(card)
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    expect(client.sent.find((x) => x.type === 'card.resolve')).toMatchObject({
+      card_id: card.id,
+      action: 'primary',
+      choice,
+      payload_hash: card.payload_hash,
+    })
+    expect(client.sent.find((x) => x.type === 'card.resolve')).not.toHaveProperty('text')
+  })
+
+  it('answered: the past tense of the choice, and it does not say the agent is starting', () => {
+    show(dialogCard(limit(), answered('Stopped. Send a message after the limit resets to go on.', "Alex's iPhone")))
+    expect(screen.getByTestId('dialog-result').textContent).toBe(
+      'Stopped. Send a message after the limit resets to go on.',
+    )
+    const meta = screen.getByTestId('dialog-meta').textContent ?? ''
+    expect(meta).toContain("Answered on Alex's iPhone")
+    expect(meta).not.toMatch(/starting/)
+  })
+
+  it('expired, the card says nothing was pressed and names no terminal', () => {
+    show(dialogCard(limit(), { state: 'expired' }))
+    expect(screen.queryByTestId('dialog-buttons')).toBeNull()
+    expect(screen.getByRole('article').textContent ?? '').not.toMatch(/terminal/i)
   })
 })

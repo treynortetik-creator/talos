@@ -1,5 +1,5 @@
 // Who may run which relay command: connect is the owner's, in a terminal; update and auto on follow the peer-link gate (the lock and
-// outside text); disconnect, auto off and status are always the agent's to run.
+// outside text); disconnect is gated the same way (it forgets the token); auto off and status are always the agent's to run.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -44,8 +44,9 @@ describe('the command classes', () => {
     expect(terminalOnly(['relay', 'connect'])).toBe('relay connect')
     for (const a of ['update', 'auto', 'disconnect', 'status']) expect(terminalOnly(['relay', a]), a).toBeUndefined()
   })
-  test('update and auto are agent-unless-locked; connect is not', () => {
+  test('update, auto and disconnect are agent-unless-locked; connect is not', () => {
     expect(agentUnlessLocked(['relay', 'update'])).toBe('relay update')
+    expect(agentUnlessLocked(['relay', 'disconnect'])).toBe('relay disconnect')
     expect(agentUnlessLocked(['relay', 'auto', 'on'])).toBe('relay auto')
     expect(agentUnlessLocked(['relay', 'connect'])).toBeUndefined()
   })
@@ -56,20 +57,25 @@ describe('the command classes', () => {
 })
 
 describe('the gate', () => {
-  test('lock on: update and auto on are refused for the agent; disconnect, auto off and status are not', () => {
+  test('lock on: update, auto on and disconnect are refused for the agent, with the same words; auto off and status are not', () => {
     const w = home({ lock: true })
     expect(gate(w, ['relay', 'update'])).toBe(SETTINGS_LOCKED)
+    expect(gate(w, ['relay', 'disconnect'])).toBe(SETTINGS_LOCKED)
+    expect(gate(w, ['relay', 'disconnect'], true)).toBeUndefined() // a terminal is the owner's
     expect(gate(w, ['relay', 'auto', 'on'])).toBe(SETTINGS_LOCKED)
     expect(gate(w, ['relay', 'auto', 'off'])).toBeUndefined()
-    expect(gate(w, ['relay', 'disconnect'])).toBeUndefined()
     expect(gate(w, ['relay', 'status'])).toBeUndefined()
     expect(gate(w, ['relay', 'update'], true)).toBeUndefined() // a terminal is the owner's
   })
-  test('outside text since the owner spoke: update and auto on are refused; off, disconnect and status are not', () => {
+  test('outside text since the owner spoke: update, auto on and disconnect are refused; off and status are not', () => {
     const w = home({ outside: true })
     expect(gate(w, ['relay', 'update'])).toMatch(/outside text/)
     expect(gate(w, ['relay', 'auto', 'on'])).toMatch(/outside text/)
+    expect(gate(w, ['relay', 'disconnect'])).toMatch(/outside text/)
     expect(gate(w, ['relay', 'auto', 'off'])).toBeUndefined()
+  })
+  test('quiet home, unlocked: disconnect runs for the agent', () => {
+    const w = home()
     expect(gate(w, ['relay', 'disconnect'])).toBeUndefined()
   })
   test('quiet home: update runs for the agent, with one audit line that names the command only', () => {
@@ -98,9 +104,12 @@ describe('through the real command', () => {
     expect(u.code).toBe(1)
     expect(u.err).toContain(SETTINGS_LOCKED)
     expect(w.railway.calls.length).toBe(calls)
-    // off and disconnect still work for the agent under the lock
+    // off still works for the agent under the lock; disconnect is refused for it like update, and runs in a terminal
     expect((await cli(w, ['relay', 'auto', 'off'], { terminal: false })).code).toBe(0)
-    expect((await cli(w, ['relay', 'disconnect'], { terminal: false })).code).toBe(0)
+    const d = await cli(w, ['relay', 'disconnect'], { terminal: false })
+    expect(d.code).toBe(1)
+    expect(d.err).toContain(SETTINGS_LOCKED)
+    expect((await cli(w, ['relay', 'disconnect'], { terminal: true })).code).toBe(0)
     void mkdirSync
   })
 })

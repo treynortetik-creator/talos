@@ -69,6 +69,8 @@ export type ReleaseFeedDeps = {
   /** Tests: the guarded fetch's name lookup. */
   resolve?: (host: string) => Promise<readonly string[]>
   timeoutMs?: number
+  /** `talos-app facts`: a stale or missing cache may still be refreshed from the network for this answer, but nothing is written to the cache (not the list, not a failure). */
+  readOnly?: boolean
 }
 
 function readCache(file: string): Cache | undefined {
@@ -120,17 +122,20 @@ class FeedError extends Error {
  */
 export async function loadReleases(
   d: ReleaseFeedDeps,
-): Promise<{ versions: string[] | undefined; failure?: FeedFailure }> {
+): Promise<{ versions: string[] | undefined; failure?: FeedFailure; fetched_at?: number; from?: 'cache' | 'fetch' }> {
   const file = d.url ? undefined : join(d.home, 'release-feed.json')
   const cache = file ? readCache(file) : undefined
   const now = d.now()
   const age = cache ? now - cache.fetched_at : Number.POSITIVE_INFINITY
-  if (cache && age >= 0 && age < FEED_FRESH_MS) return { versions: cache.versions }
+  if (cache && age >= 0 && age < FEED_FRESH_MS)
+    return { versions: cache.versions, fetched_at: cache.fetched_at, from: 'cache' }
   const stale = cache && age >= 0 && age <= FEED_STALE_MAX_MS && cache.versions.length > 0 ? cache.versions : undefined
   if (cache?.failed_at !== undefined && cache.failure) {
     const since = now - cache.failed_at
     if (since >= 0 && since < FEED_FAILURE_MEMORY_MS)
-      return stale ? { versions: stale } : { versions: undefined, failure: cache.failure }
+      return stale
+        ? { versions: stale, fetched_at: cache.fetched_at, from: 'cache' }
+        : { versions: undefined, failure: cache.failure }
   }
   const timeoutMs = d.timeoutMs ?? FEED_TIMEOUT_MS
   try {
@@ -154,16 +159,16 @@ export async function loadReleases(
       )
     const versions = parseReleaseFeed(JSON.parse(await readCapped(res, FEED_MAX_BYTES)))
     if (versions.length === 0) throw new FeedError('the releases list has no release in it', 'empty')
-    if (file)
+    if (file && !d.readOnly)
       try {
         writeJsonAtomic(file, { fetched_at: now, versions } satisfies Cache, 0o600)
       } catch {
         // a cache that cannot be written only costs the next call another request
       }
-    return { versions }
+    return { versions, fetched_at: now, from: 'fetch' }
   } catch (e) {
     const failure: FeedFailure = e instanceof FeedError ? e.why : 'offline'
-    if (file)
+    if (file && !d.readOnly)
       try {
         // keep the last good list and its time; only the failure is new
         writeJsonAtomic(
@@ -179,7 +184,9 @@ export async function loadReleases(
       } catch {
         // see above
       }
-    return stale ? { versions: stale } : { versions: undefined, failure }
+    return stale
+      ? { versions: stale, fetched_at: cache?.fetched_at ?? 0, from: 'cache' }
+      : { versions: undefined, failure }
   }
 }
 

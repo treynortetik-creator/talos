@@ -2,6 +2,7 @@
 // that may already be delivered.
 import { newUlid, ORIGINAL_TS_FEATURE, RUN_MAX_AGE_MS, signOwnerFrame } from '@talos-app/protocol'
 import { TalosClientError } from './client.ts'
+import { holdUntilAck } from './reloadHold.ts'
 import { DEDUPE_WINDOW_MS, RESIGN_AFTER_MS, RunStaleError } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { OutboxEntry } from './socket-types.ts'
@@ -25,6 +26,7 @@ export function createOutboxSend(c: SocketCtx) {
       if (c.epoch !== began || !c.canSend() || discarding.has(clientMsgId)) return false
       c.ws?.send(marked.bytes)
       writtenOn.set(clientMsgId, c.connection)
+      holdUntilAck(clientMsgId) // in flight on this socket until the relay's ack (or the socket goes)
       return true
     })
   }

@@ -1,13 +1,19 @@
 // The pure part of Settings -> Health (docs/V2-FEATURES.md V2.5): GET /api/status in, rows / notes / banner out. Times are
 // read against the status' own `at`, never the browser's clock, so a row never disagrees with the server that wrote it.
 // (The V2.5 "External check" row is dropped: the hourly external check is not built, owner 2026-10-29.)
-import { DISK_LOW_BYTES, DISK_RECOVERED_BYTES, type HealthStatusT, type Host } from '@talos-app/protocol'
+import {
+  DISK_LOW_BYTES,
+  DISK_RECOVERED_BYTES,
+  type HealthStatusT,
+  type Host,
+  type WorkerStatusItemT,
+} from '@talos-app/protocol'
 import { relativeTime, timeLabel } from '../../lib/format.ts'
 import { computerLabel, hostSteps, placeWords } from '../../lib/hostWords.ts'
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'idle'
 export type HealthRow = {
-  id: 'relay' | 'bridge' | 'mod' | 'disk' | 'scheduler' | 'alerts'
+  id: 'relay' | 'bridge' | 'mod' | 'disk' | 'scheduler' | 'alerts' | `typing:${string}`
   label: string
   tone: Tone
   detail: string
@@ -26,6 +32,28 @@ export function formatFree(bytes: number): string {
   const gb = bytes / 1024 ** 3
   if (gb >= 1) return `${(Math.floor(gb * 10) / 10).toFixed(1)} GB`
   return `${Math.floor(bytes / 1024 ** 2)} MB`
+}
+
+/**
+ * One row per thread Talos cannot type into (the deaf-thread alarm, `workers.status` item `deaf`): how long, and how many keys it
+ * refused this hour. Nothing for a thread that is fine, and nothing when the status says nothing (an older Mac).
+ */
+export function typingRows(
+  items: readonly WorkerStatusItemT[] | undefined,
+  nameOf: (id: string) => string,
+): HealthRow[] {
+  return (items ?? []).flatMap((i): HealthRow[] =>
+    i.deaf
+      ? [
+          {
+            id: `typing:${i.thread_id}`,
+            label: nameOf(i.thread_id),
+            tone: 'warn',
+            detail: `Talos can't send it messages · ${i.deaf.minutes} min · ${i.deaf.refusals_1h} ${i.deaf.refusals_1h === 1 ? 'try' : 'tries'} refused this hour. If it stays that way, your main agent answers its messages.`,
+          },
+        ]
+      : [],
+  )
 }
 
 export function healthRows(

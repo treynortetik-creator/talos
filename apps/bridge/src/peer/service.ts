@@ -18,11 +18,12 @@ import { BlockedAddressError, createGuardedFetch } from '@talos-app/protocol/gua
 import type { Clock } from '../clock.ts'
 import { type BridgeContext, defaultThreadRef, postSystemNotice, type threadRef } from '../context.ts'
 import { redact } from '../redact.ts'
-import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { cleanHandoffText } from '../worker/handoff.ts'
 import { PeerLedger } from './ledger.ts'
 import { PEER_SECRET_SERVICE, peerSecretAccount } from './records.ts'
+import { relinkLine } from './relink.ts'
+import { clearPeerCopied, markPeerRejected, peerCopyState, peerScopedStore } from './secret-store.ts'
 import { signPeerMessage } from './sign.ts'
 import { readTaint } from './taint.ts'
 
@@ -110,10 +111,10 @@ export class PeerService {
   }
 
   private async secretStore(): Promise<SecretStore> {
-    this.scoped ??= homeScopedStore(
+    this.scoped ??= peerScopedStore(
       this.secrets ?? (await openSecretStore({ home: this.ctx.env.home })),
       this.ctx.env.home,
-      { kind: 'peer', log: (m) => this.ctx.log.info(m) },
+      { log: (m) => this.ctx.log.info(m) },
     )
     return this.scoped
   }
@@ -143,6 +144,7 @@ export class PeerService {
       return no(`The secret of "${peer}" could not be read from the key store. Nothing was sent; tell the owner.`)
     }
     if (!secret) return no(unlinked)
+    if (peerCopyState(this.ctx.env.home, peer) === 'rejected') return no(relinkLine(peer))
     if (this.ledger.isRevoked(peer))
       return no(`${peer} no longer accepts messages; run talos-app peer add again once it is linked.`)
 
@@ -288,6 +290,10 @@ export class PeerService {
     } catch {
       return this.retry(row, now, 'the key store could not be read')
     }
+    if (cfg && secret && peerCopyState(this.ctx.env.home, row.peer) === 'rejected') {
+      // the other side already refused this copied secret and the owner was told once: no more tries, no more lines
+      return this.ledger.finish(row.id, 'refused', 'needs_relink')
+    }
     if (!cfg || !secret) {
       this.ledger.finish(row.id, 'refused', 'not_linked')
       return void (await this.notice(`A message to ${row.peer} was not sent: ${row.peer} is no longer linked.`))
@@ -313,7 +319,15 @@ export class PeerService {
     }
     const code = await errorCode(res)
     const status = res.status
-    if (status >= 200 && status < 300) return this.ledger.finish(row.id, 'sent')
+    if (status >= 200 && status < 300) {
+      // the secret works, so a copy mark (and a refusal recorded under it) no longer says anything
+      try {
+        clearPeerCopied(this.ctx.env.home, row.peer)
+      } catch {
+        this.ctx.log.warn('peer copy mark not cleared')
+      }
+      return this.ledger.finish(row.id, 'sent')
+    }
     if (status === 404 && code === 'not_found') {
       // the relay's own answer for an inbox that is gone: remembered, so peer_send refuses until `peer add` links it again
       this.ledger.setRevoked(row.peer, now)
@@ -326,6 +340,19 @@ export class PeerService {
       const at = utcDayStart(now) + DAY_MS + MIDNIGHT_SLACK_MS
       if (at - row.created_at > PEER_RETRY_HOURS * 3600_000) return void (await this.giveUp(row))
       return this.ledger.retryAt(row.id, at)
+    }
+    // a secret copied from a legacy item may be another home's: the other side's refusal of the signature reads as a re-link
+    if ((status === 401 || status === 403) && peerCopyState(this.ctx.env.home, row.peer) !== 'none') {
+      this.ledger.finish(row.id, 'refused', code)
+      for (const p of this.ledger.pendingFor(row.peer)) this.ledger.finish(p.id, 'refused', 'needs_relink')
+      let first = true
+      try {
+        first = markPeerRejected(this.ctx.env.home, row.peer, now)
+      } catch {
+        // not recorded: the line is still said, and a later row would say it again
+      }
+      if (first) await this.notice(relinkLine(row.peer))
+      return
     }
     // 404 and 410 without the relay's code are a platform page, and a 408 is a slow server: all retried like a 5xx
     if (status >= 400 && status < 500 && ![404, 408, 410, 429].includes(status)) {

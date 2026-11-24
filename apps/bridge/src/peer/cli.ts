@@ -17,7 +17,6 @@ import { type BridgeEnv, paths } from '../config.ts'
 import { ConfigFile } from '../config-file.ts'
 import { openHistory } from '../history-store.ts'
 import { type RelayHttp, RelayHttpError } from '../relay-http.ts'
-import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PeerLedger } from './ledger.ts'
 import { type LinkCliDeps, type LinkEnv, runLink } from './link-cli.ts'
@@ -37,6 +36,7 @@ import {
   readSecretFile,
   writePeerSecretFile,
 } from './secret-file.ts'
+import { peerScopedStore } from './secret-store.ts'
 import { utcDayStart } from './service.ts'
 import { validPeerSecret } from './sign.ts'
 
@@ -133,7 +133,7 @@ async function runPeer(
   const secrets = async (): Promise<SecretStore> => {
     const store = deps.secrets ?? (await openSecretStore({ home: env.home }))
     // a keychain-wide store keeps this home's items under its own name (secrets/home-scope.ts), so any home may use it
-    return homeScopedStore(store, env.home, { kind: 'peer', log: (m) => io.err(`talos-app: ${m}`) })
+    return peerScopedStore(store, env.home, { log: (m) => io.err(`talos-app: ${m}`) })
   }
   const config = () => new ConfigFile(paths(env.home).configJson, { log: { warn: (m) => io.err(`talos-app: ${m}`) } })
 
@@ -293,13 +293,7 @@ async function runPeer(
           `talos-app: could not reach the relay to remove the inbox "${n}" (${e instanceof RelayHttpError ? `relay said ${e.status}` : (e as Error).message}). Run this again when it is reachable.`,
         )
       }
-      try {
-        await (await secrets()).delete(PEER_SECRET_SERVICE, peerSecretAccount(n))
-        found.push('its secret')
-      } catch (e) {
-        code = 1
-        io.err(`talos-app: could not delete the secret of "${n}" (${(e as Error).message}).`)
-      }
+      // the config entry goes first: a copy of a legacy secret needs a config entry, so nothing can bring the secret back after this
       try {
         const file = config()
         if (file.load().peers.some((p) => p.name === n)) {
@@ -309,6 +303,13 @@ async function runPeer(
       } catch (e) {
         code = 1
         io.err(`talos-app: config.json was not changed (${(e as Error).message}).`)
+      }
+      try {
+        await (await secrets()).delete(PEER_SECRET_SERVICE, peerSecretAccount(n))
+        found.push('its secret')
+      } catch (e) {
+        code = 1
+        io.err(`talos-app: could not delete the secret of "${n}" (${(e as Error).message}).`)
       }
       try {
         if (deletePeerSecretFile(env.home, n)) found.push('its secret file')

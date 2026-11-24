@@ -8,7 +8,12 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearLocalData } from '../../src/features/auth/session.ts'
-import { __resetDockForTests, audioDock, dockElement, getDockState } from '../../src/features/threads/audioDock.ts'
+import {
+  __resetAudioForTests,
+  audioElement,
+  audioPlayer,
+  getAudioState,
+} from '../../src/features/threads/audioPlayer.ts'
 import { MessageView } from '../../src/features/threads/MessageView.tsx'
 import {
   NOW_PLAYING_TITLE,
@@ -104,16 +109,24 @@ let playImpl: () => Promise<void>
 beforeEach(() => {
   vi.useFakeTimers()
   localStorage.clear()
-  __resetDockForTests()
+  __resetAudioForTests()
   resetSpeak()
+  history.pushState({}, '', '/')
   plays = 0
   playImpl = () => Promise.resolve()
+  // `paused` is honest: false from play() to pause(). A start that left it true would read as a play() that did not take.
+  const going = new WeakSet<HTMLMediaElement>()
+  vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockImplementation(function (this: HTMLMediaElement) {
+    return !going.has(this)
+  })
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
     plays++
+    going.add(this)
     this.dispatchEvent(new Event('play'))
     return playImpl()
   })
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLMediaElement) {
+    going.delete(this)
     this.dispatchEvent(new Event('pause'))
   })
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {})
@@ -121,7 +134,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetSpeak()
-  __resetDockForTests()
+  __resetAudioForTests()
   vi.useRealTimers()
   vi.restoreAllMocks()
   setPlatform(webPlatform)
@@ -175,12 +188,12 @@ describe('a tap', () => {
     await tick(1600)
     expect(r.calls.map((c) => c.fresh)).toEqual([true, false])
     expect(plays).toBe(1)
-    const dock = getDockState()
-    expect(dock.item?.key).toBe(speakKey(m.id))
-    // the lock screen and pill never carry message text
-    expect(dock.item?.title).toBe(NOW_PLAYING_TITLE)
-    expect(JSON.stringify(dock.item)).not.toContain(SECRET)
-    expect(JSON.stringify(dock.item)).not.toContain('deploy')
+    const loaded = getAudioState()
+    expect(loaded.item?.key).toBe(speakKey(m.id))
+    // the lock screen never carries message text
+    expect(loaded.item?.title).toBe(NOW_PLAYING_TITLE)
+    expect(JSON.stringify(loaded.item)).not.toContain(SECRET)
+    expect(JSON.stringify(loaded.item)).not.toContain('deploy')
   })
 
   it('a failure from the Mac, a refusal and an unknown answer all show words, never silence', async () => {
@@ -235,15 +248,50 @@ describe('the speaker may have changed hands while the Mac worked', () => {
     { state: 'ready', media: ref() },
   ]
 
-  it('Drive took the speaker (it asks the dock to pause): nothing plays', async () => {
+  it('Drive took the speaker (it asks the player to pause): nothing plays', async () => {
     const r = rig(script())
     mount(r.client, agentMsg())
     await tap()
-    audioDock.pause() // what drive/index.tsx does as it starts
+    audioPlayer.pause() // what drive/index.tsx does as it starts
     await tick(1600)
     expect(plays).toBe(0)
-    expect(getDockState().item).toBeNull()
+    expect(getAudioState().item).toBeNull()
     expect(screen.getByTestId('speak-status').textContent).toBe(READY_HINT)
+  })
+
+  it('he left the screen he tapped on: nothing plays (no message on screen could stop it), and Listen is ready', async () => {
+    history.pushState({}, '', '/t/general')
+    const r = rig(script())
+    mount(r.client, agentMsg())
+    await tap()
+    history.pushState({}, '', '/threads') // another screen, same page
+    await tick(1600)
+    expect(plays).toBe(0)
+    expect(getAudioState().item).toBeNull()
+    expect(screen.getByTestId('speak-status').textContent).toBe(READY_HINT)
+  })
+
+  it('he left the screen but the device has system controls: it plays, he can stop it from the lock screen', async () => {
+    setPlatform({ ...webPlatform, mediaSession: { ...webPlatform.mediaSession, controls: () => true } })
+    history.pushState({}, '', '/t/general')
+    const r = rig(script())
+    mount(r.client, agentMsg())
+    await tap()
+    history.pushState({}, '', '/threads')
+    await tick(1600)
+    expect(plays).toBe(1)
+    expect(getAudioState().playing).toBe(true)
+  })
+
+  it('staying on the same thread (a sub-page) still plays', async () => {
+    history.pushState({}, '', '/t/general')
+    const r = rig(script())
+    mount(r.client, agentMsg())
+    await tap()
+    history.pushState({}, '', '/t/general/files')
+    await tick(1600)
+    expect(plays).toBe(1)
+    expect(getAudioState().playing).toBe(true)
   })
 
   it('another clip is playing: it is not replaced', async () => {
@@ -254,15 +302,14 @@ describe('the speaker may have changed hands while the Mac worked', () => {
       key: newId('m'),
       mediaId: newId('md'),
       title: 'Voice note',
-      threadId: 'general',
       durationMs: 60_000,
     }
-    audioDock.open(other, '/media/other?c=2', [], { play: true })
-    expect(getDockState().playing).toBe(true)
+    audioPlayer.open(other, '/media/other?c=2', [], { play: true })
+    expect(getAudioState().playing).toBe(true)
     plays = 0
     await tick(1600)
     expect(plays).toBe(0)
-    expect(getDockState().item?.key).toBe(other.key)
+    expect(getAudioState().item?.key).toBe(other.key)
     expect(screen.getByTestId('speak-status').textContent).toBe(READY_HINT)
   })
 })
@@ -276,10 +323,11 @@ describe('the browser refuses sound (Safari, Home Screen app)', () => {
     await tick(0)
     expect(screen.getByTestId('speak-status').textContent).toBe(REFUSED_HINT)
     expect(listen().getAttribute('aria-label')).toBe('Resume')
+    expect(screen.queryByTestId('audio-refused')).toBeNull() // one line says it, not two
     // the Resume tap is a gesture: it plays, and the hint goes away
     playImpl = () => Promise.resolve()
     await tap()
-    expect(getDockState().playing).toBe(true)
+    expect(getAudioState().playing).toBe(true)
     expect(screen.queryByTestId('speak-status')).toBeNull()
   })
 
@@ -301,7 +349,7 @@ describe('a file the relay no longer has', () => {
     mount(r.client, m)
     await tap()
     expect(plays).toBe(1)
-    dockElement().dispatchEvent(new Event('error')) // the relay does not have the file: the app asks the Mac for it
+    audioElement().dispatchEvent(new Event('error')) // the relay does not have the file: the app asks the Mac for it
     expect(r.fetched).toEqual([media.media_id])
     await tick(21_000) // the Mac is slower than the app is willing to wait
     expect(screen.getByRole('alert').textContent).toContain("couldn't be loaded")
@@ -316,10 +364,10 @@ describe('a file the relay no longer has', () => {
     const r = rig([{ state: 'ready', media }])
     mount(r.client, agentMsg())
     await tap()
-    dockElement().dispatchEvent(new Event('error'))
+    audioElement().dispatchEvent(new Event('error'))
     plays = 0
     r.emit('media.ready', { media_id: media.media_id })
-    expect(getDockState().src).toContain('r=1')
+    expect(getAudioState().src).toContain('r=1')
     expect(plays).toBe(1)
   })
 })
@@ -340,7 +388,7 @@ describe('sign-out reaches a tap that is still waiting', () => {
     await act(async () => release({ state: 'ready', media: ref() }))
     await tick(5000)
     expect(plays).toBe(0)
-    expect(getDockState().item).toBeNull()
+    expect(getAudioState().item).toBeNull()
     expect(r.calls).toHaveLength(2) // no further asks
   })
 })

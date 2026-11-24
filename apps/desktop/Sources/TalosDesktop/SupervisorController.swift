@@ -448,7 +448,7 @@ final class SupervisorController: ObservableObject {
     case .confirmColdStart: return "accept the dev-channel warning in the Talos popup"
     case .restartNotConfirmed(let why): return "the restart's dialog wasn't confirmed (\(why.rawValue))"
     case .stuck: return "the session looks stuck"
-    case .startStalled: return "Claude has not finished starting; look at the pane"
+    case .startStalled: return "Claude has not finished starting; choose Restart your agent to try again"
     case .bridgeNotLive(let why): return SupervisorNotice.bridgeNotLive(why)
     case .relayUnreachable(let code): return SupervisorNotice.relayUnreachable(closeCode: code)
     case .notReading: return SupervisorNotice.mainNotReading

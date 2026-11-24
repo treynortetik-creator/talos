@@ -635,7 +635,7 @@ export function testSocket(audit: (e: string, f?: Record<string, string>) => voi
   return s
 }
 
-/** Restart-on-update holds unless a LIVE bridge's fresh status.json says the governor is ok or off (update-restart.ts). */
+/** Restart-on-update holds unless a LIVE bridge's fresh status.json says the governor is ok, off or unknown (update-restart.ts). */
 function updateGovernorOf(home: string): string | null {
   const l = bridgeLiveness(join(home, 'status.json'), Date.now())
   return l.state === 'live' ? l.status.governor : null

@@ -45,6 +45,7 @@ import { RelayHttp, RelayHttpError } from './relay-http.ts'
 import { feedDeps, relayReleaseReport } from './release-feed.ts'
 import { runCommand } from './run-command.ts'
 import { cmdSchedules } from './schedules/cli.ts'
+import { releaseCheckout, type SourceStamp } from './source-stamp.ts'
 import { type BridgeLiveness, bridgeLiveness, runningBridge } from './status-file.ts'
 import { mainTee } from './subagent-tee.ts'
 import {
@@ -55,9 +56,10 @@ import {
   teeCommand,
   writeTeePlan,
 } from './subagent-tee-install.ts'
-import { agentUnlessLocked, terminalOnly, usageText } from './talos.ts'
+import { agentUnlessLocked, terminalOnly, unknownSubcommand, usageText } from './talos.ts'
 import { cmdTheme } from './theme-cli.ts'
 import { cmdTrust } from './trust-cli.ts'
+import { checkoutProblemVia, NO_GIT, updaterGit } from './updater-git.ts'
 import { cmdV2 } from './v2-cli.ts'
 import { BRIDGE_COMMIT, BRIDGE_VERSION, commitReport, resolveVersion, versionSkew } from './version.ts'
 import { fenceOffFor, isThreadCaller, threadOfCaller, workerCliRefusal } from './worker/cli-refusal.ts'
@@ -82,6 +84,9 @@ const REPO_DIR = resolve(BRIDGE_DIR, '..', '..')
 const EXAMPLES_DIR = join(REPO_DIR, 'examples')
 
 class CliError extends Error {}
+
+/** What a command says when the extra lock keeps the Talos home read-only from where it runs. */
+const READ_ONLY_HOME = "This lock is on, so I'll ask Talos to change that setting."
 
 export function systemTimezone(): string {
   const z = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -546,10 +551,16 @@ export type CliDeps = {
   /** `share shortcut`: the OS (default `process.platform`) and the signer (default `shortcuts sign`); tests inject both. */
   platform?: NodeJS.Platform
   sign?: (input: string, output: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** The caller is the bridge itself, in process (an owner-approved card): the thread-session fence does not apply to it. */
+  bridgeCaller?: boolean
+  /** `peer ...`: run with the agent profile (no secret printed or read) even though the owner's own tap started it (card-cli.ts). */
+  peerAgentProfile?: boolean
   /** `peer ...`: the key store (default this machine's); tests inject one. */
   peer?: import('./peer/cli.ts').PeerCliDeps
   /** `relay ...`: the key store (default this machine's); tests inject one. */
   relay?: import('./relay/cli.ts').RelayCliDeps
+  /** `facts`: the clock, the relay, the key store, `gh` and so on; tests inject them. */
+  facts?: import('./facts.ts').FactsDeps
   /** `apps ...` (MCP apps): the status source, Keychain, connector and so on; tests inject all of them. */
   apps?: import('./apps/cli.ts').AppsCliDeps
   /** `update`: the checkout to update (default: the one this CLI runs from) and how to run a command there; tests inject both. */
@@ -558,6 +569,8 @@ export type CliDeps = {
   rollback?: { repoDir?: string; run?: (cmd: string[], cwd: string) => { code: number; out: string } }
   /** `start`: runs the command and resolves with its exit code (default Bun.spawn with the terminal attached). */
   spawn?: (cmd: string[], opts: { cwd: string; env: Record<string, string> }) => Promise<number>
+  /** `start`: a test seam, run between the sandbox's first check and its re-check right before the spawn. */
+  beforeSandboxRecheck?: () => void
   /** `start`: where `claude` is (default Bun.which). */
   which?: (name: string) => string | null | undefined
   /** `logs --follow`: stop when this returns true (default never; Ctrl-C ends it). */
@@ -577,6 +590,7 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
       deep: { type: 'boolean' },
       json: { type: 'boolean' },
       'no-kit': { type: 'boolean' },
+      'fix-mcp': { type: 'boolean' },
     },
     strict: true,
   })
@@ -588,6 +602,7 @@ async function cmdDoctor(env: BridgeEnv, args: string[], io: CliIO, deps: CliDep
       ...(values['claude-dir'] ? { claudeDir: values['claude-dir'] } : {}),
       ...(values.deep ? { deep: true } : {}),
       ...(values['no-kit'] ? { noKit: true } : {}),
+      ...(values['fix-mcp'] ? { fixMcp: true } : {}),
     },
     io,
     deps,
@@ -651,13 +666,18 @@ async function cmdStart(args: string[], io: CliIO, deps: CliDeps, home: string):
     ? claudeFlags
     : [...claudeFlags, '--dangerously-load-development-channels', 'server:talos-app']
   // Guards exist only if the owner ran `talos-app install-guards`; then every start carries them.
-  const guarded = withGuardsSettings(flags, home)
+  const guarded = withGuardsSettings(flags, home, agentDir)
+  if (guarded.refusal) throw new CliError(`talos-app start: ${guarded.refusal}`)
   if (guarded.warning) io.err(guarded.warning)
   const withGuards = guarded.flags
   const cmd = [claude ?? 'claude', ...withGuards]
   const childEnv = { TALOS_APP_BRIDGE: '1', MCP_PROTOCOL_NEGOTIATION: 'legacy' }
   io.out(`in ${agentDir}: TALOS_APP_BRIDGE=1 MCP_PROTOCOL_NEGOTIATION=legacy ${cmd.join(' ')}`)
   if (values['dry-run']) return 0
+  // the extra lock's check once more, as the last step before the process starts (deps.beforeSandboxRecheck: a test's seam)
+  deps.beforeSandboxRecheck?.()
+  const late = guarded.recheck?.() ?? null
+  if (late) throw new CliError(`talos-app start: ${late}`)
   const spawn =
     deps.spawn ??
     (async (c, o) => {
@@ -1047,6 +1067,27 @@ function askMacAppToCheck(appHome: string): string {
   }
 }
 
+/**
+ * `talos-app update` on a checkout set up from a release's source tarball: nothing here can move it (no git; the app swaps the
+ * whole folder for the next release's checked tarball), so on a Mac it asks the app to check now. The request carries no
+ * release, no address and no path: the app fetches and verifies the signed manifest itself, so a forged request can at most
+ * make it look early.
+ */
+function askAppForUpdate(stamp: SourceStamp, home: string, io: CliIO): void {
+  const sha = stamp.gitSha.slice(0, 7)
+  io.out(
+    `This Talos was set up from release ${stamp.tag} (commit ${sha}), not from a git clone, so the Talos app updates it.`,
+  )
+  if (ownerHost() !== 'mac') {
+    io.out('Update it the way it was installed: set it up again from the newer release.')
+    return
+  }
+  io.out(askMacAppToCheck(home))
+  io.out(
+    'If there is one, the app downloads and checks it, waits for a quiet moment, then updates the code and restarts Talos. Automatic updates must be on in the app; its update line says what it found.',
+  )
+}
+
 async function cmdUpdate(
   args: string[],
   io: CliIO,
@@ -1057,7 +1098,17 @@ async function cmdUpdate(
   parseArgs({ args, options: {}, strict: true })
   const repo = deps.update?.repoDir ?? REPO_DIR
   const run = deps.update?.run ?? runCommand
-  const git = (...a: string[]) => run(['git', ...a], repo)
+  const git = updaterGit(run, repo) // hardened: no fsmonitor, no hook, a clean environment (updater-git.ts)
+  // Set up from a release's source tarball (no .git; git is not run): the Talos app updates it from the next release's tarball,
+  // so ask it to look.
+  const stamp = releaseCheckout(repo)
+  if (stamp) return askAppForUpdate(stamp, loadEnv(procEnv).home, io)
+  const problem = checkoutProblemVia(run, repo)
+  if (problem && problem !== NO_GIT) {
+    throw new CliError(
+      `${repo} is not a plain git clone (${problem}), so it was left alone: git would read files in it that an agent could have written. Use a fresh clone, or ask whoever set it up.`,
+    )
+  }
   const top = git('rev-parse', '--show-toplevel')
   if (
     top.code !== 0 ||
@@ -1074,7 +1125,7 @@ async function cmdUpdate(
       `${repo} is on a detached HEAD (a worktree or a checked-out commit), so there is no branch to pull. Check out a branch first (git switch main), then run this again.`,
     )
   }
-  const dirty = git('status', '--porcelain', '--untracked-files=no')
+  const dirty = git('status', '--porcelain', '--untracked-files=no', '--ignore-submodules=all')
   if (dirty.code !== 0) throw new CliError(`could not read the state of ${repo}: ${dirty.out}`)
   if (dirty.out) {
     throw new CliError(
@@ -1085,10 +1136,20 @@ async function cmdUpdate(
   if (upstream.code !== 0) {
     throw new CliError(`the branch ${branch.out} does not follow a remote branch, so there is nothing to pull from.`)
   }
+  // commits of its own are not pulled onto (the signed updater refuses them the same way: auto-update-apply.sh, local-commits)
+  const ahead = git('rev-list', '--count', '@{u}..HEAD')
+  if (ahead.code !== 0 || !/^\d+$/.test(ahead.out)) {
+    throw new CliError(`could not tell whether ${repo} has commits of its own: ${ahead.out}`)
+  }
+  if (Number(ahead.out) > 0) {
+    throw new CliError(
+      `${repo} has commits that are not on its remote branch (${ahead.out} ahead of ${upstream.out}), so nothing was pulled. Move them to a branch of their own (git branch my-work), put this branch back on the remote one (git reset --hard ${upstream.out}), then run this again.`,
+    )
+  }
   const version = () =>
     resolveVersion(repo, {
-      run: (c, a, cwd) => {
-        const r = run([c, ...a], cwd)
+      run: (c, a, cwd, env) => {
+        const r = run([c, ...a], cwd, env ? { env } : undefined)
         return r.code === 0 ? r.out.trim() || undefined : undefined
       },
     })
@@ -1173,7 +1234,8 @@ export async function runCli(
   const [cmd, ...rest] = argv
   // A thread's own session (a lead) works through its own tools: the mailbox commands read and write across threads.
   const raw = envOverride ?? process.env
-  const refusal = workerCliRefusal(argv, raw, deps.cwd)
+  // the bridge running an approved card (card-cli.ts) is not a thread session, whatever folder it stands in
+  const refusal = deps.bridgeCaller === true ? undefined : workerCliRefusal(argv, raw, deps.cwd)
   if (refusal) {
     io.err(refusal)
     return 1
@@ -1207,6 +1269,11 @@ export async function runCli(
     }
   }
   if (gated) {
+    const typo = unknownSubcommand(argv)
+    if (typo) {
+      io.err(typo)
+      return 1
+    }
     io.err(
       say({
         mac: `talos-app ${gated} only runs in Terminal, typed by you. Open Terminal on your Mac and run it there; it will not run from an agent, a script or a pipe.`,
@@ -1232,6 +1299,8 @@ export async function runCli(
       case 'status':
         await cmdStatus(env, rest, io, deps)
         break
+      case 'facts':
+        return await (await import('./facts.ts')).cmdFacts(env, rest, io, deps.facts)
       case 'start':
         return await cmdStart(rest, io, deps, env.home)
       case 'logs':
@@ -1269,10 +1338,12 @@ export async function runCli(
       case 'peer':
         return (await import('./peer/cli.ts')).cmdPeer(env, rest, io, () => httpFor(env), {
           ...deps.peer,
-          agent: io.isTerminal === false,
+          agent: io.isTerminal === false || deps.peerAgentProfile === true,
         })
       case 'relay':
         return (await import('./relay/cli.ts')).cmdRelay(env, rest, io, deps.relay)
+      case 'sandbox':
+        return (await import('./sandbox-cli.ts')).cmdSandbox(env, rest, io)
       case 'theme':
         return cmdTheme(env, rest, io)
       case 'lead':
@@ -1326,6 +1397,17 @@ export async function runCli(
     }
     return 0
   } catch (e) {
+    // the extra lock (OS sandbox) keeps the Talos home read-only from a session: a write that fails there says so in one line
+    const code = (e as NodeJS.ErrnoException).code
+    const at = (e as NodeJS.ErrnoException).path
+    if (
+      (code === 'EROFS' || code === 'EACCES' || code === 'EPERM') &&
+      typeof at === 'string' &&
+      at.startsWith(env.home)
+    ) {
+      io.err(READ_ONLY_HOME)
+      return 1
+    }
     io.err(
       `talos-app: ${e instanceof RelayHttpError ? `relay said ${e.status}${e.detail ? `: ${e.detail}` : ''}` : (e as Error).message}`,
     )

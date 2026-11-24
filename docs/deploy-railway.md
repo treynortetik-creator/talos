@@ -36,7 +36,7 @@ Railway side.
     updating to X", then "is on X" or "didn't update to X: <reason>. Run talos-app relay update to try again"). After a failure it does
     not retry the same release by itself for 24 hours. `talos-app relay auto off` turns it off (always allowed to an agent), `relay auto on`
     turns it on. `talos-app relay status` shows what is connected, the switch and the last attempt (never the token);
-    `talos-app relay disconnect` forgets the token and the file.
+    `talos-app relay disconnect` forgets the token and the file; your agent may run it unless "Lock Talos settings" is on (the same rule as `relay update`).
   - **A relay the Mac app set up** holds the Railway login in the app (the app refreshes it; the bridge never sees a Railway token). The
     app writes `relay-connect.json` itself with `via: "app"` and no token. The bridge then asks through two files in the Talos home;
     their shapes are `RelayConnectFile`, `RelayRedeployRequest` and `RelayRedeployResult` in `packages/protocol/src/relay-redeploy.ts`

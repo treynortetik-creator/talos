@@ -160,7 +160,8 @@
     "real-2.1.329/askuser-field-focused.txt": [],
     "real-2.1.329/askuser-select.txt": [],
     "real-2.1.329/bash-permission.txt": [],
-    "real-2.1.329/bash-permission-2.txt": []
+    "real-2.1.329/bash-permission-2.txt": [],
+    "real-2.1.329/agents-panel-finished.txt": ["box-empty"]
   },
   "usage_limit": {
     "usage-limit": {
@@ -353,12 +354,12 @@
       },
       {
         "name": "a zero-width space",
-        "rows": ["  ⏸ manual mode on · v2\u200btip"],
+        "rows": ["  ⏸ manual mode on · v2​tip"],
         "box_empty": false
       },
       {
         "name": "a bidi override",
-        "rows": ["  ⏸ manual mode on · abc\u202edef"],
+        "rows": ["  ⏸ manual mode on · abc‮def"],
         "box_empty": false
       },
       {
@@ -408,12 +409,12 @@
       },
       {
         "name": "2.1.325's subagent row at 120 columns",
-        "rows": ["  ◯ general-purpose  Write lighthouse essay  …  3s · ↑ 50 tokens"],
+        "rows": ["  ⏺ main", "  ◯ general-purpose  Write lighthouse essay  …  3s · ↑ 50 tokens"],
         "box_empty": true
       },
       {
         "name": "2.1.325's subagent row at 30 columns",
-        "rows": ["  ◯ general-purpose 6s · ↑"],
+        "rows": ["  ⏺ main", "  ◯ general-purpose 6s · ↑"],
         "box_empty": true
       },
       {
@@ -485,6 +486,358 @@
         "name": "entering is another word: allowed (R4-2)",
         "rows": ["  ⏸ manual mode on · entering plan"],
         "box_empty": true
+      },
+      {
+        "name": "the real 2.1.330 footer with a canvas open (real-2.1.330-canvas)",
+        "rows": ["  ⏵⏵ bypass permissions on (shift+tab to cycle) · ⧉ canvas · esc to interrupt"],
+        "box_empty": true
+      },
+      {
+        "name": "the canvas part alone after a mode head",
+        "rows": ["  ⏸ manual mode on · ⧉ canvas"],
+        "box_empty": true
+      },
+      {
+        "name": "the canvas part on a row of its own",
+        "rows": ["  ⧉ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "the canvas part and a known part on a row of their own",
+        "rows": ["  ⧉ canvas · esc to interrupt"],
+        "box_empty": false
+      },
+      {
+        "name": "a footer wrapped: the second row opens with the cycle hint",
+        "rows": ["  ⏵⏵ bypass permissions on", "  (shift+tab to cycle) · ⧉ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "a footer wrapped: the second row is the canvas part and a hint",
+        "rows": ["  ⏵⏵ bypass permissions on (shift+tab to cycle)", "  ⧉ canvas · esc to interrupt"],
+        "box_empty": false
+      },
+      {
+        "name": "a dialog's row that holds the anchor, not opening with it",
+        "rows": ["  Run this? ⏵⏵ bypass permissions on · ⧉ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "an option row above the footer",
+        "rows": ["  ❯ 1. Yes", "  ⏵⏵ bypass permissions on · ⧉ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "the canvas part after Talos's own row only (a part nobody has captured there)",
+        "rows": ["  Talos: Opus 5 | 7d: 12%  ⏸ manual mode on · ⧉ canvas"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: an uppercase and underscore name",
+        "rows": ["  ⏸ manual mode on · ⧉ My_Deck"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: a title with a space",
+        "rows": ["  ⏸ manual mode on · ⧉ Q4 plan draft"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: several artifacts, a count",
+        "rows": ["  ⏸ manual mode on · ⧉ 2 · esc to interrupt"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: a name of two letters",
+        "rows": ["  ⏸ manual mode on · ⧉ ab"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: cut with an ellipsis mid-row",
+        "rows": ["  ⏸ manual mode on · ⧉ Quarterly roadmap dra… · esc to interrupt"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: 24 characters",
+        "rows": ["  ⏸ manual mode on · ⧉ 123456789012345678901234"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part: 25 characters",
+        "rows": ["  ⏸ manual mode on · ⧉ 1234567890123456789012345"],
+        "box_empty": false
+      },
+      {
+        "name": "the artifact part after Claude's own parts",
+        "rows": ["  ⏸ manual mode on · esc to interrupt · ⧉ deck · ↓ to manage"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part with a name that starts with an option number (a name is any text)",
+        "rows": ["  ⏸ manual mode on · ⧉ 1. Intro"],
+        "box_empty": true
+      },
+      {
+        "name": "the artifact part with only the symbol",
+        "rows": ["  ⏸ manual mode on · ⧉ "],
+        "box_empty": false
+      },
+      {
+        "name": "the artifact part with a bidi mark in its name",
+        "rows": ["  ⏸ manual mode on · ⧉ de‮ck"],
+        "box_empty": false
+      },
+      {
+        "name": "the artifact part with a zero-width space in its name",
+        "rows": ["  ⏸ manual mode on · ⧉ de​ck"],
+        "box_empty": false
+      },
+      {
+        "name": "the artifact part on a row of its own, a name",
+        "rows": ["  ⧉ My_Deck"],
+        "box_empty": false
+      },
+      {
+        "name": "an allowlisted warning symbol then plain words",
+        "rows": ["  ⏸ manual mode on · ⚠ low disk"],
+        "box_empty": true
+      },
+      {
+        "name": "the warning symbol then an answer word",
+        "rows": ["  ⏸ manual mode on · ⚠ yes"],
+        "box_empty": false
+      },
+      {
+        "name": "the warning symbol then an option number",
+        "rows": ["  ⏸ manual mode on · ⚠ 1. yes"],
+        "box_empty": false
+      },
+      {
+        "name": "a symbol that is not allowlisted (a star) then words",
+        "rows": ["  ⏸ manual mode on · ★ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "a pointer then words",
+        "rows": ["  ⏸ manual mode on · ❯ canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "a bullet then words",
+        "rows": ["  ⏸ manual mode on · ● canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "an arrow then words",
+        "rows": ["  ⏸ manual mode on · → canvas"],
+        "box_empty": false
+      },
+      {
+        "name": "the real 2.1.329 footer and agents panel with finished agents (real-2.1.329/agents-panel-finished)",
+        "rows": [
+          "  ⏵⏵ bypass permissions on · 10 background tasks · esc to interrupt · ↓ to manage",
+          "  ⏺ main",
+          "  ◯ talos-builder  waiting on 3 shells · Update now: busy threads wait 5 min max · since Friday 2:08 PM",
+          "  ◯ talos-builder  waiting on 1 shell · Mac updater git hardening (Swift) · since Saturday 10:19 AM",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens",
+          "  ◯ talos-builder  Running anUngrantedAppsWindowNeverAppearsInAnAgentCapture t… stopped · 1d 16h 25m · ↓ 407.9k tokens",
+          "  ◯ talos-builder  Polling gate6.log for results                                 stopped · 11h 0m 9s · ↓ 506.8k tokens",
+          "  ↓ 2 more"
+        ],
+        "box_empty": true
+      },
+      {
+        "name": "a panel straight under the box, no footer row",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"
+        ],
+        "box_empty": true
+      },
+      {
+        "name": "a panel with a stopped agent and a more row",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Polling gate6.log for results                                 stopped · 11h 0m 9s · ↓ 506.8k tokens",
+          "  ↓ 1 more"
+        ],
+        "box_empty": true
+      },
+      {
+        "name": "a panel whose agent rows take any text after the name",
+        "rows": ["  ⏺ main", "  ◯ reviewer  Reading (3 files) Q4_plan.md v2, then summarising"],
+        "box_empty": true
+      },
+      {
+        "name": "a panel with tree connectors",
+        "rows": ["  ⏺ main", "  ├ ◯ one  task", "  └ ◯ two  task"],
+        "box_empty": true
+      },
+      {
+        "name": "a panel of five agents and a more row",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ agent-1  task 1",
+          "  ◯ agent-2  task 2",
+          "  ◯ agent-3  task 3",
+          "  ◯ agent-4  task 4",
+          "  ◯ agent-5  task 5",
+          "  ↓ 2 more"
+        ],
+        "box_empty": true
+      },
+      {
+        "name": "a panel of six agents",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ agent-1  task 1",
+          "  ◯ agent-2  task 2",
+          "  ◯ agent-3  task 3",
+          "  ◯ agent-4  task 4",
+          "  ◯ agent-5  task 5",
+          "  ◯ agent-6  task 6"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a panel with a plain option word as an agent name (inside a real block)",
+        "rows": ["  ⏺ main", "  ◯ Yes"],
+        "box_empty": true
+      },
+      {
+        "name": "a lone agent row",
+        "rows": ["  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"],
+        "box_empty": false
+      },
+      {
+        "name": "a lone waiting row",
+        "rows": [
+          "  ◯ talos-builder  waiting on 3 shells · Update now: busy threads wait 5 min max · since Friday 2:08 PM"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a lone more row",
+        "rows": ["  ↓ 2 more"],
+        "box_empty": false
+      },
+      {
+        "name": "a more row straight after the main row (no agent before it)",
+        "rows": [
+          "  ⏵⏵ bypass permissions on · 10 background tasks · esc to interrupt · ↓ to manage",
+          "  ⏺ main",
+          "  ↓ 2 more"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "an agent row after the more row",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens",
+          "  ↓ 2 more",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "the main row twice",
+        "rows": [
+          "  ⏺ main",
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a blank spacer row between the footer and the main row (real-2.1.322/idle-agents-panel draws one)",
+        "rows": [
+          "  ⏵⏵ bypass permissions on · 10 background tasks · esc to interrupt · ↓ to manage",
+          "",
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"
+        ],
+        "box_empty": true
+      },
+      {
+        "name": "a viewed agent: the first row is ◯ main, not the main row",
+        "rows": [
+          "  ◯ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a focused panel: the pointer on an agent row",
+        "rows": ["  ⏺ main", "  ❯ ◯ talos-builder  Waiting for fam.out test results  4h 12m 9s"],
+        "box_empty": false
+      },
+      {
+        "name": "a focused panel: the pointer inside an agent row",
+        "rows": ["  ⏺ main", "  ◯ talos-builder  ❯ 4h 12m 9s"],
+        "box_empty": false
+      },
+      {
+        "name": "an agent row that starts with an option number",
+        "rows": ["  ⏺ main", "  ◯ 1. Yes"],
+        "box_empty": false
+      },
+      {
+        "name": "an agent row with nothing after the circle",
+        "rows": ["  ⏺ main", "  ◯ "],
+        "box_empty": false
+      },
+      {
+        "name": "the main mark in the middle of an agent row",
+        "rows": ["  ⏺ main", "  ◯ one ⏺ two"],
+        "box_empty": false
+      },
+      {
+        "name": "the main mark as a row inside the block",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens",
+          "  ⏺ main"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a panel followed by an option row",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens",
+          "  ❯ 1. Yes"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "a select list that looks like agent rows, with no main row",
+        "rows": ["  ◯ Allow once", "  ◯ Allow always", "  ↓ 2 more"],
+        "box_empty": false
+      },
+      {
+        "name": "an agent row with a bidi mark",
+        "rows": ["  ⏺ main", "  ◯ talos-builder  task‮"],
+        "box_empty": false
+      },
+      {
+        "name": "an agent row with a tab",
+        "rows": ["  ⏺ main", "  ◯ talos-builder\ttask"],
+        "box_empty": false
+      },
+      {
+        "name": "the more row with a word after it",
+        "rows": [
+          "  ⏺ main",
+          "  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens",
+          "  ↓ 2 more · Yes"
+        ],
+        "box_empty": false
+      },
+      {
+        "name": "the main row after a row that is no status row",
+        "rows": ["  some other row", "  ⏺ main", "  ◯ a  task"],
+        "box_empty": false
       }
     ]
   },
@@ -1412,13 +1765,13 @@
       },
       {
         "name": "r3-153",
-        "rows": ["  ⏸ manual mode on · x\u00a01. Sure"],
+        "rows": ["  ⏸ manual mode on · x 1. Sure"],
         "note": "option numbers (R3-5)",
         "box_empty": false
       },
       {
         "name": "r3-154",
-        "rows": ["  ⏸ manual mode on · 1\u00a0. Sure"],
+        "rows": ["  ⏸ manual mode on · 1 . Sure"],
         "note": "option numbers (R3-5)",
         "box_empty": false
       },
@@ -1701,7 +2054,7 @@
       },
       {
         "name": "r3-201",
-        "rows": ["  ⏸ manual mode on · 👨\u200d👩"],
+        "rows": ["  ⏸ manual mode on · 👨‍👩"],
         "note": "length in code points",
         "box_empty": false
       },
@@ -1737,25 +2090,25 @@
       },
       {
         "name": "r3-207",
-        "rows": ["  ⏸ manual mode on · x\u2028y"],
+        "rows": ["  ⏸ manual mode on · x y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
       {
         "name": "r3-208",
-        "rows": ["  ⏸ manual mode on · x\u00a0\u00a0y"],
+        "rows": ["  ⏸ manual mode on · x  y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
       {
         "name": "r3-209",
-        "rows": ["  ⏸ manual mode on · x\u3000\u3000y"],
+        "rows": ["  ⏸ manual mode on · x　　y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
       {
         "name": "r3-210",
-        "rows": ["  ⏸ manual mode on · x \u00a0y"],
+        "rows": ["  ⏸ manual mode on · x  y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
@@ -1767,7 +2120,7 @@
       },
       {
         "name": "r3-212",
-        "rows": ["  ⏸ manual mode on · x\u180ey"],
+        "rows": ["  ⏸ manual mode on · x᠎y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
@@ -1797,7 +2150,7 @@
       },
       {
         "name": "r3-217",
-        "rows": ["  ⏸ manual mode on · x\u00ady"],
+        "rows": ["  ⏸ manual mode on · x­y"],
         "note": "empty parts, tabs, odd spaces, hidden and invisible characters (R3-5, R3-6)",
         "box_empty": false
       },
@@ -1925,13 +2278,13 @@
       },
       {
         "name": "r3-238",
-        "rows": ["  ⏸ manual mode on · Sure\u00a0·\u00a0Skip · a · b"],
+        "rows": ["  ⏸ manual mode on · Sure · Skip · a · b"],
         "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
         "box_empty": false
       },
       {
         "name": "r3-239",
-        "rows": ["  ⏸ manual mode on · a\u00a0·\u00a0b\u00a0·\u00a0c\u00a0·\u00a0d"],
+        "rows": ["  ⏸ manual mode on · a · b · c · d"],
         "note": "whole rows: forged or odd heads, recorder heads, part counts, cut parts, box edges (R3-4 for the wide heads)",
         "box_empty": false
       },
@@ -2111,19 +2464,19 @@
       },
       {
         "name": "r3-268",
-        "rows": ["  ⏸ manual mode on · a\u2028\u2028b"],
+        "rows": ["  ⏸ manual mode on · a  b"],
         "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
         "box_empty": false
       },
       {
         "name": "r3-269",
-        "rows": ["  ⏸ manual mode on · a\u20281. b"],
+        "rows": ["  ⏸ manual mode on · a 1. b"],
         "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
         "box_empty": false
       },
       {
         "name": "r3-270",
-        "rows": ["  ⏸ manual mode on · a\u1680\u1680b"],
+        "rows": ["  ⏸ manual mode on · a  b"],
         "note": "second probe: banned glyph plus VS16 or combining mark, and space edges (R3-1)",
         "box_empty": false
       },

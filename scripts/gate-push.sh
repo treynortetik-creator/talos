@@ -158,12 +158,17 @@ lease_put() { # lease_put <expected sha or ''>: a new lease over exactly that on
   until=$(($(date +%s) + LEASE_S))
   new="$(printf 'talos push lease\n\nmachine=%s\nuntil=%s\nuntil_iso=%s\npid=%s\n' "$MACHINE" "$until" "$(iso_of "$until")" "$$" |
     git commit-tree "$EMPTY_TREE")" || return 2
-  # tests: say a put has begun, then take a while, so a stop lands inside it
-  if [ -n "${IN_RENEWER:-}" ]; then # a renewal, not the take
+  # tests: say a put has begun, then take a while, so a stop lands inside it: a renewal before its push, the take after its
+  # push has landed
+  if [ -n "${IN_RENEWER:-}" ]; then
     [ -z "${GATE_PUSH_TEST_PUT_MARK:-}" ] || : >"$GATE_PUSH_TEST_PUT_MARK"
     [ -z "${GATE_PUSH_TEST_PUT_DELAY_S:-}" ] || sleep "$GATE_PUSH_TEST_PUT_DELAY_S"
   fi
   git push -q --force-with-lease="$LOCK:$1" "$REMOTE" "$new:$LOCK" >/dev/null 2>&1 || return 1
+  if [ -z "${IN_RENEWER:-}" ]; then
+    [ -z "${GATE_PUSH_TEST_TAKE_MARK:-}" ] || : >"$GATE_PUSH_TEST_TAKE_MARK"
+    [ -z "${GATE_PUSH_TEST_TAKE_DELAY_S:-}" ] || sleep "$GATE_PUSH_TEST_TAKE_DELAY_S"
+  fi
   echo "$new"
 }
 # ---- main's verdict: is it red? (for --red-main, and to check another machine's claim) ---------------------------------------
@@ -173,7 +178,11 @@ lease_put() { # lease_put <expected sha or ''>: a new lease over exactly that on
 # tested is no verdict and is walked past: no local-ci/ status (nothing yet, or only report-ci/superseded), or, with no
 # failure, a local-ci/ status that says "not tested:" (its run was cancelled; that error is never a failure).
 RED_SHA="" RED_SAID="" RED_CACHE="" RED_LOOKED=0 RED_MARKER="" RED_MARKED=0
-repo_slug() { git remote get-url "$REMOTE" 2>/dev/null | sed -nE 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//'; }
+# why the last look found no red: "unreadable <sha7>", "green <sha7>" or "none" (no finished run in reach). red_verdict runs in a
+# subshell or a background step, so it leaves this in a file, as the renewer does LEASE_FILE; only --red-main's refusal reads it
+RED_WHY_FILE="$GIT_DIR_ABS/talos-red.why"
+# owner/name of a GitHub remote; an https address may carry credentials (https://<user or token>@github.com/...), never echoed
+repo_slug() { git remote get-url "$REMOTE" 2>/dev/null | sed -nE 's#^(https://([^/@]*@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\3#p' | sed 's/\.git$//'; }
 stand_in_ok() {
   local f u
   f="$(git remote get-url "$REMOTE" 2>/dev/null)" && [ -d "$f" ] || return 1
@@ -195,8 +204,9 @@ statuses_of() { # <sha>: "<context><TAB><state><TAB><description>" lines, the la
 }
 red_verdict() {
   local sha rows ci failed
+  echo none >"$RED_WHY_FILE" 2>/dev/null
   for sha in $(git rev-list --first-parent -n 20 "refs/remotes/$REMOTE/$BRANCH" 2>/dev/null); do
-    rows="$(statuses_of "$sha")" || return 0
+    rows="$(statuses_of "$sha")" || { echo "unreadable ${sha:0:7}" >"$RED_WHY_FILE" 2>/dev/null; return 0; }
     ci="$(grep -E '^(local-ci|report-ci)/' <<<"$rows")"
     grep -q '^local-ci/' <<<"$ci" || continue # no CI run on this commit (nothing yet, or skipped as superseded)
     ! awk -F'\t' '$2 == "pending" { f = 1 } END { exit !f }' <<<"$ci" || continue # not finished
@@ -204,146 +214,13 @@ red_verdict() {
     [ -n "$failed" ] || ! awk -F'\t' '$1 ~ /^local-ci\// && index($3, "not tested:") == 1 { f = 1 } END { exit !f }' <<<"$ci" ||
       continue # cancelled before it reported: not tested
     [ -z "$failed" ] || echo "$sha $failed"
+    [ -n "$failed" ] || echo "green ${sha:0:7}" >"$RED_WHY_FILE" 2>/dev/null
     return 0 # the newest finished run decides, red or green
   done
 }
-red_now() { # the red sha this machine reads (empty when main is not red); looked up once per run
-  if [ "$RED_LOOKED" = 0 ]; then
-    RED_CACHE="$(red_verdict)"
-    RED_LOOKED=1
-  fi
-  echo "${RED_CACHE%% *}"
-}
 
-# ---- the queue: who waits for the lease, and since when --------------------------------------------------------------------
-WAIT_REF="refs/locks/wait/$MACHINE"
-WAIT_SINCE="" # when this run began waiting (seconds since 1970); empty while it is not in the queue
-FIRST_SINCE="" # when this run first began waiting: a machine that let the lease go to gate again keeps its place
-WAIT_PUT=0    # when its wait ref was last written
-waiter_put() { # writes this machine's wait ref: since WAIT_SINCE, seen now
-  local new
-  new="$(printf 'talos push wait\n\nmachine=%s\nsince=%s\nseen=%s\npid=%s\n%s' "$MACHINE" "$WAIT_SINCE" "$(date +%s)" "$$" \
-    "${RED_SHA:+red_main=$RED_SHA
-}" | git commit-tree "$EMPTY_TREE")" || return 1
-  git push -q --force "$REMOTE" "$new:$WAIT_REF" >/dev/null 2>&1 || return 1
-  WAIT_PUT=$(date +%s)
-}
-waiter_join() { # in the queue from now (once), and still there (refreshed every WAITER_REFRESH_S)
-  if [ -z "$WAIT_SINCE" ]; then
-    WAIT_SINCE="${FIRST_SINCE:-$(date +%s)}"
-    FIRST_SINCE="$WAIT_SINCE"
-    waiter_put || true
-  elif [ $(($(date +%s) - WAIT_PUT)) -ge "$WAITER_REFRESH_S" ]; then
-    waiter_put || true
-  fi
-}
-waiter_leave() {
-  [ -n "$WAIT_SINCE" ] || return 0
-  git push -q "$REMOTE" ":$WAIT_REF" >/dev/null 2>&1 || true
-  WAIT_SINCE=""
-}
-# The live waiter (seen within WAITER_STALE_S) that began before <since>, or before at the same second with a smaller name:
-# printed when there is one, nothing when this machine is first in line. A queue that cannot be read puts nobody ahead.
-waiter_ahead() {
-  local since="$1" now ref name s seen claim theirs_red mine_red
-  now=$(date +%s)
-  git fetch -q --prune "$REMOTE" "+refs/locks/wait/*:refs/talos-wait/*" >/dev/null 2>&1 || return 0
-  for ref in $(git for-each-ref --format='%(refname)' refs/talos-wait/ 2>/dev/null); do
-    name="${ref#refs/talos-wait/}"
-    [ "$name" != "$MACHINE" ] || continue
-    s="$(git log -1 --format=%B "$ref" 2>/dev/null | sed -n 's/^since=//p' | head -1)"
-    seen="$(git log -1 --format=%B "$ref" 2>/dev/null | sed -n 's/^seen=//p' | head -1)"
-    case "$s$seen" in '' | *[!0-9]*) continue ;; esac
-    [ ${#s} -le 11 ] && [ ${#seen} -le 11 ] || continue
-    # live: seen lately, and not from the future (a clock far ahead, or a forged ref, must not block the queue for good)
-    [ $((now - seen)) -lt "$WAITER_STALE_S" ] && [ $((seen - now)) -le 120 ] && [ $((s - now)) -le 120 ] || continue
-    # a red-main claim counts only when it names the red this machine reads from the statuses itself
-    claim="$(git log -1 --format=%B "$ref" 2>/dev/null | sed -n 's/^red_main=//p' | head -1)"
-    # a claim, and main's verdict not looked up yet: the parent looks (once per run) and asks again
-    if [ -n "$claim" ] && [ "$RED_LOOKED" = 0 ]; then
-      echo "?red"
-      return 0
-    fi
-    theirs_red=0
-    if [ -n "$claim" ] && [ -n "$RED_CACHE" ] && [ "$claim" = "${RED_CACHE%% *}" ]; then theirs_red=1; fi
-    mine_red=0
-    [ -z "$RED_SHA" ] || mine_red=1
-    if [ "$theirs_red" = 1 ] && [ "$mine_red" = 0 ]; then
-      echo "$name red $claim"
-      return 0
-    fi
-    [ "$mine_red" = 1 ] && [ "$theirs_red" = 0 ] && continue
-    if [ "$s" -lt "$since" ] || { [ "$s" = "$since" ] && [ "$(printf '%s\n%s\n' "$name" "$MACHINE" | LC_ALL=C sort | head -1)" = "$name" ]; }; then
-      echo "$name"
-      return 0
-    fi
-  done
-}
-
-LEASE_WAITED=0 # seconds this run has spent waiting for the lease, across requeues (its gates do not count)
-lease_take() {
-  local waited=0 tries=0 seen until who pid got ahead red_ahead holder="" held_since=0 t0
-  t0=$(date +%s)
-  while :; do
-    waited=$((LEASE_WAITED + $(date +%s) - t0)) # by the clock: the looks take time too
-    until="" who="" pid=""
-    seen="$(lease_seen)"
-    if [ -n "$seen" ] && [ "$seen" != "$LEASE" ]; then
-      IFS="|" read -r until who pid <<<"$(lease_info "$seen")"
-      # its own lease, left behind by a release that failed: take it over, never wait on itself
-      if [ "$who" = "$MACHINE" ] && [ "$pid" = "$$" ]; then until=""; fi
-      if [ -n "$until" ] && [ "$until" -gt "$(date +%s)" ] 2>/dev/null; then
-        [ "$waited" -lt "$WAIT_S" ] || refuse "the push lease is held by ${who:-another machine} until $(iso_of "$until"); try again then"
-        waiter_join
-        # who, how long this run has seen them hold it, and how long it has waited: a jam is visible without asking
-        [ "$holder" = "${who:-?}:${pid:-?}" ] || { holder="${who:-?}:${pid:-?}"; held_since=$(date +%s); }
-        say "the push lease is held by ${who:-another machine} (pid ${pid:-?}, seen holding it since $(iso_of "$held_since"), until $(iso_of "$until")); waited ${waited}s: waiting"
-        sleep "$POLL_S"
-        continue
-      fi
-    fi
-    # free (or run out): first come, first served among the machines waiting for it, a checked red-main claim first
-    ahead="$(waiter_ahead "${WAIT_SINCE:-${FIRST_SINCE:-$(date +%s)}}")"
-    if [ "$ahead" = "?red" ]; then # a waiter claims main is red: look it up here, once per run (waiter_ahead is a subshell)
-      red_now >/dev/null
-      ahead="$(waiter_ahead "${WAIT_SINCE:-${FIRST_SINCE:-$(date +%s)}}")"
-    fi
-    red_ahead=0
-    case "$ahead" in *" red "*)
-      red_ahead=1
-      case " $RED_SAID " in *" ${ahead%% *} "*) ;; *)
-        say "${ahead%% *} goes ahead: main is red at $(cut -c1-7 <<<"${ahead##* }")"
-        RED_SAID="$RED_SAID ${ahead%% *}"
-        ;;
-      esac
-      ahead="${ahead%% *}"
-      ;;
-    esac
-    if [ -n "$ahead" ]; then
-      [ "$waited" -lt "$WAIT_S" ] || refuse "the push lease is free, but $ahead goes first; try again later"
-      waiter_join
-      [ "$red_ahead" = 1 ] || say "the push lease is free, but $ahead has waited longer: letting it go first"
-      sleep "$POLL_S"
-      continue
-    fi
-    [ -z "$seen" ] || [ "$seen" = "$LEASE" ] || [ -z "${until:-}" ] || say "the lease of ${who:-another machine} ran out: taking it over"
-    if got="$(lease_put "${seen:-}")"; then
-      LEASE="$got"
-      LEASE_UNTIL=$(($(date +%s) + LEASE_S)) # set here: lease_put runs in a subshell
-      LEASE_WAITED=$((LEASE_WAITED + $(date +%s) - t0))
-      waiter_leave
-      return 0
-    fi
-    # lost a race for it (it changed between the look and the take), or the remote will not take the ref: a few more
-    # looks, a poll apart, then on without a lease (it is advisory)
-    tries=$((tries + 1))
-    if [ "$tries" -ge 3 ]; then
-      say "could not take $LOCK on $REMOTE: pushing without a lease"
-      return 0
-    fi
-    sleep "$POLL_S"
-  done
-}
+# the queue for the lease, and the wait for it (lease_take): a Ctrl-C while it waits always ends the run there
+. scripts/gate/lease-wait.sh
 lease_renew() { # before it can run out: a new lease over the one held
   local got
   [ -n "$LEASE" ] || return 0
@@ -373,40 +250,58 @@ RENEWER=""
 renewer_start() {
   [ -n "$LEASE" ] || return 0
   printf '%s\n' "$LEASE" >"$LEASE_FILE"
+  rm -f "$LEASE_FILE.stop" "$LEASE_FILE.busy"
   (
     nap="" stop="" IN_RENEWER=1
     # Stopped: only marked here. A renewal in flight (its push may already have moved the lease) is finished and written to
     # LEASE_FILE first, so the release that follows names the lease that is really there; exiting in the middle left the
     # old one in the file, the release then failed, and the lease stayed held until it ran out. The nap goes at once.
+    # The stop file says it too: a TERM that comes while this shell is in a $(...) can be lost (see lease-wait.sh). The busy
+    # file is there while a renewal is in flight, so renewer_stop knows what it may end at once.
     trap 'stop=1; [ -z "$nap" ] || kill "$nap" 2>/dev/null' TERM
-    while [ -z "$stop" ]; do
+    while [ -z "$stop" ] && [ ! -e "$LEASE_FILE.stop" ]; do
       sleep "$RENEW_EVERY_S" </dev/null >/dev/null 2>&1 &
       nap=$!
-      [ -z "$stop" ] || kill "$nap" 2>/dev/null # a stop that came just before the nap began
+      [ -z "$stop" ] && [ ! -e "$LEASE_FILE.stop" ] || kill "$nap" 2>/dev/null # a stop that came just before the nap began
       wait "$nap"
       nap=""
-      [ -z "$stop" ] || break
+      [ -z "$stop" ] && [ ! -e "$LEASE_FILE.stop" ] || break
+      : >"$LEASE_FILE.busy"
       cur="$(cat "$LEASE_FILE" 2>/dev/null)"
-      [ -n "$cur" ] || exit 0
+      [ -n "$cur" ] || { rm -f "$LEASE_FILE.busy"; exit 0; }
       if got="$(lease_put "$cur")"; then
         printf '%s\n' "$got" >"$LEASE_FILE.tmp" && mv "$LEASE_FILE.tmp" "$LEASE_FILE"
       else
         say "the push lease was lost while the gate ran (another machine holds it now): going on without it"
         : >"$LEASE_FILE"
+        rm -f "$LEASE_FILE.busy"
         exit 0
       fi
+      rm -f "$LEASE_FILE.busy"
     done
     exit 0
   ) &
   RENEWER=$!
 }
 renewer_stop() {
+  local n=0
   [ -n "$RENEWER" ] || return 0
+  : >"$LEASE_FILE.stop"
   kill "$RENEWER" 2>/dev/null
+  # Bounded: a renewer that lost its TERM must not hold this up for good (nor the EXIT trap). A renewal in flight is given
+  # up to 60 s to finish; a renewer that is only napping gets 1 s to see the stop, then it and its nap are ended.
+  while kill -0 "$RENEWER" 2>/dev/null; do
+    if [ "$n" -ge 600 ] || { [ "$n" -ge 10 ] && [ ! -e "$LEASE_FILE.busy" ]; }; then
+      (step_kill KILL "$RENEWER")
+      break
+    fi
+    sleep 0.1
+    n=$((n + 1))
+  done
   wait "$RENEWER" 2>/dev/null
   RENEWER=""
   LEASE="$(cat "$LEASE_FILE" 2>/dev/null)"
-  rm -f "$LEASE_FILE"
+  rm -f "$LEASE_FILE" "$LEASE_FILE.stop" "$LEASE_FILE.busy"
   [ -z "$LEASE" ] || LEASE_UNTIL=$(($(date +%s) + LEASE_S / 2)) # not known exactly here: renew before the push to be sure
 }
 lease_release() {
@@ -428,8 +323,9 @@ lease_release() {
     LEASE="" # another machine's now: nothing of ours to let go
   fi
 }
-trap 'renewer_stop; lease_release; waiter_leave; handoff_back' EXIT
-trap 'exit 130' INT TERM
+trap 'renewer_stop; lease_release; waiter_leave; handoff_back; rm -f "$STEP_OUT"' EXIT
+# while it waits for the lease the trap only notes the signal, and the wait ends the run (scripts/gate/lease-wait.sh)
+trap 'STOPPED=1; [ -n "$WAITING" ] || exit 130' INT TERM
 
 # ---- one pass of the gate, stamped ----------------------------------------------------------------------------------------
 plan_of() { bash scripts/gate.sh --plan --base "$1" 2>/dev/null; }
@@ -860,7 +756,14 @@ base="$(fetch_tip)" || exit 1
 if [ "$RED_MAIN" = 1 ]; then
   RED_CACHE="$(red_verdict)"
   RED_LOOKED=1
-  [ -n "$RED_CACHE" ] || refuse "--red-main: main is not red (the newest finished CI run on main has no failed status, or GitHub could not be read): wait in line"
+  if [ -z "$RED_CACHE" ]; then
+    read -r why_word why_sha <"$RED_WHY_FILE" 2>/dev/null || why_word=""
+    case "$why_word" in
+      unreadable) refuse "--red-main: GitHub's statuses of main could not be read (at ${why_sha:-?}; gh api, or no GitHub remote): wait in line" ;;
+      green) refuse "--red-main: main is not red: its newest finished CI run (${why_sha:-?}) has no failed status: wait in line" ;;
+      *) refuse "--red-main: main is not red: no finished CI run on its last 20 commits: wait in line" ;;
+    esac
+  fi
   RED_SHA="${RED_CACHE%% *}"
   RED_MARKER="refs/locks/red-main/$MACHINE/$RED_SHA"
   if git ls-remote --exit-code "$REMOTE" "$RED_MARKER" >/dev/null 2>&1; then
@@ -916,7 +819,7 @@ while :; do
   [ "$(git rev-parse HEAD)" = "$sha" ] || refuse "HEAD moved while waiting for the lease (another branch checked out, or a commit): run it again"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || refuse "tracked files changed while waiting for the lease: commit or stash them, then run it again"
   lease_renew
-  new="$(fetch_tip)" || exit 1
+  new="$(fetch_tip)" || exit 1; [ "${GATE_PUSH_TRACE:-}" != 1 ] || say "trace: fetch_tip new=$new base=$base stamp_age=$(stamp_age) fresh_s=${GATE_PUSH_STAMP_FRESH_S:-1500} -> $(if [ "$new" != "$base" ]; then echo moved; elif [ "$(stamp_age)" -ge "${GATE_PUSH_STAMP_FRESH_S:-1500}" ]; then echo renew; else echo fresh; fi)" # a test asks: what decides the branch below
   if [ "$new" != "$base" ]; then
     rebase_onto "$new"
     why="$(race_mode "$base" "$new")"
@@ -998,3 +901,6 @@ while :; do
   races=$((races + 1))
   [ "$races" -lt "$TRIES" ] || refuse "the push lost the race to main $TRIES times"
 done
+# the loop ends only by an exit: here it was cut off (bash 3.2 drops the whole loop when it loses a trap)
+[ -z "$STOPPED" ] || exit 130
+refuse "the push loop was cut off (a signal bash lost?): run it again"

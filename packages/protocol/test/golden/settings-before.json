@@ -174,7 +174,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -185,7 +185,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -196,7 +196,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -207,7 +207,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -218,7 +218,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -229,7 +229,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -240,7 +240,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -251,7 +251,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -262,7 +262,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -273,7 +273,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -287,7 +287,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -471,7 +471,7 @@
         "v": 1,
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -482,7 +482,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -493,7 +493,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -504,7 +504,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -515,7 +515,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -526,7 +526,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -537,7 +537,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -548,7 +548,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -559,7 +559,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -570,7 +570,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -584,7 +584,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<481 chars>"
+          "error": "<493 chars>"
         },
         "card": {
           "ok": false,
@@ -1536,7 +1536,7 @@
         ],
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1547,7 +1547,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1558,7 +1558,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1569,7 +1569,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1580,7 +1580,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1591,7 +1591,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1602,7 +1602,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1613,7 +1613,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1624,7 +1624,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1635,7 +1635,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -1649,7 +1649,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<485 chars>"
+          "error": "<497 chars>"
         },
         "card": {
           "ok": false,
@@ -4008,7 +4008,7 @@
         "v": ["gmail"],
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4019,7 +4019,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4030,7 +4030,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4041,7 +4041,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4052,7 +4052,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4063,7 +4063,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4074,7 +4074,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4085,7 +4085,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4096,7 +4096,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4107,7 +4107,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4121,7 +4121,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<444 chars>"
+          "error": "<456 chars>"
         },
         "card": {
           "ok": false,
@@ -4294,7 +4294,7 @@
         "v": "general",
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4305,7 +4305,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4316,7 +4316,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4327,7 +4327,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4338,7 +4338,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4349,7 +4349,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4360,7 +4360,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4371,7 +4371,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4382,7 +4382,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4393,7 +4393,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -4407,7 +4407,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<443 chars>"
+          "error": "<455 chars>"
         },
         "card": {
           "ok": false,
@@ -5254,7 +5254,7 @@
         "v": "buffer",
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5265,7 +5265,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5276,7 +5276,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5287,7 +5287,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5298,7 +5298,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5309,7 +5309,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5320,7 +5320,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5331,7 +5331,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5342,7 +5342,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5353,7 +5353,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5367,7 +5367,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<446 chars>"
+          "error": "<458 chars>"
         },
         "card": {
           "ok": false,
@@ -5540,7 +5540,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5551,7 +5551,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5562,7 +5562,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5573,7 +5573,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5584,7 +5584,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5595,7 +5595,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5606,7 +5606,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5617,7 +5617,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5628,7 +5628,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5639,7 +5639,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -5653,7 +5653,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<448 chars>"
+          "error": "<460 chars>"
         },
         "card": {
           "ok": false,
@@ -7095,7 +7095,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7106,7 +7106,7 @@
         "v": 5,
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7117,7 +7117,7 @@
         "v": "x",
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7128,7 +7128,7 @@
         "v": true,
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7139,7 +7139,7 @@
         "v": false,
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7150,7 +7150,7 @@
         "v": null,
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7161,7 +7161,7 @@
         "v": [],
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7172,7 +7172,7 @@
         "v": {},
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7183,7 +7183,7 @@
         "v": "<5000 chars>",
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7194,7 +7194,7 @@
         "v": "Not/AZone",
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7208,7 +7208,7 @@
         },
         "propose": {
           "ok": false,
-          "error": "<442 chars>"
+          "error": "<454 chars>"
         },
         "card": {
           "ok": false,
@@ -7244,7 +7244,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<484 chars>"
+        "error": "<496 chars>"
       }
     ]
   },
@@ -7275,7 +7275,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<486 chars>"
+        "error": "<498 chars>"
       }
     ]
   },
@@ -7303,7 +7303,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<494 chars>"
+        "error": "<506 chars>"
       }
     ]
   },
@@ -7334,7 +7334,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<491 chars>"
+        "error": "<503 chars>"
       }
     ]
   },
@@ -7362,7 +7362,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<498 chars>"
+        "error": "<510 chars>"
       }
     ]
   },
@@ -7393,7 +7393,7 @@
     "agent": [
       {
         "ok": false,
-        "error": "<491 chars>"
+        "error": "<503 chars>"
       }
     ]
   },
@@ -7560,6 +7560,7 @@
       "always_allow",
       "dev.thread_fence",
       "dev.note_lookup",
+      "os_sandbox",
       "settings_lock",
       "dedicated",
       "theme"
@@ -7593,6 +7594,7 @@
       "Always allowed: none → none",
       "Thread fence: on → undefined",
       "Notes that may matter: on → undefined",
+      "Extra lock on protected files (experimental): off → undefined",
       "Lock Talos settings: off → undefined",
       "Thread sessions: on → [object Object]",
       "Colour theme: talos → paper"
@@ -7616,6 +7618,7 @@
       [],
       true,
       true,
+      false,
       false,
       true,
       "talos"
@@ -7653,6 +7656,7 @@
         "thread_fence": "__undefined__",
         "note_lookup": "__undefined__"
       },
+      "os_sandbox": "__undefined__",
       "settings_lock": "__undefined__",
       "dedicated": {
         "enabled": {

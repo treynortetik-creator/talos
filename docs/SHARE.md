@@ -51,6 +51,34 @@ curl -X POST https://<your relay>/api/share \
 It also accepts JSON (`Content-Type: application/json`) with the fields `text`, `url`, `title` and `note`. Anything else,
 a thread name included, is refused with 400: a share link cannot choose where its item goes.
 
+### Sending twice
+
+If a reply is lost, a client cannot tell whether the relay stored the share. Add a header with a random id, the same on
+every retry of that one share, and the relay stores it once:
+
+```sh
+curl -X POST https://<your relay>/api/share \
+  -H "Authorization: Bearer talos_share_..." \
+  -H "Idempotency-Key: 0f8fad5b-d9cb-469f-a165-70867728950e" \
+  -F "text=Read this later"
+```
+
+- The id is 16 to 64 letters, digits, `-` or `_` (a UUID works). Anything else is refused with 400. It is a header, not a
+  form field, because a relay refuses fields it does not know and ignores headers it does not know: an app that sends it
+  still works against an older relay, which just stores a retry twice.
+- A repeat gets `202` with the same `share_id` as the first time, and nothing else happens: no second row, no second push, no
+  files saved again, no upload budget used. It still counts as a request for the per-address and per-link limits.
+- The id belongs to its share link. The relay keeps it for two days (at least one). A refused share (400, 403, 413, 429)
+  or one that failed on the relay (5xx) is not remembered, so the fixed retry goes through.
+- The same id with different content is still the first share: change the id when the share changes.
+- Two copies that arrive together make one share. A copy sent while the first upload stalls or is dropped waits only until
+  the relay gives up on that upload (60 seconds with no data), then goes through.
+- The relay reads a repeat's whole body before it answers, so a retried photo still gets its `202`.
+- One gap remains: your own devices are told about a share a moment before it is queued for the Mac. If the relay fails or
+  stops in between, the retry shows a second row in Inbox on your devices; the Mac still gets the share once.
+- Without the header every post is a new share, as before. The iPhone share sheet sends it; the Shortcut recipe above does
+  not need to.
+
 ### From your Mac: `talos-app share shortcut`
 
 ```sh

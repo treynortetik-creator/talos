@@ -9,6 +9,7 @@
 // again when it is written, on the payload actually written (a card's bound payload, what was shown), never on what the agent
 // said later.
 import { z } from 'zod'
+import { isAlwaysKind } from './always-allow.ts'
 import { type AgentConfigT, trustOn } from './config.ts'
 import { isInheritedName, ThreadId } from './ids.ts'
 import type { CardT, ThreadT } from './models.ts'
@@ -112,6 +113,103 @@ export function isAgentConfigPath(p: unknown): p is AgentConfigPath {
 export function riskOfPath(path: string): Risk | undefined {
   const t = targetOf(path)
   return !t ? undefined : t.kind === 'thread_field' ? t.row.risk : t.risk
+}
+
+/**
+ * The config keys a card may never be "Always allowed" for, because changing one widens what Talos does without asking:
+ * `always_allow` itself, the settings lock, the thread fence, and every thread field (`threads` and `threads.<id>.*`, which
+ * includes a thread's own session, folder and MCP list). A config card that touches any of them, or any row the table marks
+ * high, or whose changes cannot be read, always gets a card and no Always allow.
+ * Guards, the permission mode and the card-run allowlist are NOT config keys (guards are files made by `install-guards`, the
+ * permission mode has its own consent card, the card-run list is code), so a config card cannot change them at all.
+ */
+export const CONFIG_TRUST_KEYS = ['always_allow', 'settings_lock', 'dev.thread_fence', 'threads'] as const
+export const isConfigTrustPath = (path: string): boolean =>
+  CONFIG_TRUST_KEYS.some((k) => path === k || path.startsWith(`${k}.`))
+
+/**
+ * The payload keys that only the bridge writes, each marking a card with its own way of being answered (a permission-mode, update-resend
+ * or screen-allow settings card, a rule-ask card). The agent's card tool refuses a payload that names one: such a card would look like
+ * the bridge's and show buttons that do nothing.
+ */
+export const BRIDGE_PAYLOAD_KEYS = ['permission_mode', 'update_resend', 'screen_allow', 'action_rule'] as const
+
+/** The key of the command field a card of talos-app commands carries (the bridge runs them only on a signed tap in the app). */
+export const CLI_FIELD_KEY = 'talos_cli'
+
+/**
+ * Changes that never pass without a card even though their row is low and ordinary, because of the way they go: a setting that
+ * opens something up (the memory browser, the notes lookup for thread sessions: turning either ON) or removes data (a shorter
+ * attachment keeping time deletes files an hour later). `when` reads the change, so the opposite direction (turning them off,
+ * keeping attachments longer or for good) still passes.
+ */
+export const CONFIG_NEVER_PASS: ReadonlyArray<{ path: string; when: (c: { old: unknown; new: unknown }) => boolean }> =
+  [
+    { path: 'memory_browser', when: (c) => c.new === true },
+    { path: 'dev.note_lookup', when: (c) => c.new === true },
+    {
+      path: 'media_keep_days',
+      when: (c) => typeof c.new === 'number' && (typeof c.old !== 'number' || c.new < c.old),
+    },
+  ]
+export const isConfigNeverPass = (c: { path: string; old?: unknown; new: unknown }): boolean =>
+  CONFIG_NEVER_PASS.some((r) => r.path === c.path && r.when({ old: c.old, new: c.new }))
+
+/**
+ * Does this card offer "Always allow"? Fails closed. Only the action kinds; a card the bridge refuses from a notification (one
+ * with talos-app commands, a permission-mode, update-resend or screen-allow card) never; a rule-ask card only when it has a send
+ * kind; a schedule card only when it is low risk (a high one holds full permissions, headless runs, extra tools or memory); a
+ * config card only when it parses, is not high, and every setting it changes is an ordinary one. This is the web's judgment, with
+ * no config to read; the bridge adds the current config (`current`) so a value that makes a low row high is judged too.
+ */
+export function cardOffersAlways(
+  c: {
+    kind: string
+    risk: string
+    fields: ReadonlyArray<{ key: string }>
+    payload?: unknown
+  },
+  current?: AgentConfigT,
+): boolean {
+  if (!isAlwaysKind(c.kind)) return false
+  if (c.fields.some((f) => f.key === CLI_FIELD_KEY)) return false
+  const p = c.payload as Record<string, unknown> | null | undefined
+  if (typeof p === 'object' && p !== null) {
+    for (const k of ['permission_mode', 'update_resend', 'screen_allow'])
+      if (typeof p[k] === 'object' && p[k] !== null) return false
+    const rule = p.action_rule as { kind?: unknown } | null | undefined
+    if (typeof rule === 'object' && rule !== null && typeof rule.kind !== 'string') return false
+  }
+  // a schedule card is judged on the change's own risk (in the bound payload, written by the bridge), not the card's: trust mode
+  // lowers the card's risk to low for every schedule. A card without it reads as high.
+  if (c.kind === 'schedule') return c.risk === 'low' && p?.own_risk === 'low'
+  if (c.kind !== 'config') return true
+  if (c.risk === 'high') return false
+  const parsed = ConfigCardPayload.safeParse(c.payload)
+  if (!parsed.success) return false
+  return configChangesOfferAlways(parsed.data.changes, current)
+}
+
+/**
+ * The change half of the rule above: no trust key, no never-pass change, no row the table marks high, and not a high card. An
+ * empty list never passes. With the current config each change is judged by `riskOfChange` (a value can make a low row high:
+ * quiet hours set); without it (the app has none) a row that CAN be made high (`alsoHigh`) is refused whatever the value.
+ */
+export function configChangesOfferAlways(
+  changes: ReadonlyArray<{ path: string; old?: unknown; new: unknown }>,
+  current?: AgentConfigT,
+): boolean {
+  return (
+    changes.length > 0 &&
+    cardRisk(changes) === 'low' &&
+    changes.every((ch) => {
+      if (isConfigTrustPath(ch.path) || isConfigNeverPass(ch)) return false
+      if (current) return riskOfChange(ch, current) === 'low'
+      const t = targetOf(ch.path)
+      const also = t?.kind === 'row' ? t.alsoHigh : t?.kind === 'thread_field' ? t.row.alsoHigh : undefined
+      return riskOfPath(ch.path) === 'low' && !also
+    })
+  )
 }
 
 /** The keys of a new thread that make creating it high: each is a high field when set on its own. */

@@ -35,8 +35,13 @@ export interface Platform {
   installState(): InstallState
   /** Driving mode (docs/V2-FEATURES.md V4.1-V4.2). Each adapter is a no-op where the API is missing. */
   audioSession: {
-    /** `navigator.audioSession.type`: 'playback' while listening. */
-    set(type: AudioSessionType): void
+    /**
+     * `navigator.audioSession.type`: 'playback' while listening. In the iPhone app it returns the shell's own call as a promise that
+     * settles when the shell has answered (a refusal counts as an answer: it never rejects); a browser has no answer to wait for and
+     * returns nothing. The message player tells them apart by whether a promise came back (it must not call play() later in a browser:
+     * the tap's permission would be gone).
+     */
+    set(type: AudioSessionType): void | Promise<void>
   }
   wakeLock: {
     /** Holds the screen awake. Resolves a release function (a no-op when unsupported or refused). */
@@ -51,6 +56,12 @@ export interface Platform {
      */
     position?(state: MediaPosition): void
     clear(): void
+    /**
+     * Whether the system's own transport controls (lock screen, Control Center, media keys, a watch) can reach a session set
+     * here. A capability check, not a platform guess: true when the browser has the Media Session API or the iPhone shell's
+     * TalosAudio plugin can publish Now Playing. Optional: an adapter without it counts as no controls.
+     */
+    controls?(): boolean
   }
   speech: {
     /** The phone's own voice (`speechSynthesis`). False when unsupported. */
@@ -215,6 +226,14 @@ export const webPlatform: Platform = {
     },
   },
   mediaSession: {
+    controls() {
+      try {
+        const ms = (globalThis.navigator as (Navigator & { mediaSession?: MediaSession }) | undefined)?.mediaSession
+        return typeof ms?.setActionHandler === 'function'
+      } catch {
+        return false
+      }
+    },
     set(meta, handlers) {
       const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession
       if (!ms) return

@@ -2,8 +2,8 @@ import Foundation
 import TalosDesktopCore
 
 /// Option C: a pointer a thread's session is owed survives the app going away (docs/OPTION-C.md "Known gaps"). The hub gives a message
-/// to main when no `read_inbound` claims it within its deadline (`CLAIM_DEADLINE_MS`, or `_COLD_MS` when the wake had to start the
-/// worker), and the supervisor takes the wake before it can type the line, so a Quit, a crash or an update relaunch in between lost
+/// to main when no `read_inbound` claims it within its deadline (`CLAIM_DEADLINE_MS`, 10 minutes, or `_COLD_MS`, 3, when the wake had to
+/// start the worker; here `PointerTyper.claimDeadline` and `claimDeadlineCold`, which a test holds to the protocol file), and the supervisor takes the wake before it can type the line, so a Quit, a crash or an update relaunch in between lost
 /// the line and left the thread idle. The pointer and its Enter are now in `workers.json`: `pointer_owed_until` is that deadline,
 /// counted from when the hub wrote the wake or the Mac took it, whichever was first (the same constants, in `PointerTyper`), and `enter_owed` says the line is in Claude's input
 /// box without its Enter. A copy that comes back (`restoreOwed`) types what is still wanted, once, and drops what is not.
@@ -33,7 +33,7 @@ import TalosDesktopCore
 /// land. What is owed stays owed and goes in once the mode is left, if it is still wanted: a pointer the mode held back has its claim
 /// deadline checked from then on like one read back from the file (`deadlined`), so a line for a message main already has is dropped
 /// (or taken out of the box), never typed late. The hold is not silent: once the pointer is past its deadline, or after
-/// `draftNoticeAfter`, the thread gets one line per hold and shows as Needs you (`noteCopyModeHold`). The bridge's port has the
+/// `draftNoticeAfter`, the thread shows as Needs you, with no line in it (`noteCopyModeHold`). The bridge's port has the
 /// first rule (apps/bridge/src/supervisor/owed-pointer.ts).
 
 /// An Enter check under way (`scheduleEnterCheck`): the classes read so far and the pointer's deadline, to hold it by if flagged.
@@ -67,6 +67,12 @@ struct OwedState {
   /// Its Enter went and may have answered a prompt that opened as it went (`EnterDetection`): held, never entered again, dropped at its
   /// claim deadline with no second line.
   var enterUncertain = false
+  /// Why the pointer is held back right now, one of `WorkersFile.PointerHold.reasons`, and the wall-clock time this hold began. The
+  /// wall clock, read once when the reason first holds: the holds themselves run on the awake clock, which no file can carry, and a step
+  /// of the wall clock or a sleep afterwards must not move it. A different reason is a new hold, with a new time. Written to
+  /// `workers.json` as `pointer_hold` (`Runtime.persisted`); gone with the rest of this state when nothing is owed.
+  var holdReason: String?
+  var holdSince: Double?
 }
 
 extension WorkerManager.Runtime {
@@ -77,6 +83,10 @@ extension WorkerManager.Runtime {
     e.pointer_owed_until = pendingPointer ? owed.until.map(ISOTime.string) : nil
     e.enter_owed = pendingPointer && enterOwed ? true : nil
     e.enter_uncertain = pendingPointer && owed.enterUncertain ? true : nil
+    // only while a pointer is owed and the session has a pane (the hold is a fact about that pane)
+    e.pointer_hold =
+      pendingPointer && WorkerManager.offerStates.contains(entry.state)
+      ? owed.holdReason.flatMap { r in owed.holdSince.map { WorkersFile.PointerHold(reason: r, since: ISOTime.string($0)) } } : nil
     if !WorkerManager.offerStates.contains(entry.state) { e.dialog = nil }  // no pane, no dialog on it
     e.last_active_at = savedActivity
     if entry.state != "stopping" { e.stopping_since = nil }
@@ -86,6 +96,10 @@ extension WorkerManager.Runtime {
       ? needsYouPrompt.flatMap { p in
         needsYouAt.map { .init(kind: p, since: $0, resets_at: p == UsageLimitScreen.kind ? needsYouResetsAt : nil) }
       } : nil
+    // the deaf-thread alarm's Needs you (WorkerDeaf.swift): from when the refusals began, so the push is not delayed by the long wait
+    if e.needs_you == nil, deaf.watch.needsYou, WorkerManager.offerStates.contains(entry.state), let since = deaf.watch.sinceWall {
+      e.needs_you = .init(kind: WorkerNotice.refusedKind, since: ISOTime.string(since), resets_at: nil)
+    }
     return e
   }
 
@@ -121,6 +135,13 @@ extension WorkerManager.Runtime {
     enterOwed = entry.enter_owed == true
     owed = OwedState(until: ISOTime.parse(s) ?? 0, restored: true)  // a time we cannot read is a deadline long past
     owed.enterUncertain = entry.enter_uncertain == true  // still held: never entered again after a relaunch either
+    // a hold that still stands after a relaunch goes on from the time the file has (`notePointerHold` keeps the time while the reason
+    // is the same on the first look, and makes a new hold of it when it is not)
+    if let h = entry.pointer_hold, let at = ISOTime.parse(h.since) {
+      owed.holdReason = h.reason
+      owed.holdSince = at
+    }
+    entry.pointer_hold = nil
     entry.pointer_owed_until = nil
     entry.enter_owed = nil
     entry.enter_uncertain = nil
@@ -166,6 +187,36 @@ extension WorkerManager {
   static let screenLag: Double = 5
   private static let looksAfterTyping = 10
 
+  /// The pointer's hold as `workers.json` has it (`pointer_hold`): `reason` is nil when nothing holds it. Only while a pointer is owed and
+  /// the session has a pane. A change, a clear or a start marks the file dirty at once, so it is written at this tick's end; the time of
+  /// a hold is the wall clock when its reason first held, and stays while the same reason does.
+  func notePointerHold(_ id: String, _ reason: String?) {
+    guard let r = rt[id] else { return }
+    let want =
+      Self.holdApplies(
+        owed: r.pendingPointer, leftover: r.owed.leftover, until: r.owed.until, now: now(),
+        hasPane: Self.offerStates.contains(r.entry.state)) ? reason : nil
+    guard want != r.owed.holdReason else { return }
+    rt[id]?.owed.holdReason = want
+    rt[id]?.owed.holdSince = want == nil ? nil : now()
+    dirty = true
+  }
+
+  /// Whether a hold reason may be written at all: a pointer is owed, the session has a pane, the pointer is not past its deadline (the hub
+  /// has given the message to Main), and it is not a left-over line (that has its own words and Needs you).
+  static func holdApplies(owed: Bool, leftover: Bool, until: Double?, now: Double, hasPane: Bool) -> Bool {
+    owed && hasPane && !leftover && (until.map { now <= $0 } ?? true)
+  }
+
+  /// The reason for a pointer held back by copy mode: the rows under the scroll are still read, so a draft there is `draft` and our
+  /// own line never shown is `typed_unseen`; else `scrolled`.
+  private func scrolledReason(_ id: String, rows: [String], _ r: WorkerManager.Runtime) -> String {
+    let typed = draftPresent(id, rows)
+    let neverSeen = r.enterOwed && !typed && (r.owed.unseenSince.map { awake() - $0 > Self.screenLag } ?? false)
+    let draft = typed && PointerTyper.boxText(rows: rows) != PointerTyper.text
+    return WorkersFile.PointerHold.pick(unseen: neverSeen, draft: draft, scrolled: true, refused: false) ?? "scrolled"
+  }
+
   func dropOwed(_ id: String) {
     rt[id]?.enterHold.reset()
     rt[id]?.pendingPointer = false
@@ -198,6 +249,7 @@ extension WorkerManager {
     let mode = inCopyMode(id)
     guard mode == false else {
       if mode == true {
+        notePointerHold(id, scrolledReason(id, rows: rows, r))
         rt[id]?.owed.deadlined = true
         noteCopyModeHold(id, held: true, late: t > (r.owed.until ?? 0))
       }
@@ -224,6 +276,7 @@ extension WorkerManager {
     // a pointer from an earlier copy of the app, or one copy mode held back, is never typed past its deadline, however long it was
     // held back since
     if r.owed.restored || r.owed.deadlined || heldLate, t > (r.owed.until ?? 0) {
+      notePointerHold(id, nil)  // past its deadline nothing is held: it is settled
       let mayAct = PointerTyper.mayType(screen: shape, lastClientActivity: nil, now: t, draftPresent: false, boxVisible: box)
       return settleLate(id, r, ours: ours, draft: draft, box: box, mayAct: mayAct, attached: !activity.isEmpty)
     }
@@ -232,10 +285,9 @@ extension WorkerManager {
     var hold: PointerHold = neverSeen ? .unseen : draft ? .draft : box ? .none : .noBox
     defer { noteHeldPointer(id, hold) }
     if neverSeen {
-      // past the claim deadline the hub has given the message to main: dropped, and said now if the hold's wait has not said it yet
-      // (the Linux typer's drop of an unseen pointer). Nothing is in the box to take out.
+      // past the claim deadline the hub has given the message to main: dropped (the hub says the thread was busy, and Main answers).
+      // Nothing is in the box to take out.
       guard t > (r.owed.until ?? 0) else { return true }
-      sendNotice(id, \.unseenHold.notice, kind: WorkerNotice.unseenKind, text: WorkerNotice.unseenLine())
       hold = .none
       dropOwed(id)
       return false

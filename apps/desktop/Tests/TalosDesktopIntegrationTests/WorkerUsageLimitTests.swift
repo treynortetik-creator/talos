@@ -41,12 +41,12 @@ struct WorkerUsageLimitTests {
     #expect(line.thread == "trip")
     #expect(
       line.text
-        == "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in this thread's pane in Terminals, then /model <another model>."
+        == "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
     )
     // a message for the thread: its pointer is owed, and is never typed onto this screen
     try r.wake("trip")
-    // a click on the popup for it: nothing is on offer, nothing is pressed
-    #expect(r.mgr.popupOffers().isEmpty, "never offered for a tap")
+    // the card's two buttons are offered (row 7); a click for a dialog id that is not the offer's, or on a row that spends credits, presses nothing
+    #expect(r.wait(10) { r.mgr.popupOffers().first?.dialog.options == ["Stop and wait", "Switch model"] }, "\(r.mgr.popupOffers())")
     let clicked = Locked<PopupAnswerResult?>(nil)
     r.mgr.popupAnswer(thread: "trip", dialogId: "d_forged", action: .choose(2, label: "Switch to usage credits")) { clicked.set($0) }
     #expect(r.wait(5) { clicked.get() != nil })
@@ -78,8 +78,8 @@ struct WorkerUsageLimitTests {
   private func auditLines(_ path: String) -> [String] { completeLines(path) }
 
   /// A session that STARTS onto the usage-limit screen (it never connects to Talos while the screen is up) is not stopped as `needs_mac`
-  /// with an "answer it there" line once `dialogLimit` passes: it waits on the owner's Esc, the thread has the usage-limit line, and no key.
-  @Test func aStartOntoItIsNotStoppedAndItsLineSaysEsc() throws {
+  /// with an "answer it there" line once `dialogLimit` passes: it waits on the owner's answer, the thread has the usage-limit line, and no key.
+  @Test func aStartOntoItIsNotStoppedAndItHasItsLine() throws {
     let keys = KeyLog()
     let r = try WorkerRig(scenario: "dialog-real.sh", extraEnv: ["FAKE_DLG": "ul", "FAKE_DLG_KEYLOG": keys.path])
     defer { r.teardown(); keys.remove() }
@@ -93,7 +93,7 @@ struct WorkerUsageLimitTests {
     #expect(r.entry("trip")?.error == nil)
     #expect(
       log.all.map(\.text) == [
-        "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in this thread's pane in Terminals, then /model <another model>."
+        "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
       ], "\(log.all)")
     for t in log.all.map(\.text) { #expect(!t.lowercased().contains("answer"), "\(t)") }
     #expect(keys.keys.isEmpty, "\(keys.keys)")

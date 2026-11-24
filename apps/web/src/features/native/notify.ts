@@ -46,7 +46,9 @@ export function startNativeNotify(
     if (n) bridge.send({ type: 'notify', ...n })
   }
   const offs = [
-    client.onFrame('reply', (f) => {
+    client.onFrame('reply', (f, meta) => {
+      // A replay after a reconnect is old news: the relay already pushed it, or the owner read it on another device.
+      if (meta?.catchup) return
       // A send that went out without a card (its kind is always allowed): like the relay's push, it ignores the quiet window,
       // the master switch and thread alerts, so nothing is sent unseen. Fixed words; it opens the thread with the line.
       if (f.sent_always_allowed === true && !f.silent) {
@@ -71,9 +73,10 @@ export function startNativeNotify(
       if (f.message.author !== 'agent') return
       emit({ template: 'reply', thread_id: f.message.thread_id })
     }),
-    client.onFrame('card.create', (f) =>
-      emit({ template: 'needs_you', thread_id: f.card.thread_id, card_id: f.card.id }),
-    ),
+    client.onFrame('card.create', (f, meta) => {
+      if (meta?.catchup) return
+      emit({ template: 'needs_you', thread_id: f.card.thread_id, card_id: f.card.id })
+    }),
   ]
   return () => {
     for (const off of offs) off()

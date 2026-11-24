@@ -1,8 +1,64 @@
 # Changelog
 
+## Voice messages play again after a pause
+
+- On the iPhone, a voice message that was paused no longer ignores Play until the app is restarted. When a start does not take, the player now tries a pause and play, then loads the clip again at the same spot, and if that does not help it stops and the message says "Couldn't start playing". A clip that is waiting for data shows "Loading audio…". Read aloud and the Files sheet show the same two lines, and a pause that arrives from the system (a call), or a phone that slept while a start was pending, is never played over.
+- In the iPhone app, Play on a voice message paused in the middle should no longer get an unasked pause at the same spot: the app now takes the audio route first and starts the sound once the phone has answered (or a quarter of a second has passed), and a pause that the system caused (a call, Siri) no longer asks the phone for anything.
+
+## An upgrade's check passes inside the agent folder
+
+- Upgrading an agent folder from kit 1.x no longer stops at the installer's own check: the kit's install test now runs inside an agent folder as well as in the repository, and the kit installer decides whose Chronos it is before it looks for a bundled one.
+- Chronos's installer and uninstaller never load or unload agents in your real login session when HOME is not your own home folder.
+## A scheduler problem no longer fails a new install
+
+- If the background scheduler (Chronos) cannot be set up while Talos creates a new agent, the agent is still finished and the install says in one line that the scheduler was not added, why, and how to add it. Running the installer again finishes it. Nothing half-loaded is left behind.
+- Chronos's notify command is now stored in a form that works when your home folder has a space or a quote in its name.
+## Retrying an iPhone share sends it once
+
+- If the reply to a share from the iPhone share sheet is lost and you tap Send again, Talos no longer files it twice: the app sends the same share number on a retry and the relay answers the repeat without storing it again. If you change the note between tries, it counts as a new share. An older relay still works but may keep both copies.
+## A busy thread agent gets longer
+
+- A busy thread agent now gets ten minutes to pick up your message before your main agent answers it for it (three minutes when its session has to be started first). Meanwhile the thread says why it waits (busy, waiting for you, or not taking messages), and when the main agent does answer it says so in one line.
+- If a thread's session stops while your message waits, the main agent answers at once instead of after the wait, except that a session that crashed after being handed your message is started once more first; a session you stopped yourself is not.
+- The extra "your message has probably gone to the main session" notices for a draft, a scrolled-back pane and the like are gone; the thread line and the one answer line replace them.
+
+## Safety guards hold when their answer is lost
+
+- Three of an agent's safety checks (the append-only, vault and timeline guards) now still block a risky action when their answer cannot be delivered, instead of letting it through.
+## Memory lookup and saved thread state
+
+- An agent's memory lookup now answers only your own messages, and a thread's saved state is no longer cut off when it is long.
+- The memory lookup also finds a person by initial and surname, reversed, or with a small typo, shows how old each note is, and offers notes again after a compaction or a clear.
+
+## An extra lock on protected files
+
+- An experimental, off-by-default OS sandbox (Settings > Developer > "Extra lock on protected files (experimental)") makes Talos's protected settings files much harder for an agent to change from a shell command, however the command is written. It does not stop everything: a thread folder that contains the Talos code folder, MCP servers added with "claude mcp add" (kept in ~/.claude.json), some newer Claude Code command settings and plugins, and a hook written in a project's own settings.
+- On a Mac the app now starts Main and every thread session inside the same lock when it is on, and refuses the start, with one plain line, when a protected file has a second name.
+
+## The installer's dry run stays clean
+
+- The installer's dry run no longer downloads a second pnpm when the one installed is a different version.
+## Fleet roll call
+
+- Leads can list which machines in the fleet are reachable, with each one's latest status line (`/rollcall`).
+
+## One place for what is true
+
+- `talos-app facts` prints what is true right now: versions, relay, cards, links and update settings, in one place.
+## Protected settings files stay protected
+
+- Agents can no longer overwrite Talos's protected settings files with a short file name from inside the Talos folder.
+
+## Secret files stay private
+
+- Agents can no longer read the secret files Talos keeps when a computer has no keyring.
+
 ## The Mac app says version 0.1.9
 
 - The app's version (About, the self-test, the update check) now matches the release tag: 0.1.9. This release brings a redesigned Settings window in plain words (Your agent, Phone & Mac, Privacy & access, General, and Advanced for the technical parts) and a plain-words menu bar menu; Check for Updates always answers; Update now explains what it is waiting for, waits at most 5 minutes for busy thread agents, keeps a copy of your unsent text and offers Send again for a cut-off thread turn; links to other sites open in your browser; See and remove your devices from Phone & Mac; and each release now publishes an image for your Talos server.
+## A second Talos keeps its linked agents
+
+- A second Talos on the same Mac keeps its linked agents after an update.
 
 ## Releases publish a relay image
 

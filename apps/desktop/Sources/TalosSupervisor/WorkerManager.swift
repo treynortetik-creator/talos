@@ -76,11 +76,12 @@ public final class WorkerManager: @unchecked Sendable {
     public var clientQuiet: Double = 30  // a prompt waits while an attached client typed this recently (the owner's own picker)
     /// The most that typing holds back the line for a TOOL prompt (Bash, a file create or edit), from when that prompt first showed.
     public var toolPromptHoldMax: Double = 60
-    /// A pointer held back by a draft this long gets one line in its thread.
+    /// A pointer held back by a draft, a scroll or a line never seen this long shows the thread as Needs you (no line in it).
     public var draftNoticeAfter: Double = 120
+    public var deafAfter: (notice: Double, needsYou: Double, recover: Double) = (60, 600, 10)  // a thread Talos cannot type into: its line, Needs you, and the clear stretch that ends it
     /// A known dialog offered to the bridge for a tap: how long the Mac waits for its card (`dialog-card.json`) before it posts its own line, and how long the card lives.
     public var cardAckWait: Double = 15
-    public var cardLifetime: Double = 900
+    public var cardLifetime: Double = 86400
     /// How long an unchanged dialog is not offered again after an answer's Enter of unknown delivery (a tmux timeout); awake clock.
     public var unsentEnterMemory: Double = 5
     /// A change to a running session's folder, model, effort or MCP list is acted on once it has stood this long (awake clock).
@@ -162,6 +163,8 @@ public final class WorkerManager: @unchecked Sendable {
     /// The line for a park that cut background work, until it has gone (WorkerBackground.swift), and whether the idle park is held by it.
     var bgCutLine: String?
     var bgCutNote = NoticeState()
+    var busyNote = NoticeState()  // the "computer is busy" line of a start over the limit, and its text until sent (WorkerBusy.swift)
+    var busyLine: String?
     var bgHeld = false
     var parkReason: String?
     /// A `restart`, `fresh` or `resume` that arrived while the worker was on its way out: run when it's gone.
@@ -193,6 +196,8 @@ public final class WorkerManager: @unchecked Sendable {
     var ul = UsageLimitWatch()
     /// The line for the usage-limit screen on the pane now, while it may still go (one per appearance, at most one an hour).
     var ulLine: String?
+    /// When (awake clock) a usage-limit menu that can be a card appeared: its line waits for the card's offer (settle time) and the card's wait (WorkerUsageLimit.swift).
+    var ulCardPossibleAt: Double?
     /// The unnamed prompt the flag was raised for (its signature's hash); nil for a known dialog. Another one under the held flag is a new ask.
     var flaggedPrompt: String?
     /// When (awake clock) the current dialog was first seen.
@@ -203,8 +208,7 @@ public final class WorkerManager: @unchecked Sendable {
     var held = NoticeState()
     var noBox = NoBoxHold()
     var copyHold = CopyModeHold()
-    /// A pointer the key guard refused (`KeyGuard`): since when, and its one notice.
-    var refusedHold = NoBoxHold()
+    var deaf = DeafState()  // the deaf-thread alarm: the pane shows a screen Talos does not type into (WorkerDeaf.swift)
     /// A pointer typed and never seen in the input box (`WorkerNotice.unseenKind`): since when, and its one notice.
     var unseenHold = NoBoxHold()
     /// The one notice for a pointer whose Enter may have answered a prompt (`EnterDetection`, `WorkerNotice.enterUncertainKind`).
@@ -307,6 +311,8 @@ public final class WorkerManager: @unchecked Sendable {
   /// Held while ticking (NapGuard.swift); tests swap it before `startTicking`.
   public var napGuard: NapGuard = ProcessActivityNapGuard(reason: "Talos supervises the thread sessions")
   var rt: [String: Runtime] = [:]
+  /// Tests only: runs inside each named step of the wakes block, so a test can stall the tick in it.
+  var stepHook: (@Sendable (String) -> Void)?
   /// When each thread was last told a new set of its folder's files its session started without (awake clock), across starts: one
   /// new set a minute at most (WorkerHookStart.swift).
   var ignoredToldAt: [String: Double] = [:]
@@ -332,6 +338,7 @@ public final class WorkerManager: @unchecked Sendable {
   var unknownShapesSeen = Set<String>()
   /// The shapes of refused status parts already in the audit this run (`noteRefusedStatusParts`).
   var refusedShapesSeen = Set<String>()
+  var deafFile: (at: Double, sig: String) = (0, "")  // deaf-threads.json as last written (WorkerDeaf.swift)
   /// "Quit and stop" has finished (WorkerStopAll.swift). Read under `publishedLock`.
   var _allStopped = false
   /// Since when (awake clock) each thread with an entry has been missing from the dedicated threads (WorkerForget.swift).
@@ -459,17 +466,7 @@ public final class WorkerManager: @unchecked Sendable {
       advance(id, settings: settings ?? .off, now: t)
       publish()  // a long tick shows its progress
     }
-    watch.step("wakes", at: awake())
-    if let settings {
-      reviveOwed(settings: settings, now: t)
-      takeWakes(settings: settings, now: t)
-      publish()
-      retryHeld(settings: settings, now: t)
-      enforceCap(settings: settings, now: t)
-      checkLaunchChanges(settings: settings, now: t)
-      updateRestartTick(settings: settings, fresh: fresh)
-      retryMainSettingsNotes()
-    }
+    wakesRound(settings: settings, fresh: fresh, now: t)
     clearFolderClaims(settings ?? .off)
     if mainDialogFeed.changed() { dirty = true }  // Main's card appears (or goes) within the tick
     // abs: after the clock goes back, a heartbeat must not wait for it to catch up
@@ -551,19 +548,15 @@ public final class WorkerManager: @unchecked Sendable {
     case .start:
       start(id, s, resume: resume, now: t, own: own)
     case .parkThenStart(let victim):
-      stopNow(victim, why: "cap")  // its log line, and its thread's line if it cut background work (every quiet one had some)
+      stopNow(victim, why: "cap")  // one with background work is never the choice
       emit(.parked(thread: victim, reason: "cap"))
       start(id, s, resume: resume, now: t, own: own)
+    case .startOverLimit:
+      start(id, s, resume: resume, now: t, own: own)
+      noteOverLimitStart(id)  // WorkerBusy.swift: once it has really started, one plain line; nothing was stopped
     case .hold:
       hold(id, resume: resume, now: t)
     }
-  }
-
-  /// Keeps a start for the next tick. `heldSince` stays put, so the hold still ends.
-  func hold(_ id: String, resume: Bool, now t: Double, unreadable: Bool = false) {
-    if rt[id]?.heldSince == nil { rt[id]?.heldSince = t }
-    rt[id]?.heldResume = resume
-    rt[id]?.heldUnreadable = unreadable
   }
 
   /// Another session holds the folder, unless it is in the same family: a parent and the dedicated sub-threads that share its folder, and two of
@@ -587,7 +580,7 @@ public final class WorkerManager: @unchecked Sendable {
     }
   }
 
-  private func retryHeld(settings: DedicatedSettings, now t: Double) {
+  func retryHeld(settings: DedicatedSettings, now t: Double) {
     for id in Array(rt.keys) {
       guard let r = rt[id], let since = r.heldSince else { continue }
       guard let s = settings.threads[id] else {
@@ -613,12 +606,13 @@ public final class WorkerManager: @unchecked Sendable {
     }
   }
 
-  /// A lowered `max_live`, or more adopted workers than the cap: the longest-idle go first; busy ones wait, and so do ones with
-  /// background work while a quiet one without is there (`WorkerPolicy.victims`). A worker on its way out has already made its room:
-  /// counted here, each tick would pick one more until nobody was left.
-  private func enforceCap(settings: DedicatedSettings, now t: Double) {
+  /// A lowered `max_live`, or more adopted workers than the cap: the longest-idle go first; busy ones wait. A quiet one with background
+  /// work is never parked and is not counted against the rest (`WorkerPolicy.capExcess`), so a session started over the limit stays;
+  /// the count comes down once that work ends. A worker on its way out has already made its room: counted here, each tick would pick
+  /// one more until nobody was left.
+  func enforceCap(settings: DedicatedSettings, now t: Double) {
     let staying = liveList(now: t, maxLive: settings.maxLive).filter { WorkersFile.liveStates.contains(rt[$0.threadId]?.entry.state ?? "") }
-    let excess = staying.count - settings.maxLive
+    let excess = WorkerPolicy.capExcess(staying, maxLive: settings.maxLive)
     guard excess > 0 else { return }
     for v in WorkerPolicy.victims(staying).prefix(excess) { beginPark(v.threadId, reason: "cap") }
   }
@@ -635,7 +629,7 @@ public final class WorkerManager: @unchecked Sendable {
     let t = tmux(id).withPane(nil)
     let session = run(t.hasSession())
     guard session.ok else {
-      return TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut)
+      return goneForSure(session, group: rt[id]?.pgid)
         ? .free : .unknown("has-session status=\(session.status) timed_out=\(session.timedOut) err=\"\(WorkerNotice.logValue(String(session.err.prefix(160))))\"")
     }
     let read = run(t.paneState())
@@ -678,6 +672,9 @@ public final class WorkerManager: @unchecked Sendable {
     acceptFolderTrust(id, s, cwd: cwd, base: base)
     let claudeDir = WorkerMcp.claudeDir(home: options.home, env: base)
     let main = mainCeiling(own, claudeDir: claudeDir)  // from this start's one read of main's own --settings (WorkerMainSettings.swift)
+    // the opt-in OS sandbox ("Extra lock on protected files"): on, a start whose protected files fail the preflight does not happen
+    let sandbox = osSandboxForStart(id, cwd: cwd, base: base, dry: false)
+    if case .refused(let why)? = sandbox { return fail(id, "start_failed", why) }
     var plan: WorkerMcp.Plan?
     if let allow = s.mcpAllow {
       plan = WorkerMcp.plan(
@@ -715,7 +712,7 @@ public final class WorkerManager: @unchecked Sendable {
       let spec = try WorkerSpec.build(
         specInputs(
           id, s, cwd: cwd, parent: folder.parent, hook: hook, main: main, plan: plan, mcpConfigPath: written?.path, sessionId: sessionId,
-          resume: resumes, nonce: nonce, base: base, threadFence: threadFenceForStart(id, dry: false)))
+          resume: resumes, nonce: nonce, base: base, threadFence: threadFenceForStart(id, dry: false), osSandbox: sandbox?.pieces))
       let parts = launchSpecParts(spec: spec, plan: plan, talosOnly: written?.bytes, hook: hook, base: base)
       specHash = parts.hash
       instructionsHash = Self.instructionsHash(spec, parts)
@@ -745,6 +742,7 @@ public final class WorkerManager: @unchecked Sendable {
       instructions_hash: instructionsHash)
     rt[id]?.entry.launched = launched  // a spec tried stays tried
     writeFile()
+    if sandboxRefusedAtSpawn(id, cwd: cwd, base: base, launch: launch) { return }  // the check again, as the last step (WorkerLaunchPlan.swift)
     let create = tmux(id).withPane(nil).newSession(argv: LaunchFile.tmuxArgv(launch), cwd: cwd)
     var res = run(create)
     // The previous worker's session may have been the last one on this socket: a server on its way out answers "server
@@ -810,7 +808,7 @@ public final class WorkerManager: @unchecked Sendable {
       return .running(ps)
     }
     let session = run(tmux(id).hasSession())
-    return TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut)
+    return goneForSure(session, group: rt[id]?.pgid)
       ? .gone(rows: []) : .unknown
   }
 
@@ -837,9 +835,9 @@ public final class WorkerManager: @unchecked Sendable {
       return ps.pid == group ? .running(ps) : .gone(rows: [])
     }
     let session = run(tmux(id).hasSession())
-    if TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut) { return .gone(rows: []) }
+    if goneForSure(session, group: group) { return .gone(rows: []) }
     // tmux can't say. The kernel can: a group with nothing left in it has gone, whatever tmux would have answered.
-    return signaller.alive(group) ? .unknown : .gone(rows: [])
+    return signaller.leaderAlive(group) ? .unknown : .gone(rows: [])
   }
 
   /// Unknown counts as busy: only a pane read as quiet may be parked or chosen as the cap's victim.
@@ -873,6 +871,7 @@ public final class WorkerManager: @unchecked Sendable {
     guard var r = rt[id], !r.adoptPending else { return }
     tellCut(id)
     tellBackgroundCut(id)
+    tellComputerBusy(id)
     switch r.entry.state {
     case "starting", "live", "busy", "stopping":
       let ps: TmuxCommands.PaneState
@@ -942,6 +941,7 @@ public final class WorkerManager: @unchecked Sendable {
       noteScreen(&r, rows: rows, now: t)
       rt[id] = r
       let busy = readsBusy(id, ps, now: t)
+      noteDeafScreen(id, rows: rows, busy: busy)  // the deaf-thread alarm (WorkerDeaf.swift)
       if !busy { noteTurnEnded(id, now: t) }
       if r.entry.state == "stopping" {
         // here, after the pane and the screen were read: a failed read never gets this far

@@ -25,7 +25,7 @@ extension WorkerManager {
   func specInputs(
     _ id: String, _ s: ThreadSessionSettings, cwd: String, parent: String?, hook: WorkerHook.Installed, main: MainOwnSettings.Ceiling,
     plan: WorkerMcp.Plan?, mcpConfigPath: String?, sessionId: String, resume: Bool, nonce: String, base: [String: String],
-    threadFence: Bool
+    threadFence: Bool, osSandbox: OsSandbox.Pieces? = nil
   ) -> WorkerSpec.Inputs {
     let claudeDir = WorkerMcp.claudeDir(home: options.home, env: base)
     var i = WorkerSpec.Inputs(
@@ -39,6 +39,7 @@ extension WorkerManager {
       mainDenyRules: main.denyRules, mainArgs: main.permissionArgs,
       mainDefaultMode: main.defaultMode, parentCwd: parent, otherFolders: threadFolders ?? [])
     i.threadFence = threadFence
+    i.osSandbox = osSandbox
     return i
   }
 
@@ -48,6 +49,37 @@ extension WorkerManager {
     let on = WorkerFence.threadFenceOn(configJSON: FileManager.default.contents(atPath: configJson))
     if !on, !dry { audit("worker_thread_fence_off thread=\(id)") }
     return on
+  }
+
+  /// The opt-in OS sandbox for one start, read from config.json again each time: nil while the switch is off, else the preflight's refusal or
+  /// the pieces. A config.json that exists and cannot be read keeps the state of the last good reading, off when there was none (audited; a lock kept on is told once per run). A dry plan writes nothing and
+  /// says nothing. `start` runs it again right before the tmux call (the TypeScript twin is PtyLaunch.beforeStart / workers-wiring).
+  func osSandboxForStart(_ id: String, cwd: String, base: [String: String], dry: Bool) -> OsSandbox.Prepared? {
+    switch OsSandbox.switchState(talosHome: options.talosHome, onNotRecorded: { if !dry { self.audit("os_sandbox_record_failed thread=\(id) why=the lock is on but could not be written down as the last good reading") } }) {
+    case .off: return nil
+    case .unreadable(let why, let keptOn):
+      // an unreadable config.json keeps the state of the last good reading, off when there was none (the TypeScript side's rule); a lock kept on is said once
+      if !dry {
+        audit("os_sandbox_config_unreadable thread=\(id) lock=\(keptOn ? "kept on" : "kept off") why=\(why)")
+        if keptOn, OsSandboxLaunch.firstUnreadable(talosHome: options.talosHome) { tell(id, slot: \.refusedNote, kind: "os sandbox config unreadable", OsSandboxLaunch.unreadableNotice) }
+      }
+      if !keptOn { return nil }
+    case .on: break
+    }
+    // a thread outside the agent folder loads the owner's settings only (the worker spec's user-only setting sources)
+    let own = WorkerSpec.folderKey(cwd) != WorkerSpec.folderKey(options.agentDir)
+    return OsSandboxLaunch.prepare(
+      talosHome: options.talosHome, home: options.home, folder: cwd, claudeDir: WorkerMcp.claudeDir(home: options.home, env: base), env: base,
+      loadsProject: !own, dry: dry, agentDir: options.agentDir, audit: { audit("\($0) thread=\(id) why=\($1["why"] ?? "")") })
+  }
+
+  /// The last step before a thread session's process starts: the sandbox's whole check again, nothing written (a second name made since the first
+  /// check refuses it). True when it refused: the launch script is removed and the start has failed with the line.
+  func sandboxRefusedAtSpawn(_ id: String, cwd: String, base: [String: String], launch: String) -> Bool {
+    guard case .refused(let why)? = osSandboxForStart(id, cwd: cwd, base: base, dry: true) else { return false }
+    unlink(launch)
+    fail(id, "start_failed", why)
+    return true
   }
 
   /// The files of a launch's spec, each by the exact bytes the start writes for the session: its settings (the guards, the fence's
@@ -163,11 +195,13 @@ extension WorkerManager {
       if plan == nil { return .refused("the MCP list needs a talos-app server in the agent folder's .mcp.json") }
     }
     let talosOnly = plan == nil ? talosOnlyMcp(id, cwd: cwd) : nil
+    let sandbox = osSandboxForStart(id, cwd: cwd, base: base, dry: true)
+    if case .refused(let why)? = sandbox { return .refused(why) }
     do {
       let spec = try WorkerSpec.build(
         specInputs(
           id, s, cwd: cwd, parent: parent, hook: hook, main: main, plan: plan, mcpConfigPath: talosOnly?.path, sessionId: sessionId,
-          resume: true, nonce: Self.dryNonce, base: base, threadFence: threadFenceForStart(id, dry: true)))
+          resume: true, nonce: Self.dryNonce, base: base, threadFence: threadFenceForStart(id, dry: true), osSandbox: sandbox?.pieces))
       let parts = launchSpecParts(spec: spec, plan: plan, talosOnly: talosOnly?.bytes, hook: hook, base: base)
       return .spec(parts, instructions: Self.instructionsHash(spec, parts))
     } catch {

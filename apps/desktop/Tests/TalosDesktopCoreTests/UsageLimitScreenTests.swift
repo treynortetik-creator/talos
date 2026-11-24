@@ -9,7 +9,7 @@ import Testing
 struct UsageLimitScreenTests {
   func rows(_ name: String) throws -> [String] { try RealScreens.rows(name, in: "synthetic") }
 
-  static let neverSaid = ["answer", "approve", "accept", "confirm", "open terminals"]
+  static let neverSaid = ["answer", "approve", "accept", "confirm", "terminals"]
 
   /// Every known form (the 2.1.323 binary's strings): other paying or waiting options, other headlines, rows under the menu, a narrow pane.
   static let all = [
@@ -186,21 +186,21 @@ struct UsageLimitScreenTests {
     let thread = UsageLimitScreen.threadLine(full)
     #expect(
       thread
-        == "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in this thread's pane in Terminals, then /model <another model>."
+        == "This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
     )
     #expect(WorkerNotice.line(screen: .usageLimit(full)) == thread)
     let main = UsageLimitScreen.mainLine(.init())
     #expect(
       main
-        == "Main hit the usage limit for this session's model. Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in Main's pane, then /model <another model>."
+        == "Main hit the usage limit for this session's model. The screen doesn't say when it resets. Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
     )
     let menu = SupervisorNotice.mainDialog("usage limit")
-    #expect(menu == "Main hit a usage limit; press Esc in its pane, then /model <another model> (Talos presses nothing there: one option spends usage credits)")
+    #expect(menu == "Main hit a usage limit. Talos pressed nothing on that screen; its choices come as a card when Talos can read them.")
     let stall = MainRestartCheck.stallPhoneLine("usage limit")
-    #expect(stall == "Main restarted on request and is on the usage-limit screen at your Mac. Press Esc in Main's pane, then /model <another model>; Talos presses nothing there.")
+    #expect(stall == "Main restarted on request and is at the usage limit. Talos pressed nothing on that screen; its choices come as a card when Talos can read them.")
     for line in [thread, main, menu, stall] {
       for w in Self.neverSaid { #expect(!line.lowercased().contains(w), "\(w): \(line)") }
-      #expect(line.contains("Esc") && line.contains("/model <another model>"))
+      for w in ["Esc", "/model", "Terminal", "pane", "tmux"] { #expect(!line.contains(w), "\(w): \(line)") }
     }
     #expect(MainRestartCheck.Last.ownLabels.contains("usage limit"))
     #expect(DialogMatcher.Screen.answerless(label: "usage limit"))

@@ -27,6 +27,7 @@ import { workerScheduleTool } from '../schedules/worker-scope.ts'
 import { setInstructionsAs } from '../tools/thread-setup.ts'
 import { runCreateThread } from '../tools/threads.ts'
 import { frameBytes } from '../transport.ts'
+import { sessionSpoke } from '../worker/busy-line.ts'
 import { readNonce, WorkersReader, writeReady } from '../worker/files.ts'
 import {
   type CheckedFolder,
@@ -577,6 +578,7 @@ export class HubServer {
     const why = workerFrameProblem(f, thread, this.fenceDeps())
     if (why) return { ok: false, ...why }
     if (f.type === 'card.create') ctx.expiry?.sync()
+    if (f.type === 'status') sessionSpoke(ctx, f.thread_id) // its own word replaces the wait line
     // A worker's final word on a card: the hub outlives the worker, so it settles the claim here, before the send waits for the
     // relay. A worker that dies between this and recording the result must not have its finished card failed by the sweep.
     if (f.type === 'card.update' && (f.state === 'done' || f.state === 'failed'))

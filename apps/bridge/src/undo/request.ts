@@ -68,7 +68,7 @@ export function resendUndoRequest(ctx: BridgeContext, controlId: string): void {
   if (s) send(ctx, s)
 }
 
-async function answer(ctx: BridgeContext, f: Of<'undo.request'>): Promise<Result> {
+async function answer(ctx: BridgeContext, f: Of<'undo.request'>, early: (r: Result) => void): Promise<Result> {
   const cards = ctx.undoCards
   if (!cards)
     return { ok: false, text: say({ mac: 'Undo is not on for this Mac.', linux: 'Undo is not on for this computer.' }) }
@@ -76,7 +76,12 @@ async function answer(ctx: BridgeContext, f: Of<'undo.request'>): Promise<Result
   const row = new UndoPoints(ctx.store.db).get(f.message_id)
   if (!row || row.thread_id !== f.thread_id) return { ok: false, text: NO_POINT_TEXT }
   try {
-    const r = await cards.propose(f.message_id)
+    const r = await cards.propose(f.message_id, () =>
+      early({ ok: true, text: 'Undoing now (you always allow undos). The result will be in the thread.' }),
+    )
+    // a passed undo (always allowed) has no card: the app is told it is being done, with no card id to look for
+    if (r.ok && r.passed)
+      return { ok: true, text: 'Undoing now (you always allow undos). The result will be in the thread.' }
     return r.ok ? { ok: true, text: '', cardId: r.cardId } : { ok: false, text: r.why }
   } catch (e) {
     ctx.log.warn('undo card not made', { error: (e as Error).message })
@@ -104,6 +109,11 @@ export async function onUndoRequest(ctx: BridgeContext, f: Of<'undo.request'>, f
     finish()
     return
   }
-  record(ctx, f.control_id, await answer(ctx, f))
+  let told = false
+  const result = await answer(ctx, f, (r) => {
+    told = true
+    record(ctx, f.control_id, r)
+  })
+  if (!told) record(ctx, f.control_id, result)
   finish()
 }

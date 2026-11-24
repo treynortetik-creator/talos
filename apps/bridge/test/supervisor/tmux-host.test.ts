@@ -586,6 +586,27 @@ describe.skipIf(!haveTmux)('the tmux host (real tmux, private socket)', () => {
     })
     await expect(h2.start(launch(['true', 'a\0b']))).rejects.toMatchObject({ code: 'start_failed' })
   })
+  it('a launch whose last-moment check refuses starts nothing: no launch file, no tmux server command to run it', async () => {
+    const calls: string[][] = []
+    const spy: typeof runTool = async (argv, env, ms) => {
+      calls.push(argv)
+      return runTool(argv, env, ms)
+    }
+    const launchDir = join(dir(), 'launch')
+    const { h } = host('agent', 100, { run: spy, launchDir })
+    const line = 'devices.json has another name (a hard link); remove it, then start again'
+    await expect(h.start(launch(['sleep', '30'], { beforeStart: () => line }))).rejects.toMatchObject({
+      code: 'start_failed',
+      message: line,
+    })
+    expect(calls.some((a) => a.includes('new-session') || a.includes('new-window') || a.includes('respawn-pane'))).toBe(
+      false,
+    )
+    expect(existsSync(launchDir) ? readdirSync(launchDir) : []).toEqual([])
+    // clear: the same launch starts
+    await h.start(launch(['sleep', '30'], { beforeStart: () => null }))
+    expect(await h.probe()).toMatchObject({ kind: 'running' })
+  })
   it('a start removes only its own session’s leftover launch file', async () => {
     const launchDir = join(dir(), 'launch')
     mkdirSync(launchDir, { mode: 0o700 })

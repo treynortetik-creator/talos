@@ -61,6 +61,7 @@ extension WorkerManager {
       let o = press(id, offer, choice, label)
       guard o.outcome == .pressed else {
         if o.reason == .unconfirmed { return .nothing(.unconfirmed) }
+        if o.outcome == .partial, let r = o.reason, let stop = UsageLimitScreen.Stop(rawValue: r.rawValue) { return .nothing(.stopped(stop)) }
         switch o.blocked {
         case .typing?: return .nothing(.typing)
         case .unreadable?: return .nothing(.couldNotCheck)

@@ -5,7 +5,7 @@
 #
 #   (default)          unregister the talos-* jobs from Chronos (their prompts and entries), remove the
 #                      Chronos SessionStart hook from the agent's settings, delete the files the kit itself wrote in
-#                      ~/.config/talos (agent-dir, chronos-dir, vault-dir, notify/, talos-app-bin, notify-errors.log, and the notify.env,
+#                      ~/.config/talos (agent-dir, chronos-dir, chronos-not-added.json and .log, vault-dir, notify/, talos-app-bin, notify-errors.log, and the notify.env,
 #                      notify.env.example, telegram.json, telegram-mirror.on files older kit versions wrote). Anything else there is kept and listed, never deleted.
 #   --agent-dir DIR    the agent folder whose settings.json carries the Chronos hook (default: the folder
 #                      install.sh recorded in ~/.config/talos/agent-dir, else ~/talos-agent)
@@ -89,14 +89,19 @@ TCFG="${XDG_CONFIG_HOME:-$HOME/.config}/talos"
 # Only once the jobs are gone: jobs still registered keep their alerts.
 if [ -f "$CFG" ] && [ "$JOBS_OK" = 1 ]; then
   TCFGP="$TCFG" CFGP="$CFG" "$PY" - <<'PYEOF'
-import json, os
+import json, os, shlex
 p = os.environ["CFGP"]; tcfg = os.environ["TCFGP"].rstrip("/") + "/"
 try:
     c = json.load(open(p))
 except Exception:
     raise SystemExit(0)
 n = str(c.get("notify") or "")
-if n.startswith(tcfg):
+# the kit stores the path shell-quoted when it needs it (a space or a quote in it); older installs stored it bare: both are ours
+try:
+    first = (shlex.split(n) or [""])[0]
+except ValueError:
+    first = ""
+if n.startswith(tcfg) or first.startswith(tcfg):
     c["notify"] = ""
     mode = os.stat(p).st_mode & 0o777
     tmp = p + ".tmp.%d" % os.getpid()
@@ -108,7 +113,7 @@ fi
 # The Talos app shares this folder, and so can the user's own files. Delete ONLY names the kit itself writes
 # (install.sh and the notify setup); everything else is kept and listed. Never `rm -rf` the folder.
 # notify.env, notify.env.example, telegram.json and telegram-mirror.on are legacy files from older kit versions.
-KIT_NAMES=" agent-dir chronos-dir vault-dir notify talos-app-bin notify-errors.log notify.env notify.env.example telegram.json telegram-mirror.on "
+KIT_NAMES=" agent-dir chronos-dir chronos-not-added.json chronos-not-added.log vault-dir notify talos-app-bin notify-errors.log notify.env notify.env.example telegram.json telegram-mirror.on "
 APP_NAMES=" app action-rules.yaml brand.json "
 if [ "$JOBS_OK" != 1 ]; then
   # the jobs that are still registered run the notify wrapper and read the records kept here: they stay until the jobs go

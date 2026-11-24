@@ -18,6 +18,9 @@ public enum PaneSelect {
   public enum Kind: String, Codable, Sendable, Equatable {
     case toolPermission = "tool_permission"
     case agentQuestion = "agent_question"
+    /// Claude Code's usage-limit menu (row 7): not a Select Talos answers by a row's number but a card whose two buttons are Escape and
+    /// Escape then `/model` (`KeyGuard.Intent.usageLimit`). The rows are the menu's own, kept only to tie an answer to this exact screen.
+    case usageLimit = "usage_limit"
   }
 
   public struct Row: Equatable, Sendable {
@@ -41,6 +44,8 @@ public enum PaneSelect {
     public var allow: Int?
     public var deny: Int?
     public var bound: String
+    /// Usage limit: the model its headline names (nil: none), which decides whether `Switch model` is offered, and the limit's reset in words.
+    public var limit: UsageLimitScreen.Info?
     /// With `freeTextAt` given and the cursor on that row: what the row actually shows now (the owner's typing). nil otherwise.
     public var typed: String?
 
@@ -83,11 +88,27 @@ public enum PaneSelect {
     var tail = PromptDetector.maskQueueCounter(all.map { $0.replacingOccurrences(of: "\r", with: "") })
     while let l = tail.last, DialogMatcher.clean(l).isEmpty || l.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { tail.removeLast() }
     guard let footer = tail.last.map(DialogMatcher.clean) else { return nil }
-    // the known dialogs (and the usage-limit screen) are never these
-    if DialogMatcher.liveDialog(tail) != .none || UsageLimitScreen.read(tail) != nil { return nil }
+    // the usage-limit menu has its own reader (the card is Escape, and Escape then `/model`)
+    if let menu = UsageLimitScreen.readMenu(tail) { return readUsageLimit(menu) }
+    // the known dialogs are never these
+    if DialogMatcher.liveDialog(tail) != .none { return nil }
     if toolFooters.contains(footer) { return readTool(tail) }
     if questionFooters.contains(footer) { return readQuestion(tail, freeTextAt: freeTextAt) }
     return nil
+  }
+
+  /// The usage-limit menu as a card's screen: only when the footer says Esc cancels it (the one key every button starts with), and with the numbered
+  /// rows as drawn so an answer is tied to this exact menu (a different row list, model or reset is another screen).
+  private static func readUsageLimit(_ m: UsageLimitScreen.Menu) -> Screen? {
+    guard !UsageLimitScreen.offered(m).isEmpty else { return nil }
+    let rows = m.rows.compactMap { r -> Row? in
+      guard let dot = r.firstIndex(of: "."), let n = Int(r[..<dot]) else { return nil }
+      return Row(number: n, label: String(r[r.index(after: dot)...]).trimmingCharacters(in: .whitespaces))
+    }
+    guard rows.count == m.rows.count, rows.indices.contains(m.cursor) else { return nil }
+    let subject = UsageLimitScreen.subject(m.info)
+    let bound = (["usage_limit", m.info.model ?? "", m.info.resets ?? ""] + m.rows).joined(separator: "\u{1F}")
+    return Screen(kind: .usageLimit, tool: nil, subject: subject, rows: rows, cursor: m.cursor, freeText: nil, allow: nil, deny: nil, bound: bound, limit: m.info, typed: nil)
   }
 
   /// A question with several tabs (`← ☐ Color  ☐ Size  ✔ Submit →`): the card does not take these, the owner answers them at the Mac.
@@ -192,7 +213,7 @@ public enum PaneSelect {
       deny = d
     }
     let bound = ([kind.rawValue, tool ?? "", subject] + rows.map { "\($0.number). \($0.label)" }).joined(separator: "\u{1F}")
-    let screen = Screen(kind: kind, tool: tool, subject: subject, rows: rows, cursor: cursor, freeText: free, allow: allow, deny: deny, bound: bound, typed: typed)
+    let screen = Screen(kind: kind, tool: tool, subject: subject, rows: rows, cursor: cursor, freeText: free, allow: allow, deny: deny, bound: bound, limit: nil, typed: typed)
     return screen.displaySubject.count <= maxSubject ? screen : nil
   }
 
@@ -274,6 +295,7 @@ public enum PaneSelect {
     switch s.kind {
     case .toolPermission: return [allowLabel, denyLabel]
     case .agentQuestion: return (0..<answerRows(s)).map { $0 == s.freeText ? otherLabel : s.rows[$0].label }
+    case .usageLimit: return UsageLimitScreen.buttons(model: s.limit?.model)
     }
   }
 
@@ -288,6 +310,8 @@ public enum PaneSelect {
       if i == 1 { return s.deny }
       return nil
     case .agentQuestion: return (0..<answerRows(s)).contains(i) ? i : nil
+    // a button, not a row: Escape (and `/model`) answer it, never a row's number
+    case .usageLimit: return nil
     }
   }
 

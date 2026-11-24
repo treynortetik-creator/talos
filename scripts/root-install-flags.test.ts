@@ -54,12 +54,13 @@ describe('root install.sh', () => {
       expect(run(sandbox(), ['--dry-run', '--with-teleportation']).code).toBe(2)
     })
 
-    it('a Chronos-only flag without --with-chronos is refused loudly, never silently dropped', () => {
+    // Chronos comes with every Mac install now: only an install that leaves it out (the --no-chronos test switch) refuses them
+    it('a Chronos-only flag on an install without Chronos is refused loudly, never silently dropped', () => {
       const sb = sandbox()
       for (const flag of [['--notify', 'talos'], ['--no-jobs'], ['--no-load'], ['--chronos-path', STUB_CHRONOS]]) {
-        const r = run(sb, ['--dry-run', '--no-app', ...flag])
+        const r = run(sb, ['--dry-run', '--no-app', '--no-chronos', ...flag])
         expect(r.code, flag.join(' ')).toBe(2)
-        expect(r.out).toContain('--with-chronos')
+        expect(r.out).toContain('only does something with Chronos')
       }
       expect(run(sb, ['--dry-run', '--no-app', '--with-chronos', '--no-chronos']).code).toBe(2)
     })

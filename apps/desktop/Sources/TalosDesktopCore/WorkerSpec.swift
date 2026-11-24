@@ -115,6 +115,8 @@ public struct WorkerSpec: Equatable, Sendable {
     case fenceMissing
     /// The settings lack the write deny on the session's own hook copy, settings or MCP config (`WorkerFence.workerFilesDeny`).
     case workerFilesOpen
+    /// The OS sandbox switch is on and the settings do not carry the sandbox the supervisor built (`OsSandbox.carries`).
+    case sandboxMissing
     /// The Talos home has a character Claude Code reads as a glob, so no deny rule can name it.
     case unsafeTalosHome(String)
     /// The spec is wider than the main session on one axis (`PrivilegeCeiling`).
@@ -138,6 +140,7 @@ public struct WorkerSpec: Equatable, Sendable {
       case .fenceUnmergeable: return "the settings' permissions can't take the Talos home deny: they are not an object with a list of deny rules"
       case .fenceMissing: return "the worker's settings lack the Talos home deny"
       case .workerFilesOpen: return "the worker's settings don't deny editing its own permission hook, settings or MCP config"
+      case .sandboxMissing: return "the OS sandbox block is not in the settings as the supervisor built it"
       case .unsafeTalosHome(let h): return "the Talos home can't be named in a deny rule: \(h)"
       case .escalation(let d): return "\(PrivilegeCeiling.code) (\(d.axis.rawValue)): \(d.detail)"
       case .folderSettingsLoaded: return "a thread session outside the agent folder must start with --setting-sources user"
@@ -188,6 +191,9 @@ public struct WorkerSpec: Equatable, Sendable {
     /// the owner turned it off, and then the settings carry no Talos-home deny. Everything else in them (main's deny rules, the guards,
     /// `extraDeny`, the settings-file deny, a lead folder's own deny) is the same either way.
     public var threadFence = true
+    /// The opt-in OS sandbox (`OsSandbox`), built by the supervisor for this start when config.json says `os_sandbox: true`: its block and
+    /// environment go into the settings. nil: the switch is off and the launch is as before.
+    public var osSandbox: OsSandbox.Pieces?
 
     public init(
       threadId: String, claudePath: String, baseEnv: [String: String], talosHome: String, agentDir: String,
@@ -380,6 +386,8 @@ public struct WorkerSpec: Equatable, Sendable {
     fenced["statusLine"] = WorkerUsage.statusLine(python: i.permissionHook.python, talosHome: i.talosHome, threadId: i.threadId)
     // an MCP server of the thread folder the owner has not approved there is not launched
     if let refusal = i.mcp?.refusal { throw BuildError.escalation(.init(axis: .mcp, detail: refusal)) }
+    // the opt-in OS sandbox rides in the same file (the switch is on: the supervisor built it for this start)
+    if let sb = i.osSandbox { fenced = OsSandbox.with(fenced, sb) }
     settings = fenced
     let data = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
     let spec = WorkerSpec(
@@ -387,7 +395,7 @@ public struct WorkerSpec: Equatable, Sendable {
       settingsJSON: String(decoding: data, as: UTF8.self), mcpAllowed: i.mcp?.allowed ?? [],
       mcpOwnFolder: i.mcp.map { Array($0.ownFolder.keys) } ?? [], main: main, foldersSettingsOff: ownFolder, mainSources: mainSources,
       promptToken: projectText == nil ? nil : token)
-    try spec.validate(threadFence: i.threadFence)
+    try spec.validate(threadFence: i.threadFence, osSandbox: i.osSandbox)
     return spec
   }
 
@@ -420,7 +428,7 @@ public struct WorkerSpec: Equatable, Sendable {
   /// The last line of defence: a spec that could load a channel, run headless or carry a Telegram token never runs.
   /// `threadFence` is the supervisor's own read of the developer thread fence for this start, never anything the spec says: only
   /// when it is false may the settings lack the Talos-home deny. A spec built with the fence off is refused where the read is on.
-  public func validate(threadFence: Bool = true) throws {
+  public func validate(threadFence: Bool = true, osSandbox: OsSandbox.Pieces? = nil) throws {
     for a in args {
       for f in Self.forbiddenArgs where a == f || a.hasPrefix(f + "=") {
         throw BuildError.forbiddenArg(f)
@@ -451,6 +459,8 @@ public struct WorkerSpec: Equatable, Sendable {
       throw BuildError.workerFilesOpen
     }
     let settings = (try? JSONSerialization.jsonObject(with: Data(settingsJSON.utf8))) as? [String: Any] ?? [:]
+    // the switch is on (the supervisor's own read, never the spec's): the settings carry the sandbox it built, locked, and its environment
+    if let sb = osSandbox, !OsSandbox.carries(settings, sb) { throw BuildError.sandboxMissing }
     // TALOS_APP_THREAD_STATE=1 exactly when the settings run both thread-state commands (the kit's session-start and compaction-guard
     // leave Main's state to Main only then): neither without the other
     let flag = env[WorkerHook.threadStateEnv]

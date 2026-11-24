@@ -157,6 +157,47 @@ c=$(grep -c 'chronos-session-start.py' "$SB/agent/.claude/settings.json")
 [ "$c" = 1 ] && ok "hook-add registers the Chronos hook exactly once" || no "Chronos hook registered $c times"
 ( cd "$SB/agent" && mkdir -p scripts && cp "$KIT/scripts/_check_hook_registration.py" scripts/ && python3 scripts/_check_hook_registration.py | grep '^OK' >/dev/null ) \
   && ok "the Talos hook registration check still passes with the Chronos hook alongside" || no "adding the Chronos hook broke the registration check"
+# a hook that names another Chronos (the clone an older install made) is repointed, not called "already registered"
+mkdir -p "$SB/oldchronos/hooks"; printf 'print("{}")\n' > "$SB/oldchronos/hooks/chronos-session-start.py"
+python3 - "$SB/agent/.claude/settings.json" "$SB/fakechronos" "$SB/oldchronos" <<'PYEOF'
+import sys
+p, new, old = sys.argv[1:4]
+s = open(p).read().replace(new + "/hooks", old + "/hooks")
+open(p, "w").write(s)
+PYEOF
+python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" --replace-from "$SB/oldchronos" >/dev/null 2>&1
+c=$(grep -c 'chronos-session-start.py' "$SB/agent/.claude/settings.json")
+{ [ "$c" = 1 ] && grep -q "$SB/fakechronos/hooks" "$SB/agent/.claude/settings.json" && ! grep -q "$SB/oldchronos" "$SB/agent/.claude/settings.json" && grep -q 'pre-tool-guard.py' "$SB/agent/.claude/settings.json"; } \
+  && ok "hook-add repoints a hook that names another Chronos, and keeps the other hooks" || no "the Chronos hook was not repointed (entries: $c)"
+# the owner's wrapper around the command survives (only the old path inside it is swapped) ...
+python3 - "$SB/agent/.claude/settings.json" "$SB/fakechronos" "$SB/oldchronos" <<'PYEOF'
+import json, shlex, sys
+p, new, old = sys.argv[1:4]
+c = json.load(open(p))
+for e in c["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "chronos-session-start.py" in h["command"]:
+            h["command"] = "nice -n 5 sh -c " + shlex.quote(h["command"].replace(new + "/hooks", old + "/hooks"))
+json.dump(c, open(p, "w"), indent=2)
+PYEOF
+python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" --replace-from "$SB/oldchronos" >/dev/null 2>&1
+{ grep -q 'nice -n 5 sh -c' "$SB/agent/.claude/settings.json" && grep -q "$SB/fakechronos/hooks" "$SB/agent/.claude/settings.json" && ! grep -q "$SB/oldchronos" "$SB/agent/.claude/settings.json"; } \
+  && ok "hook-add keeps the owner's wrapper and swaps only the old Chronos path inside it" || no "the owner's wrapper was lost or the path not swapped"
+# ... and an owner's own Chronos hook (a path that is neither the new Chronos nor an old Talos one) is never repointed
+python3 - "$SB/agent/.claude/settings.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p))
+for e in c["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "chronos-session-start.py" in h["command"]:
+            h["command"] = "python3 /owner/own/hooks/chronos-session-start.py"
+json.dump(c, open(p, "w"), indent=2)
+PYEOF
+python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" --replace-from "$SB/oldchronos" >/dev/null 2>&1
+python3 "$TJ" hook-add --agent-dir "$SB/agent" --chronos-dir "$SB/fakechronos" >/dev/null 2>&1
+{ grep -q '/owner/own/hooks/chronos-session-start.py' "$SB/agent/.claude/settings.json" && ! grep -q "$SB/fakechronos/hooks" "$SB/agent/.claude/settings.json"; } \
+  && ok "hook-add never repoints a Chronos hook of the owner's own" || no "the owner's own Chronos hook was repointed"
 python3 "$TJ" hook-remove --agent-dir "$SB/agent" >/dev/null 2>&1
 { ! grep -q 'chronos-session-start.py' "$SB/agent/.claude/settings.json" && grep -q 'pre-tool-guard.py' "$SB/agent/.claude/settings.json" && grep -q 'session-start.py' "$SB/agent/.claude/settings.json"; } \
   && ok "hook-remove takes out only the Chronos hook" || no "hook-remove removed too much or too little"
@@ -187,7 +228,7 @@ mkplist "$SB/rt" 0.2.0
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" 2>&1)"; n=$(cnt)
 { [ "$n" = 0 ] && <<<"$out" grep -q 'SKIPPED talos-memory-index' && <<<"$out" grep -q 'command jobs need 0.2.1' && <<<"$out" grep -q 'SKIPPED talos-morning-brief.*restricted jobs need 0.2.2'; } \
   && ok "on Chronos 0.2.0 the command job and every restricted job are skipped with a message (nothing registers silently unrestricted)" || no "old-Chronos gate wrong (jobs=$n)" "$out"
-<<<"$out" grep -q 'git -C ~/.local/share/talos/chronos fetch' && <<<"$out" grep -q 'reinstall-chronos' && ok "the message says how to update the Chronos clone (detached: fetch + checkout the pin, or --reinstall-chronos), not 'git pull'" || no "update help missing or says git pull" "$out"
+<<<"$out" grep -q 'apps/chronos' && <<<"$out" grep -q 'reinstall-chronos' && ! <<<"$out" grep -q 'share/talos/chronos fetch' && ok "the message says how to move to the Chronos in the Talos clone (./install.sh, or --reinstall-chronos), never the old clone's fetch" || no "update help missing or names the old clone" "$out"
 out="$(python3 "$TJ" register --agent-dir "$SB/agent" --kit-dir "$KIT" --full-access 2>&1)"; n=$(cnt)
 { [ "$n" = 3 ] && python3 - "$JF" <<'PY'
 import json,sys

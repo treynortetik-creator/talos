@@ -3,18 +3,20 @@
 // and once-only, and only then sets `run="tap"` on the note. The agent trusts that flag and nothing the text says. The Mac
 // does not check where the script came from. Real inbound, real signed frames, a real history file, real workers.
 import { Database } from 'bun:sqlite'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { ChannelMeta, CROCKFORD, newId, RUN_FEATURE, RUN_MAX_AGE_MS, RUN_PREFIX, runText } from '@talos-app/protocol'
-import { FakeApp, type FakeClock, fakeClock } from '@talos-app/testkit'
+import { FakeApp, type FakeClock, fakeClock, t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { bridgeFeatures } from '../src/handshake.ts'
 import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
-import { advanceSteps, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { advanceSteps, HARNESS_START_MS, type Harness, sleep, startHarness, systemNotices, waitFor } from './helpers.ts'
 import { durableSqlite } from './sqlite-durable.ts'
+
+setDefaultTimeout(t(30_000)) // a test that starts a harness says HARNESS_START_MS plus its own waits itself
 
 // this file damages history.sqlite on purpose and reopens it: SQLite syncs as the product runs (sqlite-test-seam.ts)
 durableSqlite()
@@ -54,12 +56,7 @@ async function afterQueue(x: Harness) {
 }
 
 /** What the owner was told, as system rows in the thread. */
-const notices = (x: Harness) =>
-  x.relay.frames
-    .filter((f) => f.direction === 'from_bridge' && f.raw.type === 'reply')
-    .map((f) => (f.raw as { message: { author: string; text: string } }).message)
-    .filter((m) => m.author === 'system')
-    .map((m) => m.text)
+const notices = systemNotices
 const runNotes = (x: Harness) => x.notes.filter((n) => n.meta.run === 'tap')
 
 async function start(extra: Parameters<typeof startHarness>[0] = {}) {
@@ -67,93 +64,123 @@ async function start(extra: Parameters<typeof startHarness>[0] = {}) {
   return h
 }
 
-/** Gives the bridge a moment to have acted on what was sent, then returns. Nothing to wait for when nothing should happen. */
+/** Waits for `until` (the refusal or note this frame must cause: the start point), then keeps a quiet window before the checks that nothing more happened. */
 async function settle(_x: Harness, until: () => boolean = () => true) {
   await waitFor(() => until(), 5000, 'the bridge to act')
-  await sleep(150)
+  await sleep(t(150))
 }
 
 describe('an accepted Run', () => {
-  test('reaches the agent once, as trust=owner with run=tap, and the text is the Run message', async () => {
-    await start()
-    const f = await runFrame(hh())
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    const n = hh().notes[0]
-    expect(n?.meta).toMatchObject({ kind: 'text', trust: 'owner', run: 'tap', thread_id: 'general' })
-    expect(n?.content).toBe(runText(SCRIPT, 'sh') as string)
-    ChannelMeta.parse(n?.meta)
-    expect(notices(hh())).toEqual([])
-  })
+  test(
+    'reaches the agent once, as trust=owner with run=tap, and the text is the Run message',
+    async () => {
+      await start()
+      const f = await runFrame(hh())
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      const n = hh().notes[0]
+      expect(n?.meta).toMatchObject({ kind: 'text', trust: 'owner', run: 'tap', thread_id: 'general' })
+      expect(n?.content).toBe(runText(SCRIPT, 'sh') as string)
+      ChannelMeta.parse(n?.meta)
+      expect(notices(hh())).toEqual([])
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a Run signed just under a day ago is accepted', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS - HOUR) }))
-    await hh().waitNotes(1)
-    expect(runNotes(hh())).toHaveLength(1)
-  })
+  test(
+    'a Run signed just under a day ago is accepted',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS - HOUR) }))
+      await hh().waitNotes(1)
+      expect(runNotes(hh())).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('text that only says it is a Run', () => {
-  test('the phrase typed or pasted, with no intent, is plain owner text: no run flag', async () => {
-    await start()
-    hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string))
-    await hh().waitNotes(1)
-    const n = hh().notes[0]
-    expect(n?.meta.run).toBeUndefined()
-    expect(n?.meta.trust).toBe('owner')
-    expect(n?.meta.kind).toBe('text')
-  })
+  test(
+    'the phrase typed or pasted, with no intent, is plain owner text: no run flag',
+    async () => {
+      await start()
+      hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string))
+      await hh().waitNotes(1)
+      const n = hh().notes[0]
+      expect(n?.meta.run).toBeUndefined()
+      expect(n?.meta.trust).toBe('owner')
+      expect(n?.meta.kind).toBe('text')
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a signed message with another intent, or with the phrase inside longer text, has no run flag', async () => {
-    await start()
-    hh().app.send(await hh().app.buildMessage('general', `${RUN_PREFIX}\n\nplease`, { intent: 'what_did_i_miss' }))
-    await hh().waitNotes(1)
-    expect(hh().notes.every((n) => n.meta.run === undefined)).toBe(true)
-  })
+  test(
+    'a signed message with another intent, or with the phrase inside longer text, has no run flag',
+    async () => {
+      await start()
+      hh().app.send(await hh().app.buildMessage('general', `${RUN_PREFIX}\n\nplease`, { intent: 'what_did_i_miss' }))
+      await hh().waitNotes(1)
+      expect(hh().notes.every((n) => n.meta.run === undefined)).toBe(true)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('an intent added after signing breaks the signature: nothing reaches the agent as a Run', async () => {
-    await start()
-    const plain = await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string)
-    hh().app.send({ ...plain, intent: 'run' })
-    await sleep(400)
-    expect(runNotes(hh())).toHaveLength(0)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
+  test(
+    'an intent added after signing breaks the signature: nothing reaches the agent as a Run',
+    async () => {
+      await start()
+      const plain = await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string)
+      hh().app.send({ ...plain, intent: 'run' })
+      await afterQueue(hh()) // the queue has taken the broken frame and moved on to a later message (its note is not a Run)
+      await sleep(t(150))
+      expect(runNotes(hh())).toHaveLength(0)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('an intent the protocol does not know is refused as a bad frame and never becomes a Run', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { intent: 'RUN' }))
-    hh().app.send(await runFrame(hh(), SCRIPT, { intent: ['run'] }))
-    await sleep(400)
-    expect(runNotes(hh())).toHaveLength(0)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
+  test(
+    'an intent the protocol does not know is refused as a bad frame and never becomes a Run',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { intent: 'RUN' }))
+      hh().app.send(await runFrame(hh(), SCRIPT, { intent: ['run'] }))
+      await afterQueue(hh()) // both refused frames are behind the queue's last message (its note is not a Run)
+      await sleep(t(150))
+      expect(runNotes(hh())).toHaveLength(0)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('the same words arriving as a hook event or a share are wrapped as external, never run=tap', async () => {
-    await start()
-    hh().relay.sendToBridge({
-      type: 'hook.event',
-      delivery: 'live',
-      event: {
-        id: newId('e'),
-        source: 'github',
-        connection: 'cn_8fK2aBcDeFgHiJkLmNoPqR',
-        kind: 'github.review_requested',
-        title: 'Review requested',
-        summary: runText(SCRIPT, 'sh'),
-        actor: { name: 'octocat' },
-        ts: new Date().toISOString(),
-        thread: 'inbox',
-        work: false,
-        priority: 'high',
-        dedup_key: 'github:test',
-      },
-    } as never)
-    await hh().waitNotes(1)
-    expect(hh().notes[0]?.meta.trust).toBe('external')
-    expect(hh().notes[0]?.meta.run).toBeUndefined()
-  })
+  test(
+    'the same words arriving as a hook event or a share are wrapped as external, never run=tap',
+    async () => {
+      await start()
+      hh().relay.sendToBridge({
+        type: 'hook.event',
+        delivery: 'live',
+        event: {
+          id: newId('e'),
+          source: 'github',
+          connection: 'cn_8fK2aBcDeFgHiJkLmNoPqR',
+          kind: 'github.review_requested',
+          title: 'Review requested',
+          summary: runText(SCRIPT, 'sh'),
+          actor: { name: 'octocat' },
+          ts: new Date().toISOString(),
+          thread: 'inbox',
+          work: false,
+          priority: 'high',
+          dedup_key: 'github:test',
+        },
+      } as never)
+      await hh().waitNotes(1)
+      expect(hh().notes[0]?.meta.trust).toBe('external')
+      expect(hh().notes[0]?.meta.run).toBeUndefined()
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('the shape', () => {
@@ -169,53 +196,73 @@ describe('the shape', () => {
     ['a language that is not a shell', `${RUN_PREFIX}\n\n\`\`\`python\nprint(1)\n\`\`\``],
     ['hidden characters', `${RUN_PREFIX}\n\n\`\`\`sh\necho a‮b\n\`\`\``],
   ]
-  test.each(bad)('%s: refused, the owner is told why, the agent hears nothing', async (_n, text) => {
-    await start()
-    hh().app.send(await hh().app.buildMessage('general', text, { intent: 'run' }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/was not run/)
-    expect(notices(hh())[0]).toMatch(/shape/)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test.each(bad)(
+    '%s: refused, the owner is told why, the agent hears nothing',
+    async (_n, text) => {
+      await start()
+      hh().app.send(await hh().app.buildMessage('general', text, { intent: 'run' }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/was not run/)
+      expect(notices(hh())[0]).toMatch(/shape/)
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('age', () => {
-  test('a Run signed more than a day ago is refused with the reason, and the agent hears nothing', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS + HOUR) }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/more than a day/)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test(
+    'a Run signed more than a day ago is refused with the reason, and the agent hears nothing',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS + HOUR) }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/more than a day/)
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a Run held for days while the Mac slept is refused, signed 3 and 7.9 days ago', async () => {
-    await start()
-    for (const days of [3, 7.9]) hh().relay.sendToBridge(await runFrame(hh(), SCRIPT, { ts: ago(days * 24 * HOUR) }))
-    await settle(hh(), () => notices(hh()).length > 1)
-    expect(notices(hh()).length).toBe(2)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test(
+    'a Run held for days while the Mac slept is refused, signed 3 and 7.9 days ago',
+    async () => {
+      await start()
+      for (const days of [3, 7.9]) hh().relay.sendToBridge(await runFrame(hh(), SCRIPT, { ts: ago(days * 24 * HOUR) }))
+      await settle(hh(), () => notices(hh()).length > 1)
+      expect(notices(hh()).length).toBe(2)
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('the first signing time is the older of the two: a later original_ts cannot make an old Run young', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS + HOUR), original_ts: ago(1000) }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/more than a day/)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test(
+    'the first signing time is the older of the two: a later original_ts cannot make an old Run young',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { ts: ago(RUN_MAX_AGE_MS + HOUR), original_ts: ago(1000) }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/more than a day/)
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a Run signed again (new time) keeps its first signing time: a week-old one is refused, a fresh one is not', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(3 * 24 * HOUR) }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/more than a day/)
-    expect(hh().notes).toHaveLength(0)
-    hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(2 * HOUR) }))
-    await hh().waitNotes(1)
-    expect(runNotes(hh())).toHaveLength(1)
-    // a re-signed Run does not get the "older words" line in front of the text: its age was checked, and the text stays whole
-    expect(hh().notes[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
-  })
+  test(
+    'a Run signed again (new time) keeps its first signing time: a week-old one is refused, a fresh one is not',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(3 * 24 * HOUR) }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/more than a day/)
+      expect(hh().notes).toHaveLength(0)
+      hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(2 * HOUR) }))
+      await hh().waitNotes(1)
+      expect(runNotes(hh())).toHaveLength(1)
+      // a re-signed Run does not get the "older words" line in front of the text: its age was checked, and the text stays whole
+      expect(hh().notes[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('a tap carries nothing but the script', () => {
@@ -234,116 +281,154 @@ describe('a tap carries nothing but the script', () => {
     ['shared material', { share_content: { text: 'x' } }],
     ['a reply', { reply_to: newId('m') }],
   ]
-  test.each(extras)('%s: refused, the owner is told, the agent hears nothing', async (_n, extra) => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, extra))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/shape/)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test.each(extras)(
+    '%s: refused, the owner is told, the agent hears nothing',
+    async (_n, extra) => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, extra))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/shape/)
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('the bridge says it can take a Run', () => {
-  test('it lists run/1 in its hello, which is what makes the app show a Run button', async () => {
-    await start()
-    const hello = hh().relay.frames.find((f) => f.direction === 'from_bridge' && f.raw.type === 'hello')
-    expect(hello).toBeDefined()
-    expect((hello as unknown as { raw: { client: { features: string[] } } }).raw.client.features).toContain(RUN_FEATURE)
-    expect(bridgeFeatures({})).toContain(RUN_FEATURE)
-  })
+  test(
+    'it lists run/1 in its hello, which is what makes the app show a Run button',
+    async () => {
+      await start()
+      const hello = hh().relay.frames.find((f) => f.direction === 'from_bridge' && f.raw.type === 'hello')
+      expect(hello).toBeDefined()
+      expect((hello as unknown as { raw: { client: { features: string[] } } }).raw.client.features).toContain(
+        RUN_FEATURE,
+      )
+      expect(bridgeFeatures({})).toContain(RUN_FEATURE)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('each tap, one Run: kept by the Mac, keyed on the tap', () => {
   const noted = (x: Harness) => runNotes(x).length
 
-  test('a Run without the block it is for is refused, and the agent hears nothing', async () => {
-    await start()
-    hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, { intent: 'run' }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())[0]).toMatch(/does not say which block/)
-    expect(noted(hh())).toBe(0)
-  })
+  test(
+    'a Run without the block it is for is refused, and the agent hears nothing',
+    async () => {
+      await start()
+      hh().app.send(await hh().app.buildMessage('general', runText(SCRIPT, 'sh') as string, { intent: 'run' }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())[0]).toMatch(/does not say which block/)
+      expect(noted(hh())).toBe(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('the block named in the frame is signed: changing it after signing breaks the signature', async () => {
-    await start()
-    const ref = blockRef(0)
-    const f = await runFrame(hh(), SCRIPT, { run_block: ref })
-    hh().app.send({ ...f, run_block: { ...ref, index: 1 } })
-    await afterQueue(hh())
-    expect(noted(hh())).toBe(0)
-    expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:1`)).toBe(false)
-  })
+  test(
+    'the block named in the frame is signed: changing it after signing breaks the signature',
+    async () => {
+      await start()
+      const ref = blockRef(0)
+      const f = await runFrame(hh(), SCRIPT, { run_block: ref })
+      hh().app.send({ ...f, run_block: { ...ref, index: 1 } })
+      await afterQueue(hh())
+      expect(noted(hh())).toBe(0)
+      expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:1`)).toBe(false)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a block that is not a block (a negative or fractional place, an odd id) is refused as a bad frame', async () => {
-    await start()
-    for (const bad of [
-      { message_id: newId('m'), index: -1 },
-      { message_id: newId('m'), index: 1.5 },
-      { message_id: 'x', index: 0 },
-    ])
-      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: bad }))
-    await afterQueue(hh())
-    expect(noted(hh())).toBe(0)
-  })
+  test(
+    'a block that is not a block (a negative or fractional place, an odd id) is refused as a bad frame',
+    async () => {
+      await start()
+      for (const bad of [
+        { message_id: newId('m'), index: -1 },
+        { message_id: newId('m'), index: 1.5 },
+        { message_id: 'x', index: 0 },
+      ])
+        hh().app.send(await runFrame(hh(), SCRIPT, { run_block: bad }))
+      await afterQueue(hh())
+      expect(noted(hh())).toBe(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('the Run marks its tap (the message) in the seen store before the agent hears of it', async () => {
-    await start()
-    const f = await runFrame(hh(), SCRIPT, { run_block: blockRef(2) })
-    const seenAtEmit: boolean[] = []
-    hh().bridge.setEmit(async (n) => {
-      seenAtEmit.push(hh().bridge.ctx.store.hasSeen(f.client_msg_id))
-      hh().notes.push(n)
-    })
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    expect(seenAtEmit).toEqual([true])
-  })
+  test(
+    'the Run marks its tap (the message) in the seen store before the agent hears of it',
+    async () => {
+      await start()
+      const f = await runFrame(hh(), SCRIPT, { run_block: blockRef(2) })
+      const seenAtEmit: boolean[] = []
+      hh().bridge.setEmit(async (n) => {
+        seenAtEmit.push(hh().bridge.ctx.store.hasSeen(f.client_msg_id))
+        hh().notes.push(n)
+      })
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      expect(seenAtEmit).toEqual([true])
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
   // owner, 2026-11-15 (audit 14): a fresh tap on the same block runs it again; a replay of one tap never does (below)
-  test('a fresh tap on a block that ran runs it again, on any device or screen', async () => {
-    await start()
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await hh().waitNotes(1)
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await hh().waitNotes(2)
-    expect(noted(hh())).toBe(2)
-    expect(notices(hh())).toHaveLength(0)
-  })
+  test(
+    'a fresh tap on a block that ran runs it again, on any device or screen',
+    async () => {
+      await start()
+      const ref = blockRef()
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await hh().waitNotes(1)
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await hh().waitNotes(2)
+      expect(noted(hh())).toBe(2)
+      expect(notices(hh())).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('two devices tapping the same block are two Runs (each its own signed tap)', async () => {
-    await start()
-    const second = new FakeApp({ relayWs: hh().relay.wsBase })
-    await second.connect()
-    expect(
-      hh().bridge.ctx.devices.pin(
-        { id: second.device.deviceId, name: 'Second', pubkey_jwk: second.device.publicJwk },
-        new Date().toISOString(),
-      ).ok,
-    ).toBe(true)
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    hh().relay.sendToBridge(
-      (await second.buildMessage('general', runText(SCRIPT, 'sh') as string, {
-        intent: 'run',
-        run_block: ref,
-      })) as never,
-    )
-    await afterQueue(hh())
-    expect(noted(hh())).toBe(2)
-    await second.close()
-  })
+  test(
+    'two devices tapping the same block are two Runs (each its own signed tap)',
+    async () => {
+      await start()
+      const second = new FakeApp({ relayWs: hh().relay.wsBase })
+      await second.connect()
+      expect(
+        hh().bridge.ctx.devices.pin(
+          { id: second.device.deviceId, name: 'Second', pubkey_jwk: second.device.publicJwk },
+          new Date().toISOString(),
+        ).ok,
+      ).toBe(true)
+      const ref = blockRef()
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      hh().relay.sendToBridge(
+        (await second.buildMessage('general', runText(SCRIPT, 'sh') as string, {
+          intent: 'run',
+          run_block: ref,
+        })) as never,
+      )
+      await afterQueue(hh())
+      expect(noted(hh())).toBe(2)
+      await second.close()
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a Run that was refused does not use up its block', async () => {
-    await start()
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref, ts: ago(RUN_MAX_AGE_MS + HOUR) })) // too old
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false)
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await hh().waitNotes(1)
-    expect(noted(hh())).toBe(1)
-  })
+  test(
+    'a Run that was refused does not use up its block',
+    async () => {
+      await start()
+      const ref = blockRef()
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref, ts: ago(RUN_MAX_AGE_MS + HOUR) })) // too old
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false)
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await hh().waitNotes(1)
+      expect(noted(hh())).toBe(1)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 /** A message id made at a given time: the ULID's first ten characters are the time in milliseconds (Crockford base32). */
@@ -360,114 +445,153 @@ const WEEK = 7 * 24 * HOUR
 const OLD_LINE = 'That script is over a week old. Ask me to post it again.'
 
 describe('the age of the block', () => {
-  test('a block made 7 days minus a minute ago runs', async () => {
-    await start()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: blockRef(0, idAt(Date.now() - WEEK + 60_000)) }))
-    await hh().waitNotes(1)
-    expect(runNotes(hh())).toHaveLength(1)
-    expect(notices(hh())).toEqual([])
-  })
+  test(
+    'a block made 7 days minus a minute ago runs',
+    async () => {
+      await start()
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: blockRef(0, idAt(Date.now() - WEEK + 60_000)) }))
+      await hh().waitNotes(1)
+      expect(runNotes(hh())).toHaveLength(1)
+      expect(notices(hh())).toEqual([])
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a block made 7 days plus a minute ago is refused with the plain line, and its mark is not set', async () => {
-    await start()
-    const ref = blockRef(0, idAt(Date.now() - WEEK - 60_000))
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())).toEqual([OLD_LINE])
-    expect(runNotes(hh())).toHaveLength(0)
-    expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false) // a refused Run does not use up its block
-  })
+  test(
+    'a block made 7 days plus a minute ago is refused with the plain line, and its mark is not set',
+    async () => {
+      await start()
+      const ref = blockRef(0, idAt(Date.now() - WEEK - 60_000))
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())).toEqual([OLD_LINE])
+      expect(runNotes(hh())).toHaveLength(0)
+      expect(hh().bridge.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false) // a refused Run does not use up its block
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a message id whose time will not parse is refused the same way', async () => {
-    await start()
-    // 26 characters that pass the id pattern, but start above 7: more than 48 bits of time
-    const bad = `m_8${'Z'.repeat(25)}`
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: { message_id: bad, index: 0 } }))
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(notices(hh())).toEqual([OLD_LINE])
-    expect(runNotes(hh())).toHaveLength(0)
-    expect(hh().bridge.ctx.store.hasSeen(`run:${bad}:0`)).toBe(false)
-  })
+  test(
+    'a message id whose time will not parse is refused the same way',
+    async () => {
+      await start()
+      // 26 characters that pass the id pattern, but start above 7: more than 48 bits of time
+      const bad = `m_8${'Z'.repeat(25)}`
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: { message_id: bad, index: 0 } }))
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(notices(hh())).toEqual([OLD_LINE])
+      expect(runNotes(hh())).toHaveLength(0)
+      expect(hh().bridge.ctx.store.hasSeen(`run:${bad}:0`)).toBe(false)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('what is kept of a Run', () => {
-  test('an accepted Run and a refused one are both in the history, so a reloaded app sees the owner row', async () => {
-    await start()
-    const ok = await runFrame(hh())
-    hh().app.send(ok)
-    await hh().waitNotes(1)
-    const bad = await hh().app.buildMessage('general', `${RUN_PREFIX}\n\nnothing`, { intent: 'run' })
-    hh().app.send(bad)
-    await settle(hh(), () => notices(hh()).length > 0)
-    for (const f of [ok, bad]) {
-      const row = hh().bridge.ctx.store.getMessage(f.client_msg_id as string)
-      expect(row?.author).toBe('owner')
-      expect(row?.text).toBe(f.text as string)
-    }
-    expect(
-      hh()
-        .bridge.ctx.store.page({ thread_id: 'general', limit: 50 })
-        .messages.filter((m) => m.author === 'owner').length,
-    ).toBe(2)
-  })
+  test(
+    'an accepted Run and a refused one are both in the history, so a reloaded app sees the owner row',
+    async () => {
+      await start()
+      const ok = await runFrame(hh())
+      hh().app.send(ok)
+      await hh().waitNotes(1)
+      const bad = await hh().app.buildMessage('general', `${RUN_PREFIX}\n\nnothing`, { intent: 'run' })
+      hh().app.send(bad)
+      await settle(hh(), () => notices(hh()).length > 0)
+      for (const f of [ok, bad]) {
+        const row = hh().bridge.ctx.store.getMessage(f.client_msg_id as string)
+        expect(row?.author).toBe('owner')
+        expect(row?.text).toBe(f.text as string)
+      }
+      expect(
+        hh()
+          .bridge.ctx.store.page({ thread_id: 'general', limit: 50 })
+          .messages.filter((m) => m.author === 'owner').length,
+      ).toBe(2)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a refused Run is remembered by its message id: the same Run signed again is not refused a second time', async () => {
-    await start()
-    const old = ago(RUN_MAX_AGE_MS + HOUR)
-    const first = await runFrame(hh(), SCRIPT, { ts: old })
-    hh().app.send(first)
-    await settle(hh(), () => notices(hh()).length > 0)
-    expect(hh().bridge.ctx.store.hasSeen(first.client_msg_id as string)).toBe(true)
-    hh().relay.sendToBridge((await runFrame(hh(), SCRIPT, { ts: old, client_msg_id: first.client_msg_id })) as never)
-    await afterQueue(hh())
-    expect(notices(hh())).toHaveLength(1)
-    expect(runNotes(hh())).toHaveLength(0)
-  })
+  test(
+    'a refused Run is remembered by its message id: the same Run signed again is not refused a second time',
+    async () => {
+      await start()
+      const old = ago(RUN_MAX_AGE_MS + HOUR)
+      const first = await runFrame(hh(), SCRIPT, { ts: old })
+      hh().app.send(first)
+      await settle(hh(), () => notices(hh()).length > 0)
+      expect(hh().bridge.ctx.store.hasSeen(first.client_msg_id as string)).toBe(true)
+      hh().relay.sendToBridge((await runFrame(hh(), SCRIPT, { ts: old, client_msg_id: first.client_msg_id })) as never)
+      await afterQueue(hh())
+      expect(notices(hh())).toHaveLength(1)
+      expect(runNotes(hh())).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('once only', () => {
-  test('the note is sent after the Run is marked seen, never before', async () => {
-    await start()
-    const f = await runFrame(hh())
-    const seenAtEmit: boolean[] = []
-    hh().bridge.setEmit(async (n) => {
-      seenAtEmit.push(
-        hh().bridge.ctx.store.hasSeen(f.client_msg_id as string) && hh().bridge.ctx.store.hasSeen(f.id as string),
-      )
-      hh().notes.push(n)
-    })
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    expect(seenAtEmit).toEqual([true])
-  })
+  test(
+    'the note is sent after the Run is marked seen, never before',
+    async () => {
+      await start()
+      const f = await runFrame(hh())
+      const seenAtEmit: boolean[] = []
+      hh().bridge.setEmit(async (n) => {
+        seenAtEmit.push(
+          hh().bridge.ctx.store.hasSeen(f.client_msg_id as string) && hh().bridge.ctx.store.hasSeen(f.id as string),
+        )
+        hh().notes.push(n)
+      })
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      expect(seenAtEmit).toEqual([true])
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a hand-over that fails (a crash after the mark) loses the Run: the replay does not run it', async () => {
-    await start()
-    const f = await runFrame(hh())
-    let boom = true
-    hh().bridge.setEmit(async (n) => {
-      if (boom) throw new Error('the agent link broke')
-      hh().notes.push(n)
-    })
-    hh().app.send(f)
-    await waitFor(() => hh().bridge.ctx.store.hasSeen(f.client_msg_id as string), 5000, 'the mark')
-    boom = false
-    hh().relay.sendToBridge(f as never) // the relay never saw it consumed, so it sends it again
-    hh().relay.sendToBridge((await runFrame(hh(), SCRIPT, { client_msg_id: f.client_msg_id })) as never) // and signed again, same message
-    await sleep(400)
-    expect(hh().notes).toHaveLength(0)
-  })
+  test(
+    'a hand-over that fails (a crash after the mark) loses the Run: the replay does not run it',
+    async () => {
+      await start()
+      const f = await runFrame(hh())
+      let boom = true
+      hh().bridge.setEmit(async (n) => {
+        if (boom) throw new Error('the agent link broke')
+        hh().notes.push(n)
+      })
+      hh().app.send(f)
+      await waitFor(() => hh().bridge.ctx.store.hasSeen(f.client_msg_id as string), 5000, 'the mark')
+      boom = false
+      hh().relay.sendToBridge(f as never) // the relay never saw it consumed, so it sends it again
+      const again = await runFrame(hh(), SCRIPT, { client_msg_id: f.client_msg_id })
+      hh().relay.sendToBridge(again as never) // and signed again, same message
+      // start point: the bridge has CONSUMED the last replay (its 'delivered' ack only says it arrived; a sentinel message would be a
+      // note, and this test counts notes)
+      await hh().relay.expectFrame('ack', (a) => a.ref === again.id && a.stage === 'consumed', {
+        direction: 'from_bridge',
+      })
+      await sleep(t(150))
+      expect(hh().notes).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('a replayed Run, and the same Run under a new frame id, reach the agent once', async () => {
-    await start()
-    const f = await runFrame(hh())
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    hh().relay.sendToBridge(f as never)
-    hh().relay.sendToBridge({ ...(await runFrame(hh())), client_msg_id: f.client_msg_id } as never)
-    await sleep(400)
-    expect(runNotes(hh())).toHaveLength(1)
-  })
+  test(
+    'a replayed Run, and the same Run under a new frame id, reach the agent once',
+    async () => {
+      await start()
+      const f = await runFrame(hh())
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      hh().relay.sendToBridge(f as never)
+      hh().relay.sendToBridge({ ...(await runFrame(hh())), client_msg_id: f.client_msg_id } as never)
+      await afterQueue(hh()) // both replays are behind the queue's last message (its note is not a Run)
+      await sleep(t(150))
+      expect(runNotes(hh())).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 describe('a backlog', () => {
@@ -478,52 +602,60 @@ describe('a backlog', () => {
     await hh().bridge.inbound?.idle()
   }
 
-  test('a Run in a replayed batch of old messages is never folded into the backlog note; it is judged on its own', async () => {
-    const clock = fakeClock(new Date().toISOString())
-    await start({ startBridge: false, clock })
-    const old = new Date(clock.now() - 20 * 60_000).toISOString()
-    const q = async (frame: Record<string, unknown>, seq: number) =>
-      hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
-    const frames = [
-      await q(await hh().app.buildMessage('general', 'first owner message'), 1),
-      await q(await runFrame(hh()), 2),
-      await q(await hh().app.buildMessage('general', 'second owner message'), 3),
-    ]
-    hh().bridge.start()
-    await settleReplay(
-      clock,
-      frames.map((f) => f.id as string),
-    )
-    await hh().waitNotes(2)
-    const backlog = hh().notes.find((n) => n.meta.kind === 'backlog')
-    expect(backlog?.meta.batch_count).toBe('2')
-    expect(backlog?.content).not.toContain('echo hello')
-    const run = runNotes(hh())
-    expect(run).toHaveLength(1)
-    expect(run[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
-    expect(run[0]?.meta.kind).toBe('text')
-  })
+  test(
+    'a Run in a replayed batch of old messages is never folded into the backlog note; it is judged on its own',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      await start({ startBridge: false, clock })
+      const old = new Date(clock.now() - 20 * 60_000).toISOString()
+      const q = async (frame: Record<string, unknown>, seq: number) =>
+        hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
+      const frames = [
+        await q(await hh().app.buildMessage('general', 'first owner message'), 1),
+        await q(await runFrame(hh()), 2),
+        await q(await hh().app.buildMessage('general', 'second owner message'), 3),
+      ]
+      hh().bridge.start()
+      await settleReplay(
+        clock,
+        frames.map((f) => f.id as string),
+      )
+      await hh().waitNotes(2)
+      const backlog = hh().notes.find((n) => n.meta.kind === 'backlog')
+      expect(backlog?.meta.batch_count).toBe('2')
+      expect(backlog?.content).not.toContain('echo hello')
+      const run = runNotes(hh())
+      expect(run).toHaveLength(1)
+      expect(run[0]?.content).toBe(runText(SCRIPT, 'sh') as string)
+      expect(run[0]?.meta.kind).toBe('text')
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 
-  test('an old Run in that batch is refused by age, not delivered with a fresh time', async () => {
-    const clock = fakeClock(new Date().toISOString())
-    await start({ startBridge: false, clock })
-    const old = new Date(clock.now() - 20 * 60_000).toISOString()
-    const q = async (frame: Record<string, unknown>, seq: number) =>
-      hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
-    const frames = [
-      await q(await hh().app.buildMessage('general', 'first owner message'), 1),
-      await q(await runFrame(hh(), SCRIPT, { ts: new Date(clock.now() - 2 * 24 * HOUR).toISOString() }), 2),
-      await q(await hh().app.buildMessage('general', 'second owner message'), 3),
-    ]
-    hh().bridge.start()
-    await settleReplay(
-      clock,
-      frames.map((f) => f.id as string),
-    )
-    await hh().waitNotes(1)
-    expect(hh().notes.every((n) => n.meta.run === undefined)).toBe(true)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
+  test(
+    'an old Run in that batch is refused by age, not delivered with a fresh time',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      await start({ startBridge: false, clock })
+      const old = new Date(clock.now() - 20 * 60_000).toISOString()
+      const q = async (frame: Record<string, unknown>, seq: number) =>
+        hh().relay.sendToBridge({ ...frame, relay: { seq, received_at: old } } as never)
+      const frames = [
+        await q(await hh().app.buildMessage('general', 'first owner message'), 1),
+        await q(await runFrame(hh(), SCRIPT, { ts: new Date(clock.now() - 2 * 24 * HOUR).toISOString() }), 2),
+        await q(await hh().app.buildMessage('general', 'second owner message'), 3),
+      ]
+      hh().bridge.start()
+      await settleReplay(
+        clock,
+        frames.map((f) => f.id as string),
+      )
+      await hh().waitNotes(1)
+      expect(hh().notes.every((n) => n.meta.run === undefined)).toBe(true)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    HARNESS_START_MS + t(30_000),
+  )
 })
 
 // ---- a history that was kept aside ---------------------------------------------------------------------------------------
@@ -556,7 +688,7 @@ async function restartWithResetHistory(x: Harness) {
   b.start()
   const t0 = Date.now()
   while (!b.client?.connected) {
-    if (Date.now() - t0 > 20_000) throw new Error('the second bridge did not connect')
+    if (Date.now() - t0 > t(20_000)) throw new Error('the second bridge did not connect')
     clock.advance(50)
     await sleep(20)
   }
@@ -566,83 +698,99 @@ async function restartWithResetHistory(x: Harness) {
 async function ticking(clock: FakeClock, cond: () => boolean, what: string) {
   const t0 = Date.now()
   while (!cond()) {
-    if (Date.now() - t0 > 20_000) throw new Error(`timed out waiting for ${what}`)
+    if (Date.now() - t0 > t(20_000)) throw new Error(`timed out waiting for ${what}`)
     clock.advance(50)
     await sleep(20)
   }
 }
 
 describe('a Run replayed after the history was kept aside', () => {
-  test('the new history has forgotten it was handed over, so it is refused, not run again', async () => {
-    await start()
-    const f = await runFrame(hh())
-    hh().app.send(f)
-    await hh().waitNotes(1)
-    const { b, clock, notes } = await restartWithResetHistory(hh())
-    expect(b.ctx.store.kvGet('history_reset_at')).toBeDefined()
-    const before = notices(hh()).length
-    hh().relay.sendToBridge(f as never)
-    // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
-    await ticking(
-      clock,
-      () =>
-        notices(hh())
-          .slice(before)
-          .some((n) => /history was reset/.test(n)),
-      'the refusal',
-    )
-    expect(notes.filter((n) => n.meta.run !== undefined || n.content.includes('echo hello'))).toHaveLength(0)
-  })
+  test(
+    'the new history has forgotten it was handed over, so it is refused, not run again',
+    async () => {
+      await start()
+      const f = await runFrame(hh())
+      hh().app.send(f)
+      await hh().waitNotes(1)
+      const { b, clock, notes } = await restartWithResetHistory(hh())
+      expect(b.ctx.store.kvGet('history_reset_at')).toBeDefined()
+      const before = notices(hh()).length
+      hh().relay.sendToBridge(f as never)
+      // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
+      await ticking(
+        clock,
+        () =>
+          notices(hh())
+            .slice(before)
+            .some((n) => /history was reset/.test(n)),
+        'the refusal',
+      )
+      expect(notes.filter((n) => n.meta.run !== undefined || n.content.includes('echo hello'))).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 
-  test('a Run signed after the reset but first written before it is refused too (its first signing time counts)', async () => {
-    await start()
-    const { b, clock, notes } = await restartWithResetHistory(hh())
-    expect(b.ctx.store.kvGet('history_reset_at')).toBeDefined()
-    const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
-    const realSign = app.sign.bind(hh().app)
-    app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
-    await advanceSteps(clock, 180_000, 20_000, b.client) // the signing time is now past the reset and its margin
-    const before = notices(hh()).length
-    hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(10 * 60_000) })) // but the words were written before it
-    // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
-    await ticking(
-      clock,
-      () =>
-        notices(hh())
-          .slice(before)
-          .some((n) => /history was reset/.test(n)),
-      'the refusal',
-    )
-    expect(notes.filter((n) => n.meta.run !== undefined)).toHaveLength(0)
-  })
+  test(
+    'a Run signed after the reset but first written before it is refused too (its first signing time counts)',
+    async () => {
+      await start()
+      const { b, clock, notes } = await restartWithResetHistory(hh())
+      expect(b.ctx.store.kvGet('history_reset_at')).toBeDefined()
+      const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
+      const realSign = app.sign.bind(hh().app)
+      app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
+      await advanceSteps(clock, 180_000, 20_000, b.client) // the signing time is now past the reset and its margin
+      const before = notices(hh()).length
+      hh().app.send(await runFrame(hh(), SCRIPT, { original_ts: ago(10 * 60_000) })) // but the words were written before it
+      // wait for the refusal itself: the restarted bridge's own startup notice can land in this window and is not it
+      await ticking(
+        clock,
+        () =>
+          notices(hh())
+            .slice(before)
+            .some((n) => /history was reset/.test(n)),
+        'the refusal',
+      )
+      expect(notes.filter((n) => n.meta.run !== undefined)).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 
-  test('a block that ran before the reset can run once more after it: the marks went with the history', async () => {
-    await start()
-    const ref = blockRef()
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await hh().waitNotes(1)
-    const { b, clock, notes } = await restartWithResetHistory(hh())
-    const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
-    const realSign = app.sign.bind(hh().app)
-    app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
-    await advanceSteps(clock, 180_000, 20_000, b.client)
-    expect(b.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false)
-    hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
-    await ticking(clock, () => notes.some((n) => n.meta.run === 'tap'), 'the note')
-  })
+  test(
+    'a block that ran before the reset can run once more after it: the marks went with the history',
+    async () => {
+      await start()
+      const ref = blockRef()
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await hh().waitNotes(1)
+      const { b, clock, notes } = await restartWithResetHistory(hh())
+      const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
+      const realSign = app.sign.bind(hh().app)
+      app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
+      await advanceSteps(clock, 180_000, 20_000, b.client)
+      expect(b.ctx.store.hasSeen(`run:${ref.message_id}:0`)).toBe(false)
+      hh().app.send(await runFrame(hh(), SCRIPT, { run_block: ref }))
+      await ticking(clock, () => notes.some((n) => n.meta.run === 'tap'), 'the note')
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 
-  test('a Run signed after the reset is accepted', async () => {
-    await start()
-    const { b, clock, notes } = await restartWithResetHistory(hh())
-    const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
-    const realSign = app.sign.bind(hh().app)
-    // three minutes after the reset: past the two minutes of phone clock the Mac allows for
-    app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
-    await advanceSteps(clock, 180_000, 20_000, b.client)
-    const f = await runFrame(hh())
-    hh().app.send(f)
-    await ticking(clock, () => notes.some((n) => n.meta.run === 'tap'), 'the note')
-  })
+  test(
+    'a Run signed after the reset is accepted',
+    async () => {
+      await start()
+      const { b, clock, notes } = await restartWithResetHistory(hh())
+      const app = hh().app as unknown as { sign: (f: Record<string, unknown>) => Promise<Record<string, unknown>> }
+      const realSign = app.sign.bind(hh().app)
+      // three minutes after the reset: past the two minutes of phone clock the Mac allows for
+      app.sign = (f) => realSign({ ...f, ts: new Date(clock.now()).toISOString() })
+      await advanceSteps(clock, 180_000, 20_000, b.client)
+      const f = await runFrame(hh())
+      hh().app.send(f)
+      await ticking(clock, () => notes.some((n) => n.meta.run === 'tap'), 'the note')
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 })
 
 // ---- a worker holds the thread -------------------------------------------------------------------------------------------
@@ -715,40 +863,54 @@ async function readWorker() {
 }
 
 describe('a Run in a thread with its own session', () => {
-  test('is refused with a plain line: nothing reaches main or the worker, and the Run is marked seen', async () => {
-    await dedicatedTrip(true)
-    const typed = await hh().app.sendMessage('trip', runText(SCRIPT, 'sh') as string) // same words, no intent: ordinary text
-    const tap = await runFrame(hh(), SCRIPT, {}, 'trip')
-    hh().app.send(tap)
-    await waitFor(() => notices(hh()).length > 0, 5000, 'the refusal')
-    // a re-post cannot run in such a thread either, so the line does not suggest one
-    expect(notices(hh())[0]).toBe("That Run was not run: this thread has its own session, so Run isn't available here.")
-    const got = await readWorker()
-    expect(got.map((m) => m.meta.message_id)).toEqual([typed.client_msg_id as string]) // only the typed words reached the worker
-    expect(runNotes(hh())).toHaveLength(0) // and nothing reached main
-    // Marked seen, both ids: a replay is consumed silently and the owner is not told twice.
-    expect(hh().bridge.ctx.store.hasSeen(tap.client_msg_id as string)).toBe(true)
-    expect(hh().bridge.ctx.store.hasSeen(tap.id as string)).toBe(true)
-    hh().relay.sendToBridge(tap as never)
-    await afterQueue(hh())
-    expect(notices(hh())).toHaveLength(1)
-  })
+  test(
+    'is refused with a plain line: nothing reaches main or the worker, and the Run is marked seen',
+    async () => {
+      await dedicatedTrip(true)
+      const typed = await hh().app.sendMessage('trip', runText(SCRIPT, 'sh') as string) // same words, no intent: ordinary text
+      const tap = await runFrame(hh(), SCRIPT, {}, 'trip')
+      hh().app.send(tap)
+      await waitFor(() => notices(hh()).length > 0, 5000, 'the refusal')
+      // a re-post cannot run in such a thread either, so the line does not suggest one
+      expect(notices(hh())[0]).toBe(
+        "That Run was not run: this thread has its own session, so Run isn't available here.",
+      )
+      const got = await readWorker()
+      expect(got.map((m) => m.meta.message_id)).toEqual([typed.client_msg_id as string]) // only the typed words reached the worker
+      expect(runNotes(hh())).toHaveLength(0) // and nothing reached main
+      // Marked seen, both ids: a replay is consumed silently and the owner is not told twice.
+      expect(hh().bridge.ctx.store.hasSeen(tap.client_msg_id as string)).toBe(true)
+      expect(hh().bridge.ctx.store.hasSeen(tap.id as string)).toBe(true)
+      hh().relay.sendToBridge(tap as never)
+      await afterQueue(hh())
+      expect(notices(hh())).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 
-  test('is refused whether or not a worker is running: a switched-off thread refuses too', async () => {
-    await dedicatedTrip(false)
-    const tap = await runFrame(hh(), SCRIPT, {}, 'trip')
-    hh().app.send(tap)
-    await waitFor(() => notices(hh()).length > 0, 5000, 'the refusal')
-    expect(notices(hh())[0]).toMatch(/has its own session/)
-    await afterQueue(hh())
-    expect(runNotes(hh())).toHaveLength(0)
-    expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
-  })
+  test(
+    'is refused whether or not a worker is running: a switched-off thread refuses too',
+    async () => {
+      await dedicatedTrip(false)
+      const tap = await runFrame(hh(), SCRIPT, {}, 'trip')
+      hh().app.send(tap)
+      await waitFor(() => notices(hh()).length > 0, 5000, 'the refusal')
+      expect(notices(hh())[0]).toMatch(/has its own session/)
+      await afterQueue(hh())
+      expect(runNotes(hh())).toHaveLength(0)
+      expect(hh().notes.some((n) => n.content.includes('echo hello'))).toBe(false)
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 
-  test('a shared thread on the same Mac still takes a Run', async () => {
-    await dedicatedTrip(false)
-    hh().app.send(await runFrame(hh(), SCRIPT, {}, 'general'))
-    await hh().waitNotes(1)
-    expect(runNotes(hh())).toHaveLength(1)
-  })
+  test(
+    'a shared thread on the same Mac still takes a Run',
+    async () => {
+      await dedicatedTrip(false)
+      hh().app.send(await runFrame(hh(), SCRIPT, {}, 'general'))
+      await hh().waitNotes(1)
+      expect(runNotes(hh())).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(60_000),
+  )
 })

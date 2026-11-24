@@ -3,6 +3,7 @@
 import { type AttachmentRefT, type DeviceKey, newUlid, OwnerAttachmentRef, signOwnerFrame } from '@talos-app/protocol'
 import { type SendResult, TalosClientError } from './client.ts'
 import { ensureDeviceKey } from './deviceKey.ts'
+import { holdReload } from './reloadHold.ts'
 import { overFrameLimit } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { OutboxEntry, OutboxKind } from './socket-types.ts'
@@ -92,19 +93,26 @@ export function createOutboxEnqueue(c: SocketCtx) {
     fields: Record<string, unknown>,
   ): Promise<SendResult> {
     const began = c.epoch
-    await signAndStore(kind, threadId, clientMsgId, fields)
-    const state = sendState()
-    if (state === 'sent') {
-      try {
-        if (!(await c.sendEntry(clientMsgId, began))) return { clientMsgId, state: 'queued' }
-      } catch {
-        // The entry is saved and queued; a write that could not be saved just means it goes out on a later flush.
-        // Throwing here would tell the caller "not sent" about a message that will be sent.
-        if (c.epoch === began) c.scheduleFlushRetry()
-        return { clientMsgId, state: 'queued' }
+    // From the click until the row is in the queue (signing and saving can take seconds on a busy machine) no reload may
+    // take the page; after that the queued row itself (queuedIds) holds it until the ack.
+    const release = holdReload()
+    try {
+      await signAndStore(kind, threadId, clientMsgId, fields)
+      const state = sendState()
+      if (state === 'sent') {
+        try {
+          if (!(await c.sendEntry(clientMsgId, began))) return { clientMsgId, state: 'queued' }
+        } catch {
+          // The entry is saved and queued; a write that could not be saved just means it goes out on a later flush.
+          // Throwing here would tell the caller "not sent" about a message that will be sent.
+          if (c.epoch === began) c.scheduleFlushRetry()
+          return { clientMsgId, state: 'queued' }
+        }
       }
+      return { clientMsgId, state }
+    } finally {
+      release()
     }
-    return { clientMsgId, state }
   }
 
   c.enqueue = enqueue

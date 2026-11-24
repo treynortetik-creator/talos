@@ -20,6 +20,7 @@ extension WorkerManager {
     // the reason's code only: the row under the box that was not a status row is screen text, which the log never holds
     audit("key_refused thread=\(id) intent=\(intent.name) why=\(why.why)")
     if why.why == "row_under_box" { noteRefusedStatusParts(rows, thread: id) }
+    countDeafRefusal(id, why: why.why)  // the deaf-thread alarm's hourly count (WorkerDeaf.swift)
     return (why, rows)
   }
 
@@ -64,6 +65,8 @@ extension WorkerManager {
     case .number(let n): return tmux(id).sendSelectNumber(n)
     case .text(let t): return tmux(id).sendAnswerText(t)
     case .enter: return tmux(id).sendDialogKey(.enter)
+    case .escape: return tmux(id).sendEscape()
+    case .backspaces(let n): return tmux(id).sendBackspaces(n)
     }
   }
 }

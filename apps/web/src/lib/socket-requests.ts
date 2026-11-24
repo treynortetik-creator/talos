@@ -2,6 +2,7 @@
 
 import { type FrameOf, newUlid, signOwnerFrame } from '@talos-app/protocol'
 import { NoAnswerError, NotSentError, TalosClientError } from './client.ts'
+import { holdReload } from './reloadHold.ts'
 import { REQUEST_TIMEOUT_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 
@@ -120,19 +121,25 @@ export function createSocketRequests(c: SocketCtx) {
     timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<number | undefined> {
     if (!c.canSend()) throw new NotSentError('internal', "You're offline.")
-    const k = await c.ensureKey()
-    if (!store.getState().devicePinned)
-      throw new NotSentError('device_not_pinned', 'Waiting for your Mac to confirm this device.')
-    const id = typeof frame.id === 'string' ? frame.id : newUlid()
-    const signed = await signOwnerFrame({ v: 1, id, ts: signedTs(), ...frame, device_id: k.deviceId }, k.privateKey)
-    return await new Promise<number | undefined>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id)
-        reject(new NoAnswerError('internal', 'Talos did not answer. Try again.'))
-      }, timeoutMs)
-      pending.set(id, { resolve, reject, timer })
-      c.ws?.send(JSON.stringify(signed))
-    })
+    // a card answer or a setting change waiting for its ack: no reload takes the page meanwhile (reloadHold.holdReload)
+    const release = holdReload()
+    try {
+      const k = await c.ensureKey()
+      if (!store.getState().devicePinned)
+        throw new NotSentError('device_not_pinned', 'Waiting for your Mac to confirm this device.')
+      const id = typeof frame.id === 'string' ? frame.id : newUlid()
+      const signed = await signOwnerFrame({ v: 1, id, ts: signedTs(), ...frame, device_id: k.deviceId }, k.privateKey)
+      return await new Promise<number | undefined>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new NoAnswerError('internal', 'Talos did not answer. Try again.'))
+        }, timeoutMs)
+        pending.set(id, { resolve, reject, timer })
+        c.ws?.send(JSON.stringify(signed))
+      })
+    } finally {
+      release()
+    }
   }
 
   /**

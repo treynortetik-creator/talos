@@ -48,6 +48,11 @@ export interface PtyLaunch {
   argv: string[]
   cwd: string
   env: Record<string, string>
+  /**
+   * Run by the host as its last step before the process is started (after the launch file is written): a plain line refuses the
+   * start (`start_failed`, nothing runs), null lets it go. Set only for a launch with the OS sandbox on (the re-check of its preflight).
+   */
+  beforeStart?: () => string | null
 }
 
 /**
@@ -341,8 +346,9 @@ export const WORKER_TIMING = {
   dialog_client_quiet_s: 30,
   /** A pointer held back by a draft this long gets one line in its thread. */
   draft_notice_after_s: 120,
-  /** How long a dialog card the supervisor offered lives. (How long it waits for the card: DIALOG_CARD_WAIT_MS.) */
-  card_lifetime_s: 15 * 60,
+  /** How long a dialog card the supervisor offered lives: a day (DIALOG_TTL_S); the question leaving the screen closes it sooner.
+   * (How long it waits for the card: DIALOG_CARD_WAIT_MS.) */
+  card_lifetime_s: 24 * 3600,
   /** At most one notice per thread per kind of dialog in this time; prompts nobody named, this much. */
   notice_debounce_s: 10 * 60,
   prompt_debounce_s: 5,
@@ -360,7 +366,7 @@ export const WORKER_TIMING = {
  * The owed pointer (typing WORKER_POINTER_TEXT into a worker): the screen's lag before an empty box counts as "not typed",
  * the looks after typing for exactly our line before Enter, the late clears of our own line nobody read, and the oldest wake
  * still owed (a wake older than the longest claim the hub waits for is dropped). The guard is POINTER_CLIENT_QUIET_MS, the
- * deadlines CLAIM_DEADLINE_MS and CLAIM_DEADLINE_COLD_MS.
+ * deadlines CLAIM_DEADLINE_MS (10 min, a live session) and CLAIM_DEADLINE_COLD_MS (3 min, a session being started).
  */
 export const WORKER_POINTER = {
   screen_lag_s: 5,
@@ -531,6 +537,11 @@ export interface SecretStore {
   /** Never replaces an item it cannot read (`not_ours`, `locked`): that throws instead. */
   set(service: string, account: string, value: string): Promise<void>
   delete(service: string, account: string): Promise<void>
+  /**
+   * Is the item there? Asked WITHOUT reading its value (no secret is read into the process), and it never writes, moves or copies.
+   * `undefined`: it could not be told (locked, unreachable). Throws only for a store that is unusable as a whole.
+   */
+  has(service: string, account: string): Promise<boolean | undefined>
 }
 
 // ---- 6. Telling the owner ------------------------------------------------------------------------------------------------------

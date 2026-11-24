@@ -42,6 +42,8 @@ export type SlotDeps = {
   turnCut(w: WorkerRuntime, why: string): void
   /** A park cut background work: one line to the thread (bg-work.ts cutLine). */
   backgroundCut(w: WorkerRuntime, text: string): void
+  /** A start over the limit (every quiet session has background work): one plain line to the starting thread. */
+  computerBusy(w: WorkerRuntime): void
   /** The process table and one process's argv (bg-work.ts reads /proc when none is given). */
   procs?: { procTable?(): Proc[] | null; procArgv?(pid: number): string[] | null }
 }
@@ -51,6 +53,8 @@ export class WorkerSlots {
   maxLive = DEFAULT_MAX_LIVE
   /** The wall clock against the monotonic one at the last tick (worker-idle.ts wallJump). */
   private wallOffset: number | null = null
+  /** Workers whose last start was planned over the limit: told once the process is really up (afterStart). */
+  private readonly overLimit = new Set<string>()
 
   constructor(private readonly m: SlotDeps) {}
 
@@ -174,8 +178,9 @@ export class WorkerSlots {
   }
 
   /**
-   * The cap's say on a start (the Mac's requestStart): true when a slot is free. Else the quietest worker is parked first and the
-   * start waits for it to go, or, every slot busy, the start is held; either way retryHeld asks again each tick.
+   * The cap's say on a start (the Mac's requestStart): true when a slot is free. Else the quietest worker with no background work is
+   * parked first and the start waits for it to go; every slot busy, the start is held; every quiet one with background work, the
+   * start goes ahead over the limit (nothing is stopped). Held or waiting, retryHeld asks again each tick.
    */
   async mayStart(w: WorkerRuntime, fresh: boolean, forPointer = false): Promise<boolean> {
     // the worker parked to make room for this start is still on its way out: the room is coming, so nothing is planned again
@@ -191,10 +196,14 @@ export class WorkerSlots {
       return false
     }
     const cap = planStart(await this.holders(w.id), this.maxLive)
-    if (cap.kind === 'start') {
+    if (cap.kind === 'start' || cap.kind === 'startOverLimit') {
       w.held = null
+      // the line goes once the start has really happened (afterStart), not on a start that is still refused further on
+      if (cap.kind === 'startOverLimit') this.overLimit.add(w.id)
+      else this.overLimit.delete(w.id)
       return true
     }
+    this.overLimit.delete(w.id)
     if (!w.held) this.m.audit('worker_start_held', { thread: w.id, why: 'cap' })
     // held for the pointer only while nothing else asked for this start: the owner's start, once held, outlives the pointer
     w.held = {
@@ -206,6 +215,13 @@ export class WorkerSlots {
     }
     if (cap.kind === 'parkThenStart') this.m.beginEnd(cap.victim, 'parked', 'cap')
     return false
+  }
+
+  /** The process of a start is up: when it was planned over the limit (every quiet session had background work), say so in its thread. */
+  afterStart(w: WorkerRuntime): void {
+    if (!this.overLimit.delete(w.id)) return
+    this.m.audit('worker_start_over_limit', { thread: w.id })
+    this.m.computerBusy(w)
   }
 
   /** Each held start, asked again: dropped after CAP_HOLD_MS with its owed pointer; waiting while the worker parked for it goes. */
@@ -231,7 +247,8 @@ export class WorkerSlots {
   }
 
   /**
-   * A lowered max_live, or more adopted workers than the cap: the longest idle go first; busy ones wait. A worker on its way out
+   * A lowered max_live, or more adopted workers than the cap: the longest idle go first; busy ones wait, and so do ones with
+   * background work (the count comes down once that work ends). A worker on its way out
    * has already made its room: counted, each tick would pick one more.
    */
   async enforceCap(): Promise<void> {

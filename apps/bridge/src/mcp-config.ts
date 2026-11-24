@@ -8,6 +8,28 @@ import { realFileSync } from './real-file.ts'
 
 export type McpEntry = { command: string; args: string[]; env: Record<string, string> }
 
+/** The bridge clone's server script and the bunfig bun is told to use in its place (the clone's own, which holds only test settings). */
+export const bridgeServer = (bridgeDir: string): string => join(bridgeDir, 'src', 'server.ts')
+export const bridgeBunfig = (bridgeDir: string): string => join(bridgeDir, 'bunfig.toml')
+
+/**
+ * What a talos-app entry in `.mcp.json` is: `current` (the form `mcpEntry` writes: `--no-env-file`, `--config=<bridge bunfig>`, the
+ * server script, for this clone), `old` (`run --cwd <dir> --silent ...`, written before the sandbox's launch check: it still works with
+ * the extra lock off, and refuses with it on) or `other`.
+ */
+export function mcpEntryState(entry: unknown, bridgeDir: string): 'current' | 'old' | 'other' {
+  const e = entry && typeof entry === 'object' ? (entry as { args?: unknown }) : {}
+  const a = Array.isArray(e.args) ? e.args : []
+  if (
+    a.length === 3 &&
+    a[0] === '--no-env-file' &&
+    a[1] === `--config=${bridgeBunfig(bridgeDir)}` &&
+    a[2] === bridgeServer(bridgeDir)
+  )
+    return 'current'
+  return a[0] === 'run' && a.includes('--cwd') ? 'old' : 'other'
+}
+
 /**
  * bun by absolute path: Claude Code starts the MCP server with the PATH of its own session, and Main can start with a bare one
  * (2026-11-09: "Executable not found in $PATH: bun", the bridge never ran). The bun on PATH comes first (a stable path like
@@ -24,12 +46,15 @@ export function bunPath(): string {
  * `agentDir` goes in as TALOS_AGENT_DIR: the server runs with the bridge folder as its working folder (`bun run --cwd`), so
  * the agent folder it serves cannot be read from there. Only the last-good save uses it. No PATH is written: Claude Code puts the entry's
  * env over the session's, so a PATH here would hide ~/.local/bin (claude) and /opt/homebrew/bin (ffmpeg, gh, tmux) from the bridge.
- * `server.ts` is run directly (not through the `start` script, whose shell needs a bare `bun`).
+ * `server.ts` is run directly (not through the `start` script, whose shell needs a bare `bun`), by absolute path, with `--no-env-file` and
+ * `--config=<the bridge clone's bunfig.toml>`: the server's working folder stays the agent folder (the bridge and its CLI read it as that),
+ * and bun loads neither that folder's `.env` nor its `bunfig.toml` (a `preload` there would run outside the sandbox; MCP servers are not
+ * sandboxed). Before 2026-11-22 the entry was `run --cwd <bridge> --silent src/server.ts`: `mcpEntryState` calls that one `old`.
  */
 export function mcpEntry(bridgeDir: string, home: string, agentDir?: string, bun: string = bunPath()): McpEntry {
   return {
     command: bun,
-    args: ['run', '--cwd', bridgeDir, '--silent', 'src/server.ts'],
+    args: ['--no-env-file', `--config=${bridgeBunfig(bridgeDir)}`, bridgeServer(bridgeDir)],
     env: { TALOS_APP_HOME: home, ...(agentDir ? { TALOS_AGENT_DIR: agentDir } : {}) },
   }
 }

@@ -549,6 +549,58 @@ for g in append-only-guard.py check-vault.py; do
   rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
   { [ "$ru" = 2 ] && [ "$rl" = 2 ]; } && ok "$g: if the alarm's verdict cannot be written (stdout closed) both an unattended and a live run exit 2 (block)" || no "$g alarm with a closed stdout: unattended rc=$ru, live rc=$rl (want 2 and 2)"
 done
+# a verdict that cannot be WRITTEN must still block. Claude Code reads exit 2 as a block and any other non-zero as a
+# non-blocking error; Python's own flush at exit turns an unwritable stdout into exit 120, which lets the action through.
+# bp: run a hook with its stdout on a pipe whose read end is closed BEFORE the hook starts (no timing): every write or flush
+# fails at once. Prints the exit code.
+bp() { local payload="$1"; shift; ( cd "${BPDIR:-$A}" && python3 -c '
+import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+print(subprocess.run(sys.argv[2:], input=sys.argv[1].encode(), stdout=w, stderr=subprocess.DEVNULL).returncode)' "$payload" "$@" ); }
+SHRINK="$(printf '{"tool_name":"Write","tool_input":{"file_path":%s,"content":"short"}}' "$(js "$A/memory/2026-10-01.md")")"
+OTHER="$(printf '{"tool_name":"Write","tool_input":{"file_path":%s,"content":"x"}}' "$(js "$A/memory/notes.md")")"
+printf 'zebra-clinic\n' > "$V/_guard-terms.txt"; printf '%s\n' "$V" > "$XDG_CONFIG_HOME/talos/vault-dir"
+TERM_OUT="$(payload "$A/wiki/x.md" "Zebra-Clinic")"; TERM_OK="$(payload "$A/wiki/x.md" "nothing private")"
+for spec in "append-only-guard.py|$SHRINK|$OTHER" "check-vault.py|$TERM_OUT|$TERM_OK"; do
+  g="${spec%%|*}"; rest="${spec#*|}"; bad="${rest%%|*}"; fine="${rest#*|}"
+  live="$(bp "$bad" python3 "hooks/$g")"; un="$(CHRONOS_RUN=1 bp "$bad" python3 "hooks/$g")"
+  { [ "$live" = 2 ] && [ "$un" = 2 ]; } && ok "$g: an ask (live) or deny (unattended) that cannot be written exits 2 (block), not 120" || no "$g unwritable verdict: live rc=$live, unattended rc=$un (want 2 and 2)"
+  a="$(bp "$fine" python3 "hooks/$g")"; [ "$a" = 0 ] && ok "$g: an allow that cannot be written exits 0, not 120" || no "$g unwritable allow: rc=$a (want 0)"
+  live="$(bp "$BADIN" python3 "hooks/$g")"; un="$(CHRONOS_RUN=1 bp "$BADIN" python3 "hooks/$g")"
+  { [ "$live" = 0 ] && [ "$un" = 2 ]; } && ok "$g: an internal error with stdout unwritable: live allows (0), unattended blocks (2)" || no "$g guard_failed unwritable: live rc=$live, unattended rc=$un (want 0 and 2)"
+  printf '%s' "$bad" | ( cd "$A" && CHRONOS_RUN=1 python3 "hooks/$g" >&- 2>/dev/null ); un=$?
+  printf '%s' "$bad" | ( cd "$A" && python3 "hooks/$g" >&- 2>/dev/null ); live=$?
+  { [ "$live" = 2 ] && [ "$un" = 2 ]; } && ok "$g: with stdout closed outright, the verdict still blocks (exit 2)" || no "$g closed stdout: live rc=$live, unattended rc=$un (want 2 and 2)"
+done
+rm -f "$XDG_CONFIG_HOME/talos/vault-dir"
+mv "$A/scripts/wiki-lint.py" "$SB/wiki-lint.hold" 2>/dev/null || true
+live="$(bp "$TLW" python3 hooks/timeline-guard.py)"; un="$(CHRONOS_RUN=1 bp "$TLW" python3 hooks/timeline-guard.py)"
+{ [ "$live" = 0 ] && [ "$un" = 2 ]; } && ok "timeline-guard.py: an internal error with stdout unwritable: live allows (0), unattended blocks (2)" || no "timeline guard_failed unwritable: live rc=$live, unattended rc=$un (want 0 and 2)"
+mv "$SB/wiki-lint.hold" "$A/scripts/wiki-lint.py" 2>/dev/null || true
+for g in append-only-guard.py check-vault.py timeline-guard.py; do
+  live="$(BPDIR="$A4" bp '{}' python3 "hooks/$g")"; un="$(BPDIR="$A4" CHRONOS_RUN=1 bp '{}' python3 "hooks/$g")"
+  { [ "$live" = 0 ] && [ "$un" = 2 ]; } && ok "$g: helpers broken AND stdout unwritable: live allows (0), unattended blocks (2)" || no "$g import fallback unwritable: live rc=$live, unattended rc=$un (want 0 and 2)"
+done
+live="$(bp '{"tool_name":"Bash","tool_input":{"command":"git add -A"}}' python3 hooks/pre-tool-guard.py)"
+[ "$live" = 2 ] && ok "pre-tool guard: a refusal with stdout unwritable still exits 2" || no "pre-tool guard unwritable refusal rc=$live (want 2)"
+python3 - "$A/hooks" <<'PY' && ok "_talos_common: say() writes and flushes; allow() writes {}; on an unwritable stdout they end the hook at once with 2 (blocking) or 0" || no "_talos_common say/allow semantics wrong"
+import os, subprocess, sys
+h = sys.argv[1]
+def run(code, closed):
+    r, w = os.pipe()
+    if closed: os.close(r)
+    p = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import _talos_common as C; %s; sys.exit(7)" % (h, code)],
+                       stdout=w, stderr=subprocess.DEVNULL)
+    os.close(w)
+    out = b"" if closed else os.read(r, 4096)
+    if not closed: os.close(r)
+    return p.returncode, out
+assert run("C.say('x', True)", False) == (7, b"x\n")
+assert run("C.allow()", False) == (7, b"{}\n")
+assert run("C.say('x', True)", True)[0] == 2
+assert run("C.say('x', False)", True)[0] == 0
+assert run("C.allow()", True)[0] == 0
+PY
 # action-rules with its SHIPPED rule file unreadable (this folder has none): it must not answer {} (allow everything); like the timeout it
 # ASKS in a live session and DENIES when unattended, both exit 0, naming the file and no command text, one line in the unreadable log
 AR='{"tool_name":"Bash","cwd":"/srv/app","tool_input":{"command":"npm publish"}}'

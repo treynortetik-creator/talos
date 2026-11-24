@@ -2,7 +2,7 @@
 // found in $PATH: bun", the bridge never ran). The entry install-mcp, adopt and onboarding write names bun by its absolute path and carries a
 // PATH that has bun's folder; talos-app doctor flags a bare `bun` (or any command that is not absolute) and says how to fix it.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { runCli } from '../src/cli.ts'
@@ -38,7 +38,7 @@ describe('the entry written for the talos-app MCP server', () => {
     const e = mcpEntry(BRIDGE_DIR, '/home/app', '/agent')
     expect(isAbsolute(e.command)).toBe(true)
     expect(e.command.endsWith('/bun')).toBe(true)
-    expect(e.args).toEqual(['run', '--cwd', BRIDGE_DIR, '--silent', 'src/server.ts'])
+    expect(e.args).toEqual(['--no-env-file', `--config=${BRIDGE_DIR}/bunfig.toml`, `${BRIDGE_DIR}/src/server.ts`])
     expect(e.env.PATH).toBeUndefined()
     expect(e.env.TALOS_APP_HOME).toBe('/home/app')
   })
@@ -86,7 +86,60 @@ describe('the entry written for the talos-app MCP server', () => {
     expect(m.changed).toBe(true)
     expect(g.env.PATH).toBeUndefined()
     expect(g.env.KEEP).toBe('y')
-    expect(g.args.at(-1)).toBe('src/server.ts')
+    expect(g.args.at(-1)).toBe(`${BRIDGE_DIR}/src/server.ts`)
+  })
+})
+
+describe('talos-app doctor and the older entry form', () => {
+  const oldEntry = (agent: string) => ({
+    command: process.execPath,
+    args: ['run', '--cwd', BRIDGE_DIR, '--silent', 'src/server.ts'],
+    env: { TALOS_AGENT_DIR: agent },
+  })
+  const withOld = (agent: string) =>
+    writeFileSync(
+      join(agent, '.mcp.json'),
+      JSON.stringify({ mcpServers: { 'talos-app': oldEntry(agent), other: { command: 'npx', args: ['x'] } } }),
+    )
+
+  test('the older form is a warning with the extra lock off and a FAIL with it on, both naming the one fix', async () => {
+    h = await startHarness({ startBridge: false })
+    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    withOld(agent)
+    const off = cliIO()
+    await runCli(['doctor', '--agent-dir', agent], off.io, env(h))
+    const offRow = off.out.find((l) => l.includes('.mcp.json entry form'))
+    expect(offRow?.startsWith('warn')).toBe(true)
+    expect(offRow).toContain('talos-app doctor --fix-mcp')
+    writeFileSync(
+      join(h.home, 'config.json'),
+      JSON.stringify({ ...JSON.parse(readFileSync(join(h.home, 'config.json'), 'utf8')), os_sandbox: true }),
+    )
+    const on = cliIO()
+    await runCli(['doctor', '--agent-dir', agent], on.io, env(h))
+    const onRow = on.out.find((l) => l.includes('.mcp.json entry form'))
+    expect(onRow?.startsWith('FAIL')).toBe(true)
+    expect(onRow).toContain('refuses it')
+  })
+
+  test('doctor --fix-mcp rewrites the entry in the current form, keeps the other servers, and the row goes away', async () => {
+    h = await startHarness({ startBridge: false })
+    const agent = mkdtempSync(join(tmpdir(), 'talos-agent-'))
+    withOld(agent)
+    const fix = cliIO()
+    await runCli(['doctor', '--agent-dir', agent, '--fix-mcp'], fix.io, env(h))
+    expect(fix.out.find((l) => l.includes('.mcp.json entry fix'))).toContain('rewrote the talos-app entry')
+    expect(fix.out.some((l) => l.includes('.mcp.json entry form'))).toBe(false)
+    const cfg = JSON.parse(readFileSync(join(agent, '.mcp.json'), 'utf8'))
+    expect(cfg.mcpServers['talos-app'].args).toEqual([
+      '--no-env-file',
+      `--config=${BRIDGE_DIR}/bunfig.toml`,
+      `${BRIDGE_DIR}/src/server.ts`,
+    ])
+    expect(cfg.mcpServers.other).toEqual({ command: 'npx', args: ['x'] })
+    const again = cliIO()
+    await runCli(['doctor', '--agent-dir', agent, '--fix-mcp'], again.io, env(h))
+    expect(again.out.find((l) => l.includes('.mcp.json entry fix'))).toContain('already current')
   })
 })
 
@@ -98,7 +151,7 @@ describe('talos-app doctor and the command in .mcp.json', () => {
         mcpServers: {
           'talos-app': {
             command,
-            args: ['run', '--cwd', BRIDGE_DIR, '--silent', 'src/server.ts'],
+            args: ['--no-env-file', `--config=${BRIDGE_DIR}/bunfig.toml`, `${BRIDGE_DIR}/src/server.ts`],
             env: { TALOS_AGENT_DIR: dir },
           },
         },

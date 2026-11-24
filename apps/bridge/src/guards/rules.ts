@@ -6,6 +6,16 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { WORKER_FILES } from '@talos-app/protocol'
 import { realFileSync, walkLinks } from '../real-file.ts'
 import { appOnly, COMMANDS, kitVendorDir, terminalOnly, terminalOnlyNames } from '../talos.ts'
+import {
+  copySpec,
+  headOf,
+  type Parsed,
+  parseCommands,
+  simpleCommands,
+  TARGET_LAST,
+  targetsOf,
+  WRAPPERS,
+} from './shell-words.ts'
 
 export type GuardConfig = {
   home: string
@@ -55,42 +65,25 @@ export function buildGuardConfig(a: {
     writeDenied: [
       ...protectedPaths,
       checkout,
-      join(real(a.home), 'enroll-pending'),
-      ...KEY_FILES.map((f) => join(real(a.home), f)),
-      join(real(a.home), 'guards'),
-      join(real(a.home), 'tripwire.json'),
-      join(real(a.home), 'tripwire.writing'),
-      join(real(a.home), 'devices.json'),
-      // the screen helper's allowed-apps list: Talos.app is its only writer (it is sealed too; this keeps a session from trying)
-      join(real(a.home), 'screen'),
-      join(real(a.home), 'config.json'),
-      // the folders the owner chose for threads (supervisor/owner-folders.ts): only the bridge writes it, after a signed config.patch;
-      // a session that could write it could have a folder it picked trusted with no card
-      join(real(a.home), 'owner-folders.json'),
-      // phone recovery: the request file the Mac app acts on, and the saved setups a restore reads
-      join(real(a.home), 'agent-request.json'),
-      // permission_mode: the request the Mac app acts on to change Main's permission mode (only the bridge writes it)
-      join(real(a.home), 'permission-mode-request.json'),
-      // restart_main: the Mac app's own answer to "would Main come back?" (only the app writes it; the bridge reads it)
-      join(real(a.home), 'main-restart-check.json'),
-      join(real(a.home), 'last-good'),
-      join(real(a.home), 'config-history'),
-      // relay updates: which service is redeployed, the auto-update switch, the attempt being followed, and the two files the
-      // bridge and the Mac app pass between them (docs/deploy-railway.md); only the bridge, the app and the owner's command write them
-      join(real(a.home), 'relay-connect.json'),
-      join(real(a.home), 'relay-auto.json'),
-      join(real(a.home), 'relay-redeploy-request.json'),
-      join(real(a.home), 'relay-redeploy-result.json'),
-      // the Linux supervisor's own files (a session runs as the same user, so these rules are the only thing in its way): what it
-      // is told to do (supervisor-control: start or stop Main, past every restart check), the owner's Stop, the launch, the
-      // launch scripts, and the owner's restart proofs already used
-      ...SUPERVISOR_NEVER.map((f) => join(real(a.home), f)),
-      ...SUPERVISOR_READ_ONLY.map((f) => join(real(a.home), f)),
+      // The Mac app's own folder (its git checkout): the updater runs git there and
+      // runs the checkout's install.sh, so a session that could write its .git/config, a hook or a ref would get its code run by the
+      // updater. Read freely, never written: the file tools (guardDecision), a shell (bashDecision) and the one Edit( ) rule (denyRules).
+      real(appSupportDir(a.userHome ?? homedir())),
+      // the Talos home's own files and folders no tool call may write (HOME_WRITE_DENIED, below: one list for these rules and the OS sandbox)
+      ...HOME_WRITE_DENIED.map((f) => join(real(a.home), f)),
       join(real(a.claudeHome), 'plugins'),
       join(real(a.claudeHome), 'dev-mods'),
     ],
   }
 }
+
+/** The Mac app's own folder under the owner's home (`app.talos.desktop` is the app's bundle id). Compared without case, as macOS disks are. */
+export const appSupportDir = (userHome: string): string =>
+  join(userHome, 'Library', 'Application Support', 'app.talos.desktop')
+
+/** Verbs of git that change a repository (its config, hooks, refs, index or files); reading ones (log, status, diff, show, rev-parse) are not here. */
+const GIT_MUTATES =
+  /\bgit\b[^;&|\n]*?\s(?:checkout|switch|reset|clean|commit|add|rm|mv|config|pull|fetch|merge|rebase|restore|stash|apply|am|cherry-pick|revert|update-ref|symbolic-ref|worktree|gc|prune|init|clone|push|submodule|(?:branch|tag)\s+(?:-[dDmMfcC]\b|--(?:delete|force|move|copy|set-upstream-to|unset-upstream)\b|[^-\s])|remote\s+(?:add|remove|rm|rename|set-url|set-head|prune|update))\b/
 
 /** realpath of the deepest part that exists, so a symlink or `..` cannot step round a rule. */
 export function real(p: string): string {
@@ -118,7 +111,12 @@ const under = (p: string, target: string) => p === target || p.startsWith(target
 /** `Edit(//abs/path)` is Claude Code's spelling of an absolute path in a permission rule. */
 export function denyRules(cfg: GuardConfig): string[] {
   const edit = cfg.writeDenied.flatMap((p) => [`Edit(/${p})`, `Edit(/${p}/**)`])
-  const keys = KEY_FILES.map((f) => `Read(/${join(cfg.home, f)})`)
+  const keys = [
+    ...KEY_FILES.map((f) => `Read(/${join(cfg.home, f)})`),
+    // the secret store's folder (a keyring-less computer's file_0600 backend): no read through the tools either
+    `Read(/${join(cfg.home, 'secrets')})`,
+    `Read(/${join(cfg.home, 'secrets')}/**)`,
+  ]
   const gated = [
     ...terminalOnlyNames('talos-app').map((n) => `Bash(talos-app ${n}:*)`),
     ...terminalOnlyNames('talos').map((n) => `Bash(talos ${n}:*)`),
@@ -152,7 +150,7 @@ export function denyRules(cfg: GuardConfig): string[] {
  * The Linux supervisor's files a session may not even name (cli.ts SUPERVISOR_FILES, restart-proof.ts): the control file it
  * acts on, the owner's Stop, and the owner's restart proofs already used with their mark.
  */
-const SUPERVISOR_NEVER = [
+export const SUPERVISOR_NEVER = [
   'supervisor-control',
   'supervisor-stopped',
   'restart-proofs-used.json',
@@ -161,7 +159,7 @@ const SUPERVISOR_NEVER = [
   'restart-actor.json',
 ]
 /** The supervisor's files a session may read but never write: the launch, and the launch scripts. */
-const SUPERVISOR_READ_ONLY = ['supervisor.json', 'launch']
+export const SUPERVISOR_READ_ONLY = ['supervisor.json', 'launch']
 
 /**
  * The deny rules for the supervisor's files, from THIS code: added at every launch to the guard settings Main gets (main-launch.ts),
@@ -180,8 +178,10 @@ export function supervisorDenyRules(talosHome: string): string[] {
 
 /** Files and folders inside the Talos home that no command may name at all. */
 /** The bridge's signing keys: a session that read one could sign as the bridge. */
-const KEY_FILES = ['bridge.key', 'bridge.key.next', 'bridge.key.prev']
-const HOME_NEVER = [
+export const KEY_FILES = ['bridge.key', 'bridge.key.next', 'bridge.key.prev']
+export const HOME_NEVER = [
+  // the key the bridge and the mod share (mod/link.ts): a session that read it could sign as the mod
+  'mod.key',
   // the file tools and the cat path refuse them; a script that opens one is the light lead profile's open gap (docs/OPTION-C.md)
   ...KEY_FILES,
   'enroll-pending',
@@ -195,6 +195,9 @@ const HOME_NEVER = [
   // the relay update request and the Mac app's answer: the bridge and the app are the only writers (relay/files.ts)
   'relay-redeploy-request.json',
   'relay-redeploy-result.json',
+  // the secret store's folder on a computer with no keyring (secrets/store.ts): values sit in files here; a session goes through
+  // `talos-app peer ...`, never the raw file
+  'secrets',
   ...SUPERVISOR_NEVER,
 ]
 /**
@@ -219,8 +222,12 @@ function dialogFileAt(abs: string, home: string): string | undefined {
   return name && inWorkers ? name : undefined
 }
 /** Files inside the Talos home that a command may read but not write. */
-const HOME_READ_ONLY = [
+export const HOME_READ_ONLY = [
   'devices.json',
+  // the bridge's own environment file: it runs TALOS_APP_TTS_CMD, CHRONOS_BIN, FFMPEG and PATH from it, so a write is code run as the bridge
+  'bridge.env',
+  // the MCP apps' catalog (apps/paths.ts): which app servers the bridge starts
+  'apps/catalog.json',
   'config.json',
   'owner-folders.json',
   // which relay service is redeployed, the auto-update switch and the one attempt being followed (no secret in either)
@@ -229,8 +236,47 @@ const HOME_READ_ONLY = [
   'last-good',
   'config-history',
   'screen',
+  // which secret store this computer uses (secrets/store.ts): the bridge writes it once; a session may read it, never change it
+  'secret-backend',
   ...SUPERVISOR_READ_ONLY,
 ]
+/**
+ * The Talos home's own files and folders no tool call may write, by name under the home (guardConfig.writeDenied reads this list, and so
+ * does the OS sandbox, guards/os-sandbox.ts: a name added here is protected in both). Why each is here:
+ * the updater's working folder (the copy of auto-update-apply.sh that bash runs, pending.json, check-now.json), the enrollment
+ * request, the bridge's signing keys, the guards' own folder and the tripwire's files, the device list, the screen helper's allowed-apps
+ * list (Talos.app is its only writer), config.json, the folders the owner chose for threads (a card-less trust), phone recovery's
+ * request, the permission-mode and restart-check requests the Mac app acts on, the last-good and config-history copies, the relay
+ * update files, which secret store this computer uses and the store's own files, then the Linux supervisor's files.
+ */
+export const HOME_WRITE_DENIED = [
+  'bridge.env',
+  'mod.key',
+  'apps/catalog.json',
+  'auto-update',
+  'enroll-pending',
+  ...KEY_FILES,
+  'guards',
+  'tripwire.json',
+  'tripwire.writing',
+  'devices.json',
+  'screen',
+  'config.json',
+  'owner-folders.json',
+  'agent-request.json',
+  'permission-mode-request.json',
+  'main-restart-check.json',
+  'last-good',
+  'config-history',
+  'relay-connect.json',
+  'relay-auto.json',
+  'relay-redeploy-request.json',
+  'relay-redeploy-result.json',
+  'secret-backend',
+  'secrets',
+  ...SUPERVISOR_NEVER,
+  ...SUPERVISOR_READ_ONLY,
+] as const
 /** Spellings of those names that mean the file wherever the shell is standing (`cd <home> && rm guards.json`). */
 const BARE_STEMS = [
   'guards.json',
@@ -246,26 +292,6 @@ const BARE_STEMS = [
   ...DIALOG_FILE_NAMES,
 ]
 
-/** Words that run the next command rather than being it. */
-const WRAPPERS = new Set([
-  'env',
-  'sudo',
-  'doas',
-  'nohup',
-  'time',
-  'exec',
-  'command',
-  'builtin',
-  'nice',
-  'xargs',
-  'stdbuf',
-  'timeout',
-  'caffeinate',
-  'script',
-  'unbuffer',
-  'expect',
-  'faketty',
-])
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 const RUNNERS = new Set(['bun', 'bunx', 'node', 'deno', 'tsx', 'npx'])
 // (and the other ways to hand a command a terminal: tmux, screen, systemd-run --pty, ssh -t, a pty module however imported;
@@ -284,54 +310,6 @@ const WRITES_STRICT = new RegExp(SHELL_WRITES)
 /** The same, plus an interpreter, which can write whatever its script says. */
 const WRITES = new RegExp(`${SHELL_WRITES}|\\b(?:python3?|node|ruby)\\b|\\bbun\\b(?!\\s+test\\b)`)
 const quiet = (cmd: string) => cmd.replace(/\d*>&\d+|\d*>>?\s*\/dev\/null/g, ' ')
-
-/** A command line split into simple commands, each a list of words with quotes removed. Quotes keep `;` and `|` inside a word. */
-function simpleCommands(cmd: string): string[][] {
-  const out: string[][] = []
-  let words: string[] = []
-  let word = ''
-  let has = false
-  let q: '' | "'" | '"' = ''
-  const endWord = () => {
-    if (has) words.push(word)
-    word = ''
-    has = false
-  }
-  const endCmd = () => {
-    endWord()
-    if (words.length) out.push(words)
-    words = []
-  }
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i] as string
-    if (q === "'") {
-      if (c === "'") q = ''
-      else word += c
-      continue
-    }
-    if (c === '\\' && i + 1 < cmd.length) {
-      word += cmd[++i]
-      has = true
-      continue
-    }
-    if (q === '"') {
-      if (c === '"') q = ''
-      else word += c
-      continue
-    }
-    if (c === "'" || c === '"') {
-      q = c
-      has = true
-    } else if (/[;&|\n()`]/.test(c)) endCmd()
-    else if (/\s/.test(c)) endWord()
-    else {
-      word += c
-      has = true
-    }
-  }
-  endCmd()
-  return out
-}
 
 /** The name of the terminal-only command this one runs, or undefined. Looks only where a command is, not at any word. */
 function gatedIn(cmd: string, depth = 0): string | undefined {
@@ -402,7 +380,13 @@ function gatedIn(cmd: string, depth = 0): string | undefined {
 /** Both spellings of a path under a symlinked root (`/tmp` and `/private/tmp`), lower-cased: macOS compares names without case. */
 function spellings(p: string): string[] {
   const l = p.toLowerCase()
-  return l.startsWith('/private/') ? [l, l.slice('/private'.length)] : [l]
+  const out = [l]
+  if (l.startsWith('/private/')) out.push(l.slice('/private'.length))
+  // macOS names the data volume's users folder twice: /Users/alex and /System/Volumes/Data/Users/alex are one folder
+  const data = '/system/volumes/data'
+  if (l.startsWith(`${data}/`)) out.push(l.slice(data.length))
+  else if (l.startsWith('/users/')) out.push(`${data}${l}`)
+  return out
 }
 
 /**
@@ -463,48 +447,16 @@ function hardLinkTo(path: string, protectedFiles: readonly string[]): string | u
   }
 }
 
-/** Verbs whose every non-option word is written, moved or removed. */
-const TARGET_ALL = new Set([
-  'rm',
-  'rmdir',
-  'unlink',
-  'shred',
-  'truncate',
-  'chmod',
-  'chown',
-  'touch',
-  'tee',
-  'mv',
-  'patch',
-])
-/** Verbs that write their last word (cp a b, ln -s a b, install a b, rsync a b). */
-const TARGET_LAST = new Set(['cp', 'ln', 'install', 'rsync'])
-const INTERPRETERS = /^(?:python[\d.]*|node|ruby|perl|bun|deno|php|lua|osascript|sh|bash|zsh|dash|ksh)$/
-
 /**
- * Where a command line writes, as far as its words say: redirect targets, each writing verb's targets, the files of an in-place
- * `sed -i`/`perl -i`, `dd of=`, and every word of an interpreter (its script can write anything it names). Resolved and
- * lower-cased. Paths only: a pattern guard cannot follow names built at run time (see bashDecision).
+ * Where a command line writes: the targets of each of its simple commands. Resolved and lower-cased by the callers. Paths only: a
+ * pattern guard cannot follow names built at run time (see bashDecision).
  */
 function writeTargets(cmd: string, cfg: GuardConfig): string[] {
   const text = expandHome(cmd, cfg.userHome, cfg.home)
-  const out: string[] = []
-  for (const m of quiet(text).matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)) out.push(m[1] as string)
-  for (const words of simpleCommands(text)) {
-    let i = 0
-    while (
-      words[i] !== undefined &&
-      (WRAPPERS.has(basename(words[i] as string)) || /^[A-Za-z_]\w*=/.test(words[i] as string))
-    )
-      i++
-    const head = basename(words[i] ?? '')
-    const args = words.slice(i + 1).filter((w) => !w.startsWith('-'))
-    if (TARGET_ALL.has(head)) out.push(...args)
-    else if (TARGET_LAST.has(head) && args.length > 0) out.push(args[args.length - 1] as string)
-    else if ((head === 'sed' || head === 'perl') && words.slice(i + 1).some((w) => /^-\S*i/.test(w))) out.push(...args)
-    else if (head === 'dd') out.push(...words.filter((w) => w.startsWith('of=')).map((w) => w.slice(3)))
-    else if (INTERPRETERS.test(head)) out.push(...words.slice(i + 1))
-  }
+  const out = parseCommands(text).flatMap(targetsOf)
+  // also every `>` in the raw text, quoted ones included: a redirect inside `"$(…)"`, backticks or an `eval` string still writes.
+  // It only adds targets, and these callers judge them against protected paths (the relative-name rule uses targetsOf alone).
+  for (const m of quiet(text).matchAll(/>>?\|?\s*([^\s;|&<>()'"`]+)/g)) out.push(m[1] as string)
   // resolved, in their own case (a file is looked at by its real name); callers compare lower-cased
   return out.map((t) => (t.startsWith('/') ? real(t) : t))
 }
@@ -512,7 +464,7 @@ function writeTargets(cmd: string, cfg: GuardConfig): string[] {
 const MAYBE = Symbol('maybe the home')
 
 /** One simple command and the folder it runs in: a path, MAYBE (see below), or not known; `byCd` when a cd in the command set it. */
-type Ran = { text: string; at: string | typeof MAYBE | undefined; byCd: boolean }
+type Ran = { text: string; p: Parsed; at: string | typeof MAYBE | undefined; byCd: boolean }
 
 /**
  * Each simple command with the folder it runs in. The folder starts at the call's `cwd` (Claude Code gives it to every hook) and
@@ -526,10 +478,11 @@ function whereEachRuns(cmd: string, cfg: GuardConfig, cwd: string | undefined): 
   const out: Ran[] = []
   let at: Ran['at'] = cwd?.startsWith('/') ? real(cwd) : undefined
   let byCd = false
-  for (const words of simpleCommands(expandHome(cmd, cfg.userHome, cfg.home))) {
+  for (const p of parseCommands(expandHome(cmd, cfg.userHome, cfg.home))) {
+    const { words } = p
     const head = words[0]
     if (head !== 'cd' && head !== 'pushd') {
-      out.push({ text: words.join(' '), at, byCd })
+      out.push({ text: words.join(' '), p, at, byCd })
       continue
     }
     byCd = true
@@ -577,6 +530,92 @@ const SEARCHERS = new Set([
 /** Writers that reach into a folder named as a word (`tar -C <home>`, `git --work-tree=<home>`, `find <home> … -delete`). */
 const DIR_WRITERS = /\btar\b|\bunzip\b|\s-delete\b|--work-tree\b|\bfind\b[^;|&]*-exec\b|\bbsdtar\b|\bcpio\b/
 
+/** A glob over one file name (`*`, `?`, `[...]`, `{a,b}`), lower-cased. */
+function globMatch(pattern: string, name: string): boolean {
+  const open = /\{([^{}]*)\}/.exec(pattern)
+  if (open)
+    return open[1]
+      .split(',')
+      .some((alt) => globMatch(pattern.slice(0, open.index) + alt + pattern.slice(open.index + open[0].length), name))
+  let re = ''
+  for (let k = 0; k < pattern.length; k++) {
+    const c = pattern[k] as string
+    if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else if (c === '[') {
+      const end = pattern.indexOf(']', k + 2)
+      if (end < 0) re += '\\['
+      else {
+        re += `[${pattern
+          .slice(k + 1, end)
+          .replace(/^!/, '^')
+          .replace(/\\/g, '\\\\')}]`
+        k = end
+      }
+    } else re += c.replace(/[.+^${}()|\\\]]/g, '\\$&')
+  }
+  try {
+    return new RegExp(`^${re}$`, 'i').test(name)
+  } catch {
+    return true
+  }
+}
+
+const HAS_GLOB = /[*?[{]/
+
+/**
+ * Whether one simple command writes a read-only file of the home (HOME_READ_ONLY) by a name that is not absolute: each write target
+ * is resolved against the folder the command runs in (`candidates`, the one the secrets rules use). A wildcard in the last segment
+ * is matched as a real glob against every read-only name when its folder is the home (`> *-auto.json`, `rm *`, `tee {config,x}.json`);
+ * a wildcard in the folder part is judged by its stem. A copy-like verb whose destination folder is the home (`cp x .`, `cp -t .
+ * x`, `cp x talos` from ~/.config) is judged by its sources' names, and a recursive copy into the home is refused whole: what it
+ * brings is not known. Reads are not write targets and stay allowed; the same name in an agent's own folder resolves elsewhere.
+ */
+function touchesReadOnly(r: Ran, cfg: GuardConfig, candidates: (r: Ran, w: string) => string[]): boolean {
+  if (typeof r.at !== 'string' && r.at !== MAYBE) return false
+  const names = HOME_READ_ONLY.map((n) => n.toLowerCase())
+  const files = HOME_READ_ONLY.flatMap((n) => spellings(join(cfg.home, n)))
+  const homes = spellings(cfg.home)
+  const inside = (c: string) => files.some((f) => c === f || c.startsWith(`${f}/`))
+  const exact = (t: string) => candidates(r, t).some(inside)
+  const named = (base: string) =>
+    HAS_GLOB.test(base) ? names.some((n) => globMatch(base, n)) : names.includes(base.toLowerCase())
+  const hit = (t: string): boolean => {
+    const slash = t.lastIndexOf('/')
+    const dir = t.slice(0, slash + 1)
+    const last = t.slice(slash + 1)
+    if (!HAS_GLOB.test(t)) return exact(t)
+    if (HAS_GLOB.test(dir)) {
+      // a wildcard in the folder part: its beginning
+      const stem = globStem(t) ?? ''
+      if (stem === '') return false
+      return candidates(r, stem).some(
+        (c) => inside(c) || (!homes.includes(c) && files.some((f) => dirname(c) === dirname(f) && f.startsWith(c))),
+      )
+    }
+    const dirs = candidates(r, dir === '' ? '.' : dir)
+    return dirs.some((d) => inside(d) || (homes.includes(d) && named(last)))
+  }
+  if (targetsOf(r.p).some((t) => !t.startsWith('/') && hit(t))) return true
+  const { i, head } = headOf(r.p.words)
+  if (head !== 'mv' && head !== 'ln' && !TARGET_LAST.has(head)) return false
+  const spec = copySpec(r.p.words, i + 1)
+  // `ln x` alone makes its link in the folder it runs in, named like x
+  if (
+    head === 'ln' &&
+    spec.sources.length === 0 &&
+    spec.dest !== undefined &&
+    !r.p.words.slice(i + 1).some((w) => /^(?:-t|--target-directory)/.test(w))
+  )
+    Object.assign(spec, { sources: [spec.dest], dest: '.' })
+  const { dest, sources, recursive } = spec
+  if (dest === undefined || !candidates(r, dest).some((d) => homes.includes(d))) return false
+  return (
+    (recursive && (head === 'cp' || head === 'rsync' || head === 'install')) ||
+    sources.some((src) => named(src.replace(/\/+$/, '').split('/').pop() ?? ''))
+  )
+}
+
 // What follows is a pattern guard over the command's text and words. It is complete for nothing: a name built at run time (a
 // variable, base64, a script file, an interpreter's own string handling) passes it. On an unmanaged install these rules raise the
 // cost for a session acting through Claude Code's tools; they are not a boundary against code running as the same user. That
@@ -619,6 +658,59 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
   if ((BARE_STEMS.some((s) => hay.includes(s)) && !searchOnly) || mentions(names(cfg.home, HOME_NEVER)))
     return {
       deny: "Talos guard: the guard rules, the tripwire record, enroll-pending, agent-request.json, permission-mode-request.json, main-restart-check.json, the supervisor's control file, the owner's Stop (supervisor-stopped), the restart proofs and the bridge's signing keys (bridge.key and its .next and .prev) belong to the app and the owner; no command may touch them. The same goes for the needs-you files (dialog-answer.json and its siblings) and the wake bookkeeping (wake-state.json, wake-written.json).",
+    }
+  // the secret store's folder and the signing keys by a relative name: each path word is resolved against the folder its command
+  // runs in (`cd <home> && cat secrets/x`, `cd ~/.config && cat talos/secrets/x`, `cat ../secrets/x` from workers/, `cd <home> && cat
+  // ../talos/secrets/x`), and any command run inside secrets/ is refused. There is no exemption for the command or the word's place
+  // in the line: from the home, `echo secrets` is refused like `cat secrets/x` (a text guard cannot tell them apart; safe beats clever).
+  // A word with a wildcard is judged by its stem: `cat secr*/a` and `cat bridge.k*` reach the same files.
+  const secretsDirs = spellings(join(cfg.home, 'secrets'))
+  const keyPaths = KEY_FILES.flatMap((f) => spellings(join(cfg.home, f)))
+  const homePaths = spellings(cfg.home)
+  /** Where the word may point: one path, or two when the folder is only "maybe the home". */
+  const candidates = (r: Ran, w: string): string[] => {
+    if (typeof r.at === 'string') return [real(resolve(r.at, w)).toLowerCase()]
+    if (r.at !== MAYBE) return []
+    const clean = w.replace(/^(\.\/)+/, '').toLowerCase()
+    return [real(resolve(cfg.home, clean)).toLowerCase(), real(resolve(dirname(cfg.home), clean)).toLowerCase()]
+  }
+  const reachesSecrets = (r: Ran, x: string): boolean => {
+    const stem = globStem(x)
+    if (stem === undefined)
+      return candidates(r, x).some(
+        (c) => secretsDirs.some((d) => c === d || c.startsWith(`${d}/`)) || keyPaths.includes(c),
+      )
+    if (stem === '') return false
+    // a name's beginning: it reaches the folder or a key when the home plus that beginning is a prefix of their names (`secr*`, `s*`,
+    // `bridge.k*`), or it lies inside secrets/. A stem that is only a folder above the home (`~/*`, `/*`, `../*`) reaches nothing here:
+    // wildcards over an ancestor are a logged read gap (docs/FOLLOWUPS.md), not refused, or `ls ~/*` would be.
+    const namePrefix = (c: string, target: string) => dirname(c) === dirname(target) && target.startsWith(c)
+    return candidates(r, stem).some(
+      (c) =>
+        !homePaths.includes(c) &&
+        (secretsDirs.some((d) => namePrefix(c, d) || c.startsWith(`${d}/`) || c === d) ||
+          keyPaths.some((k) => namePrefix(c, k))),
+    )
+  }
+  const touchesSecrets = (r: Ran): boolean => {
+    if (typeof r.at === 'string') {
+      const t = r.at.toLowerCase().replace(/\/$/, '')
+      if (secretsDirs.some((d) => t === d || t.startsWith(`${d}/`))) return true
+    }
+    if (typeof r.at !== 'string' && r.at !== MAYBE) return false
+    return r.text
+      .split(/\s+/)
+      .map((w) => w.replace(/^['"]+|['"]+$/g, ''))
+      .some((w, i) =>
+        w
+          .split(/[=<>]+/)
+          .filter((x) => x && i > 0 && !x.startsWith('-'))
+          .some((x) => reachesSecrets(r, x)),
+      )
+  }
+  if (ran.some(touchesSecrets))
+    return {
+      deny: 'Talos guard: secrets/ holds the secret store files, and the bridge keys sit beside it; no command may touch them. Ask the owner.',
     }
   // a wildcard that could expand to one of them: match on the stem
   const words = expandHome(cmd, cfg.userHome).split(/[\s'"`;|&<>()=,]+/)
@@ -694,6 +786,11 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
     return {
       deny: 'Talos guard: supervisor.json and launch/ are how Main is started; the owner changes them, not a command.',
     }
+  // the read-only files by a relative name or a folder destination (see touchesReadOnly)
+  if (ran.some((r) => touchesReadOnly(r, cfg, candidates)))
+    return {
+      deny: 'Talos guard: the protected settings files in the Talos home (config.json, devices.json, owner-folders.json, relay-connect.json, relay-auto.json and the others the app writes) are not changed by a command. Reading them is fine.',
+    }
   // a folder at or above the home moved or removed whole (mv ~/.config elsewhere takes the home with it)
   for (const words of simpleCommands(expandHome(cmd, cfg.userHome, cfg.home))) {
     const head = basename(words[0] ?? '')
@@ -725,6 +822,29 @@ function bashDecision(cmd: string, cfg: GuardConfig, cwd?: string): GuardDeny | 
     const hit = [cfg.checkout, ...cfg.protectedPaths].find((p) => mentions(spellings(p)))
     if (hit) return { deny: `Talos guard: this looks like a write under ${hit}, which is on the never-change list.` }
   }
+  // the Mac app's own folder: a command whose write targets are in it (a redirect, rm, mv, tee, sed -i, the last word of cp, any word
+  // of an interpreter), or that changes a git repository there (`git -C <it> checkout`, or from inside it). Reading is not refused.
+  const appDirs = [real(appSupportDir(cfg.userHome)), join(real(cfg.home), 'auto-update')].flatMap(spellings)
+  const inApp = (p: string) => appDirs.some((d) => p === d || p.startsWith(`${d}/`))
+  const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const inAppFolder =
+    targets.some((t) => appDirs.some((d) => t.includes(d))) ||
+    // a redirect to a path with a space in it (the target word above is cut at the space)
+    appDirs.some((d) => new RegExp(`>>?\\|?\\s*${reEscape(d)}`).test(hay)) ||
+    ran.some(
+      (r) =>
+        typeof r.at === 'string' &&
+        writeTargets(r.text, cfg)
+          .filter((t) => !t.startsWith('/'))
+          .some((t) => inApp(real(resolve(r.at as string, t)).toLowerCase())),
+    )
+  const gitInApp =
+    GIT_MUTATES.test(quiet(cmd)) &&
+    (mentions(appDirs) || ran.some((r) => typeof r.at === 'string' && inApp(r.at.toLowerCase())))
+  if (inAppFolder || gitInApp)
+    return {
+      deny: "Talos guard: this writes in a folder the Talos app's updater runs code from (app.talos.desktop, its git checkout and update files, or auto-update in the Talos home). A session may read them, never change them.",
+    }
   return undefined
 }
 
@@ -749,10 +869,16 @@ export function guardDecision(call: GuardCall, cfg: GuardConfig): GuardDeny | un
         }
       : undefined
   }
-  if (call.tool_name === 'Read' || call.tool_name === 'Grep') {
+  if (call.tool_name === 'Read' || call.tool_name === 'Grep' || call.tool_name === 'Glob') {
     const file = input.file_path ?? input.path
     if (typeof file !== 'string' || !file) return undefined
     const abs = real(file.startsWith('~') ? join(cfg.userHome, file.slice(1)) : file).toLowerCase()
+    // the secret store's folder, and anything in it. The hook is only registered for Bash and the write tools, so this branch backs up
+    // the permission rules: a Read, Grep or Glob of a file in the folder rests on Claude Code's own `Read(<home>/secrets/**)` deny
+    // (denyRules). A Grep or Glob at the home or above it is not seen by any shell rule; it relies on that same deny, which is
+    // unconfirmed until a real-Claude run (docs/FOLLOWUPS.md).
+    if (spellings(join(cfg.home, 'secrets')).some((s) => abs === s || abs.startsWith(`${s}${sep}`)))
+      return { deny: "Talos guard: secrets/ holds the secret store's files; no session reads them. Ask the owner." }
     const key = KEY_FILES.find((f) => spellings(join(cfg.home, f)).some((s) => abs === s))
     return key ? { deny: `Talos guard: ${key} is the bridge's signing key; no session reads it.` } : undefined
   }

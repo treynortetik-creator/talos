@@ -115,6 +115,7 @@ export class WorkerManager {
       },
       turnCut: (w, why) => this.notices.turnCut(w.id, w.notes, why),
       backgroundCut: (w, text) => this.notices.backgroundCut(w.id, w.notes, text),
+      computerBusy: (w) => this.notices.computerBusy(w.id, w.notes),
       procs: d,
     })
     this.dialogs = new WorkerDialogs({
@@ -574,8 +575,10 @@ export class WorkerManager {
       error: null,
     }
     this.d.audit('worker_start', { thread: w.id, pid: String(pid), session: sessionId, resume: resume ? 'yes' : 'no' })
+    this.slots.afterStart(w) // a start over the limit says so (one line, kept for retry)
     // a server the owner listed that the session started without is said, never a silent difference
     if (plan.mcpLeftOut) this.notices.mcpLeftOut(w.id, w.notes, plan.mcpLeftOut.missing, plan.mcpLeftOut.refused)
+    if (plan.lockNote) this.notices.lockNote(w.id, w.notes, plan.lockNote)
     if (plan.settingsIgnored) this.notices.settingsIgnored(w.id, w.notes, plan.settingsIgnored)
     // told only of a new conversation in a folder other than the last launch's (a change back to the same folder is none)
     if (retire && last !== null && last !== plan.cwd) this.notices.folderChanged(w.id, w.notes, plan.cwd)
@@ -800,6 +803,7 @@ export class WorkerManager {
 
   /** No pane, no dialog on it: what it showed is over, and nothing stays on offer. */
   private paneGone(w: WorkerRuntime): void {
+    w.hold = null // the pane the hold was about is gone
     this.notices.release(w.id, w.notes)
     this.dialogs.end(this.offerTarget(w))
   }
@@ -891,6 +895,7 @@ export class WorkerManager {
     })
     w.owed = r.state
     auditPointerLook((e, f) => this.d.audit(e, f), w.id, r.enterCheck, w.host?.unknownShapes?.() ?? [])
+    status.applyHold(w, r, new Date(nowMs).toISOString(), () => this.publish())
     const wasHeld = w.heldFor ?? null
     if (r.looked && wasHeld && !r.delivered && !r.state.pending) this.notices.heldAtDrop(w.id, w.notes, wasHeld)
     else if (r.looked) this.notices.heldPointer(w.id, w.notes, r.held, r.state.leftover)

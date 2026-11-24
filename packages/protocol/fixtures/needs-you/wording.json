@@ -7,7 +7,8 @@
     "dev_channels": "Allow Talos's development channel?",
     "bypass": "Run with permission checks off?",
     "tool_permission": "Allow this tool request?",
-    "agent_question": "A question from {thread}'s session"
+    "agent_question": "A question from {thread}'s session",
+    "usage_limit": "{thread}'s session hit its usage limit"
   },
   "titleNamed": {
     "mcp_consent": "Use {server}?"
@@ -19,7 +20,14 @@
     "dev_channels": "Main session's start needs this to talk to the Talos app.",
     "bypass": "{thread}'s session was started with permission checks off. It will run commands and change files without asking you first. Accept only if you meant that.",
     "tool_permission": "{thread}'s session asks to use the tool shown. Allow once lets it run this one time. Standing permissions are only given at the Mac.",
-    "agent_question": "{thread}'s session is asking you to choose. Your answer goes straight into the session."
+    "agent_question": "{thread}'s session is asking you to choose. Your answer goes straight into the session.",
+    "usage_limit": "{thread}'s session can't go on until the limit resets or you switch to another model. Stop and wait ends its current turn. Switch model opens the model list in the session. Nothing here spends money."
+  },
+  "sentenceUsageLimitWaitOnly": "{thread}'s session can't go on until the limit resets. Stop and wait ends its current turn. Nothing here spends money.",
+  "usageStopped": {
+    "closed": "Closed the limit menu. Switch model at the Mac.",
+    "typed": "Closed the limit menu; /model was typed but not sent. Finish at the Mac or clear it.",
+    "cleared": "Closed the limit menu; /model was typed and cleared again. Switch model at the Mac."
   },
   "sentenceThreadDevChannels": "{thread}'s session was started with a development channel, and Claude Code asks before it loads it.",
   "devChannels": {

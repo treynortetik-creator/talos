@@ -749,7 +749,7 @@ export const routes = {
     owner: 'WP-V4',
     req: SharePostBody,
     res: z.object({ share_id: z.string() }),
-    note: '202; JSON or multipart (same names plus <= 4 `file` parts, files scope only); 404 when SHARE_ENABLED=0',
+    note: '202; JSON or multipart (same names plus <= 4 `file` parts, files scope only); optional `Idempotency-Key` header: a repeat gets the first 202; 404 when SHARE_ENABLED=0',
   },
   bridgeShareTokens: {
     id: 'bridgeShareTokens',

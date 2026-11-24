@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS main_handover (
   at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS route_rewake (
+  message_id TEXT PRIMARY KEY,
+  seen_live_at INTEGER,
+  rewoken_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS card_raisers (
   card_id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL,
@@ -77,6 +82,8 @@ export class WorkerStore {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(r.message_id, r.thread_id, JSON.stringify(r.notification), r.woke_at, r.deadline_at, r.cold ? 1 : 0)
+    // routed while the session was warm (live or busy): that is a sighting, so a death before the next hub tick is still a death
+    if (res.changes === 1 && !r.cold) this.noteSeenLive(r.message_id, r.woke_at)
     return res.changes === 1
   }
 
@@ -252,6 +259,47 @@ export class WorkerStore {
     return r ? toRoute(r) : undefined
   }
 
+  // ---- the one re-wake of a message whose session died before it read it (router/rewake.ts) ----------------------------
+
+  /** The session was live or busy while this message waited: the latest time, kept so a restart does not forget it. */
+  noteSeenLive(messageId: string, now: number): void {
+    this.db
+      .query(
+        `INSERT INTO route_rewake(message_id, seen_live_at) VALUES (?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET seen_live_at = excluded.seen_live_at`,
+      )
+      .run(messageId, now)
+  }
+
+  /** Was the session live or busy at any look while this message waited? */
+  wasSeenLive(messageId: string): boolean {
+    return (
+      this.db
+        .query('SELECT 1 AS y FROM route_rewake WHERE message_id = ? AND seen_live_at IS NOT NULL')
+        .get(messageId) !== null
+    )
+  }
+
+  /** True for the one caller that takes the re-wake of a message that was seen live; never twice, whoever asks and whenever. */
+  rewakeOnce(messageId: string, now: number): boolean {
+    const res = this.db
+      .query(
+        'UPDATE route_rewake SET rewoken_at = ? WHERE message_id = ? AND seen_live_at IS NOT NULL AND rewoken_at IS NULL',
+      )
+      .run(now, messageId)
+    return res.changes === 1
+  }
+
+  /** Re-woken, seen live again after that, and now gone again: a second death. */
+  diedAgain(messageId: string): boolean {
+    const r = this.db
+      .query(
+        'SELECT 1 AS y FROM route_rewake WHERE message_id = ? AND rewoken_at IS NOT NULL AND seen_live_at > rewoken_at',
+      )
+      .get(messageId)
+    return r !== null
+  }
+
   // ---- card raisers ----------------------------------------------------------------------------------------------
 
   /** First writer wins: a card id can never change hands. False when the id already has a raiser. */
@@ -277,6 +325,7 @@ export class WorkerStore {
     this.db.query('DELETE FROM claim_settled WHERE at < ?').run(cut)
     this.db.query('DELETE FROM main_handover WHERE at < ?').run(cut)
     this.db.query('DELETE FROM card_raisers WHERE at < ?').run(cut)
+    this.db.query('DELETE FROM route_rewake WHERE message_id NOT IN (SELECT message_id FROM worker_routes)').run()
   }
 }
 

@@ -1,6 +1,7 @@
 // The owner rule behind docs/PANE-PROMPTS: nothing that needs the owner lives only in a session's terminal. So no text the owner reads may
-// send them to a terminal: "open Terminals", `tmux attach`, "ssh to", "run claude /login". This scans the three trees that make
-// owner-facing text (the Mac app, the bridge, the web app) for those instructions.
+// mention a terminal at all: the app ("Terminals", "Terminal"), `tmux attach`, "in its pane", "ssh to", "run claude /login". The rule is the
+// WORD, not an instruction shape: "press Esc in this thread's pane in Terminals" and "Check the session in Terminals" fail as much as "open
+// Terminals". This scans the three trees that make owner-facing text (the Mac app, the bridge, the web app).
 //
 // What is NOT owner text and is left alone: comments, and the settings and developer text that is meant for a developer (row `advanced` in the
 // test's allowlist). What is owner text and not converted yet sits in ALLOWED with the plan row (the pane-prompts plan, rows
@@ -11,6 +12,14 @@ import { join, relative } from 'node:path'
 /** The patterns an owner must never be told. Each is matched against one non-comment line of source. */
 export const FORBIDDEN: ReadonlyArray<{ id: string; re: RegExp }> = [
   { id: 'open-terminals', re: /\bopen (?:this thread )?(?:in )?terminals?\b/i },
+  // the Mac's Terminals window (plural, capital T), or the Terminal app named as the place to go ("in Terminal", "open Terminal"). A feature name
+  // alone ("Terminal screen", an icon label) is not a place the owner is sent, and lower-case "terminal" is the general word.
+  { id: 'terminals-app', re: /\bTerminals\b/ },
+  { id: 'terminal-app', re: /\b(?:in|open|from|into|via|run it in) (?:the |a |your |this )?Terminal\b/ },
+  // a key the owner is told to press in a session ("press Esc in …"): the pane is where they are sent, however the place is spelled
+  { id: 'press-esc', re: /\bpress Esc\b/i },
+  // a session's pane named as the place to go
+  { id: 'in-its-pane', re: /\bin (?:its|their|the|that|this|this thread's|Main's|a|each|every) pane\b/i },
   { id: 'tmux-attach', re: /tmux attach/i },
   { id: 'ssh', re: /\bssh (?:to|into)\b/i },
   { id: 'run-login', re: /\b(?:run|type) `?(?:claude )?\/login/i },
@@ -40,6 +49,11 @@ function* walk(dir: string): Generator<string> {
 }
 
 const isComment = (t: string) => t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('#')
+/** A line's code and strings, without a trailing `// remark` (a remark after code is a comment too, never shown). */
+const codePart = (t: string): string => {
+  const at = t.indexOf(' // ')
+  return at < 0 ? t : t.slice(0, at)
+}
 
 export type Hit = { file: string; line: number; id: string; text: string }
 
@@ -58,8 +72,9 @@ export function scan(root: string, roots: readonly string[] = ROOTS): Hit[] {
       const lines = readFileSync(f, 'utf8').split('\n')
       lines.forEach((text, i) => {
         if (isComment(text.trim())) return
+        const code = codePart(text)
         for (const { id, re } of FORBIDDEN)
-          if (re.test(text))
+          if (re.test(code))
             hits.push({ file: relative(root, f).replaceAll('\\', '/'), line: i + 1, id, text: text.trim() })
       })
     }

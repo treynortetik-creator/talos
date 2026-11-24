@@ -71,7 +71,10 @@ struct ScreenCaptureRealTests {
     let (helper, windowID, dir) = try Self.showMagentaWindow()
     defer {
       helper.terminate()
-      helper.waitUntilExit()
+      // not `waitUntilExit`: after an `await` this can be another thread than the one that started the helper, and its run loop then
+      // never hears of the exit (seen: the helper gone, this wait an hour long)
+      for _ in 0..<500 where helper.isRunning { usleep(10_000) }
+      if helper.isRunning { kill(helper.processIdentifier, SIGKILL) }
       try? FileManager.default.removeItem(atPath: dir)
     }
     let core = ScreenCore.live(maxLongEdge: ScreenPNG.largestMaxLongEdge)

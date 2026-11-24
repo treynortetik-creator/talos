@@ -142,7 +142,7 @@ describe('doctor: linked agents', () => {
     expect(c?.detail).toContain('locked')
   })
 
-  test('a non-default home whose legacy item exists while the default home exists: warn, legacy untouched', async () => {
+  test('a non-default home with a peer entry and a legacy item while the default home exists: ok (copied), legacy untouched', async () => {
     const account = mkdtempSync(join(realpathSync(tmpdir()), 'acct-'))
     made.push(account)
     mkdirSync(join(account, '.config', 'talos', 'app'), { recursive: true })
@@ -154,9 +154,8 @@ describe('doctor: linked agents', () => {
     const legacy = `${PEER_SECRET_SERVICE}\u0000${peerSecretAccount('atlas')}`
     s.data.set(legacy, FAKE_SECRET)
     const c = await linkedAgentsCheck(envOf(d), { secrets: s })
-    expect(c?.level).toBe('warn')
-    expect(c?.detail).toContain(relinkLine('atlas'))
-    expect(s.data.get(legacy)).toBe(FAKE_SECRET)
+    expect(c?.level).toBe('ok')
+    expect(s.data.get(legacy)).toBe(FAKE_SECRET) // a copy never deletes the legacy item
     expect(JSON.stringify(c)).not.toContain(FAKE_SECRET)
   })
 

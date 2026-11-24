@@ -64,9 +64,16 @@ public struct DialogOffer: Codable, Equatable, Sendable {
       options.allSatisfy({ (1...120).contains($0.count) }), subject.map({ (1...500).contains($0.count) }) ?? true,
       cursor.map({ options.indices.contains($0) }) ?? true, ISOTime.parse(seen_at) != nil, ISOTime.parse(expires_at) != nil,
       launch_changed.map({ $0.count <= 4 && $0.allSatisfy(Self.launchPieces.contains) }) ?? true,
-      free_text.map({ kind == .agentQuestion && options.indices.contains($0) }) ?? true
+      free_text.map({ kind == .agentQuestion && options.indices.contains($0) }) ?? true,
+      kind != .usageLimit || Self.usageOptionsFit(options)
     else { return false }
     return true
+  }
+
+  /// A usage-limit offer carries only the two buttons of its card, each at most once (a row that spends credits is never an option).
+  static func usageOptionsFit(_ options: [String]) -> Bool {
+    let allowed = [UsageLimitScreen.waitLabel, UsageLimitScreen.switchLabel]
+    return Set(options).count == options.count && options.allSatisfy(allowed.contains)
   }
 
   /// 16 random bytes from the system's generator, base64url: 128 bits, not guessable and not a time.
@@ -203,12 +210,16 @@ public enum DialogAnswerFile: Equatable, Sendable {
 public enum DialogResult {
   public static let fileName = "dialog-result.json"
 
-  public enum Outcome: String, Sendable { case pressed, nothingPressed = "nothing_pressed", opened }
+  public enum Outcome: String, Sendable { case pressed, nothingPressed = "nothing_pressed", opened
+    /// A usage-limit answer that stopped part way (Escape went): `reason` is how far (`UsageLimitScreen.Stop`).
+    case partial }
   /// Why nothing was pressed: the proof did not check out, the screen was not the dialog offered, or the dialog was answered already.
   public enum Reason: String, Sendable {
     case screenChanged = "screen_changed", alreadyAnswered = "already_answered", unverified
     /// A key was sent and the Mac has not seen it take (a timeout, or the prompt still on screen): not "pressed", and not "nothing happened" either.
     case unconfirmed
+    /// With `.partial`: `UsageLimitScreen.Stop`.
+    case closed, typed, cleared
   }
 
   public static func encode(

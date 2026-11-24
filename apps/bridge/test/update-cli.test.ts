@@ -150,7 +150,7 @@ describe('talos-app update', () => {
     expect(h.err.join('\n')).toContain('does not follow a remote branch')
   })
 
-  test('a diverged branch fails the fast-forward and nothing changes', async () => {
+  test('a diverged branch is refused for its commits of its own, and nothing changes', async () => {
     const w = world()
     writeFileSync(join(w.install, 'mine'), 'mine')
     sh(w.install, 'add', '.')
@@ -159,7 +159,7 @@ describe('talos-app update', () => {
     const before = w.sha()
     const h = harness(w.install)
     expect(await h.run()).toBe(1)
-    expect(h.err.join('\n')).toContain('git pull --ff-only failed')
+    expect(h.err.join('\n')).toContain('commits that are not on its remote branch')
     expect(w.sha()).toBe(before)
     expect(h.calls.some((c) => c[0] === 'pnpm')).toBe(false)
   })

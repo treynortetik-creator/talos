@@ -58,12 +58,25 @@ export type RunNote = {
   wake?: boolean
   summary?: string
   late_note?: string
+  /**
+   * The bridge gave this run to Main because the thread's own session could not take it (the deaf-thread alarm): it ran in Main,
+   * not in the thread. The history says so, so a check that only reads "done" cannot mistake it for the thread's own run.
+   */
+  ran_in_main_for?: { thread: string; name: string }
   report?: string
   finished_at?: string
   duration_s?: number
   /** A heartbeat run's result: the outcome and, per source, ok / ms / unreadable / error (never item text). */
   heartbeat?: HeartbeatResultT
   at: number
+}
+
+/** "Ran in Main, not in <thread>." in front of a run's own summary (280 characters at most, as every summary is). */
+export function withMainMark(n: Pick<RunNote, 'ran_in_main_for' | 'summary'>): string | undefined {
+  const m = n.ran_in_main_for
+  if (!m) return n.summary
+  const mark = `Ran in Main, not in ${m.name}.`
+  return n.summary ? `${mark} ${n.summary}`.slice(0, 280) : mark
 }
 
 export type SidecarData = {

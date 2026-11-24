@@ -2,8 +2,14 @@ import Foundation
 
 /// Finds the `talos-app` command line when it is not an executable on the login PATH (audit D7). On a fresh checkout
 /// `talos-app` is a shell alias (`docs/SETUP.md`), which `which` can never see. What always exists is the agent folder's
-/// `.mcp.json`: its `talos-app` entry names `bun run --cwd <bridge folder> --silent start`, and `<bridge folder>/src/cli.ts`
+/// `.mcp.json`: its `talos-app` entry names the bridge folder (`bun run --cwd <bridge folder> --silent src/server.ts`, or the newer
+/// `bun --no-env-file --config=<bridge folder>/bunfig.toml <bridge folder>/src/server.ts`), and `<bridge folder>/src/cli.ts`
 /// is the same CLI the alias runs. Pure: the file system is passed in.
+private extension String {
+  /// The folder above this path's last component (`/a/b/src` becomes `/a/b`).
+  func dropLastComponent() -> String { (self as NSString).deletingLastPathComponent }
+}
+
 public enum TalosAppLocator {
   public struct Found: Equatable, Sendable {
     public var command: [String]
@@ -11,17 +17,25 @@ public enum TalosAppLocator {
     public var env: [String: String]
   }
 
-  /// `data` is the agent folder's `.mcp.json`. nil when there is no usable `talos-app` entry, no `--cwd`, no `src/cli.ts`
+  /// `data` is the agent folder's `.mcp.json`. nil when there is no usable `talos-app` entry, no bridge folder in it, no `src/cli.ts`
   /// there, or no `bun` to run it.
   public static func fromMcpJson(
     _ data: Data?, searchPath: String?, home: String, isExecutable: (String) -> Bool, fileExists: (String) -> Bool
   ) -> Found? {
     guard let data, let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
       let servers = root["mcpServers"] as? [String: Any], let entry = servers["talos-app"] as? [String: Any],
-      let command = entry["command"] as? String, !command.isEmpty, let args = entry["args"] as? [String],
-      let cwdAt = args.firstIndex(of: "--cwd"), cwdAt + 1 < args.count
+      let command = entry["command"] as? String, !command.isEmpty, let args = entry["args"] as? [String]
     else { return nil }
-    let bridgeDir = PathUtil.expandTilde(args[cwdAt + 1], home: home)
+    // the bridge folder: the older entry's `--cwd <folder>`, or the newer one's script (`bun --no-env-file --config=<folder>/bunfig.toml
+    // <folder>/src/server.ts`, which has no `--cwd`: bun then keeps the folder it was started in)
+    let bridgeDir: String
+    if let cwdAt = args.firstIndex(of: "--cwd"), cwdAt + 1 < args.count {
+      bridgeDir = PathUtil.expandTilde(args[cwdAt + 1], home: home)
+    } else if let script = args.first(where: { $0.hasSuffix("/src/server.ts") }) {
+      bridgeDir = (PathUtil.expandTilde(script, home: home) as NSString).deletingLastPathComponent.dropLastComponent()
+    } else {
+      return nil
+    }
     let cli = bridgeDir + "/src/cli.ts"
     guard fileExists(cli) else { return nil }
     guard let runner = findProgram(command, searchPath: searchPath, home: home, isExecutable: isExecutable) else { return nil }

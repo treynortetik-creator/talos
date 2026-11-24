@@ -1,7 +1,7 @@
 // The pure part of the Health screen: status -> rows, notes and banner (docs/V2-FEATURES.md V2.5).
 import { DISK_LOW_BYTES, DISK_RECOVERED_BYTES, HealthBeat, HealthStatus } from '@talos-app/protocol'
 import { describe, expect, it } from 'vitest'
-import { bannerFor, formatFree, healthNotes, healthRows } from '../../src/features/health/rows.ts'
+import { bannerFor, formatFree, healthNotes, healthRows, typingRows } from '../../src/features/health/rows.ts'
 import { statusOf } from './status.ts'
 
 const quiet = (on: boolean) => on
@@ -100,5 +100,31 @@ describe('Mac disk row (D11)', () => {
     const OldStatus = HealthStatus.extend({ beat: OldBeat })
     expect(OldStatus.parse(body).beat).not.toHaveProperty('disk_free_bytes')
     expect(HealthStatus.parse(body).beat?.disk_free_bytes).toBe(3 * GB)
+  })
+})
+
+describe('typingRows (the deaf-thread alarm)', () => {
+  const nameOf = (id: string) => (id === 'delphi' ? 'Delphi' : id)
+  it('one amber row per thread Talos cannot type into, with its minutes and refused tries', () => {
+    const r = typingRows(
+      [
+        { thread_id: 'delphi', state: 'live', deaf: { minutes: 11, refusals_1h: 640 } },
+        { thread_id: 'talos', state: 'live' },
+      ],
+      nameOf,
+    )
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ id: 'typing:delphi', label: 'Delphi', tone: 'warn' })
+    expect(r[0]?.detail).toContain('11 min')
+    expect(r[0]?.detail).toContain('640 tries refused this hour')
+  })
+  it('says nothing when the status says nothing (an older Mac, or no thread sessions)', () => {
+    expect(typingRows(undefined, nameOf)).toEqual([])
+    expect(typingRows([], nameOf)).toEqual([])
+  })
+  it('one try reads as one try', () => {
+    expect(
+      typingRows([{ thread_id: 'x', state: 'live', deaf: { minutes: 1, refusals_1h: 1 } }], nameOf)[0]?.detail,
+    ).toContain('1 try refused')
   })
 })

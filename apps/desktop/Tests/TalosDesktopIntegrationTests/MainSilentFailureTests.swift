@@ -142,15 +142,27 @@ struct MainSilentFailureTests {
     try JSONSerialization.data(withJSONObject: keyFile).write(to: URL(fileURLWithPath: r.talosHome + "/bridge.key"))
     try "TALOS_APP_RELAY_URL=https://relay.example.com\n".write(toFile: r.talosHome + "/bridge.env", atomically: true, encoding: .utf8)
     r.start()
-    #expect(r.wait(60) { r.sup.tickNow(); return r.audit.contains("system_row result=") }, "\(r.phase()), audit: \(r.audit)")
-    let req = try #require(r.agentsProbe.sent.first)
+    // look for the loop's own row: a config that cannot be read says nothing about the extra lock when it was never on (asserted below)
+    func loopRow() throws -> (URLRequest, [String: Any])? {
+      for req in r.agentsProbe.sent {
+        guard let raw = req.httpBody, let body = (try JSONSerialization.jsonObject(with: raw)) as? [String: Any],
+          let m = body["message"] as? [String: Any], (m["text"] as? String)?.hasPrefix("The agent's session stopped restarting at") == true
+        else { continue }
+        return (req, m)
+      }
+      return nil
+    }
+    #expect(
+      r.wait(60) { r.sup.tickNow(); return (try? loopRow()) != nil && r.audit.contains("system_row result=sent") },
+      "\(r.phase()), audit: \(r.audit)")
+    let (req, message) = try #require(try loopRow())
     #expect(req.url?.absoluteString == "https://relay.example.com/bridge/post")
-    let raw = try #require(req.httpBody)
-    let body = try #require((try JSONSerialization.jsonObject(with: raw)) as? [String: Any])
-    let message = try #require(body["message"] as? [String: Any])
     #expect(message["thread_id"] as? String == "inbox" && message["author"] as? String == "system")
     #expect((message["text"] as? String)?.hasPrefix("The agent's session stopped restarting at") == true, "\(message)")
     #expect(r.audit.contains("system_row result=sent"), "audit: \(r.audit)")
+    // the damaged file is not "the lock on": no word about it reaches the phone, and the audit log says it was kept off
+    let said = r.agentsProbe.sent.compactMap { $0.httpBody.flatMap { String(data: $0, encoding: .utf8) } }
+    #expect(said.allSatisfy { !$0.contains("extra lock") }, "\(said)")
   }
 }
 

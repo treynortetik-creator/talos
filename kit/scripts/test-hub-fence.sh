@@ -59,7 +59,8 @@ SESSION_ENV=(TALOS_APP_HOME="$APP" TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_TH
 for s in test-action-rules.sh test-permission-relay.sh; do
   rm -f "$APP/got.jsonl"
   out="$(env "${SESSION_ENV[@]}" bash "$KIT/scripts/$s" 2>&1)"; rc=$?
-  [ "$rc" = 0 ] && ok || no "$s exits 0 from a thread session (got $rc)" "$(printf '%s' "$out" | tail -3)"
+  # name the failing checks (and their detail lines), not just the last lines: a stray traceback there hid the real one
+  [ "$rc" = 0 ] && ok || no "$s exits 0 from a thread session (got $rc)" "$(printf '%s\n' "$out" | grep -E -A2 '^ *FAIL ' | head -30; printf '%s\n' "$out" | tail -2)"
   [ "$(got)" = 0 ] && ok || no "$s sent the decoy hub $(got) request(s)"
 done
 

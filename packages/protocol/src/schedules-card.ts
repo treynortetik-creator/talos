@@ -669,6 +669,7 @@ export function composeScheduleCard(
   }
   const eff = effective(change, opts.base)
   const labels = LABELS[change.op]
+  const ownRisk = scheduleCardRisk(change, opts.base, opts.now)
   const payload: ScheduleCardPayloadT = {
     schema: SCHEDULE_CARD_SCHEMA,
     change,
@@ -676,6 +677,7 @@ export function composeScheduleCard(
     proposed_by: opts.proposedBy,
     client_ref: opts.clientRef,
     preview,
+    own_risk: ownRisk,
   }
   const session = opts.sessionName
   const destination = session
@@ -729,7 +731,7 @@ export function composeScheduleCard(
     kill_label: session ? 'Not now' : labels.kill,
     allow_edit: false,
     allow_revise: true,
-    risk: riskForTrust(opts.trust === true, 'schedule', scheduleCardRisk(change, opts.base, opts.now)),
+    risk: riskForTrust(opts.trust === true, 'schedule', ownRisk),
     origin: opts.origin,
     payload,
     payload_hash: '',

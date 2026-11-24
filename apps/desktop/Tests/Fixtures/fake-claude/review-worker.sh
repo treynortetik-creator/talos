@@ -58,24 +58,24 @@ if [ -n "${FAKE_RV_SETSID_CHILD:-}" ]; then
 fi
 if [ -n "${FAKE_RV_DIALOG:-}" ]; then
   # FAKE_RV_DIALOG_GONE=<file>: once this file exists the dialog is answered, the screen clears and the input box is drawn again
-  ( until [ -f "$FAKE_RV_DIALOG" ]; do sleep 0.1; done; [ "$box" != typing_box ] || printf '\033[3B\033[1G'  # below the box, as the cursor was
+  ( until [ -f "$FAKE_RV_DIALOG" ] || ! fake_alive; do sleep 0.1; done; [ "$box" != typing_box ] || printf '\033[3B\033[1G'  # below the box, as the cursor was
     printf '\n \342\235\257 1. Yes, I trust this folder\n   2. No, exit\n'
     [ -n "${FAKE_RV_DIALOG_GONE:-}" ] || exit 0
-    until [ -f "$FAKE_RV_DIALOG_GONE" ]; do sleep 0.1; done; box_back ) &
+    until [ -f "$FAKE_RV_DIALOG_GONE" ] || ! fake_alive; do sleep 0.1; done; box_back ) &
 fi
 if [ -n "${FAKE_RV_QUESTION:-}" ]; then
   # FAKE_RV_QUESTION=<file>: once it exists, draw a numbered question that is not one of the known dialogs (a prompt nobody named), below the status row (row 6);
   # FAKE_RV_QUESTION_GONE=<file>: it goes away when that file exists, and the input box is back.
-  ( until [ -f "$FAKE_RV_QUESTION" ]; do sleep 0.1; done
+  ( until [ -f "$FAKE_RV_QUESTION" ] || ! fake_alive; do sleep 0.1; done
     printf '\033[2J\033[8;1H Allow this tool?\n\n \342\235\257 1. Allow\n   2. Deny\n'
-    until [ -f "${FAKE_RV_QUESTION_GONE:-/nonexistent}" ]; do sleep 0.1; done; box_back ) &
+    until [ -f "${FAKE_RV_QUESTION_GONE:-/nonexistent}" ] || ! fake_alive; do sleep 0.1; done; box_back ) &
 fi
 if [ -n "${FAKE_RV_BLANK:-}" ]; then
   # FAKE_RV_BLANK=<file>: once this file exists the screen is cleared (no input box); FAKE_RV_BLANK_BACK=<file>: the box is drawn again
-  ( until [ -f "$FAKE_RV_BLANK" ]; do sleep 0.1; done; printf '\033[2J\033[H'
-    until [ -f "${FAKE_RV_BLANK_BACK:-/nonexistent}" ]; do sleep 0.1; done; box_back ) &
+  ( until [ -f "$FAKE_RV_BLANK" ] || ! fake_alive; do sleep 0.1; done; printf '\033[2J\033[H'
+    until [ -f "${FAKE_RV_BLANK_BACK:-/nonexistent}" ] || ! fake_alive; do sleep 0.1; done; box_back ) &
 fi
-[ -n "${FAKE_RV_READY_FILE:-}" ] && until [ -f "$FAKE_RV_READY_FILE" ]; do sleep 0.1; done
+[ -n "${FAKE_RV_READY_FILE:-}" ] && until [ -f "$FAKE_RV_READY_FILE" ] || ! fake_alive; do sleep 0.1; done
 if [ -z "${FAKE_RV_NO_READY:-}" ]; then
   d="$TALOS_APP_HOME/workers/$T"
   mkdir -p "$d"
@@ -84,14 +84,14 @@ fi
 case ",${FAKE_RV_STATUS_ONLY:-$T}," in
   *",$T,"*)
     if [ -n "${FAKE_RV_STATUS:-}" ]; then  # row 6: under the footer, the last row of the box's layout (lib.sh `input_box`)
-      ( n=19; while :; do n=$(( (n + 1) % 101 )); printf '\0337\033[6;1H\033[2K  Talos: Sonnet 5 | 7d: %d%%\0338' "$n"; sleep "$FAKE_RV_STATUS"; done ) &
+      ( n=19; while fake_alive; do n=$(( (n + 1) % 101 )); printf '\0337\033[6;1H\033[2K  Talos: Sonnet 5 | 7d: %d%%\0338' "$n"; sleep "$FAKE_RV_STATUS"; done ) &
     fi ;;
 esac
 if [ -n "${FAKE_RV_TURN:-}" ]; then
-  ( n=0; while :; do if [ -f "$FAKE_RV_TURN" ]; then n=$((n+1)); printf '\0337\033[1;1H\033[2Kthinking %d\0338' "$n"; fi; sleep 0.3; done ) &
+  ( n=0; while fake_alive; do if [ -f "$FAKE_RV_TURN" ]; then n=$((n+1)); printf '\0337\033[1;1H\033[2Kthinking %d\0338' "$n"; fi; sleep 0.3; done ) &
 fi
 [ -n "${FAKE_RV_BOX_DELAY:-}" ] && sleep "$FAKE_RV_BOX_DELAY"  # ready is written first, so a slow machine shows the box late
-[ -n "${FAKE_RV_BOX_FILE:-}" ] && until [ -f "$FAKE_RV_BOX_FILE" ]; do sleep 0.1; done
+[ -n "${FAKE_RV_BOX_FILE:-}" ] && until [ -f "$FAKE_RV_BOX_FILE" ] || ! fake_alive; do sleep 0.1; done
 # With DIM_TEXT the box is first drawn by the echo loop below, dim from the start: a plain empty box first would be the screen the
 # pointer is typed onto, and the dim copy would never be what the guard reads.
 [ -n "${FAKE_RV_ECHO_BOX:-}" ] && [ -n "${FAKE_RV_DIM_TEXT:-}" ] || { printf '\n'; $box; }
@@ -135,7 +135,7 @@ if [ -n "${FAKE_RV_ECHO_BOX:-}" ]; then
   idle
 fi
 if [ -n "$plain" ]; then
-  [ -n "${FAKE_RV_DEAF:-}" ] && ( until [ -f "$FAKE_RV_DEAF" ]; do sleep 0.1; done; stty -echo < /dev/tty 2>/dev/null ) &  # a background job has no stdin: the pane's tty is /dev/tty
+  [ -n "${FAKE_RV_DEAF:-}" ] && ( until [ -f "$FAKE_RV_DEAF" ] || ! fake_alive; do sleep 0.1; done; stty -echo < /dev/tty 2>/dev/null ) &  # a background job has no stdin: the pane's tty is /dev/tty
   log_typed_lines  # logs "$TALOS_APP_WORKER_THREAD <line>", the same as "$T <line>"
   idle
 fi

@@ -2,12 +2,12 @@
 // receipt still `sent`) now ends with a `not_delivered` receipt that survives a reconnect, a plain system row for a settings
 // change, and ONE push at day 6 per episode (the flag lives in the store, so a relay restart repeats nothing).
 import { bindingFrom, payloadHash } from '@talos-app/protocol'
-import { fakeClock, sleep, waitFor } from '@talos-app/testkit'
+import { type FakeApp, fakeClock, mkFrame, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // a test whose waits add up higher (the relay and sockets it starts, each testkit wait at x3) says so itself
 const DAY = 86_400_000
 const SUB = { endpoint: 'https://push.example.com/send/dead-mac', keys: { p256dh: 'a', auth: 'b' } }
 
@@ -19,6 +19,13 @@ afterEach(async () => {
 
 const warnings = (r: TestRelay) =>
   r.transport.sent.map((s) => s.payload.notification.body).filter((b) => b.includes('Your messages have not reached'))
+
+/** Everything this app sent before this has been handled by the relay, and what the relay sent it before the answer has arrived: the relay answers one socket's frames in order. */
+const handled = async (a: FakeApp) => {
+  const nonce = `after-${Math.random().toString(36).slice(2, 10)}`
+  a.send(mkFrame('ping', { nonce }))
+  await a.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'in' })
+}
 
 async function world() {
   const c = fakeClock(new Date().toISOString())
@@ -71,64 +78,81 @@ describe('D38 a message to a dead Mac', () => {
     expect(r.runtime.store.getMeta(String(sent.client_msg_id)).receipt).not.toBe('not_delivered')
   })
 
-  it('a message the Mac took but never pushed into Claude warns at day 6 and ends with a not_delivered receipt', async () => {
-    const { c, r, k, app } = await world()
-    const bridge = await k
-      .bridge({ pinnedDevices: { [app.device.deviceId]: app.device.publicJwk }, consume: 'manual', verifyOwner: false })
-      .connect()
-    // the Mac has pushed an earlier message, which is how the relay learns it acks in two stages
-    const earlier = await app.sendMessage('general', 'pushed through')
-    await bridge.expectFrame('message', (f) => f.id === earlier.id, { direction: 'in' })
-    expect(bridge.consume(String(earlier.id))).toBe(true)
-    await waitFor(() => r.runtime.store.outboxRow(String(earlier.id)) === undefined, 5000, 'earlier consumed')
+  it(
+    'a message the Mac took but never pushed into Claude warns at day 6 and ends with a not_delivered receipt',
+    async () => {
+      const { c, r, k, app } = await world()
+      const bridge = await k
+        .bridge({
+          pinnedDevices: { [app.device.deviceId]: app.device.publicJwk },
+          consume: 'manual',
+          verifyOwner: false,
+        })
+        .connect()
+      // the Mac has pushed an earlier message, which is how the relay learns it acks in two stages
+      const earlier = await app.sendMessage('general', 'pushed through')
+      await bridge.expectFrame('message', (f) => f.id === earlier.id, { direction: 'in' })
+      expect(bridge.consume(String(earlier.id))).toBe(true)
+      await waitFor(() => r.runtime.store.outboxRow(String(earlier.id)) === undefined, 5000, 'earlier consumed')
 
-    const start = c.now()
-    const stuck = await app.sendMessage('general', 'taken but stuck')
-    await bridge.expectFrame('message', (f) => f.id === stuck.id, { direction: 'in' })
-    await waitFor(() => r.runtime.store.outboxRow(String(stuck.id))?.delivered === 1, 5000, 'delivered, not consumed')
-    await bridge.close() // the Mac dies holding it
-    await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
+      const start = c.now()
+      const stuck = await app.sendMessage('general', 'taken but stuck')
+      await bridge.expectFrame('message', (f) => f.id === stuck.id, { direction: 'in' })
+      await waitFor(() => r.runtime.store.outboxRow(String(stuck.id))?.delivered === 1, 5000, 'delivered, not consumed')
+      await bridge.close() // the Mac dies holding it
+      await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
 
-    c.set(start + 5 * DAY + 23 * 3_600_000)
-    r.runtime.hub.sweep()
-    expect(warnings(r)).toHaveLength(0)
-    c.set(start + 6 * DAY + 3_600_000)
-    r.runtime.hub.sweep()
-    await waitFor(() => warnings(r).length === 1, 5000, 'the day-6 push')
+      c.set(start + 5 * DAY + 23 * 3_600_000)
+      r.runtime.hub.sweep()
+      expect(warnings(r)).toHaveLength(0)
+      c.set(start + 6 * DAY + 3_600_000)
+      r.runtime.hub.sweep()
+      await waitFor(() => warnings(r).length === 1, 5000, 'the day-6 push')
 
-    c.set(start + 8 * DAY)
-    r.runtime.hub.sweep()
-    expect(r.runtime.store.outboxDepth()).toBe(0)
-    const got = await app.expectFrame('receipt', (f) => f.message_id === stuck.client_msg_id, { direction: 'in' })
-    expect(got.state).toBe('not_delivered')
-    expect(r.runtime.store.getMeta(String(stuck.client_msg_id)).receipt).toBe('not_delivered')
-    expect(r.runtime.store.getMeta(String(earlier.client_msg_id)).receipt).not.toBe('not_delivered')
-    r.runtime.hub.sweep() // once per frame
-    expect(app.rec.of('receipt', 'in').filter((f) => f.state === 'not_delivered')).toHaveLength(1)
-  })
+      c.set(start + 8 * DAY)
+      r.runtime.hub.sweep()
+      expect(r.runtime.store.outboxDepth()).toBe(0)
+      const got = await app.expectFrame('receipt', (f) => f.message_id === stuck.client_msg_id, { direction: 'in' })
+      expect(got.state).toBe('not_delivered')
+      expect(r.runtime.store.getMeta(String(stuck.client_msg_id)).receipt).toBe('not_delivered')
+      expect(r.runtime.store.getMeta(String(earlier.client_msg_id)).receipt).not.toBe('not_delivered')
+      r.runtime.hub.sweep() // once per frame
+      expect(app.rec.of('receipt', 'in').filter((f) => f.state === 'not_delivered')).toHaveLength(1)
+    },
+    t(75_000),
+  )
 
-  it('a bridge that has never pushed a frame (an older one that only says delivered) is not reported or warned about', async () => {
-    const { c, r, k, app } = await world()
-    const bridge = await k
-      .bridge({ pinnedDevices: { [app.device.deviceId]: app.device.publicJwk }, consume: 'manual', verifyOwner: false })
-      .connect()
-    const start = c.now()
-    const sent = await app.sendMessage('general', 'taken by an older bridge')
-    await bridge.expectFrame('message', (f) => f.id === sent.id, { direction: 'in' })
-    await waitFor(() => r.runtime.store.outboxRow(String(sent.id))?.delivered === 1, 5000, 'delivered')
-    await bridge.close()
-    await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
+  it(
+    'a bridge that has never pushed a frame (an older one that only says delivered) is not reported or warned about',
+    async () => {
+      const { c, r, k, app } = await world()
+      const bridge = await k
+        .bridge({
+          pinnedDevices: { [app.device.deviceId]: app.device.publicJwk },
+          consume: 'manual',
+          verifyOwner: false,
+        })
+        .connect()
+      const start = c.now()
+      const sent = await app.sendMessage('general', 'taken by an older bridge')
+      await bridge.expectFrame('message', (f) => f.id === sent.id, { direction: 'in' })
+      await waitFor(() => r.runtime.store.outboxRow(String(sent.id))?.delivered === 1, 5000, 'delivered')
+      await bridge.close()
+      await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
 
-    c.set(start + 6 * DAY + 3_600_000)
-    r.runtime.hub.sweep()
-    c.set(start + 8 * DAY)
-    r.runtime.hub.sweep()
-    expect(r.runtime.store.outboxDepth()).toBe(0)
-    expect(warnings(r)).toHaveLength(0)
-    await sleep(150)
-    expect(app.rec.of('receipt', 'in').filter((f) => f.state === 'not_delivered')).toHaveLength(0)
-    expect(r.runtime.store.getMeta(String(sent.client_msg_id)).receipt).not.toBe('not_delivered')
-  })
+      c.set(start + 6 * DAY + 3_600_000)
+      r.runtime.hub.sweep()
+      c.set(start + 8 * DAY)
+      r.runtime.hub.sweep()
+      expect(r.runtime.store.outboxDepth()).toBe(0)
+      expect(warnings(r)).toHaveLength(0)
+      await handled(app) // relay-side: the sweeps are done and the relay has answered the app's ping, so any receipt came before the pong
+      await sleep(t(150))
+      expect(app.rec.of('receipt', 'in').filter((f) => f.state === 'not_delivered')).toHaveLength(0)
+      expect(r.runtime.store.getMeta(String(sent.client_msg_id)).receipt).not.toBe('not_delivered')
+    },
+    t(40_000),
+  )
 
   it('short-lived frames (a device notice, a hook) are dropped without a word', async () => {
     const { c, r, app } = await world()
@@ -137,90 +161,104 @@ describe('D38 a message to a dead Mac', () => {
     c.set(c.now() + 8 * DAY)
     r.runtime.hub.sweep()
     expect(r.runtime.store.outboxDepth()).toBe(0)
-    await sleep(150) // a frame the relay did send would have reached the app by now
+    await handled(app) // relay-side: a frame the relay did send would have come before the pong
+    await sleep(t(150))
     expect(app.rec.of('receipt', 'in')).toHaveLength(0)
     expect(app.rec.of('message.stored', 'in')).toHaveLength(0)
     expect(warnings(r)).toHaveLength(0)
   })
 
-  it('a settings change and a card decision get a plain system row, not a receipt', async () => {
-    const { c, r, k, app } = await world()
-    const bridge = await k
-      .bridge({ pinnedDevices: { [app.device.deviceId]: app.device.publicJwk }, consume: 'manual', verifyOwner: false })
-      .connect()
-    const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
-    await app.expectFrame('card.create', (f) => f.card.id === card.id)
-    await bridge.close() // the Mac goes away before either owner frame
-    await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
-    await app.sendConfigPatch(0, { quiet_window: null })
-    await app.resolveCard(card, 'primary', payloadHash(bindingFrom(card)))
-    await waitFor(() => r.runtime.store.outboxDepth() === 2, 5000, 'both queued')
+  it(
+    'a settings change and a card decision get a plain system row, not a receipt',
+    async () => {
+      const { c, r, k, app } = await world()
+      const bridge = await k
+        .bridge({
+          pinnedDevices: { [app.device.deviceId]: app.device.publicJwk },
+          consume: 'manual',
+          verifyOwner: false,
+        })
+        .connect()
+      const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
+      await app.expectFrame('card.create', (f) => f.card.id === card.id)
+      await bridge.close() // the Mac goes away before either owner frame
+      await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
+      await app.sendConfigPatch(0, { quiet_window: null })
+      await app.resolveCard(card, 'primary', payloadHash(bindingFrom(card)))
+      await waitFor(() => r.runtime.store.outboxDepth() === 2, 5000, 'both queued')
 
-    c.set(c.now() + 8 * DAY)
-    r.runtime.hub.sweep()
-    const system = () => app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')
-    await waitFor(() => system().length === 2, 5000, 'two system rows')
-    const rows = system()
-    expect(rows.map((f) => f.message.text).sort()).toEqual([
-      expect.stringContaining('A settings change never reached your Mac'),
-      expect.stringContaining('Your decision on a card never reached your Mac'),
-    ])
-    expect(rows.find((f) => f.message.text?.includes('card'))?.message.thread_id).toBe('general')
-    expect(app.rec.of('receipt', 'in')).toHaveLength(0)
-    r.runtime.hub.sweep() // once per frame
-    await sleep(100)
-    expect(app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')).toHaveLength(2)
-  })
+      c.set(c.now() + 8 * DAY)
+      r.runtime.hub.sweep()
+      const system = () => app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')
+      await waitFor(() => system().length === 2, 5000, 'two system rows')
+      const rows = system()
+      expect(rows.map((f) => f.message.text).sort()).toEqual([
+        expect.stringContaining('A settings change never reached your Mac'),
+        expect.stringContaining('Your decision on a card never reached your Mac'),
+      ])
+      expect(rows.find((f) => f.message.text?.includes('card'))?.message.thread_id).toBe('general')
+      expect(app.rec.of('receipt', 'in')).toHaveLength(0)
+      r.runtime.hub.sweep() // once per frame
+      await handled(app) // relay-side: both system rows are in and the second sweep is done; a third row would come before the pong
+      await sleep(t(150))
+      expect(app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')).toHaveLength(2)
+    },
+    t(60_000),
+  )
 })
 
 describe('D38 the day-6 warning', () => {
-  it('one push per episode, none before day 6, none again after a relay restart, a new one for a new episode', async () => {
-    const { c, r, k, app } = await world()
-    const dir = r.dir
-    const start = c.now()
-    await app.sendMessage('general', 'first')
-    await waitFor(() => r.runtime.store.outboxDepth() === 1, 5000, 'queued')
+  it(
+    'one push per episode, none before day 6, none again after a relay restart, a new one for a new episode',
+    async () => {
+      const { c, r, k, app } = await world()
+      const dir = r.dir
+      const start = c.now()
+      await app.sendMessage('general', 'first')
+      await waitFor(() => r.runtime.store.outboxDepth() === 1, 5000, 'queued')
 
-    c.set(start + 5 * DAY + 23 * 3_600_000)
-    r.runtime.hub.sweep()
-    expect(warnings(r)).toHaveLength(0)
+      c.set(start + 5 * DAY + 23 * 3_600_000)
+      r.runtime.hub.sweep()
+      expect(warnings(r)).toHaveLength(0)
 
-    c.set(start + 6 * DAY + 3_600_000)
-    r.runtime.hub.sweep()
-    await waitFor(() => warnings(r).length === 1, 5000, 'the day-6 push')
-    r.runtime.hub.sweep()
-    c.set(start + 6 * DAY + 5 * 3_600_000)
-    r.runtime.hub.sweep()
-    expect(warnings(r)).toHaveLength(1)
+      c.set(start + 6 * DAY + 3_600_000)
+      r.runtime.hub.sweep()
+      await waitFor(() => warnings(r).length === 1, 5000, 'the day-6 push')
+      r.runtime.hub.sweep()
+      c.set(start + 6 * DAY + 5 * 3_600_000)
+      r.runtime.hub.sweep()
+      expect(warnings(r)).toHaveLength(1)
 
-    // a restart keeps the "already warned" state (it is in the store, not in memory)
-    const first = r.transport.sent.length
-    await r.stopKeepData()
-    relay = await startTestRelay({ clock: c, dir })
-    relay.runtime.store.putSub(SUB)
-    relay.runtime.hub.sweep()
-    expect(relay.transport.sent.length).toBe(0)
-    expect(first).toBe(1)
+      // a restart keeps the "already warned" state (it is in the store, not in memory)
+      const first = r.transport.sent.length
+      await r.stopKeepData()
+      relay = await startTestRelay({ clock: c, dir })
+      relay.runtime.store.putSub(SUB)
+      relay.runtime.hub.sweep()
+      expect(relay.transport.sent.length).toBe(0)
+      expect(first).toBe(1)
 
-    // the Mac comes back and takes the message: the episode is over, and the next one warns afresh
-    const k2 = kit(relay)
-    const app2 = await k2.connectedApp({ visible: false })
-    const bridge = await k2
-      .bridge({ pinnedDevices: { [app2.device.deviceId]: app2.device.publicJwk }, autoReply: false })
-      .connect()
-    await bridge.expectFrame('message', (f) => f.text === 'first', { direction: 'in' })
-    await waitFor(() => relay?.runtime.store.oldestUndeliveredOwner() === null, 5000, 'delivered')
-    relay.runtime.hub.sweep()
-    await bridge.close()
-    await waitFor(() => !relay?.runtime.hub.bridgeOnline(), 5000, 'gone again')
-    const t2 = c.now()
-    await app2.sendMessage('general', 'second')
-    await waitFor(() => relay?.runtime.store.oldestUndeliveredOwner() !== null, 5000, 'second queued')
-    c.set(t2 + 6 * DAY + 3_600_000)
-    relay.runtime.hub.sweep()
-    await waitFor(() => (relay ? warnings(relay).length === 1 : false), 5000, 'the second episode push')
-    void k
-  })
+      // the Mac comes back and takes the message: the episode is over, and the next one warns afresh
+      const k2 = kit(relay)
+      const app2 = await k2.connectedApp({ visible: false })
+      const bridge = await k2
+        .bridge({ pinnedDevices: { [app2.device.deviceId]: app2.device.publicJwk }, autoReply: false })
+        .connect()
+      await bridge.expectFrame('message', (f) => f.text === 'first', { direction: 'in' })
+      await waitFor(() => relay?.runtime.store.oldestUndeliveredOwner() === null, 5000, 'delivered')
+      relay.runtime.hub.sweep()
+      await bridge.close()
+      await waitFor(() => !relay?.runtime.hub.bridgeOnline(), 5000, 'gone again')
+      const t2 = c.now()
+      await app2.sendMessage('general', 'second')
+      await waitFor(() => relay?.runtime.store.oldestUndeliveredOwner() !== null, 5000, 'second queued')
+      c.set(t2 + 6 * DAY + 3_600_000)
+      relay.runtime.hub.sweep()
+      await waitFor(() => (relay ? warnings(relay).length === 1 : false), 5000, 'the second episode push')
+      void k
+    },
+    t(100_000),
+  )
 })
 
 describe('D38 review findings', () => {

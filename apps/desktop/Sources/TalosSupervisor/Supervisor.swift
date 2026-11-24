@@ -50,7 +50,7 @@ public final class Supervisor: @unchecked Sendable {
   var updateRestartedFor: String?
   var launch: Launch?  // written by the tick, and by the Mac popup's click (SupervisorDevPopup.swift), both on `q`
   /// The just-exited child's group and leader start time. Cleared once a stop completes.
-  private var previousChild: (pgid: Int32, start: Double)?
+  var previousChild: (pgid: Int32, start: Double)?
   var loop: CrashLoop
   /// The auto-answers of cold starts (`Timings.coldConfirmCap`), apart from `loop`'s crash-loop count.
   var coldLoop: CrashLoop
@@ -58,7 +58,7 @@ public final class Supervisor: @unchecked Sendable {
   /// exit is not a crash: it never spends the crash loop's cap and never ends in `.crashLoop` (which brings the automatic restore).
   private var cleanExits: [Double] = []
   /// The restart now waiting follows an exit with code 0: it is not recorded in the crash loop, and its launch is marked.
-  private var restartAfterCleanExit = false
+  var restartAfterCleanExit = false
   /// The next launch resumes this id: `--session-id` of it was refused as already in use (`sessionTrouble`). Spent by that launch.
   private var forceResume: String?
   /// Session errors already mended once (`inuse:<id>`, `empty:<id>`): never twice, so they cannot loop.
@@ -71,13 +71,15 @@ public final class Supervisor: @unchecked Sendable {
   private var restartIsRetry = false
   /// Set around the launch `doRestart` makes: a launch that cannot even begin then (the channels are held, no claude, no folder) is
   /// a failed attempt that is tried again, not the end.
-  private var restartingAfterCrash = false
+  var restartingAfterCrash = false
+  /// What tmux did not answer (`TmuxDoubt`): a pending start, an unanswered attach, the unanswered looks.
+  var doubt = TmuxDoubt()
   /// `desktop.json` was there and could not be read when this supervisor was made. Fixed for its lifetime: the app chose its host and
   /// its workers from the defaults too, so nothing is started and nothing is saved until the owner has fixed the file and reopened Talos.
   let configUnreadable: Bool
-  private var attempt = -1
+  var attempt = -1
   private var cleanup: Cleanup?
-  private var restartAt: Double?
+  var restartAt: Double?
   private var stopDeadline: Double?
   private var stopThen: StopReason = .user
   private var stopCloseHost = true
@@ -86,7 +88,7 @@ public final class Supervisor: @unchecked Sendable {
   var needsYou: NeedsYou?
   var agentActivity: String?
   private var lastExit: ExitInfo?
-  private var nextRestartIsCold = false
+  var nextRestartIsCold = false
   /// Set by `startAnyway()` for the one cold launch that follows it; spent by that launch (or cleared right after it).
   private var skipTakeoverOnce = false
   /// Restart and restore requests, and the automatic restore (SupervisorRecovery.swift).
@@ -175,6 +177,13 @@ public final class Supervisor: @unchecked Sendable {
     q.async {
       self.detached = false
       if self.attachLocked() { return }
+      // tmux did not answer: nothing is running that we know of, and nothing is started over one that may be
+      if self.doubt.attachUnknown {
+        self.doubt.attachRetry = allowColdStart
+        self.audit("attach_unanswered", [:])
+        self.publish()
+        return
+      }
       if allowColdStart { self.startColdLocked() }
     }
   }
@@ -187,6 +196,14 @@ public final class Supervisor: @unchecked Sendable {
   /// spent by the next launch attempt of any kind, so a later start is checked again.
   public func startAnyway() {
     q.async {
+      // The owner's way out while tmux does not answer: one start goes ahead over the unknown session.
+      if self.doubt.attachRetry != nil {
+        self.doubt.attachRetry = nil
+        self.host.allowStartOverUnknown()
+        self.audit("start_anyway_unanswered", [:])
+        self.startColdLocked()
+        return
+      }
       guard case .blocked(let blockers) = self.phase, !blockers.contains(where: { $0.resource == .telegram }) else {
         self.audit("start_anyway_refused", ["phase": "\(self.phase)"])
         return
@@ -231,6 +248,8 @@ public final class Supervisor: @unchecked Sendable {
   public func detach() {
     q.sync {
       self.detached = true
+      self.doubt.pendingAdopt = nil
+      self.doubt.attachRetry = nil
       self.timer?.cancel()
       self.timer = nil
       self.syncNapGuard()
@@ -246,7 +265,7 @@ public final class Supervisor: @unchecked Sendable {
   /// re-attaches after the active one restarts the pane, so a crash gets one restart and at most one Enter.
   private var lockFd: Int32 = -1
   private var detached = false
-  private var passiveReattach = false
+  var passiveReattach = false
   public var holdsSessionLock: Bool { statusLock.withLock { _holdsLock } }
   private var _holdsLock = false
 
@@ -312,7 +331,7 @@ public final class Supervisor: @unchecked Sendable {
     audit("config_unreadable_refused", ["what": what])
     if isStart, !isLive {
       phase = .stopped(.startFailed(SupervisorNotice.configUnreadableShort))
-      publish()
+      publish(); postStartLine(.couldNotStart) { SupervisorNotice.couldNotStartLine(agentName: $0) }
     }
     emit(.configUnreadable)
     return true
@@ -405,53 +424,21 @@ public final class Supervisor: @unchecked Sendable {
     }
   }
 
-  private func attachLocked() -> Bool {
-    guard !configUnreadable else { return false }  // not even watched: a crash would be restarted from the defaults
-    guard host.attachIfRunning(), let pid = host.childPid else { return false }
-    passiveReattach = false
-    let snap = probe.snapshot(pid)
-    // Without the lock this supervisor only watches (passive): it owns no group, so it can never signal one.
-    let owner = tryLock()
-    if owner { signaller.own(pid, leaderStart: snap?.startTime ?? 0) }
-    previousChild = nil
-    let claude = resolveClaude(env: launchEnv())
-    let fp = launchFingerprint(config, claude ?? config.claudePath)
-    let markerFp = host.marker("talos_launch")
-    let markerSession = host.marker("talos_session")
-    // A pane launched with another command or conversation keeps running, but its next restart is cold.
-    if markerFp != fp || markerSession == nil || markerSession != config.session.id { nextRestartIsCold = true }
-    // The pane may still be sitting on the development-channels warning (the app quit, crashed or was updated while Main was
-    // starting). It is not running then: the start goes on from here, so the owner gets the card and the popup. Only the live warning
-    // counts (its shape at the bottom of the screen, not the words in a transcript), only for the copy that holds the lock (a
-    // passive one never types), and a screen that could not be read says nothing. The Mac never presses the Enter for an attached
-    // start by itself: an earlier copy of the app may already have pressed it, and the rule is never twice (`awakeStartedAt`
-    // puts this start outside the auto-accept's window whatever else matches).
-    let waiting = owner && DialogMatcher.liveDevChannels(host.visibleRows() ?? [])
-    // What the pane was launched with is known only when its marker is the launch the config names now.
-    let sameLaunch = markerFp == fp
-    launch = Launch(
-      kind: .attached, resumeId: config.session.id, sessionId: markerSession ?? config.session.id ?? "",
-      startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: markerFp ?? "",
-      parts: sameLaunch ? launchParts(config, claude ?? config.claudePath) : [:], launchedArgs: sameLaunch ? config.args : nil, cliVersion: nil,
-      expectsDevDialog: waiting, launchedChannels: sameLaunch ? AutoConfirmGuard.channels(inArgv: config.args) : [],
-      awakeStartedAt: -.infinity, devDialogSeen: nil, dialogAnswered: !waiting, agentDir: config.expandedAgentDir(home: options.home))
-    launch?.narrowed = MainNarrowed.found(
-      argv: snap?.argv, env: snap?.env, sameLaunch: sameLaunch, configured: MainNarrowed.mode(args: config.args, env: launchEnv()))
-    phase = waiting ? .starting : .running
-    needsYou = nil
-    audit("attach", ["pid": "\(pid)", "warning": waiting ? "live" : "no"])
-    emit(.attached(pid: pid))
-    publish()
-    return true
-  }
-
   func startColdLocked() {
     switch phase {
-    case .starting, .running, .cleaningUp, .waitingToRestart, .stopping: return
+    case .starting, .running, .cleaningUp, .waitingToRestart, .stopping:
+      // a start waiting for tmux keeps waiting; pressing Start says so (the status) and never drops it
+      if doubt.pendingAdopt != nil {
+        doubt.unreachable.ownerAsked = true
+        publish()
+      }
+      return
     default: break
     }
     guard !refusesForUnreadableConfig("start") else { return }
-    guard tryLock() else { return fail(.startFailed("another Talos instance supervises this session")) }
+    guard tryLock() else { return fail(.startFailed(SupervisorNotice.anotherInstanceDetail)) }
+    if holdsForUnansweredAttach() { return }
+    doubt.attachRetry = nil
     attempt = -1
     cannotLaunchTries = 0
     restartIsRetry = false
@@ -460,7 +447,7 @@ public final class Supervisor: @unchecked Sendable {
     launchLocked(kind: .cold)
   }
 
-  private func launchLocked(kind: StartKind) {
+  func launchLocked(kind: StartKind) {
     let env = launchEnv()
     guard let claude = resolveClaude(env: env) else {
       if retriesRestart(.claudeMissing) { return }
@@ -527,15 +514,49 @@ public final class Supervisor: @unchecked Sendable {
     refreshGuards(env: env)
     // optional guards (talos-app install-guards): added when installed; a --settings of the owner's own wins and is warned about
     // and Claude Code's own computer use off (Talos's screen tools replace it), in the same one --settings
-    let guarded = GuardsSettings.applyingToMain(to: args, talosHome: talosAppHome, cwd: cwd)
-    args = guarded.args
-    for w in guarded.warnings { audit("guards_not_applied", ["why": w]) }
-    // Main runs with Claude Code's own computer use on: the owner hears it once per run, not only the audit log
-    if guarded.warnings.contains(where: { $0.hasSuffix(GuardsSettings.notDenied) }), !computerUseNotDeniedTold {
-      computerUseNotDeniedTold = postToPhone { _ in GuardsSettings.notDeniedPhoneLine }
-    }
+    // (the OS sandbox switch rides in the same settings, and a start that cannot carry it does not happen: OsSandboxLaunch.swift)
+    if let why = mainGuards(&args, env: env, cwd: cwd) { return fail(.startFailed(why)) }
     let version = probe.cliVersion(claude: claude, env: env)
+    if let why = sandboxRecheck(env: env, cwd: cwd, args: args) { return fail(.startFailed(why)) }
 
+    let afterCleanExit = launchingAfterCleanExit
+    func finish(_ pid: Int32) {
+      let snap = probe.snapshot(pid)
+      signaller.own(pid, leaderStart: snap?.startTime ?? 0)
+      migrateChannelsFlagSeal(claude: claude)
+      let fp = launchFingerprint(config, claude)
+      host.setMarker("talos_launch", fp)
+      host.setMarker("talos_session", sessionId)
+      let expects = MainChannelFlag.passes(args)
+      launch = Launch(
+        kind: kind, resumeId: { if case .resume(let id) = mode { return id } else { return nil } }(),
+        sessionId: sessionId, startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: fp,
+        parts: launchParts(config, claude), launchedArgs: config.args, cliVersion: version,
+        expectsDevDialog: expects, launchedChannels: AutoConfirmGuard.channels(inArgv: args), awakeStartedAt: options.awake(),
+        devDialogSeen: nil, startedWallMs: options.wallClock(), agentDir: cwd, afterCleanExit: afterCleanExit)
+      launch?.narrowed = MainNarrowed.mode(args: args, env: env)
+      lastAgentsPollAt = -.infinity
+      cannotLaunchTries = 0
+      needsYou = nil
+      phase = expects ? .starting : .running
+      audit(
+        "start",
+        ["kind": kind.rawValue, "pid": "\(pid)", "session": sessionId, "resume": launch?.resumeId == nil ? "no" : "yes"])
+      publish()
+    }
+    // What a failed start means (also what a pending start that turns out to have exited means, with the rows its dead pane left).
+    func handleStartError(_ error: Error) {
+      // the child was gone before its pid could be read: the same two mends as an exit at the start, then the launch again
+      if case PtyHostError.exitedImmediately(let rows) = error, sessionTrouble(mode, sessionId, folder: cwd, env: env, rows: rows) {
+        return launchLocked(kind: kind)
+      }
+      if resumeMissingAtStart(error, mode) { return }
+      // tmux did not answer: the agent may run. Not a crash, not a failed start, never started again (`adoptPendingTick` decides later).
+      if handleUnreadableStart(error, kind: kind, finish: finish, exited: { rows in handleStartError(PtyHostError.exitedImmediately(rows: rows)) }) { return }
+      // A restart whose child dies before its pid can be read is a crash like any other (it counts toward the cap); an owner's start ends at once.
+      if restartingAfterCrash { return crashedWithoutChild(String(describing: error)) }
+      return fail(.startFailed("\(error)"))
+    }
     do {
       // A cold start refuses a live pane; a restart replaces the dead one in place (tmux respawn-pane).
       if kind == .cold {
@@ -544,42 +565,13 @@ public final class Supervisor: @unchecked Sendable {
         try host.restart(executable: claude, args: args, env: env, cwd: cwd)
       }
     } catch {
-      // the child was gone before its pid could be read: the same two mends as an exit at the start, then the launch again
-      if case PtyHostError.exitedImmediately(let rows) = error, sessionTrouble(mode, sessionId, folder: cwd, env: env, rows: rows) {
-        return launchLocked(kind: kind)
-      }
-      if resumeMissingAtStart(error, mode) { return }
-      // A restart whose child dies before its pid can be read is a crash like any other: it counts toward the cap.
-      // (Any restart after a crash, a cold one too: the launch changed or the host was lost. Only a start the owner made ends at once.)
-      if restartingAfterCrash { return crashedWithoutChild(String(describing: error)) }
-      return fail(.startFailed("\(error)"))
+      return handleStartError(error)
     }
     guard let pid = host.childPid else {
       if restartingAfterCrash { return crashedWithoutChild("no child pid") }
       return fail(.startFailed("no child pid after start"))
     }
-    let snap = probe.snapshot(pid)
-    signaller.own(pid, leaderStart: snap?.startTime ?? 0)
-    migrateChannelsFlagSeal(claude: claude)
-    let fp = launchFingerprint(config, claude)
-    host.setMarker("talos_launch", fp)
-    host.setMarker("talos_session", sessionId)
-    let expects = MainChannelFlag.passes(args)
-    launch = Launch(
-      kind: kind, resumeId: { if case .resume(let id) = mode { return id } else { return nil } }(),
-      sessionId: sessionId, startedAt: clock.now(), childPid: pid, leaderStart: snap?.startTime ?? 0, fingerprint: fp,
-      parts: launchParts(config, claude), launchedArgs: config.args, cliVersion: version,
-      expectsDevDialog: expects, launchedChannels: AutoConfirmGuard.channels(inArgv: args), awakeStartedAt: options.awake(),
-      devDialogSeen: nil, startedWallMs: options.wallClock(), agentDir: cwd, afterCleanExit: launchingAfterCleanExit)
-    launch?.narrowed = MainNarrowed.mode(args: args, env: env)
-    lastAgentsPollAt = -.infinity
-    cannotLaunchTries = 0
-    needsYou = nil
-    phase = expects ? .starting : .running
-    audit(
-      "start",
-      ["kind": kind.rawValue, "pid": "\(pid)", "session": sessionId, "resume": launch?.resumeId == nil ? "no" : "yes"])
-    publish()
+    finish(pid)
   }
 
   /// A restart after a crash that cannot launch at all right now: another session holds the channels (the dead agent's own
@@ -656,7 +648,7 @@ public final class Supervisor: @unchecked Sendable {
     }
   }
 
-  private func fail(_ reason: StopReason) {
+  func fail(_ reason: StopReason) {
     phase = .stopped(reason)
     audit("start_failed", [:])
     emit(.stopped(reason))
@@ -723,15 +715,20 @@ public final class Supervisor: @unchecked Sendable {
   private func tick() {
     let now = clock.now()
     switch phase {
-    case .starting, .running: superviseLive(now)
+    case .starting where doubt.pendingAdopt != nil: adoptPendingTick(now)
+    case .starting, .running:
+      superviseLive(now)
+      noteHostReads(now)
     case .cleaningUp: continueCleanup(now)
     case .waitingToRestart:
       if let at = restartAt, now >= at {
         restartAt = nil
         doRestart(now)
       }
-    case .stopping: continueStop(now)
+    case .stopping:
+      if doubt.stopRequest != nil { stopRequestTick() } else { continueStop(now) }
     case .idle:
+      if let allow = doubt.attachRetry { attachRetryTick(allow, now) }
       if passiveReattach { _ = attachLocked() }
     default: break
     }
@@ -833,23 +830,6 @@ public final class Supervisor: @unchecked Sendable {
     beginCleanup(pgid: l.childPid, holders: holders, now: now, then: .restart)
   }
 
-  private func crashedWithoutChild(_ why: String) {
-    let now = clock.now()
-    audit("restart_failed", [:])
-    guard loop.mayRestart(now: now) else {
-      postCrashLoopOnce()
-      emit(.stoppedRestarting)
-      return finishStop(.crashLoop, closeHost: false)
-    }
-    attempt += 1
-    let delay = timings.backoff.delay(attempt: attempt, unit: random())
-    restartAt = now + delay
-    restartAfterCleanExit = false
-    phase = .waitingToRestart
-    emit(.restarting(attempt: attempt, delay: delay))
-    publish()
-  }
-
   func beginCleanup(pgid: Int32, holders: [Holder], now: Double, then: AfterCleanup) {
     signaller.signal(pgid, SIGTERM)
     cleanup = Cleanup(pgid: pgid, deadline: now + timings.cleanupWait, holders: holders, then: then)
@@ -913,8 +893,10 @@ public final class Supervisor: @unchecked Sendable {
       emit(.actionRefusedNotOwner)
       return
     }
+    // a retry that stands (an unanswered attach or start) looks first: a Stop never ignores an agent tmux has not answered about
+    if resolveDoubtBeforeStop(reason, closeHost) { return }
     guard let l = launch, isLive else {
-      if reason == .user, host.kind == .tmux, closeHost { host.close() }
+      if reason == .user, host.kind == .tmux, closeHost, !host.closeChecked() { return waitForKill(reason, closeHost) }
       phase = .stopped(reason)
       emit(.stopped(reason))
       publish()
@@ -950,7 +932,7 @@ public final class Supervisor: @unchecked Sendable {
     if let p = previousChild { signaller.release(p.pgid) }
     previousChild = nil
     launch = nil
-    if closeHost { host.close() }
+    if closeHost, !host.closeChecked() { return waitForKill(reason, closeHost) }
     phase = .stopped(reason)
     publish()
     if let e = announcing { emit(e) }  // after the status: a listener that reads it sees the stop
@@ -962,20 +944,22 @@ public final class Supervisor: @unchecked Sendable {
 
   // MARK: plumbing
 
-  func saveConfig() {
+  @discardableResult
+  func saveConfig() -> Bool {
     // The one place the app writes desktop.json, so the rule sits here too, whatever the caller checked: never over a file that
     // could not be read when the app opened (what is in memory then is the defaults, not the owner's setup).
-    guard !configUnreadable else { return audit("config_unreadable_refused", ["what": "save"]) }
+    guard !configUnreadable else { audit("config_unreadable_refused", ["what": "save"]); return false }
     do {
       // A file that has become unreadable since (the app holds the owner's real settings then) is set aside, not overwritten:
       // say where it went (the name only, next to desktop.json).
       if let moved = try ConfigFile.save(config, to: options.configPath) {
         audit("config_unreadable_set_aside", ["file": (moved as NSString).lastPathComponent])
       }
-    } catch { audit("config_save_failed", [:]) }
+      return true
+    } catch { audit("config_save_failed", [:]); return false }
   }
 
-  func emit(_ e: Event) { onEvent?(e) }
+  func emit(_ e: Event) { onEvent?(e); postStartLineIfDue(e) }
 
   func publish() {
     let s = Status(
@@ -985,7 +969,8 @@ public final class Supervisor: @unchecked Sendable {
       ownedGroups: ownedGroupsLocked, agentActivity: phase == .running ? agentActivity : nil, devDialog: launch?.devCard.offer, paneDialog: launch?.paneOffer,
       apiKeyDialog: launch?.apiKeyOffer, safetyDialog: launch?.safetyOffer, safetyPhoneTold: launch?.safetyPhoneTold ?? false,
       devPhoneTold: launch?.devCard.phoneTold ?? false, bridgeLive: launch?.bridgeSeenLive ?? false,
-      configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed, launchPending: launchPendingNow, runningArgs: recovery.confirmedArgs, devStartMode: launchStartMode)
+      configUnreadable: configUnreadable, mainNarrowed: launch?.narrowed, launchPending: launchPendingNow, agentUnreachable: doubt.unreachable.told || doubt.unreachable.ownerAsked,
+      runningArgs: recovery.confirmedArgs, devStartMode: launchStartMode)
     statusLock.withLock { _status = s }
   }
 

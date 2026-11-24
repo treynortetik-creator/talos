@@ -3,7 +3,7 @@ import TalosDesktopCore
 
 /// The permission mode of Main (Mac settings → Session, or the agent's `permission_mode` tool after the owner asked): the saved
 /// launch arguments get ONE permission flag (`PermissionModeSetting`) and a running Main is restarted cold, as the menu's Restart
-/// session does. The changed launch is not the one the owner confirmed, so the new start waits at the development-channel dialog for
+/// session does: at once for the owner's own choice, and for the agent's request once Main is quiet (SupervisorPermissionPending.swift). The changed launch is not the one the owner confirmed, so the new start waits at the development-channel dialog for
 /// his own confirmation (the launch seal); nothing here confirms it.
 extension Supervisor {
   var permissionRequestPath: String { talosAppHome + "/" + PermissionModeRequest.fileName }
@@ -12,6 +12,8 @@ extension Supervisor {
   /// start reads the new arguments). `then` runs on the queue once the arguments are saved.
   public func changePermissionMode(_ mode: PermissionMode, restart: Bool, then: (@Sendable () -> Void)? = nil) {
     let adds = addsChannelsFlagToSaved
+    // the owner's own choice is the last word: a change of the agent's that still waits for it to finish is gone
+    q.async { self.clearPermissionWait() }
     mutateConfig(
       { $0.args = adds ? MainChannelFlag.ensured(PermissionModeSetting.applying(mode, to: $0.args)) : PermissionModeSetting.applying(mode, to: $0.args) },
       then: then)
@@ -82,7 +84,11 @@ extension Supervisor {
       recovery.permissionHandledId = r.controlId
       guard PermissionModeRequestFile.clear(path: permissionRequestPath, ifStill: file) else { return }
       recovery.permissionActedAt = awake
-      guard !configUnreadable else { return audit("permission_mode_request_refused", ["why": "config_unreadable"]) }
+      guard !configUnreadable else {
+        audit("permission_mode_request_refused", ["why": "config_unreadable"])
+        if !postToPhone({ _ in PermissionModeSetting.saveFailedLine(r.mode) }) { audit("permission_mode_phone_line_not_sent", ["mode": r.mode.rawValue]) }
+        return
+      }
       // a launch command with its own permission flags is the owner's: only his own choice in the picker replaces it
       if PermissionModeSetting.read(config.args) == .custom {
         audit("permission_mode_request_refused", ["why": "custom"])
@@ -91,16 +97,34 @@ extension Supervisor {
       }
       let outcome = PermissionModeSetting.evaluate(r.mode, against: config, addsChannelsFlag: addsChannelsFlagToSaved)
       audit("permission_mode_request", ["mode": r.mode.rawValue, "changed": outcome == .unchanged ? "0" : "1"])
+      let atStart = (phase == .running || phase == .starting) && holdsSessionLock
+      let runsIt = launch?.launchedArgs.map(PermissionModeSetting.read) == .mode(r.mode)
       guard case .updated(let args) = outcome else {
-        postToPhone { _ in PermissionModeSetting.alreadyLine(r.mode) }
+        // saved already: "already active" only when the running agent really has it; otherwise the change waits for Main to finish
+        // (also one saved by hand without a restart, which nothing else would apply)
+        let notYet = atStart && !runsIt
+        if notYet { armPermissionWait(r.mode) }  // nothing changes when it already waits
+        postToPhone { _ in notYet ? PermissionModeSetting.alreadySavedLine(r.mode, waiting: true) : PermissionModeSetting.alreadyLine(r.mode) }
         return
       }
+      // save first: a failed save changes nothing and restarts nothing, and the owner is told so
+      let before = config
       config = PermissionModeSetting.applied(config, args: args)
-      saveConfig()
-      let running = isLive && holdsSessionLock
+      guard saveConfig() else {
+        config = before
+        audit("permission_mode_request_refused", ["why": "save_failed"])
+        if !postToPhone({ _ in PermissionModeSetting.saveFailedLine(r.mode) }) { audit("permission_mode_phone_line_not_sent", ["mode": r.mode.rawValue]) }
+        return
+      }
+      var apply = PermissionModeSetting.Apply.nextStart
+      clearPermissionWait()  // a change still waiting is replaced: the last one wins
+      if atStart && !runsIt {
+        armPermissionWait(r.mode)
+        apply = .whenIdle
+      }
+      let line = atStart && runsIt ? PermissionModeSetting.keepsRunningLine(r.mode) : PermissionModeSetting.changedLine(r.mode, apply: apply)
       // posted whatever else happens (a visible row; for Bypass all it is the owner's only sight of it): a post that cannot start is logged
-      if !postToPhone({ _ in PermissionModeSetting.changedLine(r.mode, restarting: running) }) { audit("permission_mode_phone_line_not_sent", ["mode": r.mode.rawValue]) }
-      if running { restartColdIfLive() }
+      if !postToPhone({ _ in line }) { audit("permission_mode_phone_line_not_sent", ["mode": r.mode.rawValue]) }
     }
   }
 }

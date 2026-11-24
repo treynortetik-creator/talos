@@ -20,8 +20,8 @@ public enum UpdateStatus: Equatable, Sendable {
   /// The owner pressed Update now, and the update goes in the moment the turn that is running ends (or typing stops).
   /// `why`: the quiet rule's raw reasons that still hold it (never Main's draft: the owner's ask overrides that). `draft`: what happens to
   /// the unsent text in Main's box (it is kept and put back after the restart, or Talos could not keep it).
-  /// `threads`: Main is quiet and only thread agents (or their background work) are left; they get a limited wait, and the window
-  /// offers Update now anyway. nil whenever Main itself still holds the update: that wait cannot be skipped.
+  /// `threads`: Main is quiet and only thread agents (or their background work) are left; they are waited for like Main (the same
+  /// 2 hours), and the window offers Update now anyway. nil whenever Main itself still holds the update: that wait cannot be skipped.
   case waitingForTurn(version: String, why: [String] = [], draft: DraftPlan = .none, threads: ThreadWait? = nil)
   /// The Talos code folder is moving to the new version and its packages are installing.
   case preparing(version: String)
@@ -43,23 +43,27 @@ public enum UpdateStatus: Equatable, Sendable {
   /// The check itself got no answer; the window says why in plain words and offers Try again.
   case couldntCheck(CheckProblem)
 
-  /// The thread agents an Update now is still waiting for: their display names (empty when only background work is left) and the
-  /// longest wait in whole minutes.
+  /// The thread agents an Update now is still waiting for: their display names (empty when none is known). It waits as it waits for
+  /// Main (the same 2-hour limit, then it says so); only the owner's Update now anyway goes ahead sooner.
   public struct ThreadWait: Equatable, Sendable {
     public var names: [String]
-    public var minutes: Int
-    public init(names: [String], minutes: Int = 5) {
+    /// What holds it is something running in the background, with no thread named.
+    public var background: Bool
+    public init(names: [String], background: Bool = false) {
       self.names = names
-      self.minutes = minutes
+      self.background = background
     }
-    /// "Waiting for Trip to finish (up to 5 minutes)", or "your thread agents" for several (or none named).
+    /// "Waiting for Trip to finish", "Waiting for your thread agents to finish" for several or when none is named, or "Waiting for
+    /// background work in your threads to finish" when only something running in the background is left.
     public var line: String {
+      if names.isEmpty && background { return "Waiting for background work in your threads to finish" }
+      if names.isEmpty { return "Waiting for your thread agents to finish" }
       let who = Set(names).count == 1 ? UpdateStatus.one(names[0]) : "your thread agents"
-      return "Waiting for \(who) to finish (up to \(minutes) \(minutes == 1 ? "minute" : "minutes"))"
+      return "Waiting for \(who) to finish"
     }
   }
 
-  /// The button in the waiting line that skips the rest of the thread wait. It is never offered while Main's own turn runs.
+  /// The button in the waiting line that skips the thread wait. It is never offered while Main's own turn runs.
   public static let skipThreadWaitButton = "Update now anyway"
   public var offersSkipThreadWait: Bool {
     if case .waitingForTurn(_, _, _, let t) = self { return t != nil }
@@ -145,7 +149,7 @@ public enum UpdateStatus: Equatable, Sendable {
         return Words(
           headline: threads.line,
           detail:
-            "Talos \(UpdateStatus.one(v)) goes in when they finish, or after \(threads.minutes) \(threads.minutes == 1 ? "minute" : "minutes") at most. Anything they were still working on may be cut off. You can send it again from the thread.\(note)"
+            "Talos \(UpdateStatus.one(v)) goes in when they finish. To go now, press Update now anyway: anything they were still working on is cut off, and you can send it again from the thread.\(note)"
         )
       }
       return Words(
@@ -273,7 +277,10 @@ public enum AboutCopy {
   public static let installButton = "Install"
   /// The check button reads Try again after a check that got no answer.
   public static func checkButtonTitle(_ s: UpdateStatus) -> String {
-    if case .couldntCheck = s { return tryAgainButton }
+    switch s {
+    case .couldntCheck, .failed: return tryAgainButton
+    default: break
+    }
     return checkButton
   }
   public static func version(_ v: String) -> String { "Version \(UpdateRestartLine.oneLine(v))" }

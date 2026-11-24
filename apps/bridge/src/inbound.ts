@@ -682,6 +682,9 @@ export class Inbound {
     return cardsFrames.onCardResolve.apply(this, args)
   }
 
+  applyCliCard(...args: Parameters<typeof cardsFrames.applyCliCard>) {
+    return cardsFrames.applyCliCard.apply(this, args)
+  }
   tellAgent(...args: Parameters<typeof cardsFrames.tellAgent>) {
     return cardsFrames.tellAgent.apply(this, args)
   }

@@ -19,8 +19,9 @@
 // `default` against what the schema really gives.
 
 import { z } from 'zod'
-import { SEND_KINDS } from './always-allow.ts'
+import { ALWAYS_KINDS } from './always-allow.ts'
 import { type AgentConfigT, HHMM, isIanaZone, MAX_SESSION_MODELS, ModelValue } from './config.ts'
+import { OS_SANDBOX_TITLE, osSandboxHelpLines } from './dev.ts'
 import { IsoTs, ThreadId } from './ids.ts'
 import { THREAD_TOPIC_MAX, type ThreadT } from './models.ts'
 import { themeProblems, validateTheme } from './theme.ts'
@@ -442,7 +443,7 @@ export const SETTINGS_TABLE = defineSettingsTable({
   // "Lock Talos settings": the agent may turn it ON when asked (true is the only value it may propose); only the owner turns it
   // off, from the app or at the computer. On, the agent changes nothing itself (config-propose/service.ts).
   // "Always allow" (always-allow.ts): the owner's, from a card's third button or Settings (a signed tap). Through the agent, ADDING
-  // a kind is always a one-tap card "Always allow <kind>" (a standing grant to send or pay as him: never from the two-hour window,
+  // a kind is always a one-tap card "Always allow <kind>" (a standing grant to approve, send or pay as him: never from the two-hour window,
   // Pantheon 2026-11-14); REMOVING one is made at once when he asks. The agent names kinds; the bridge writes the entries.
   always_allow: {
     phone: 'leaf',
@@ -450,9 +451,9 @@ export const SETTINGS_TABLE = defineSettingsTable({
     risk: 'high',
     agentRule: {
       label: 'Always allowed',
-      phrase: 'which kinds of sending are always allowed',
-      hint: `a list of kinds from ${SEND_KINDS.join(', ')}; [] for none`,
-      value: z.array(z.enum(SEND_KINDS)).max(SEND_KINDS.length),
+      phrase: 'which kinds of approvals are always allowed',
+      hint: `a list of kinds from ${ALWAYS_KINDS.join(', ')}; [] for none`,
+      value: z.array(z.enum(ALWAYS_KINDS)).max(ALWAYS_KINDS.length),
       read: (c) => (c.always_allow ?? []).map((e) => e.kind),
       patch: (v) => ({ always_allow: [...new Set(v as string[])].map((kind) => ({ kind, destination: null })) }),
       show: (v) => (Array.isArray(v) && v.length ? v.join(', ') : 'none'),
@@ -489,6 +490,23 @@ export const SETTINGS_TABLE = defineSettingsTable({
       show: onOff,
     },
     default: true,
+  },
+  // The opt-in OS sandbox ("Extra lock on protected files"): Main and thread sessions start inside Claude Code's sandbox, so the files
+  // that guard the Talos home are unwritable at the kernel. Turning it off weakens a guard, so a high row, like the thread fence;
+  // takes effect at each session's next start. Absent reads as off.
+  os_sandbox: {
+    phone: 'leaf',
+    agent: true,
+    risk: 'high',
+    agentRule: {
+      label: OS_SANDBOX_TITLE,
+      phrase: 'the extra lock on protected files (OS sandbox)',
+      hint: `${osSandboxHelpLines().join(' ')}. true (on: sessions start in an OS sandbox from their next start, and agents cannot edit their own instruction files such as CLAUDE.md) or false (off)`,
+      value: z.boolean(),
+      show: onOff,
+      read: (c) => c.os_sandbox === true,
+    },
+    default: undefined,
   },
   settings_lock: {
     phone: 'leaf',

@@ -99,9 +99,10 @@
                   "2026-10-07T07:30:00-04:00"
                 ],
                 "tz": "America/New_York"
-              }
+              },
+              "own_risk": "low"
             },
-            "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+            "payload_hash": "sha256:797dc6de074deca7f9e65c21774067d0015e78b6cce4b63b9d211bbb6ee2652a",
             "state": "pending",
             "created_at": "2026-10-05T11:00:00.300Z",
             "expires_at": "2026-10-06T11:00:00.300Z",
@@ -123,7 +124,7 @@
           "ts": "2026-10-05T11:00:00.300Z",
           "card_id": "c_00000000000000000000000004",
           "action": "primary",
-          "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+          "payload_hash": "sha256:797dc6de074deca7f9e65c21774067d0015e78b6cce4b63b9d211bbb6ee2652a",
           "device_id": "d_aaaaaaaaaaaaaaaaaaaa",
           "osig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         }
@@ -148,7 +149,7 @@
             "action": "primary",
             "at": "2026-10-05T11:00:00.300Z",
             "edited": false,
-            "payload_hash": "sha256:8f68bd01d3e9b92f43ff328d5a765d92fb47b8bd6a144c685f4ec18f77397582",
+            "payload_hash": "sha256:797dc6de074deca7f9e65c21774067d0015e78b6cce4b63b9d211bbb6ee2652a",
             "taken_at": "2026-10-05T11:00:00.300Z"
           }
         },

@@ -281,4 +281,37 @@ struct AutoUpdateCoreTests {
   @Test func aGonePaneGivesNothing() {
     #expect(BackgroundWork.offenders(Self.table, panes: [999, 0, 1]).isEmpty)
   }
+
+  // MARK: the apply script's refusals (--preflight, --prepare, --swap) in the owner's words
+
+  @Test func theScriptsRefusalsHaveTheirOwnPlainWords() {
+    let want: [(String, AutoUpdate.Failure, String)] = [
+      ("checkout", .checkout, "the Talos code folder could not be moved to the new version"),
+      ("checkout-config", .checkoutConfig, "the Talos code folder has settings of its own that Talos does not trust, so it was left alone"),
+      ("dirty", .dirty, "the Talos code folder has changes of its own"),
+      ("local-commits", .localCommits, "the Talos code folder has changes of its own that are not in the new version"),
+      ("older-release", .olderRelease, "the new version is older than the Talos code folder"),
+    ]
+    for (raw, f, words) in want {
+      #expect(AutoUpdate.Failure(rawValue: raw) == f, Comment(rawValue: raw))
+      #expect(f.words == words, Comment(rawValue: raw))
+      #expect(MacWords.forbiddenWords(in: f.words).isEmpty, "no engineer word in \u{201C}\(f.words)\u{201D}")
+      #expect(!f.words.lowercased().contains("git") && !f.words.lowercased().contains("config"), Comment(rawValue: f.words))
+    }
+    #expect(AutoUpdate.failedLine("1.5.0", why: .olderRelease, old: "1.4.0") == "Talos couldn\u{2019}t update to 1.5.0: the new version is older than the Talos code folder. It\u{2019}s still on 1.4.0.".replacingOccurrences(of: "\u{2019}", with: "'"))
+  }
+
+  @Test func aSwapThatRefusedACheckoutItWillNotTouchIsNotRestoredAgain() {
+    let p = AutoUpdate.Pending(
+      version: "1.5.0", old_version: "1.4.0", checkout: "/home/alex/talos", old_ref: "main", old_head: String(repeating: "a", count: 40),
+      helper_pid: 1, started_at: "2026-11-21T10:00:00Z")
+    // exit 21, why checkout-config, restored false: nothing can put it back safely, and the way back would refuse it just the same
+    let refused = AutoUpdate.settle(pending: p, result: .init(ok: false, why: "checkout-config", restored: false), running: "1.4.0", helperAlive: false)
+    #expect(refused == .failed(.checkoutConfig, restoreCheckout: false))
+    // the control: any other swap failure that could not put the checkout back is tried once more by the app
+    let other = AutoUpdate.settle(pending: p, result: .init(ok: false, why: "checkout", restored: false), running: "1.4.0", helperAlive: false)
+    #expect(other == .failed(.checkout, restoreCheckout: true))
+    let local = AutoUpdate.settle(pending: p, result: .init(ok: false, why: "local-commits", restored: false), running: "1.4.0", helperAlive: false)
+    #expect(local == .failed(.localCommits, restoreCheckout: true))
+  }
 }

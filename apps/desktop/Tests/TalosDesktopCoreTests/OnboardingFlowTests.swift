@@ -505,9 +505,9 @@ struct OnboardingFlowTests {
     #expect(!OnboardingMarker.isPending(home: home))
   }
 
-  @Test func chronosIsAddedWithItsOwnRunAndNeverBlocksTheAgent() {
-    let a = AgentFolderSetup.chronosArguments(repo: "/home/alex/talos", dir: "/home/alex/talos-agent")
-    #expect(a == ["/home/alex/talos/install.sh", "--agent-dir", "/home/alex/talos-agent", "--no-app", "--yes", "--with-chronos"])
-    #expect(!AgentFolderSetup.installArguments(repo: "/r", dir: "/d").contains("--with-chronos"))  // Create itself stays as it was
+  @Test func createIsTheOnlyInstallerRunAndAsksForNoSchedulerOfItsOwn() {
+    // the scheduler is added by that one run (kit/install.sh), never by a second run with --with-chronos
+    #expect(AgentFolderSetup.installArguments(repo: "/home/alex/talos", dir: "/home/alex/talos-agent")
+      == ["/home/alex/talos/install.sh", "--agent-dir", "/home/alex/talos-agent", "--no-app", "--yes"])
   }
 }

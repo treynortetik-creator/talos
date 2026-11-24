@@ -5,6 +5,7 @@
 import { join } from 'node:path'
 import {
   cardNotice,
+  cardOffersAlways,
   checkNativeAct,
   clipUnits,
   type ErrorCodeT,
@@ -15,6 +16,7 @@ import {
 } from '@talos-app/protocol'
 import { isRuleAskCard } from './action-rule-asks.ts'
 import { addFromOwnerTap } from './always-allow.ts'
+import { type CardCliResult, hasCliField, runCardCli } from './card-cli.ts'
 import type { LedgerRow, ResolutionRecord } from './cards-ledger.ts'
 import { localClock } from './clock-meta.ts'
 import { postSystemNotice, threadRef } from './context.ts'
@@ -94,6 +96,9 @@ export const cardsFrames = {
       return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'update_resend_card')
     if (row && isPermissionModeCard(row.binding))
       return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'permission_mode_card')
+    // a card with talos-app commands on it is approved in the app: only his signed card.resolve there runs them (card-cli.ts)
+    if (row && hasCliField(row.binding))
+      return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'cli_card')
     // Approvals bind what was shown. The words the notification displayed are rebuilt here from THIS Mac's copy of the
     // card; the phone signed a hash of what it displayed. A relay that sealed other words, or a card that cannot be shown
     // whole in a notification, is refused. (A card the ledger does not know falls through to the normal resolve refusal.)
@@ -138,6 +143,14 @@ export const cardsFrames = {
       ctx.log.security('dialog card resolve refused', { card_id: f.card_id, code: dlg.code })
       return this.reject(it, dlg.code, dlg.reason)
     }
+    // "Always allow" is refused whole, before the ledger moves, on a card that does not offer it (a question card, a permission
+    // card, a card a notification cannot approve, a settings card that touches a trust key): the card stays pending. On Kill or
+    // Ask for changes the flag is ignored, as it always was (it rides only on a primary tap, which is the only one that adds).
+    if (f.always === true) {
+      const known = ctx.ledger.get(f.card_id)
+      if (known && f.action === 'primary' && !cardOffersAlways(known.binding))
+        return this.reject(it, 'bad_frame', 'this card does not offer Always allow')
+    }
     const out = ctx.ledger.resolve(
       {
         card_id: f.card_id,
@@ -179,6 +192,14 @@ export const cardsFrames = {
       await ctx.dialogs?.onResolved(row, dlg.choice, it.raw)
       return this.done(it)
     }
+    // "Always allow <kind>" (always-allow.ts): only the owner's own signed tap in the app (never a notification's Approve), on the
+    // primary button of a card that offers it (checked before the ledger moved), after the signature and the ledger checks above.
+    // A rule-ask card records its own grant when it is answered (action-rule-asks.ts). This runs BEFORE the handler applies the card,
+    // so a grant is saved even if the apply then fails: accepted, the owner did choose "always" for that kind.
+    if (f.always === true && f.action === 'primary' && it.frame.type === 'card.resolve' && !isRuleAskCard(row.binding))
+      await addFromOwnerTap(ctx, row.binding.kind, row.thread_id).catch((e) =>
+        ctx.log.warn('always allow not recorded', { card: f.card_id, error: (e as Error).message }),
+      )
     if (pre.handled) {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       const sent = await ctx.permission.onResolved(row, f.action)
@@ -199,6 +220,10 @@ export const cardsFrames = {
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)
     }
+    // A card that names talos-app commands (card-cli.ts): the agent is never told to run them. The BRIDGE runs what the owner was
+    // shown, here, only on his signed card.resolve; Kill and Ask for changes go to the agent as for any card.
+    if (f.action === 'primary' && row.actor === 'agent' && hasCliField(row.binding))
+      return this.applyCliCard(it, row, out.resolution, nowMs)
     let payloadPath: string | undefined
     if (f.action === 'primary') {
       payloadPath = join(ctx.paths.approved, `${f.card_id}.json`)
@@ -266,12 +291,6 @@ export const cardsFrames = {
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)
     }
-    // "Always allow <kind>" (always-allow.ts): only the owner's own signed tap in the app (never a notification's Approve), on the
-    // primary button of one of the agent's own cards of a send kind, after the signature and the ledger checks above
-    if (f.always === true && f.action === 'primary' && it.frame.type === 'card.resolve' && row.actor === 'agent')
-      await addFromOwnerTap(ctx, row.binding.kind, row.thread_id).catch((e) =>
-        ctx.log.warn('always allow not recorded', { card: f.card_id, error: (e as Error).message }),
-      )
     // ONE attempt to tell the agent, never repeated. The `telling` marker was written with `resolved`; it is cleared when the
     // write returns, either way. A marker found at startup means the process died mid-write (see `sweepInterrupted`).
     // 'resolved' goes out before the write: a card ended while the write is pending sends 'failed', and every app keeps the
@@ -286,6 +305,45 @@ export const cardsFrames = {
         "Your agent didn't get this, so nothing ran. Ask it again when it's back.",
         false,
       )
+    this.done(it)
+  },
+
+  /**
+   * Runs the commands of an approved card (card-cli.ts), posts what they printed to the card's thread and records the result in the
+   * ledger. The `telling` marker stays until the end: a bridge that dies mid-run leaves it, and startup ends the card as "may have run".
+   */
+  async applyCliCard(this: Inbound, it: Item, row: LedgerRow, resolution: ResolutionRecord, nowMs: number) {
+    const { ctx } = this
+    this.fire(cardUpdateFrame(nowMs, { card_id: row.id, state: 'resolved', resolution }))
+    let r: CardCliResult
+    try {
+      if (it.frame.type !== 'card.resolve') {
+        const text = 'Open this card in the app to approve it, so nothing was run.'
+        r = { ok: false, ran: 0, text, owner: text }
+      } else {
+        const { runCli } = await import('./cli-main.ts')
+        r = await runCardCli(ctx, row, runCli)
+      }
+    } catch (e) {
+      const text = `Nothing was confirmed: ${(e as Error).message}`
+      r = { ok: false, ran: 0, text, owner: text }
+    }
+    ctx.log.security('card commands run', { card: row.id, thread: row.thread_id, ok: r.ok, ran: r.ran })
+    ctx.ledger.settled(row.id)
+    if (ctx.ledger.finish(row.id, r.ok))
+      this.fire(
+        cardUpdateFrame(ctx.clock.now(), {
+          card_id: row.id,
+          state: r.ok ? 'done' : 'failed',
+          result: { ok: r.ok, text: r.owner, at: new Date(ctx.clock.now()).toISOString(), ran: r.ran > 0 },
+        }),
+      )
+    // The thread gets the summary only: a message there is something the agent reads back (read_thread). What the commands printed is
+    // in the card's own result for the owner.
+    const title = clipUnits(oneLine(row.binding.title), 80)
+    await postSystemNotice(ctx, `"${title}": ${r.text}`, { thread: threadRef(ctx, row.thread_id) }).catch((e) =>
+      ctx.log.warn('card output not posted', { error: (e as Error).message }),
+    )
     this.done(it)
   },
 
@@ -388,7 +446,14 @@ export const cardsFrames = {
       if (frameId) ctx.store.markSeen(frameId, ctx.clock.now())
       const row = ctx.ledger.get(cardId)
       if (row?.state !== 'resolved' || !row.resolution) continue
-      this.endUndelivered(row, row.resolution, 'This may not have reached your agent. Check before asking again.', true)
+      this.endUndelivered(
+        row,
+        row.resolution,
+        hasCliField(row.binding)
+          ? 'Talos stopped while running this card. Some of it may have run: check before asking again.'
+          : 'This may not have reached your agent. Check before asking again.',
+        true,
+      )
     }
   },
 

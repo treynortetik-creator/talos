@@ -168,7 +168,8 @@ describe('root install.sh pre-flight: versions too old (stub binaries)', () => {
     (tmux) => {
       const sb = sandbox()
       put(sb, 'tmux', `echo "${tmux}"`)
-      put(sb, 'bun', 'echo 1.4.4')
+      // asked its version it says 1.4.4; asked to run the pre-flight's one-line script (a bun that runs nothing is refused) it runs it
+      put(sb, 'bun', 'case "$*" in *talos-bun-ok*) echo talos-bun-ok ;; *) echo 1.4.4 ;; esac')
       put(sb, 'claude', 'case "$1" in --version) echo "2.1.304 (Claude Code)" ;; esac')
       put(sb, 'swift', `echo "Apple Swift version ${NEED.swift} (swiftlang-6.2.0.1)"`)
       const r = run(sb, ['--dry-run'])

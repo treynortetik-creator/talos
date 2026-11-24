@@ -142,6 +142,15 @@ export class CaptureThrottle {
   sent = 0
   held = 0
   constructor(private now: () => number) {}
+  /** A report that is not deduplicated by fingerprint (an audio trace) still counts against the same session cap. */
+  takeSession(): boolean {
+    if (this.sent >= PROBLEM_LIMITS.perSession) {
+      this.held++
+      return false
+    }
+    this.sent++
+    return true
+  }
   allow(fingerprint: string): boolean {
     const t = this.now()
     const prev = this.last.get(fingerprint)

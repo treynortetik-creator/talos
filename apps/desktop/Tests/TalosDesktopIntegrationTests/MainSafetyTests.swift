@@ -22,7 +22,14 @@ struct MainSafetyTests {
   }
 
   /// A tmux client attached to Main's pane, as an owner at the keys is (it is a client that `list-clients` reports).
-  private func attachClient(_ r: Rig) throws -> Process {
+  /// `pinWindow`: false only to show what an attach does to the window without the pin (the control test).
+  private func attachClient(_ r: Rig, pinWindow: Bool = true) throws -> Process {
+    // The window keeps its size when a client of another size attaches. By default tmux fits the window to its clients, and the fake
+    // Main draws once and never again on a resize, so an attach used to crop the dialog away under the app's feet: its offer ended
+    // and the click came back "not offered" before it ever reached the typing check this test is about.
+    if pinWindow {
+      #expect(Rig.pinWindowSize(socket: r.socket, session: "agent"), "control: the window is pinned to its size")
+    }
     let client = Process()
     client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
     client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=agent"]
@@ -37,6 +44,11 @@ struct MainSafetyTests {
     }
     #expect(r.wait(10) { listed() }, "control: the client attached")
     return client
+  }
+
+  private func windowSize(_ r: Rig) -> String {
+    ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "display-message", "-p", "-t", "=agent:", "#{window_width}x#{window_height}"], env: ["PATH": "/usr/bin:/bin"]).out
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private func click(_ r: Rig, _ item: NeedsYouPopupItem, _ choice: Int, label: String? = nil) -> PopupAnswerResult? {
@@ -135,6 +147,25 @@ struct MainSafetyTests {
     #expect(r.phase() == .stopped(.user), "it does not start itself again: \(r.phase())")
     #expect(keys.keys == ["ENTER"], "\(keys.keys)")
     #expect(r.sup.safetyPopupItem() == nil)
+  }
+
+  /// The cause of the 2026-11-21 flake: a client attaching must not change what Main's pane shows. Without the pin the window shrinks to the
+  /// client's size at once (deterministic), the fake's dialog is cropped to its last line, and the offer ends.
+  @Test func attachingAClientLeavesMainsScreenAsItWas() throws {
+    let (r, keys) = try make("bypass", quiet: 600)
+    defer { r.teardown(); keys.remove() }
+    r.start()
+    #expect(r.wait(25) { r.sup.safetyPopupItem() != nil })
+    let before = windowSize(r)
+    let rowsBefore = r.sup.host.visibleRows()
+    let client = try attachClient(r)
+    defer {
+      if client.isRunning { client.terminate() }
+      client.waitUntilExit()
+    }
+    #expect(windowSize(r) == before, "the window was resized by the attach")
+    #expect(r.sup.host.visibleRows() == rowsBefore, "the dialog on screen changed with the attach")
+    #expect(r.sup.safetyPopupItem() != nil)
   }
 
   @Test func aClickWhileATmuxClientIsTypingPressesNothing() throws {

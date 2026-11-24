@@ -4,7 +4,7 @@
 // owner's skills stay as they are. A kit 1.x folder (`.talos-version` starting "1.") is recognized and the update path is
 // printed; it is never run from here. Owner only: the terminal gate in cli-main.ts covers this command (see talos.ts).
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { readCatalog } from './apps/catalog.ts'
 import { cmdInstallAppHooks, homeAsAgentDir } from './apps/cli.ts'
@@ -50,8 +50,10 @@ function foreignEntry(dir: string, home: string): string | undefined {
   ]
   if (entry === undefined) return undefined
   const args = isObject(entry) && Array.isArray(entry.args) ? entry.args : []
+  // the clone the entry runs: `--config=<clone>/bunfig.toml` (the form Talos writes now) or `--cwd <clone>` (the older one)
+  const conf = args.find((a): a is string => typeof a === 'string' && a.startsWith('--config='))
   const at = args.indexOf('--cwd')
-  const cwd = at >= 0 ? args[at + 1] : undefined
+  const cwd = conf ? dirname(conf.slice('--config='.length)) : at >= 0 ? args[at + 1] : undefined
   if (typeof cwd !== 'string' || !cwd) return 'a clone it cannot tell'
   if (real(cwd) !== real(BRIDGE_DIR)) return cwd
   // An entry with no TALOS_APP_HOME runs the bridge on the default home.

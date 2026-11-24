@@ -6,9 +6,9 @@ import { setDefaultTimeout } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type ChronosDraftT, newUlid } from '@talos-app/protocol'
-import { type FakeClock, fakeClock } from '@talos-app/testkit'
+import { type FakeClock, fakeClock, t, waitScale } from '@talos-app/testkit'
 import type { Notification } from '../../src/notify.ts'
-import { advanceSteps, type Harness, sleep, startHarness, tempHome, waitFor } from '../helpers.ts'
+import { advanceSteps, HARNESS_START_MS, type Harness, sleep, startHarness, tempHome, waitFor } from '../helpers.ts'
 import { ChronosBox, MON_0700_EDT } from './chronos-box.ts'
 
 /**
@@ -16,7 +16,7 @@ import { ChronosBox, MON_0700_EDT } from './chronos-box.ts'
  * so every file calls this at its top (this module is evaluated once per run, not once per file).
  */
 export function longTimeouts() {
-  setDefaultTimeout(60_000)
+  setDefaultTimeout(t(60_000))
 }
 longTimeouts()
 
@@ -87,6 +87,11 @@ function drivenWatch() {
   }
 }
 
+/** The schedule loops' wait to arm (ms before the testkit's x3). */
+const SCHED_ARMED_MS = 15_000
+/** The longest startSched can wait: startHarness's, then the schedule loops arming (15 s at x3). */
+export const SCHED_START_MS = HARNESS_START_MS + SCHED_ARMED_MS * waitScale()
+
 export async function startSched(
   opts: {
     now?: string
@@ -150,7 +155,7 @@ export async function startSched(
   if (opts.startBridge !== false) {
     clock.advance(300)
     const svc = h.bridge.ctx.schedules
-    if (svc?.hasStarted) await waitFor(() => svc.armed, 15_000, 'the schedule loops to arm')
+    if (svc?.hasStarted) await waitFor(() => svc.armed, SCHED_ARMED_MS, 'the schedule loops to arm')
   }
   // FakeApp stamps real time; the bridge runs on the injected clock, so signed frames carry the injected `now` (the
   // bridge checks `ts` against its own clock). A test that wants an exact `ts` (staleness) passes `keep_ts: true`.
@@ -194,9 +199,15 @@ export async function startSched(
     watched: driven.paths,
     async filesChanged() {
       driven.fire()
-      // the service waits 300 ms (real time) after a change before it refreshes, so a burst of writes is one refresh
-      await sleep(350)
-      await h.bridge.ctx.schedules?.idle()
+      // the service waits 300 ms (real time) after a change before it refreshes, so a burst of writes is one refresh: wait
+      // until that timer has run (it is the service's own, on the real clock, so it cannot be advanced), then for the refresh
+      const svc = h.bridge.ctx.schedules
+      await waitFor(
+        () => !(svc as unknown as { pokeTimer?: unknown } | undefined)?.pokeTimer,
+        t(4000),
+        'the refresh timer',
+      )
+      await svc?.idle()
     },
     noteKinds: () => h.notes.map((n) => n.meta.kind ?? ''),
     notesOf: (kind: string) => h.notes.filter((n) => n.meta.kind === kind),

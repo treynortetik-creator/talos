@@ -9,17 +9,22 @@
 #      your memory and wiki never sit inside a git checkout that has a remote
 #   3. builds the Talos plugin release (hooks, skills, agents, scripts) under ~/.local/share/talos/kit, links hooks/ and scripts/ to it,
 #      writes .claude/settings.json (the local marketplace and enabledPlugins) and stamps .talos-version
-#   4. Chronos, the scheduler: clones it at a pinned commit (or uses --chronos-path), then runs
-#      Chronos's own installer with the agent folder as its workspace
+#   4. Chronos, the scheduler: the copy in this repository (apps/chronos; or --chronos-path), whose own installer runs with
+#      the agent folder as its workspace. Nothing is cloned or fetched.
 #   5. registers the Talos jobs in Chronos, all DISABLED until your agent has finished setup
 #   6. optionally wires a delivery command (--notify macos | talos)
 #
 # Skip Chronos entirely with --no-chronos. You lose scheduled jobs and nothing else.
 #
+# A scheduler that cannot be set up never fails a NEW install (no --add-to-existing, --reinstall-chronos, --chronos-path or
+# --set-chronos-workspace): the agent is finished (copy, git, checks, memory search), one plain line says the scheduler was not added
+# and how to add it, the failing step's whole output goes to ~/.config/talos/chronos-not-added.log (mode 600), a marker
+# ~/.config/talos/chronos-not-added.json says why ({"v":1,"reason":...,"at":...}; scripts/install-chronos-marker.sh has the codes),
+# and the exit code is 0. Running ./install.sh again finishes the scheduler. Those explicit asks, and any --add-to-existing run, stay
+# loud: they exit with Chronos's own exit code (apps/chronos/install.sh lists them) or 1 for the jobs, hook and delivery steps.
+#
 #   --agent-dir DIR       where the agent will live (default ~/talos-agent). Must not exist or must be empty.
-#   --chronos-path DIR    use this local Chronos checkout instead of cloning
-#   --chronos-repo URL    clone source (default: the Chronos repo on GitHub)
-#   --chronos-ref SHA     full 40-character commit sha to pin (default: the one this kit was tested with)
+#   --chronos-path DIR    use this Chronos instead of the repository's apps/chronos (for development)
 #   --no-chronos          do not install Chronos and do not register jobs
 #   --no-jobs             install Chronos but do not register the Talos jobs
 #   --full-access-jobs    register the Claude jobs WITHOUT the tool restriction: their scheduled runs then skip
@@ -77,14 +82,13 @@
 set -eu
 
 KIT="$(cd "$(dirname "$0")" && pwd)"
-# The Chronos commit this kit was tested with. Bump it deliberately.
-# 48846b3 is Chronos main after 0.5.1 with the Linux background timer (PR #10): on Linux its installer starts a systemd user
-# timer for the tick, so jobs that run by themselves (the kit's maintenance jobs) run there, as launchd runs them on a Mac.
-# Earlier pins: 3cf20fc (after 0.3.1, the health fix for a missing jobs.json), ac21e92 (0.2.2).
-CHRONOS_PINNED_REF="48846b3e2f3383385f47c46539c17bee5c351e7a"
-CHRONOS_DEFAULT_REPO="https://github.com/treynortetik-creator/chronos"
+# Chronos lives in this repository (apps/chronos, beside kit/): the standalone chronos repository is frozen at 48846b3 and no longer
+# maintained (the owner, 2026-11-19; apps/chronos/PROVENANCE.md). Nothing here clones or fetches it.
+CHRONOS_BUNDLED="$(cd "$KIT/.." 2>/dev/null && pwd)/apps/chronos"
+# test seam, only with CHRONOS_TEST_MODE=1: another place for the bundled Chronos (a clone without it), so a test edits no checkout
+if [ "${CHRONOS_TEST_MODE:-}" = 1 ] && [ -n "${TALOS_CHRONOS_BUNDLED:-}" ]; then CHRONOS_BUNDLED="$TALOS_CHRONOS_BUNDLED"; fi
 
-AGENT_DIR="$HOME/talos-agent"; CHRONOS_PATH=""; CHRONOS_REPO="$CHRONOS_DEFAULT_REPO"; CHRONOS_REF="$CHRONOS_PINNED_REF"
+AGENT_DIR="$HOME/talos-agent"; CHRONOS_PATH=""
 DO_CHRONOS=1; DO_JOBS=1; FULL_JOBS=0; REINSTALL=0; SET_WS=0; MEMSEARCH=0; EMBED=auto; VAULT=""; VAULT_EXISTS=0; VOICE=0; GPOINTER=0; QWEN=0; PARAKEET=0; DIARIZE=0; RERANKER=0; NOTIFY=none; NOLOAD=0; SESSION_HOOK=1; PROTECTED_OK=0; SYNCED_OK=0; DRY=0; ADD_ONLY=0; PARENT_OK=0
 
 usage() { awk 'NR>1 { if ($0 ~ /^#/) print; else exit }' "$0" | sed 's/^# \{0,1\}//'; }
@@ -95,8 +99,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --agent-dir) val "$@"; AGENT_DIR="$2"; AGENT_DIR_GIVEN=1; shift 2 ;;
     --chronos-path) val "$@"; CHRONOS_PATH="$2"; shift 2 ;;
-    --chronos-repo) CHRONOS_REPO="${2:?}"; shift 2 ;;
-    --chronos-ref) CHRONOS_REF="${2:?}"; shift 2 ;;
     --no-chronos) DO_CHRONOS=0; shift ;;
     --no-jobs) DO_JOBS=0; shift ;;
     --full-access-jobs) FULL_JOBS=1; shift ;;
@@ -134,11 +136,6 @@ if [ "$AGENT_DIR_GIVEN" = 0 ] && [ -e "$HOME/my-agent" ] && [ ! -e "$HOME/talos-
   exit 1
 fi
 case "$NOTIFY" in none|macos|talos) ;; *) echo "--notify must be macos, talos or none" >&2; exit 2 ;; esac
-# The pin is a security boundary: a short or symbolic ref can resolve to a different commit later. Full sha only.
-case "$CHRONOS_REF" in
-  *[!0-9a-f]*|"") echo "--chronos-ref must be the full 40-character lowercase commit sha (got '$CHRONOS_REF')" >&2; exit 2 ;;
-esac
-[ "${#CHRONOS_REF}" = 40 ] || { echo "--chronos-ref must be the full 40-character commit sha, not a short ref (got '$CHRONOS_REF')" >&2; exit 2; }
 case "$EMBED" in auto|base|small) ;; *) echo "--embed-model must be auto, base or small" >&2; exit 2 ;; esac
 [ "$DO_CHRONOS" = 1 ] || DO_JOBS=0
 
@@ -275,6 +272,46 @@ VERSION="$(tr -d ' \t\r\n' < "$KIT/VERSION" 2>/dev/null || echo unknown)"
 COMMIT="$(git -C "$KIT" rev-parse --short HEAD 2>/dev/null || echo none)"
 say "   kit version $VERSION (commit $COMMIT)"
 
+ROOT_INSTALL="$(cd "$KIT/.." 2>/dev/null && pwd)/install.sh"
+# SOFT: a new install, where a scheduler that cannot be added is told in one line and never fails the install. An explicit ask is loud.
+EXPLICIT=0; SOFT=0; FINISHING=0
+if [ -n "$CHRONOS_PATH" ] || [ "$REINSTALL" = 1 ]; then EXPLICIT=1; fi
+if [ "$ADD_ONLY" != 1 ] && [ "$EXPLICIT" != 1 ] && [ "$SET_WS" != 1 ] && [ "$DRY" != 1 ]; then SOFT=1; fi
+if [ "$DO_CHRONOS" = 1 ]; then
+  [ -f "$KIT/scripts/install-chronos-marker.sh" ] || { echo "this kit is incomplete: scripts/install-chronos-marker.sh is missing" >&2; exit 1; }
+  . "$KIT/scripts/install-chronos-marker.sh"
+  if chronos_marker_present; then FINISHING=1; fi
+fi
+# a scheduler step that failed after the agent was set up: a new install says so in one line and goes on, anything else exits RC
+sched_fail() {   # CODE RC OUTPUT
+  if [ "$SOFT" = 1 ]; then
+    chronos_not_added "$1" "$3" "$AGENT_DIR" "$ROOT_INSTALL"
+    # "not added" means nothing of it runs: what Chronos's installer loaded is unloaded again (its data stays; a rerun loads it)
+    if [ "$CHRONOS_RAN" = 1 ] && [ "$TICK_BEFORE" != 1 ] && [ -x "$CHRONOS_DIR/uninstall.sh" ]; then "$CHRONOS_DIR/uninstall.sh" >/dev/null 2>&1 || true; fi
+    return 0
+  fi
+  chronos_marker_write "$1"
+  echo "The scheduler step failed ($(chronos_reason_words "$1"); exit $2). Its output is above. Nothing else was changed in the agent folder." >&2
+  exit "$2"
+}
+# A kit copy with no apps/chronos beside it (inside an agent folder, or a plugin release) decides its Chronos here, before anything is
+# written or copied: whose it is first (a Chronos that is not Talos's is left alone by the section below), then the folder to use.
+if [ "$DO_CHRONOS" = 1 ] && [ -z "$CHRONOS_PATH" ] && [ ! -d "$CHRONOS_BUNDLED" ]; then
+  _sc=3; _scf="$KIT/scripts/install-chronos-scope.sh"
+  # A NEW install started by the root ./install.sh (a clone: the root installer is beside this kit) never fails for a missing Chronos: it
+  # goes on and says "not added" in the Chronos step. A kit called directly from inside an agent folder stays loud, before any copy.
+  _softroot=0; _se=2   # (file descriptor 2, or 4 = /dev/null: never "/dev/stderr", which cannot be reopened when stderr is a socket)
+  if [ "$SOFT" = 1 ] && [ -f "$ROOT_INSTALL" ] && grep -q 'kit/install.sh' "$ROOT_INSTALL" 2>/dev/null; then _softroot=1; _se=4; exec 4>/dev/null; fi
+  if [ -f "$_scf" ]; then   # the rule missing fails closed: an existing Chronos counts as not Talos's
+    . "$_scf"
+    _sd="$(chronos_shipped_dir "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir" 2>/dev/null || true)" "${TALOS_VENDOR_DIR:-$HOME/.local/share/talos}/chronos" "${CHRONOS_CONFIG:-$HOME/.config/chronos/config.json}" "$REINSTALL" 2>&"$_se")" && _sc=0 || _sc=$?
+  elif [ ! -f "${CHRONOS_CONFIG:-$HOME/.config/chronos/config.json}" ]; then
+    echo "this copy of the kit has no Chronos beside it: run ./install.sh in an up-to-date Talos clone, or add --no-chronos (or --chronos-path DIR). Nothing was changed." >&2; _sc=1
+  fi
+  if [ "$_sc" = 1 ] && [ "$_softroot" != 1 ]; then exit 1; fi
+  [ "$_sc" != 0 ] || CHRONOS_BUNDLED="$_sd"
+fi
+
 [ "$ADD_ONLY" = 1 ] || run mkdir -p "$AGENT_DIR"
 if [ "$ADD_ONLY" = 1 ]; then
   say "   the kit is already installed here; nothing is copied"
@@ -359,7 +396,9 @@ if [ "$DRY" != 1 ]; then
 fi
 
 # ---------------------------------------------------------------- 3. Chronos
-CHRONOS_DIR=""; CHRONOS_RUNTIME=""; CHRONOS_RAN=0
+CHRONOS_DIR=""; CHRONOS_RUNTIME=""; CHRONOS_RAN=0; CHRONOS_FOREIGN=0; SCHED_FAILED=0; SCHED_SKIP=0; CLAIM_NEW=0; TICK_BEFORE=0
+# the clone an older kit made (it ran Chronos from there): left alone, as it may hold changes of the owner's
+OLD_VENDOR="${TALOS_VENDOR_DIR:-$HOME/.local/share/talos}/chronos"
 CFG="${CHRONOS_CONFIG:-$HOME/.config/chronos/config.json}"
 if [ "$DO_CHRONOS" = 1 ]; then
   step "Chronos (the scheduler)"
@@ -371,38 +410,58 @@ if [ "$DO_CHRONOS" = 1 ]; then
     done
     say "   using local Chronos at $CHRONOS_DIR"
   else
-    VENDOR="${TALOS_VENDOR_DIR:-$HOME/.local/share/talos}"
-    CHRONOS_DIR="$VENDOR/chronos"
-    if [ "$DRY" = 1 ]; then
-      plan "git clone $CHRONOS_REPO $CHRONOS_DIR, then check out $CHRONOS_REF (detached)"
-    else
-      mkdir -p "$VENDOR"
-      if [ -d "$CHRONOS_DIR/.git" ]; then
-        say "   Chronos already cloned at $CHRONOS_DIR"
-        git -C "$CHRONOS_DIR" fetch --quiet origin 2>/dev/null || true
-      else
-        say "   cloning $CHRONOS_REPO"
-        git clone --quiet "$CHRONOS_REPO" "$CHRONOS_DIR" || {
-          echo >&2
-          echo "Could not clone Chronos from $CHRONOS_REPO. It is a public repository, so check your network or proxy" >&2
-          echo "(git ls-remote $CHRONOS_REPO), or pass a local checkout with --chronos-path DIR, or skip it with --no-chronos." >&2
-          exit 1
-        }
-      fi
-      git -C "$CHRONOS_DIR" checkout --quiet --detach "$CHRONOS_REF" || { echo "commit $CHRONOS_REF not found in the Chronos clone" >&2; exit 1; }
-      HEADSHA="$(git -C "$CHRONOS_DIR" rev-parse HEAD)"
-      [ "$HEADSHA" = "$CHRONOS_REF" ] || { echo "Chronos HEAD $HEADSHA is not the pinned $CHRONOS_REF; refusing" >&2; exit 1; }
-      say "   Chronos pinned at $HEADSHA"
+    CHRONOS_DIR="$CHRONOS_BUNDLED"
+    # (no apps/chronos at all was decided above, before anything was copied: only a folder that is there but incomplete reaches this)
+    for f in install.sh bin/chronos lib/chronoslib.py; do
+      [ -e "$CHRONOS_DIR/$f" ] && continue
+      # no folder at all and not "missing" (the early block above saw a Chronos that is not Talos's): the ownership check below decides
+      if [ ! -d "$CHRONOS_DIR" ] && [ "${_sc:-}" != 1 ]; then break; fi
+      _m="this Talos clone has no Chronos at $CHRONOS_DIR (no $f): update the clone, or pass --chronos-path DIR or --no-chronos"
+      if [ "$SOFT" != 1 ]; then echo "$_m" >&2; exit 1; fi
+      chronos_not_added missing "$_m" "$AGENT_DIR" "$ROOT_INSTALL"; DO_CHRONOS=0; DO_JOBS=0; break
+    done
+    if [ "$DO_CHRONOS" = 1 ] && [ -d "$CHRONOS_DIR" ]; then
+      say "   Chronos from this clone: $CHRONOS_DIR"
+      # (said only when the older clone is NOT the Chronos in use: a kit with no apps/chronos beside it can be using exactly that one)
+      [ -d "$OLD_VENDOR" ] && [ "$CHRONOS_DIR" != "$OLD_VENDOR" ] && say "   the Chronos clone an older install made, $OLD_VENDOR, is no longer used; remove it when you like."
     fi
   fi
+if [ "$DO_CHRONOS" = 1 ]; then   # (still on: the bundled Chronos was found)
   # Chronos copies its runtime out of Desktop/Documents/Downloads on its own (TCC); mirror that rule so the
   # SessionStart hook points at the copy that actually exists.
   CHRONOS_RUNTIME="$CHRONOS_DIR"
   case "$CHRONOS_DIR" in "$HOME/Desktop"/*|"$HOME/Documents"/*|"$HOME/Downloads"/*) CHRONOS_RUNTIME="$HOME/.local/share/chronos" ;; esac
 
-  if [ -f "$CFG" ] && [ "$REINSTALL" != 1 ]; then
+  PREV_CHRONOS="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir" 2>/dev/null || true)"
+  # the copy launchd really ran for a recorded checkout under Desktop/Documents/Downloads: its hook may point there
+  PREV_RUNTIME="${PREV_CHRONOS:-/nonexistent}"
+  case "$PREV_CHRONOS" in "$HOME/Desktop"/*|"$HOME/Documents"/*|"$HOME/Downloads"/*) PREV_RUNTIME="$HOME/.local/share/chronos" ;; esac
+  # A Chronos that is not Talos's own (one made by hand: a config and no record; or a record naming another folder) is never taken
+  # over, whoever calls this: no jobs registered, none turned on, no hook, no move. Only --reinstall-chronos or a --chronos-path you
+  # name says "take it over". The rule is the root installer's (kit/scripts/install-chronos-scope.sh).
+  # Fails closed: with the rule missing, any existing Chronos is treated as not Talos's.
+  if [ -z "$CHRONOS_PATH" ] && [ "$REINSTALL" != 1 ] && [ -f "$CFG" ]; then
+    if [ -f "$KIT/scripts/install-chronos-scope.sh" ]; then
+      . "$KIT/scripts/install-chronos-scope.sh"
+      # a bundled folder that is not there cannot have been set up by Talos: a record equal to its path is not Talos's (no match at all)
+      _bd=""; [ ! -d "$CHRONOS_BUNDLED" ] || _bd="$CHRONOS_BUNDLED"
+      chronos_record_is_ours "$PREV_CHRONOS" "$_bd" "$OLD_VENDOR" || CHRONOS_FOREIGN=1
+      # a run of Talos that stopped before its Chronos was in place, and then a Chronos made by hand: not Talos's (install-chronos-scope.sh)
+      if [ "$CHRONOS_FOREIGN" != 1 ] && [ "$EXPLICIT" != 1 ] && chronos_handmade_after_unfinished "$AGENT_DIR"; then CHRONOS_FOREIGN=1; PREV_CHRONOS=""; fi
+    else CHRONOS_FOREIGN=1; fi
+  fi
+  if [ "$CHRONOS_FOREIGN" = 1 ]; then
+    if [ -z "$PREV_CHRONOS" ]; then _whose="was set up by hand"; else _whose="runs from $PREV_CHRONOS"; fi
+    if [ "$NOTIFY" != none ] || [ "$SET_WS" = 1 ] || [ "$FULL_JOBS" = 1 ] || [ "$NOLOAD" = 1 ]; then
+      echo "this Mac's Chronos $_whose, so Talos leaves it alone and --notify, --set-chronos-workspace, --full-access-jobs and --no-load would change it. To let Talos take it over (it moves to this clone's copy; its config and jobs are kept), add --reinstall-chronos (or name your own with --chronos-path DIR). Nothing was changed." >&2
+      exit 2
+    fi
+    say "   Chronos: this Mac's Chronos $_whose, so Talos left it alone (no jobs registered, none turned on, no session hook, no move)."
+    say "   To let Talos take it over (its config and jobs are kept): --reinstall-chronos; to use a Chronos of your own on purpose: --chronos-path DIR"
+    DO_CHRONOS=0; DO_JOBS=0
+  elif [ -f "$CFG" ] && [ "$REINSTALL" != 1 ] && { [ -z "$PREV_CHRONOS" ] || [ "$PREV_CHRONOS" = "$CHRONOS_DIR" ]; } && ! chronos_marker_present; then
     say "   Chronos is already configured ($CFG): not running its installer again."
-    say "   NOTE: that means the Chronos launchd runs may be OLDER than the pinned clone. Talos reads the version of the one launchd"
+    say "   NOTE: that means the Chronos launchd runs may be OLDER than this one. Talos reads the version of the one launchd"
     say "   actually runs; the restricted jobs need 0.2.2 and are skipped if it is older or unknown (--reinstall-chronos updates it)."
     # Chronos cd's into its OWN workspace before it starts `claude -p`, so a job's CLAUDE.md, hooks and the
     # pre-tool guard load from THAT folder, not from the agent folder. The job prompt tells the agent to cd
@@ -444,32 +503,63 @@ PYEOF
     grep -q -- '--quiet' "$CHRONOS_DIR/install.sh" 2>/dev/null && CARGS+=(--quiet)
     if [ "$DRY" = 1 ]; then plan "$CHRONOS_DIR/install.sh ${CARGS[*]}"
     else
+      [ -n "$PREV_CHRONOS" ] && [ "$PREV_CHRONOS" != "$CHRONOS_DIR" ] && say "   Chronos moves from $PREV_CHRONOS to $CHRONOS_DIR (its installer runs again; its config and jobs are kept)."
       say "   running Chronos's installer (its own output is indented and labelled below)"
+      # ownership first (a Chronos that is not Talos's was refused above): the marker, then the record, before Chronos touches anything
+      # a Chronos that was already in place before this run (another agent's scheduler, a moved clone) is never unloaded by a later failure
+      TICK_BEFORE=0; [ ! -f "${CHRONOS_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}/io.github.chronos.tick.plist" ] || TICK_BEFORE=1
+      chronos_claim "$CHRONOS_DIR" "$PREV_CHRONOS"
       if COUT="$("$CHRONOS_DIR/install.sh" "${CARGS[@]}" 2>&1)"; then CRC=0; else CRC=$?; fi
       printf '%s\n' "$COUT" | sed 's/^/   chronos: /'
-      [ "$CRC" = 0 ] || { echo "Chronos's installer failed (exit $CRC); see its output above." >&2; exit "$CRC"; }
-      CHRONOS_RAN=1
+      # (Chronos loads through launchd only where it runs on a Mac: the installer's own uname decides, so does this check)
+      if [ "$CRC" = 0 ] && [ "$NOLOAD" != 1 ] && [ "$(uname -s)" = Darwin ] && ! chronos_tick_loaded; then
+        CRC=15; COUT="$COUT
+the tick (io.github.chronos.tick) is not listed as loaded by launchctl print"
+        echo "Chronos's installer finished but the tick is not loaded." >&2
+      fi
+      if [ "$CRC" != 0 ]; then
+        if [ "$SOFT" = 1 ]; then chronos_not_added "$(chronos_reason_for_exit "$CRC")" "$COUT" "$AGENT_DIR" "$ROOT_INSTALL"; DO_JOBS=0; SCHED_SKIP=1
+        else
+          echo "Chronos's installer failed (exit $CRC); see its output above." >&2
+          # a takeover or a Chronos of your own that failed leaves the record as it was; any other run keeps its claim, to be finished
+          if [ "$EXPLICIT" = 1 ]; then chronos_unclaim "$PREV_CHRONOS"; else chronos_marker_write "$(chronos_reason_for_exit "$CRC")"; fi
+          exit "$CRC"
+        fi
+      else CHRONOS_RAN=1; fi
     fi
   fi
 fi
 
+fi
+
 # remember where Chronos came from, so uninstall.sh can find its own uninstaller
 if [ "$DO_CHRONOS" = 1 ] && [ "$DRY" != 1 ]; then
-  mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/talos"; chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/talos"
-  printf '%s\n' "$CHRONOS_DIR" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir"
-  # and where the agent lives, so uninstall.sh finds the right settings.json without being told
-  printf '%s\n' "$AGENT_DIR" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir"
+  if [ "$SOFT" = 1 ]; then
+    # a new install: these two records are a convenience for the uninstaller and never fail the install (a state folder that cannot be
+    # written, a record that is a folder): the writes warn and the install goes on
+    chronos_state_dir_make
+    if [ "$CHRONOS_RAN" = 1 ] || [ "$PREV_CHRONOS" = "$CHRONOS_DIR" ]; then chronos_record_set "$CHRONOS_DIR"; fi
+    printf '%s\n' "$AGENT_DIR" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir" 2>/dev/null || say "   (could not write ${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir; the uninstaller will ask for the folder)"
+  else
+    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/talos"; chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/talos"
+    # only the Chronos this run installed (or the one already recorded): a Chronos the owner set up by hand is never claimed
+    { [ "$CHRONOS_RAN" = 1 ] || [ "$PREV_CHRONOS" = "$CHRONOS_DIR" ]; } && printf '%s\n' "$CHRONOS_DIR" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir"
+    # and where the agent lives, so uninstall.sh finds the right settings.json without being told
+    printf '%s\n' "$AGENT_DIR" > "${XDG_CONFIG_HOME:-$HOME/.config}/talos/agent-dir"
+  fi
 fi
 
 # ---------------------------------------------------------------- 4. delivery
-if [ "$DO_CHRONOS" = 1 ] && [ "$NOTIFY" != none ]; then
+if [ "$DO_CHRONOS" = 1 ] && [ "$NOTIFY" != none ] && [ "$SCHED_SKIP" != 1 ]; then
   step "Delivery ($NOTIFY)"
   TCFG="${XDG_CONFIG_HOME:-$HOME/.config}/talos"
   if [ "$DRY" = 1 ]; then plan "copy notify/$NOTIFY.sh to $TCFG/notify/ and set Chronos's notify command if it is empty"
   else
-    mkdir -p "$TCFG/notify"; chmod 700 "$TCFG"
-    cp "$KIT/notify/$NOTIFY.sh" "$TCFG/notify/$NOTIFY.sh"; chmod +x "$TCFG/notify/$NOTIFY.sh"
-    if [ "$NOTIFY" = talos ]; then
+    _drc=0
+    _dout="$( { mkdir -p "$TCFG/notify" && chmod 700 "$TCFG" && cp "$KIT/notify/$NOTIFY.sh" "$TCFG/notify/$NOTIFY.sh" && chmod +x "$TCFG/notify/$NOTIFY.sh"; } 2>&1 )" || _drc=$?
+    if [ "$_drc" != 0 ]; then printf '%s\n' "$_dout" >&2; sched_fail delivery "$_drc" "$_dout"; fi
+    if [ "$_drc" != 0 ]; then :
+    elif [ "$NOTIFY" = talos ]; then
       # Chronos runs with a thin PATH, so record where talos-app lives now (TALOS_APP_BIN overrides); talos.sh reads it
       TBIN="${TALOS_APP_BIN:-$(command -v talos-app 2>/dev/null || true)}"
       if [ -z "$TBIN" ]; then for c in "$HOME/.bun/bin/talos-app" "$HOME/.local/bin/talos-app"; do [ -x "$c" ] && { TBIN="$c"; break; }; done; fi
@@ -481,10 +571,13 @@ if [ "$DO_CHRONOS" = 1 ] && [ "$NOTIFY" != none ]; then
         say "   warning: --notify talos: the talos-app command was not found on PATH, in ~/.bun/bin or in ~/.local/bin. Install the Talos app first (docs/SETUP.md); until then notify/talos.sh logs 'talos-app not found' to $TCFG/notify-errors.log and delivers nothing."
       fi
     fi
-    if [ -f "$CFG" ]; then
-      TCMD="$TCFG/notify/$NOTIFY.sh" CFGP="$CFG" "$PY" - <<'PYEOF'
-import json, os, sys
-p = os.environ["CFGP"]; cmd = os.environ["TCMD"]
+    if [ "$_drc" != 0 ]; then :
+    elif [ -f "$CFG" ]; then
+      # Chronos runs "notify" as a shell command, so the path is stored shell-quoted (a plain path stays exactly as it is)
+      _drc=0
+      _dout="$(TCMD="$TCFG/notify/$NOTIFY.sh" CFGP="$CFG" "$PY" - 2>&1 <<'PYEOF'
+import json, os, shlex, sys
+p = os.environ["CFGP"]; cmd = shlex.quote(os.environ["TCMD"])
 c = json.load(open(p))
 if str(c.get("notify") or "").strip():
     print("   Chronos already has a notify command (%s); left as it is." % c["notify"])
@@ -496,6 +589,9 @@ else:
     os.chmod(tmp, mode); os.replace(tmp, p)
     print("   set Chronos notify to %s" % cmd)
 PYEOF
+)" || _drc=$?
+      printf '%s\n' "$_dout"
+      if [ "$_drc" != 0 ]; then sched_fail delivery "$_drc" "$_dout"; fi
     else
       say "   no Chronos config yet; set \"notify\" to $TCFG/notify/$NOTIFY.sh in it by hand."
     fi
@@ -506,28 +602,54 @@ fi
 if [ "$DO_JOBS" = 1 ]; then
   step "Talos jobs"
   if [ "$DRY" = 1 ]; then plan "register the Talos jobs from jobs/ (see scripts/talos-jobs.py list after) in Chronos, and turn on the weekly wiki check and the weekly snapshot (plain commands, no Claude usage); the Claude jobs stay off"
-  elif [ "$FULL_JOBS" = 1 ]; then
-    say "   --full-access-jobs: the Claude jobs will run with permission prompts SKIPPED when you enable them."
-    _reg="$("$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" --full-access 2>&1)"; printf '%s\n' "$_reg"
-  else _reg="$("$PY" "$KIT/scripts/talos-jobs.py" register --agent-dir "$AGENT_DIR" --kit-dir "$KIT" 2>&1)"; printf '%s\n' "$_reg"; fi
+  else
+    [ "$FULL_JOBS" = 1 ] && say "   --full-access-jobs: the Claude jobs will run with permission prompts SKIPPED when you enable them."
+    _regargs=(register --agent-dir "$AGENT_DIR" --kit-dir "$KIT"); [ "$FULL_JOBS" != 1 ] || _regargs+=(--full-access)
+    _regrc=0; _reg="$("$PY" "$KIT/scripts/talos-jobs.py" "${_regargs[@]}" 2>&1)" || _regrc=$?
+    printf '%s\n' "$_reg"
+    if [ "$_regrc" != 0 ]; then sched_fail jobs "$_regrc" "$_reg"; _reg=""; fi
+  fi
   # the zero-cost jobs (plain commands: no Claude, no plan usage) are on from the start, but ONLY when this run registered
   # them: a job that was already there (an owner's, maybe off on purpose, maybe an old Claude version) is never turned on
   JOBS_ON=""
   if [ "$DRY" != 1 ]; then
     for _j in talos-weekly-wiki-lint talos-weekly-snapshot; do
-      printf '%s\n' "$_reg" | grep -q "registered $_j (disabled)" || continue
-      "$PY" "$KIT/scripts/talos-jobs.py" enable "$_j" >/dev/null 2>&1 && { JOBS_ON="$JOBS_ON $_j"; say "   $_j: on (a plain command, no Claude usage)"; }
+      printf '%s\n' "${_reg:-}" | grep -q "registered $_j (disabled)" || continue
+      if _eout="$("$PY" "$KIT/scripts/talos-jobs.py" enable "$_j" 2>&1)"; then JOBS_ON="$JOBS_ON $_j"; say "   $_j: on (a plain command, no Claude usage)"
+      else
+        _erc=$?
+        # a job that could not be turned on is taken out again, so a rerun registers it afresh and turns it on (it would otherwise
+        # count as "already there" and stay off); only what this run registered goes
+        _only=(); for _r in $(printf '%s\n' "$_reg" | sed -n 's/^ *registered \(talos-[A-Za-z0-9_-]*\) (disabled)$/\1/p'); do _only+=(--only "$_r"); done
+        "$PY" "$KIT/scripts/talos-jobs.py" unregister "${_only[@]}" >/dev/null 2>&1 || true
+        printf '%s\n' "$_eout" >&2
+        sched_fail jobs "$_erc" "$_eout"; break
+      fi
     done
   fi
 fi
-if [ "$DO_CHRONOS" = 1 ] && [ "$SESSION_HOOK" = 1 ]; then
+if [ "$DO_CHRONOS" = 1 ] && [ "$SESSION_HOOK" = 1 ] && [ "$SCHED_SKIP" != 1 ]; then
   step "Chronos session hook"
   if [ "$DRY" = 1 ]; then plan "register $CHRONOS_RUNTIME/hooks/chronos-session-start.py in $AGENT_DIR/.claude/settings.json"
   elif [ -f "$CHRONOS_RUNTIME/hooks/chronos-session-start.py" ]; then
-    "$PY" "$KIT/scripts/talos-jobs.py" hook-add --agent-dir "$AGENT_DIR" --chronos-dir "$CHRONOS_RUNTIME"
+    _hrc=0
+    _hout="$("$PY" "$KIT/scripts/talos-jobs.py" hook-add --agent-dir "$AGENT_DIR" --chronos-dir "$CHRONOS_RUNTIME" --replace-from "${PREV_CHRONOS:-/nonexistent}" --replace-from "$PREV_RUNTIME" --replace-from "$OLD_VENDOR" 2>&1)" || _hrc=$?
+    printf '%s\n' "$_hout"
+    if [ "$_hrc" != 0 ]; then sched_fail hook "$_hrc" "$_hout"; fi
   else
     say "   Chronos runtime not found at $CHRONOS_RUNTIME (its installer may not have run); skipped."
   fi
+fi
+
+# The scheduler is in place only when its installer finished, the tick is loaded (checked above) and the jobs and the hook went in:
+# only then is the marker removed. A --no-load run is a choice, not a failure: it removes a marker it made itself, never an older one.
+if [ "$DO_CHRONOS" = 1 ] && [ "$DRY" != 1 ] && [ "$CHRONOS_RAN" = 1 ] && [ "$SCHED_FAILED" != 1 ]; then
+  # a finishing run also adds the memory search's own job (the first run, with no scheduler, set the search up with --no-job)
+  if [ "$FINISHING" = 1 ] && [ "$DO_JOBS" = 1 ] && [ "$MEMSEARCH" != 1 ] && [ -f "$AGENT_DIR/.index/.wanted" ] && [ -f "$AGENT_DIR/.index/memory.db" ]; then
+    if "$PY" "$KIT/scripts/talos-jobs.py" enable talos-memory-index >/dev/null 2>&1; then JOBS_ON="$JOBS_ON talos-memory-index"; say "   talos-memory-index: on (the semantic memory search's daily refresh)"
+    else say "   could not turn on talos-memory-index; python3 $AGENT_DIR/scripts/talos-jobs.py enable talos-memory-index"; fi
+  fi
+  if [ "$NOLOAD" != 1 ] || [ "$CLAIM_NEW" = 1 ]; then chronos_marker_clear || true; fi
 fi
 
 # ---------------------------------------------------------------- 5b. personal vault (opt-in)
@@ -649,14 +771,17 @@ fi
 step "Done"
 if [ "$DRY" = 1 ]; then say "Dry run: nothing was changed."; exit 0; fi
 say "Agent folder: $AGENT_DIR"
-if [ "$DO_CHRONOS" = 1 ]; then
+if [ "$SCHED_FAILED" = 1 ] || { [ "$DO_CHRONOS" = 1 ] && chronos_marker_present; }; then
+  say "Chronos:      NOT added. Your agent is complete and works; the scheduler is not in place. Add it with: bash \"$ROOT_INSTALL\" --agent-dir \"$AGENT_DIR\"   (what stopped it: $(chronos_log_path))"
+elif [ "$DO_CHRONOS" = 1 ]; then
   say "Chronos:      $CHRONOS_DIR   (config: $CFG)"
   if [ "$DO_JOBS" = 1 ]; then
     _on="${JOBS_ON:-}"; [ "$MEMSEARCH" = 1 ] && [ "${_mrc:-1}" = 0 ] && _on="$_on talos-memory-index"
     say "Jobs:         the Claude jobs are off until setup is finished; on:${_on:- none} (plain commands, no Claude usage). List them: python3 $AGENT_DIR/scripts/talos-jobs.py list"
   fi
 else
-  say "Chronos:      skipped (--no-chronos). Your agent works; nothing runs on a schedule."
+  if [ "$CHRONOS_FOREIGN" = 1 ]; then say "Chronos:      left alone: it is not Talos's own, so no jobs were added to it (--reinstall-chronos moves it to this clone's copy)."
+  else say "Chronos:      skipped (--no-chronos). Your agent works; nothing runs on a schedule."; fi
 fi
 if [ "$NOLOAD" = 1 ] && [ "$CHRONOS_RAN" = 1 ]; then
   _ag="${CHRONOS_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"

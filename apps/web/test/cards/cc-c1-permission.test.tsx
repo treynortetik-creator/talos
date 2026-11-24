@@ -1,5 +1,5 @@
-// WP-C1 (docs/CLAUDE-CODE.md C3.2): the permission card. The raw call comes first and is never cut by the app, Claude's
-// own summary comes after it, Allow unlocks once the end of the call has been on screen, a card that does not show all of its
+// WP-C1 (docs/CLAUDE-CODE.md C3.2): the permission card. Allow is one tap on the card's face (owner, 2026-11-21); the whole call is
+// behind Details, never cut by the app, with Claude's own summary after it; a card that does not show all of its
 // call keeps Allow with a note saying what is missing (only a repeated id has none), and an old card says it may already have
 // been answered at the Mac.
 import {
@@ -13,7 +13,7 @@ import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { approvalIsOpen } from '../../src/lib/approvalOpen.ts'
-import { type FakeIO, installAlwaysVisible, installIntersection } from '../helpers/intersection.ts'
+import { installAlwaysVisible } from '../helpers/intersection.ts'
 import { LiveCard, renderWith, setup } from './helpers.tsx'
 
 const NOW = Date.parse('2026-10-28T15:00:00.000Z')
@@ -61,10 +61,42 @@ describe('the compact card in the thread', () => {
     expect(preview.textContent?.length).toBeLessThan(200)
     expect(screen.getByTestId('permission-tail').textContent).toContain('; rm -rf ~')
     expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^Allow/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy() // one tap, on the face
     expect(screen.queryByTestId('approval-sheet')).toBeNull()
     expect(approvalIsOpen()).toBe(false)
+  })
+
+  it('Allow on the card face is one tap: it sends a primary resolve with the rendered hash and opens no sheet', async () => {
+    const c = make()
+    const client = setup({ cards: [c] })
+    renderWith(<LiveCard id={c.id} />, client)
+    await userEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
+    expect(client.sent.at(-1)).toMatchObject({
+      type: 'card.resolve',
+      card_id: c.id,
+      action: 'primary',
+      payload_hash: c.payload_hash,
+    })
+    expect(client.sent.at(-1)).not.toHaveProperty('always')
+    expect(screen.queryByTestId('approval-sheet')).toBeNull()
+    expect(approvalIsOpen()).toBe(false)
+  })
+
+  it('offers no Always allow (a permission rule needs Claude Code to suggest one first), even with the feature on', () => {
+    const c = make()
+    const client = setup({ cards: [c] })
+    client.store.setState((st) => ({ ...st, presence: { ...st.presence, features: ['always-allow/1'] } }))
+    renderWith(<LiveCard id={c.id} />, client)
+    expect(screen.queryByRole('button', { name: /^Always allow/ })).toBeNull()
+  })
+
+  it('a card with no Allow shows no Allow on the face either', () => {
+    const c = make({}, { repeated: true })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
+    expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull()
   })
 
   it('a card with no Allow (a repeated id) keeps the whole call in its scrolling box and has no way into the sheet', () => {
@@ -72,14 +104,14 @@ describe('the compact card in the thread', () => {
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     expect(screen.getByTestId('permission-call').className).toContain('max-h-80')
     expect(screen.queryByTestId('permission-open')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Review to allow' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull()
     expect(screen.getByRole('status').textContent).toContain(PERMISSION_REPEAT_WARNING)
   })
 
   it('a card with a part Claude Code hid keeps its way into the sheet, with the note naming what is not shown', () => {
     const c = make({ input_preview: '{"command": "cat <<EOF \u22ef 4812 code points elided \u22ef EOF"}' })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
-    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain(permissionHiddenWarning(['elided']))
     expect(screen.getByRole('status').textContent).not.toMatch(/at the Mac/)
   })
@@ -123,11 +155,12 @@ describe('the full-screen approval sheet', () => {
     expect(approvalIsOpen()).toBe(true) // every floating thing is told to stand down
   })
 
-  it('opens by itself when the card is opened from a push or /card/:id (highlighted)', () => {
+  it('does not open by itself when the card is opened from a push or /card/:id (highlighted): the card is armed, Details is there', () => {
     const c = make()
     renderWith(<LiveCard id={c.id} highlighted />, setup({ cards: [c] }))
-    expect(screen.getByTestId('approval-sheet')).toBeTruthy()
-    expect(approvalIsOpen()).toBe(true)
+    expect(screen.queryByTestId('approval-sheet')).toBeNull()
+    expect(approvalIsOpen()).toBe(false)
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy()
   })
 
   it('Close closes it without sending anything and clears the flag', async () => {
@@ -166,12 +199,12 @@ describe('the full-screen approval sheet', () => {
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
   })
 
-  it('Allow from the sheet needs nothing more (a permission card is risk low) and sends a primary resolve with the same hash', async () => {
+  it('Allow from the sheet is enabled at once and sends a primary resolve with the same hash', async () => {
     const c = make()
     const client = setup({ cards: [c] })
     renderWith(<LiveCard id={c.id} />, client)
     await open()
-    await waitFor(() => expect(allowBtn().disabled).toBe(false)) // a body that fits needs no scroll
+    expect(allowBtn().disabled).toBe(false)
     await userEvent.click(allowBtn())
     await waitFor(() => expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(true))
     expect(c.risk).toBe('low')
@@ -183,18 +216,16 @@ describe('the full-screen approval sheet', () => {
     })
   })
 
-  it('Deny from the sheet sends a kill, and Deny is enabled before the call has been read', async () => {
-    const io = installIntersection() // nothing reports: the end of the call is never seen
-    const c = make()
+  it('Deny from the sheet sends a kill; the call need not have been read', async () => {
+    const c = make({ input_preview: 'x'.repeat(5000) })
     const client = setup({ cards: [c] })
     renderWith(<LiveCard id={c.id} />, client)
     await open()
-    expect(allowBtn().disabled).toBe(true)
+    expect(allowBtn().disabled).toBe(false)
     const deny = within(screen.getByTestId('approval-sheet')).getByRole('button', { name: 'Deny' }) as HTMLButtonElement
     expect(deny.disabled).toBe(false)
     await userEvent.click(deny)
     await waitFor(() => expect(client.sent.at(-1)).toMatchObject({ action: 'kill', card_id: c.id }))
-    io.restore()
   })
 
   it('hidden characters are shown as markers, CJK and emoji as they are, and the call stays approvable', async () => {
@@ -242,141 +273,52 @@ describe('nothing may run off the side of the sheet', () => {
       expect(el.className).toContain('break-all')
     }
   })
-
-  for (const which of ['the scroll area', 'the title', 'the tail'] as const) {
-    it(`if ${which} still sticks out sideways (scrollWidth over clientWidth), Allow stays on and the hint says to scroll sideways`, async () => {
-      const c = make()
-      renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
-      const sheet = await open()
-      await waitFor(() => expect(allowBtn().disabled).toBe(false))
-      const el =
-        which === 'the scroll area'
-          ? within(sheet).getByTestId('approval-scroll')
-          : which === 'the title'
-            ? within(sheet).getByRole('heading', { name: /Allow Bash/ })
-            : within(sheet).getByTestId('permission-tail')
-      const sw = vi.spyOn(el, 'scrollWidth', 'get').mockReturnValue(3394)
-      const cw = vi.spyOn(el, 'clientWidth', 'get').mockReturnValue(393)
-      act(() => window.dispatchEvent(new Event('resize'))) // re-checked on resize
-      await waitFor(() =>
-        expect(within(sheet).getByTestId('approval-hint').textContent).toBe(
-          'Part of this call runs off the side of the screen: scroll sideways to see all of it.',
-        ),
-      )
-      expect(allowBtn().disabled).toBe(false) // a hint, not a refusal
-      sw.mockRestore()
-      cw.mockRestore()
-      act(() => window.dispatchEvent(new Event('resize')))
-      await waitFor(() => expect(within(sheet).queryByTestId('approval-hint')).toBeNull()) // and gone once it fits again
-      expect(allowBtn().disabled).toBe(false)
-    })
-  }
 })
 
-describe('the scroll-through gate: Allow unlocks once the owner has seen every line', () => {
-  const setupGate = (over = {}) => {
-    const io = installIntersection()
-    const c = make(over)
-    const client = setup({ cards: [c] })
-    renderWith(<LiveCard id={c.id} />, client)
-    return { io, c, client }
-  }
-  const sentinelObserver = (io: ReturnType<typeof installIntersection>) =>
-    io.live().find((o) => o.targets.includes(screen.getByTestId('approval-end'))) as FakeIO
-
-  it('fails closed: disabled, with the reason, until the end of the call has been in view', async () => {
-    const { io } = setupGate({ input_preview: 'x'.repeat(5000) })
+describe('the sheet gates nothing: no scroll gate, no zoom gate, no hint', () => {
+  it('Allow is enabled with a long call unread and no IntersectionObserver at all', async () => {
+    const g = globalThis as unknown as { IntersectionObserver: unknown }
+    const saved = g.IntersectionObserver
+    g.IntersectionObserver = undefined
+    const c = make({ input_preview: 'x'.repeat(5000) })
+    renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     await open()
-    expect(allowBtn().disabled).toBe(true)
-    expect(screen.getByTestId('approval-hint').textContent).toContain('Scroll to the end')
-    io.restore()
-  })
-
-  it("watches a sentinel at the END of the call, rooted in the sheet's own scroll area, at threshold 1", async () => {
-    const { io } = setupGate()
-    await open()
-    const o = sentinelObserver(io)
-    expect(o.opts.root).toBe(screen.getByTestId('approval-scroll'))
-    expect(o.opts.threshold).toBe(1)
-    const scroll = screen.getByTestId('approval-scroll')
-    const kids = Array.from(scroll.children)
-    expect(kids.at(-1)).toBe(screen.getByTestId('approval-end')) // after the call, after the summary: the last thing in the scroll area
-    io.restore()
-  })
-
-  it('enables Allow when the sentinel is seen, and keeps it enabled after it scrolls away again', async () => {
-    const { io } = setupGate()
-    await open()
-    const o = sentinelObserver(io)
-    act(() => o.report(screen.getByTestId('approval-end'), true))
     expect(allowBtn().disabled).toBe(false)
     expect(screen.queryByTestId('approval-hint')).toBeNull()
-    act(() => o.report(screen.getByTestId('approval-end'), false)) // scrolled back up to re-read
-    expect(allowBtn().disabled).toBe(false)
-    io.restore()
+    expect(screen.queryByTestId('approval-end')).toBeNull()
+    g.IntersectionObserver = saved
   })
 
-  it('a pinch zoom (visual viewport scale over 1) disables Allow until the scale is back to 1; Deny stays', async () => {
+  it('a pinch zoom does not disable Allow', async () => {
     const listeners: Record<string, () => void> = {}
     const vv = {
       offsetTop: 0,
       offsetLeft: 0,
       width: 320,
       height: 500,
-      scale: 1,
+      scale: 2.2,
       addEventListener: (n: string, f: () => void) => {
         listeners[n] = f
       },
       removeEventListener: () => {},
     }
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv })
-    const { io } = setupGate()
-    await open()
-    const o = sentinelObserver(io)
-    act(() => o.report(screen.getByTestId('approval-end'), true))
-    expect(allowBtn().disabled).toBe(false)
-    vv.scale = 2.2
-    act(() => listeners.resize?.())
-    expect(allowBtn().disabled).toBe(true)
-    expect(screen.getByTestId('approval-hint').textContent).toContain('Zoom back out')
-    expect(
-      (within(screen.getByTestId('approval-sheet')).getByRole('button', { name: 'Deny' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(false)
-    vv.scale = 1
-    act(() => listeners.resize?.())
-    expect(allowBtn().disabled).toBe(false)
-    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
-    io.restore()
-  })
-
-  it('a click on a disabled Allow sends nothing', async () => {
-    const { io, client } = setupGate()
-    await open()
-    await userEvent.click(allowBtn())
-    expect(client.sent.some((f) => f.type === 'card.resolve')).toBe(false)
-    io.restore()
-  })
-
-  it('without an IntersectionObserver at all, Allow never enables (fails closed)', async () => {
-    const g = globalThis as unknown as { IntersectionObserver: unknown }
-    const saved = g.IntersectionObserver
-    g.IntersectionObserver = undefined
     const c = make()
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     await open()
-    expect(allowBtn().disabled).toBe(true)
-    g.IntersectionObserver = saved
+    expect(allowBtn().disabled).toBe(false)
+    expect(screen.queryByTestId('approval-hint')).toBeNull()
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
   })
 })
 
 describe('Allow on every card but a repeated id (every fixture)', () => {
   for (const fx of permissionFixtures) {
-    it(`${fx.name}: ${fx.allow ? 'a way to Allow (the sheet)' : 'Deny only'}`, () => {
+    it(`${fx.name}: ${fx.allow ? 'Allow on the face' : 'Deny only'}`, () => {
       const c = make(fx.params, { card_id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4E1', ...(fx.repeated ? { repeated: true } : {}) })
       renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
       expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy()
-      expect(screen.queryByRole('button', { name: 'Review to allow' }) !== null).toBe(fx.allow)
+      expect(screen.queryByRole('button', { name: 'Allow' }) !== null).toBe(fx.allow)
       if (fx.repeated) expect(screen.getByRole('status').textContent).toContain(PERMISSION_REPEAT_WARNING)
       else if (fx.hidden.length > 0)
         expect(screen.getByRole('status').textContent).toContain(permissionHiddenWarning(fx.hidden))
@@ -387,19 +329,19 @@ describe('Allow on every card but a repeated id (every fixture)', () => {
     const c = make({}, { client_version: '2.1.210' })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
     expect(screen.getByText(PERMISSION_OLD_CLIENT_WARNING)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy()
   })
 
   it('a tampered card (body changed after hashing) is not offered at all', () => {
     const c = { ...make(), body: '{"command": "rm -rf /"}' }
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
-    expect(screen.queryByRole('button', { name: 'Review to allow' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull()
   })
 
   it('another channel adds a one-line note and the way to Allow stays', () => {
     const c = make({}, { other_channels: ['discord'] })
     renderWith(<LiveCard id={c.id} />, setup({ cards: [c] }))
-    expect(screen.getByRole('button', { name: 'Review to allow' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy()
     // the note lives with the warning line of the card
     expect(c.warning).toBe('discord can also approve this.')
   })

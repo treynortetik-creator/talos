@@ -234,7 +234,8 @@ struct RestartCannotLaunchTests {
     #expect(r.gaveUpPosts.count == 1 && r.starts.count == 1 && ProcessInspect.alive(other))
   }
 
-  /// The owner's own Start is not a crash restart: blocked or failed, it ends at once with its reason and posts nothing.
+  /// The owner's own Start is not a crash restart: blocked or failed, it ends at once with its reason and posts no crash message, and
+  /// no restart is tried. The one line the thread gets is row 12's "Talos couldn't start" (`StartStallPhoneLineTests`).
   @Test func theOwnersOwnStartStillEndsAtOnce() throws {
     let r = try Rig(.direct, scenario: "dev-dialog.sh", timings: timings())
     defer { r.teardown() }
@@ -243,7 +244,8 @@ struct RestartCannotLaunchTests {
     r.start()
     #expect(r.wait(10) { stopReason(r.phase()) != nil }, "\(r.phase())")
     r.tickFor(1.5)
-    #expect(r.count("restart_not_possible") == 0 && r.phonePosts.isEmpty && r.starts.isEmpty, "audit: \(r.audit)")
+    #expect(r.count("restart_not_possible") == 0 && r.starts.isEmpty && r.gaveUpPosts.isEmpty && r.crashPosts.isEmpty, "audit: \(r.audit)")
+    #expect(r.phonePosts == ["post general " + StartStallPhoneLineTests.couldNotStartLine], "\(r.phonePosts)")
   }
 }
 

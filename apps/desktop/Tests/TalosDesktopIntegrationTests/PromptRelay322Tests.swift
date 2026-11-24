@@ -14,14 +14,6 @@ private final class FlagReads: @unchecked Sendable {
   var all: [String?] { lock.withLock { items } }
 }
 
-/// The manager's awake clock, plus a jump the test makes: a minute of the awake clock passes at once, whatever the load is.
-private final class SkewClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var skew = 0.0
-  func read() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lock.withLock { skew } }
-  func jump(_ seconds: Double) { lock.withLock { skew += seconds } }
-}
-
 @Suite("Worker prompts: the 2.1.322 sub-agent ask", .serialized, .enabled(if: Rig.hasTmux))
 struct WorkerPrompt322Tests {
   static let ask = "perm-subagent-rm-120x40"
@@ -42,6 +34,7 @@ struct WorkerPrompt322Tests {
 
   /// An attached tmux client with a tty, the way a Terminals window is one; its activity time is the attach.
   private func attach(_ r: WorkerRig) throws -> Process {
+    #expect(Rig.pinWindowSize(socket: r.socket, session: "t-trip"), "control: the window is pinned to its size")
     let client = Process()
     client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
     client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=t-trip"]
@@ -176,10 +169,15 @@ struct WorkerPrompt322Tests {
       Thread.sleep(forTimeInterval: 0.3)
       return one == capture() && PromptDetector.detect(TmuxCommands.parseCapture(one)) != nil
     }
-    r.mgr.tune { $0.promptDebounce = 0 }  // the wall clock never hides a second post here: only the flicker rule can keep it back
+    // The manager looks only when this test says (`tickOnce`): its own timer would otherwise look at the screens at arbitrary moments between
+    // the clock's jumps, which no real run does (a look every second), and 1 run in ~20 posted the ask a second time (2026-11-22).
+    r.mgr.tune {
+      $0.promptDebounce = 0  // the wall clock never hides a second post here: only the flicker rule can keep it back
+      $0.tick = 3600
+    }
     r.mgr.startTicking()
     try r.wake("trip")
-    #expect(r.wait(30) { log.all.count == 1 }, "\(r.why("trip"))")
+    #expect(r.wait(30) { r.mgr.tickOnce(); return log.all.count == 1 }, "\(r.why("trip"))")
     r.mgr.tune { $0.dialogSettle = 60 }  // the flag's hold: far longer than the flicker, however slow the machine
     FileManager.default.createFile(atPath: a, contents: nil)
     #expect(r.wait(30) { !askOnPane() }, "control: the ask is off the pane")

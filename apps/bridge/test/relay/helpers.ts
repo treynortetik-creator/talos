@@ -170,6 +170,9 @@ export function memorySecrets(): SecretStore & { data: Map<string, string> } {
     async delete(s, a) {
       data.delete(k(s, a))
     },
+    async has(s, a) {
+      return data.has(k(s, a))
+    },
   }
 }
 

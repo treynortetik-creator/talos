@@ -110,6 +110,8 @@ public enum PopupNothing: Equatable, Sendable {
   case couldNotCheck
   /// A key was sent and Talos has not seen it take: not an answer that stood, and the prompt is offered again if it is still there.
   case unconfirmed
+  /// A usage-limit answer stopped part way: Escape went, so it is not "nothing pressed" (`UsageLimitScreen.Stop`).
+  case stopped(UsageLimitScreen.Stop)
 }
 
 /// What the popup controller needs of the worker manager (the live one is `WorkerManager`; tests bring their own).
@@ -209,6 +211,11 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     case .agentQuestion:
       title = "A question from \(Self.cut60(name))'s session"
       sentence = "\(name)'s session is asking you to choose. Your answer goes straight into the session."
+    case .usageLimit:
+      title = "\(Self.cut60(name))'s session hit its usage limit"
+      sentence = d.options.contains(UsageLimitScreen.switchLabel)
+        ? "\(name)'s session can't go on until the limit resets or you switch to another model. Stop and wait ends its current turn. Switch model opens the model list in the session. Nothing here spends money."
+        : "\(name)'s session can't go on until the limit resets. Stop and wait ends its current turn. Nothing here spends money."
     case .apiKey:
       title = ApiKeyCard.title
       sentence = "\(name)'s session found an API key in your environment. If you use it, Claude Code bills that key instead of your Claude account. Claude Code's own default is not to use it."
@@ -251,6 +258,7 @@ public struct NeedsYouPopupContent: Equatable, Sendable {
     case .alreadyAnswered(let by): return "Already answered on \(by.map(DialogVisibleText.show) ?? "another device")"
     case .noWindow: return "Nothing opened: Talos could not open the sign-in window. Choose Sign in to Claude again in the Talos menu."
     case .typing: return "You were typing in \(name)'s session, so Talos left it alone."
+    case .stopped(let s): return s.text
     case .unconfirmed: return "Sent, but Talos has not seen it take yet. If \(name)'s prompt comes back, answer it again."
     case .couldNotCheck: return "Talos could not check whether you were typing in \(name)'s session, so it left it alone."
     }

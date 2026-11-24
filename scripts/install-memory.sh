@@ -74,7 +74,7 @@ carry_memsearch_step() {
     [ "$a" = --with-reranker ] && asked_rr=1
     prev="$a"
   done
-  # Chronos only comes with --with-chronos (the root installer gives the kit --no-chronos otherwise), and then --no-jobs is its own
+  # Chronos comes with every Mac install (the root installer gives the kit --no-chronos only off macOS or with --no-chronos); --no-jobs is its own
   if [ "$CHRONOS" = 1 ]; then nojob=(); for a in ${KIT_ARGS[@]+"${KIT_ARGS[@]}"}; do [ "$a" = --no-jobs ] && nojob=(--no-job); done; fi
   [ "$asked_rr" = 1 ] && gate=()   # an explicit --with-reranker is never second-guessed
   [ -z "${TALOS_INSTALL_MEMSEARCH_CMD:-}" ] || cmd=(bash -c "$TALOS_INSTALL_MEMSEARCH_CMD" memsearch)

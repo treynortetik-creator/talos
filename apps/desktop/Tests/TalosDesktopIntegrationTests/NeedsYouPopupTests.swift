@@ -413,6 +413,7 @@ struct NeedsYouPopupTests {
     defer { r.teardown(); keys.remove() }
     r.mgr.tune { $0.cardLifetime = 2 }
     let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 600 }  // no look makes a new sighting meanwhile (re-offering at expiry is its own test): this one is about the old offer
     #expect(r.wait(10) { r.mgr.popupOffers().isEmpty }, "still offered past expires_at")
     #expect(r.offer?.id == o.id, "control: the dialog itself is still on the pane")
     #expect(click(r, o, choice: 1) == .nothing(.notOffered))

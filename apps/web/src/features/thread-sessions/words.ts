@@ -41,6 +41,8 @@ export type SessionWordsInput = {
 export const LONG_TURN_MS = 2 * 60 * 60_000
 
 const USAGE_LIMIT = 'usage limit'
+/** The deaf-thread alarm's kind (protocol NEEDS_YOU_UNTYPEABLE): Talos cannot type into the session, so its messages go to Main. */
+const UNTYPEABLE = 'something Talos does not type into'
 const RUNNING = new Set<WorkerStatusItemT['state']>(['starting', 'live', 'busy'])
 
 /** "9:40 AM" today, "Nov 12, 9:40 AM" another day; empty for a time that does not parse. */
@@ -95,6 +97,14 @@ function live(i: SessionWordsInput, item: WorkerStatusItemT): SessionWords {
       tone: 'needs',
       short: when ? `Usage limit · resets ${when}` : 'Usage limit reached',
       long: `${sinceWords(at(n.since))}it reached the usage limit${when ? `, which resets ${when}` : ''}.`,
+      ...(n.step ? { step: n.step } : {}),
+    }
+  }
+  if (n && n.kind === UNTYPEABLE) {
+    return {
+      tone: 'needs',
+      short: "Needs you · Talos can't send it messages",
+      long: `${sinceWords(at(n.since))}something on its screen is one Talos doesn't recognise, so Talos can't send it messages. If it stays that way, your main agent answers your messages.`,
       ...(n.step ? { step: n.step } : {}),
     }
   }

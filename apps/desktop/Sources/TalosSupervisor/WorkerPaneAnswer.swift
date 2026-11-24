@@ -12,7 +12,7 @@ import TalosDesktopCore
 extension WorkerManager {
   func pressPane(_ id: String, _ offer: DialogOffer, _ choice: Int, _ chosen: String, text: String?) -> AnswerOutcome {
     guard let bound = rt[id]?.offer.paneBound, offer.options.indices.contains(choice), ExactText.equal(offer.options[choice], chosen) else { return .nothing() }
-    let kind: PaneSelect.Kind = offer.kind == .toolPermission ? .toolPermission : .agentQuestion
+    guard let kind = PaneSelect.Kind(rawValue: offer.kind.rawValue) else { return .nothing() }
     let driver = PaneAnswerDriver(
       kind: kind, bound: bound, freeText: offer.free_text,
       read: { [self] in
@@ -39,6 +39,12 @@ extension WorkerManager {
       return .init(outcome: .nothingPressed, reason: .unconfirmed)  // sent, not seen to take: never reported as an answer that stood
     case .blocked(let b): return .blocked(b == .typing ? .typing : .unreadable)
     case .changed: return .nothing()
+    case .usageStopped(let stop):
+      // Escape went and the answer stopped before it was done: this offer is spent, and it is said as it is (never "nothing pressed")
+      rt[id]?.offer.disturbed = true
+      rt[id]?.offer.enterSentFor = offer.id
+      audit("worker_pane_usage_stopped thread=\(id) how=\(stop.rawValue)")
+      return .init(outcome: .partial, choice: choice, label: chosen, reason: AnswerOutcome.partialReason(stop))
     case .partial:
       // the free-text field was focused and the rest was stopped: this offer is spent, the owner finishes it at the Mac
       rt[id]?.offer.disturbed = true

@@ -81,9 +81,9 @@ That does the mechanical parts:
 - **Copies** the kit into `~/talos-agent` (change it with `--agent-dir`). Your agent lives in the copy,
   not in the clone, so your memory never sits inside a git checkout that has a remote.
 - Writes `.claude/settings.json` (the hooks) and `.talos-version` in the copy.
-- **Does not install Chronos** unless you ask. Chronos is the scheduler that lets the agent do things on a timer. Add it with
-  `./install.sh --with-chronos` (now, or any time later on this agent): it registers the Talos jobs, all switched off for
-  now. Not wanting scheduling is the default; the agent works the same and nothing runs on a timer. See the README, "Chronos".
+- **Installs Chronos**, the scheduler that lets the agent do things on a timer, from `apps/chronos` in the repository. It
+  registers the Talos jobs with every Claude job switched off; nothing that uses Claude runs on a timer until you enable it.
+  An agent made before Chronos came with Talos gets it the next time you run `./install.sh`. See the README, "Chronos".
 
 Run `./install.sh --dry-run` first if you want to see the plan without changing anything.
 
@@ -149,7 +149,7 @@ also records the vault for the optional guard in `hooks/check-vault.py`. If you 
 
 ## Optional, whenever you like: talk to it from your phone
 
-If you want to message your agent from your phone instead of sitting at the terminal, use the Talos app (the owner enrolls the phone with `talos-app enroll` in Terminal). Setup is in [SETUP.md](../SETUP.md) (steps 4 to 7). If you want scheduled jobs to deliver there, `./install.sh --with-chronos --notify talos` checks that `talos-app` exists and records where it lives, and warns if it can't find it (do the phone steps first, so `talos-app` is on your PATH). Skip all of this for now if you are not sure; nothing else depends on it.
+If you want to message your agent from your phone instead of sitting at the terminal, use the Talos app (the owner enrolls the phone with `talos-app enroll` in Terminal). Setup is in [SETUP.md](../SETUP.md) (steps 4 to 7). If you want scheduled jobs to deliver there, `./install.sh --notify talos` checks that `talos-app` exists and records where it lives, and warns if it can't find it (do the phone steps first, so `talos-app` is on your PATH). Skip all of this for now if you are not sure; nothing else depends on it.
 
 ## Day two — the moment that matters
 
@@ -202,10 +202,11 @@ out, being asked is correct.
 It tells you why: a non-empty folder, cloud-synced storage, or a macOS-protected folder. Each has a
 fix in the message.
 
-**The installer cannot clone Chronos**
-Chronos is a public repository, so this is usually the network (or a proxy that blocks GitHub). Check that
-`git ls-remote https://github.com/treynortetik-creator/chronos` works, or use a local checkout with `--chronos-path DIR`,
-or leave Chronos out (it is off unless you pass `--with-chronos`).
+**The installer says this clone has no Chronos, or that the kit has no Chronos beside it**
+Chronos lives in the Talos repository (`apps/chronos`) and is never cloned or fetched. A clone that lacks it is older than
+that: update it (`git pull`), then run `./install.sh` again. Or use a Chronos of your own with `--chronos-path DIR`.
+The "no Chronos beside it" message comes from the kit copy inside an agent folder, which carries no `apps/chronos`. Run
+`./install.sh` in the Talos clone instead, or add `--no-chronos`. (Adding to an agent whose Chronos Talos set up keeps using that Chronos.)
 
 **Something else**
 Tell your agent what happened, in plain language. It has this whole kit available and can usually

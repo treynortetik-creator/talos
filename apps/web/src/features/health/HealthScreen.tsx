@@ -13,10 +13,11 @@ import { Mascot } from '../../ui/Mascot.tsx'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { ReportProblem } from '../problems/ReportProblem.tsx'
 import { NOT_CONNECTED_LINE } from '../settings/offline.ts'
+import { useWorkersStatus } from '../thread-sessions/store.ts'
 import { gatherDiagnosticsText } from './gather.ts'
 import { limitsLine } from './limits.ts'
 import { PermissionRelaySwitch } from './PermissionRelaySwitch.tsx'
-import { type HealthRow, healthNotes, healthRows, NOBODY, type Tone, testOutcome } from './rows.ts'
+import { type HealthRow, healthNotes, healthRows, NOBODY, type Tone, testOutcome, typingRows } from './rows.ts'
 import { useHealthStatus } from './useHealthStatus.ts'
 
 const http = createHttp()
@@ -143,8 +144,14 @@ export function HealthScreen() {
   }
 
   const status = state.status
+  const threads = useTalos((s) => s.threads)
+  const workers = useWorkersStatus()
+  const nameOf = (id: string) => threads.find((t) => t.id === id)?.name ?? id
   const rows = status
-    ? healthRows(status, { scheduler: schedules === 'off' ? undefined : { state: cached }, host })
+    ? [
+        ...healthRows(status, { scheduler: schedules === 'off' ? undefined : { state: cached }, host }),
+        ...typingRows(workers?.threads, nameOf),
+      ]
     : []
   const copyDiagnostics = async () => {
     const text = gatherDiagnosticsText({

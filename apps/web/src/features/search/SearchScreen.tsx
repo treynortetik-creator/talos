@@ -19,6 +19,7 @@ import {
   MIN_CHARS,
   pushRecent,
   RANGE_LABEL,
+  SEARCH_WORDS,
   searchCached,
   type TimeRange,
 } from './logic.ts'
@@ -275,8 +276,8 @@ export function SearchScreen() {
         {status.kind === 'idle' && (
           <div className="px-4 py-4">
             <p className="m-0 text-sm text-text-2">
-              Type at least {MIN_CHARS} letters. Words match anywhere in a message, a voice note or a file name. Put
-              "quotes" around a phrase and a - before a word to leave it out.
+              Type at least {MIN_CHARS} letters. {SEARCH_WORDS} Put "quotes" around a phrase and a - before a word to
+              leave it out.
             </p>
             {recent.length > 0 && (
               <div className="mt-4 flex flex-col gap-1" data-testid="search-recent">

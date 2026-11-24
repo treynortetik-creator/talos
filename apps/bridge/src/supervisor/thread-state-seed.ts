@@ -66,7 +66,12 @@ export function seedThreadState(
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
     }
-    if (fst) return fst.isSymbolicLink() ? { problem: `${file} is a link` } : { ok: 'exists' }
+    if (fst) {
+      if (fst.isSymbolicLink()) return { problem: `${file} is a link` }
+      // a folder (or anything else) there is not a state file: the session's rules deny what is under it, and it would not be read
+      if (!fst.isFile()) return { problem: `${file} is not a regular file` }
+      return { ok: 'exists' }
+    }
     if (dry) return { ok: 'created' }
     if (!st) mkdirSync(dir, { mode: 0o700 })
     const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)

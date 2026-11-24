@@ -17,14 +17,14 @@ fi
 cd "$(dirname "$0")/.."
 OUT="${1:-.build/ci-app}"
 STAMP="$(bash scripts/tests-green-stamp.sh || true)"  # the tree the suite runs on, taken before it runs
-# The main run is watched for pty masters its test process keeps (pty-watch.sh), around the retry so a rerun can't hide a bad peak.
+# The main run is watched for pty masters its test process keeps (pty-watch.sh).
 if [ "${TALOS_GUI_TESTS:-0}" = 1 ]; then
   # A logged-in session that allows windows: the window-opening suites run one process each (gui-tests.sh fails a process that ends
   # early), and the main run keeps the gate off so nothing runs twice.
   TALOS_GUI_TESTS=0 bash scripts/pty-watch.sh bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
   bash scripts/gui-tests.sh
 else
-  # In CI (CI_FLAKE_FILE set) a failed test runs once more, alone; by hand ci-swift-retry.sh just runs test.sh.
+  # ci-swift-retry.sh runs test.sh once: no retries.
   bash scripts/pty-watch.sh bash ../../scripts/ci-swift-retry.sh bash scripts/test.sh
 fi
 bash scripts/pty-watch-test.sh

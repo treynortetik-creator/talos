@@ -2,9 +2,11 @@
 // resolve can never arrive for a card the ledger does not know.
 import {
   AGENT_CARD_KINDS,
+  BRIDGE_PAYLOAD_KEYS,
   bindingFrom,
   Card,
   type CardT,
+  cardOffersAlways,
   clipUnits,
   isAgentCardKind,
   newId,
@@ -12,6 +14,7 @@ import {
   validateCard,
 } from '@talos-app/protocol'
 import { allowWithoutCard, alwaysAllowedNow } from '../always-allow.ts'
+import { cliFields, isHighRiskCommand, isReservedField, parseCliArg } from '../card-cli.ts'
 import { touchThread } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { CARD_EXPIRY_S, MAX_PENDING_CARDS } from '../heartbeat/cards.ts'
@@ -88,6 +91,12 @@ export const card: ToolRecord = {
       warning: { type: 'string', description: 'Up to 160 characters, e.g. "Goes outside this app. Can\'t be unsent."' },
       expires_in_s: { type: 'number', description: 'Default 86400 (one day) for background and chat; at most 604800.' },
       payload: { description: 'Your own opaque data, up to 64 KiB. Shown to the owner under Details.' },
+      cli: {
+        type: 'array',
+        items: { type: 'array', items: { type: 'string' } },
+        description:
+          'Optional. talos-app commands for Talos itself to run when the owner approves this card in the app, each as a list of words, e.g. [["peer","remove","work"],["peer","list"]]. Only peer accept|list|remove|secret-forget and devices list|revoke: a command that makes a code or a secret (peer link, create, rotate) or needs a secret file (add) cannot run from a card, and is refused. The card shows the owner what will happen in plain words, with the exact commands under Details. Talos runs them in order, once, and posts what they printed; you do not run them and are not told to.',
+      },
       related_event_id: { type: 'string' },
       supersedes: { type: 'string', description: 'Card id this one replaces (after a revise).' },
       allow_edit: { type: 'boolean' },
@@ -119,12 +128,54 @@ export const card: ToolRecord = {
       const expiresIn = hbJob ? Math.min(asked, CARD_EXPIRY_S) : asked
       if (!(expiresIn >= 1) || expiresIn > MAX_EXPIRY_S)
         throw new ToolError(`expires_in_s must be between 1 and ${MAX_EXPIRY_S}`)
+      // payload keys only the bridge writes (a rule-ask or permission-mode card's own marks): refused, so an agent card cannot pass for
+      // one and show an Always allow button that grants nothing
+      if (
+        typeof args.payload === 'object' &&
+        args.payload !== null &&
+        BRIDGE_PAYLOAD_KEYS.some((k) => Object.hasOwn(args.payload as object, k))
+      )
+        throw new ToolError(`payload keys ${BRIDGE_PAYLOAD_KEYS.join(', ')} are reserved for the bridge's own cards`)
       const attachmentPaths = args.attachments
       if (
         attachmentPaths !== undefined &&
         (!Array.isArray(attachmentPaths) || attachmentPaths.some((p) => typeof p !== 'string'))
       )
         throw new ToolError('attachments must be an array of absolute paths')
+      // The commands this card carries (card-cli.ts) are written onto it by the bridge from the argvs: what will happen in plain words,
+      // the exact commands under "Details", and a check code, all read-only and inside the hash the owner approves. The agent cannot write
+      // a field like them, and the bridge, not the agent, runs them on his signed tap in the app.
+      let cliFieldsOut: Record<string, unknown>[] = []
+      let forceHigh = false
+      if (Array.isArray(args.fields) && args.fields.some((f) => isReservedField(f, args.cli !== undefined)))
+        throw new ToolError(
+          'a field with the key or label the bridge uses for commands (talos_cli, "What will happen", "Details", "Commands check") is reserved: pass the commands as cli',
+        )
+      if (args.cli !== undefined) {
+        const parsedCli = parseCliArg(args.cli)
+        if (!parsedCli.ok) throw new ToolError(parsedCli.error)
+        // nothing on a card with commands can be changed in the app after the agent wrote it: no editing, no editable field
+        if (args.allow_edit === true) throw new ToolError('a card with cli cannot allow edits: leave allow_edit off')
+        if (
+          Array.isArray(args.fields) &&
+          args.fields.some((f) => (f as { editable?: unknown } | null)?.editable === true)
+        )
+          throw new ToolError('a card with cli cannot have an editable field')
+        // linking to another agent, or taking a device's access away, is high risk whatever the agent says
+        forceHigh = parsedCli.argvs.some(isHighRiskCommand)
+        // `devices revoke <id>` shows a raw id: the bridge looks it up and says whose access goes. An id that is not a device, or is
+        // already revoked, is refused; and such a card is always high risk.
+        const notes: Record<string, string> = {}
+        for (const argv of parsedCli.argvs) {
+          if (argv[0] !== 'devices' || argv[1] !== 'revoke') continue
+          const d = argv[2] === undefined ? undefined : ctx.devices.get(argv[2])
+          if (!argv[2] || !d || d.revoked_at)
+            throw new ToolError(`cli names \`devices revoke ${argv[2] ?? ''}\`, which is not an approved device`)
+          const name = clipUnits(d.name.replace(/\s+/g, ' ').trim(), 60)
+          notes[argv[2]] = `${name}${d.pinned_at ? ` (added ${d.pinned_at.slice(0, 10)})` : ''}`
+        }
+        cliFieldsOut = cliFields(parsedCli.argvs, notes)
+      }
       const attachments = await uploadAll(ctx, (attachmentPaths as string[] | undefined) ?? [])
       const candidate: Record<string, unknown> = {
         id: newId('c'),
@@ -133,11 +184,15 @@ export const card: ToolRecord = {
         title: args.title,
         destination: args.destination ?? [],
         body_format: args.body_format ?? 'plain',
-        fields: args.fields ?? [],
+        // the bridge's own lines come first, so what the agent may run is the first thing the owner reads
+        fields:
+          cliFieldsOut.length && (args.fields === undefined || Array.isArray(args.fields))
+            ? [...cliFieldsOut, ...(args.fields ?? [])]
+            : (args.fields ?? []),
         attachments,
         primary_label: args.primary_label,
         kill_label: args.kill_label,
-        risk: mintRisk(ctx.config.config, String(args.kind), args.risk),
+        risk: forceHigh ? 'high' : mintRisk(ctx.config.config, String(args.kind), args.risk),
         origin: hbJob ? 'background' : origin,
         payload_hash: `sha256:${'0'.repeat(64)}`,
         state: 'pending',
@@ -155,6 +210,7 @@ export const card: ToolRecord = {
       ] as const) {
         if (args[k] !== undefined) candidate[k] = args[k]
       }
+      if (args.cli !== undefined) candidate.allow_edit = false
       const parsed = Card.safeParse(candidate)
       if (!parsed.success) {
         const i = parsed.error.issues[0]
@@ -166,7 +222,8 @@ export const card: ToolRecord = {
       c.payload_hash = payloadHash(bindingFrom(c))
       // "Always allow" (always-allow.ts): a send kind the owner always allows is approved now, with no card; read from config at
       // this moment, so a kind he removed a second ago is a card again
-      if (alwaysAllowedNow(ctx, c.kind)) return ok(await allowWithoutCard(ctx, c))
+      if (alwaysAllowedNow(ctx, c.kind) && cardOffersAlways(c, ctx.config.config))
+        return ok(await allowWithoutCard(ctx, c))
       const createFrame = cardCreateFrame(nowMs, c)
       assertFrameFits(createFrame) // a schema-valid card can still be over the relay's frame limit; refuse it up front
       // From here to `ledger.create` there is no await: the supersede check, the count of pending cards and the card itself are

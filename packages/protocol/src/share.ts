@@ -27,6 +27,12 @@ export const ShareToken = z.object({
 /** `Authorization: Bearer talos_share_<43 base64url>` (32 random bytes). Hashed at rest; shown once. */
 export const SHARE_SECRET_RE = /^talos_share_[A-Za-z0-9_-]{43}$/
 
+/**
+ * `Idempotency-Key` header on `POST /api/share`: one random id per share, the same on every retry of it. A header, not a
+ * body field, because `SharePostBody` is strict and an older relay would refuse an unknown field.
+ */
+export const SHARE_IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,64}$/
+
 /** The only target a token can reach. No thread choice, no reads, no other route. */
 export const SHARE_THREAD = 'inbox'
 

@@ -106,6 +106,36 @@ describe('export-public.sh', () => {
     expect(existsSync(join(target, '.git'))).toBe(false)
   })
 
+  it('never carries refs/fleet/*: no headline or roster file and no .git in the output', () => {
+    const { repo, keep } = fixtureRepo()
+    for (const [name, file] of [
+      ['work', 'headline'],
+      ['_roster', 'roster'],
+    ] as const) {
+      const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+        cwd: repo,
+        env: cleanEnv,
+        encoding: 'utf8',
+        input: 'work on it\n',
+      }).trim()
+      const tree = execFileSync('git', ['mktree'], {
+        cwd: repo,
+        env: cleanEnv,
+        encoding: 'utf8',
+        input: `100644 blob ${blob}\t${file}\n`,
+      }).trim()
+      git(repo, 'update-ref', `refs/fleet/${name}`, git(repo, 'commit-tree', '-m', 'fleet', tree).trim())
+    }
+    expect(git(repo, 'for-each-ref', 'refs/fleet/')).toContain('refs/fleet/_roster')
+    const target = join(tmp('export-out-'), 'public')
+    const r = run([target], repo)
+    expect(r.code, r.out).toBe(0)
+    expect(walk(target)).toEqual(keep)
+    expect(existsSync(join(target, 'headline'))).toBe(false)
+    expect(existsSync(join(target, 'roster'))).toBe(false)
+    expect(existsSync(join(target, '.git'))).toBe(false)
+  })
+
   it('leaves out an untracked file and does not mind an exclude entry that was never tracked', () => {
     const { repo } = fixtureRepo()
     writeFileSync(join(repo, 'untracked-secret.txt'), 'x')

@@ -162,3 +162,6 @@ export function clearRecent(): void {
     // nothing stored
   }
 }
+
+/** Where words match (the same line on /search and in a thread's search). The Mac still indexes old voice notes' transcripts. */
+export const SEARCH_WORDS = 'Words match anywhere in a message, an old voice note or a file name.'

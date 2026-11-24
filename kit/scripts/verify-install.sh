@@ -242,11 +242,28 @@ except ImportError:
 try: d = json.load(open(".claude/settings.json"))
 except Exception: sys.exit(1)
 hooks = merged_hooks(d).get("PreToolUse", [])
-sys.exit(0 if any("pre-tool-guard.py" in h.get("command","") for e in hooks if e.get("matcher")=="Bash" for h in e.get("hooks",[])) else 1)
+sys.exit(0 if any("pre-tool-guard.py" in h.get("command","") for e in hooks if "Bash" in str(e.get("matcher")).split("|") for h in e.get("hooks",[])) else 1)
 PYCHK
 then ok "pre-tool guard is registered on PreToolUse for Bash"
 else bad "pre-tool guard is NOT registered -- cat .env and rm -rf are unguarded through Bash"
      note 'copy the hooks block from templates/dot-claude/settings.json'; fi
+
+# The same guard on the file tools: it also refuses a Write/Edit into the Mac app's folders (the updater runs code from there). An agent
+# set up before that has the guard on Bash only; the template change reaches it only when its settings are rewritten (upgrade.sh).
+if [ -f .claude/settings.json ] && HERE="$HERE" python3 - <<'PYCHK2'
+import json, os, sys
+sys.path.insert(0, os.environ["HERE"])
+try:
+    from _hook_registry import merged_hooks
+except ImportError:
+    merged_hooks = lambda cfg, agent=".": cfg.get("hooks") or {}
+try: d = json.load(open(".claude/settings.json"))
+except Exception: sys.exit(0)
+ms = [str(e.get("matcher")).split("|") for e in merged_hooks(d).get("PreToolUse", []) for h in e.get("hooks", []) if "pre-tool-guard.py" in h.get("command", "")]
+sys.exit(0 if (not ms or any("Write" in m for m in ms)) else 1)
+PYCHK2
+then :
+else note "the pre-tool guard is registered for Bash only: add Write|Edit|MultiEdit|NotebookEdit to its matcher (templates/dot-claude/settings.json) so it also protects the Mac app's folders"; fi
 
 # The enforcement hooks (claim gate, append-only guard, sub-agent log, statusline, channel debt) are extras:
 # reported as notes, never failures, so an older install is not told it is broken for lacking a nice-to-have.

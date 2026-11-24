@@ -4,7 +4,8 @@ import TalosDesktopCore
 /// Claude Code's usage-limit screen on Main's pane (`UsageLimitScreen`; the thread sessions' twin is WorkerUsageLimit.swift). Main is
 /// needs-you while it is up (`needs_you` in main-restart-check.json, with the screen's own kind), Terminals is not brought forward
 /// (`opensTerminal`: the screen is `answerless`), and the phone gets one line per appearance, at most one an hour, naming the model, when
-/// it resets if the screen says, and how to go on. Talos sends it NO key, ever: one of its options spends usage credits.
+/// it resets if the screen says. Talos presses no row of it: one of its options spends usage credits. Its choices (Stop and wait, Switch model)
+/// are the Mac popup and the phone card (`SupervisorPanePrompt.swift`), and their keys are the card's own (`KeyGuard.Intent.usageLimit`).
 extension Supervisor {
   func mainUsageLimit(_ rows: [String], launch l: inout Launch) {
     let info = UsageLimitScreen.read(rows)

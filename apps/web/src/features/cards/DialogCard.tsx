@@ -20,7 +20,7 @@ import { hostSteps, useHost } from '../../lib/hostWords.ts'
 import { cn } from '../../ui/cn.ts'
 import { Button } from '../../ui/index.ts'
 import { isExpiredNow } from './logic.ts'
-import { formatClock, revealHidden } from './util.ts'
+import { formatClock, formatExpiry, revealHidden } from './util.ts'
 
 export type DialogCardProps = {
   card: CardT
@@ -124,7 +124,11 @@ export function DialogCard({
       {d.subject !== null && phase !== 'nothing' ? (
         <p
           data-testid="dialog-subject"
-          className="mt-2 whitespace-pre-wrap rounded-button bg-surface-2 p-2 font-mono text-sm text-text [overflow-wrap:anywhere] break-all"
+          // a command or a path is monospace; the usage limit's subject is a sentence (which limit, when it resets), set as words
+          className={cn(
+            'mt-2 whitespace-pre-wrap rounded-button bg-surface-2 p-2 text-sm text-text [overflow-wrap:anywhere]',
+            d.dialog_kind === 'usage_limit' ? 'font-sans' : 'break-all font-mono',
+          )}
         >
           {dialogVisibleText(d.subject)}
         </p>
@@ -144,7 +148,8 @@ export function DialogCard({
           {[
             by ? `Answered on ${dialogVisibleText(by)}` : 'Answered',
             when,
-            d.dialog_kind === 'login' ? '' : 'your agent is starting',
+            // a sign-in and a usage-limit answer say nothing about the agent starting: neither starts it
+            d.dialog_kind === 'login' || d.dialog_kind === 'usage_limit' ? '' : 'your agent is starting',
           ]
             .filter(Boolean)
             .join(' · ')}
@@ -230,7 +235,7 @@ export function DialogCard({
             {DIALOG_FOOTNOTE}
           </p>
           <p className="mt-1 font-mono text-xs text-text-2" data-testid="card-expiry">
-            Expires {formatClock(new Date(cardExpiryMs(card)).toISOString(), timeZone)} if nobody answers
+            Expires {formatExpiry(new Date(cardExpiryMs(card)).toISOString(), timeZone, now)} if nobody answers
           </p>
         </>
       ) : null}

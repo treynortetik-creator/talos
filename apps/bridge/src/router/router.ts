@@ -26,13 +26,13 @@ import { claudeConfigDir } from '../claude-dir.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
-import { say } from '../owner-words.ts'
 import { BridgeStopping, isStopping } from '../stopping.ts'
 import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
 import { BRIDGE_COMMIT } from '../version.ts'
 import { dropWake } from '../wake-me/drop.ts'
 import { pendingOf } from '../wake-me/service.ts'
 import { WakeMeStore } from '../wake-me/store.ts'
+import { deadlineLine, ownersOwn, syncWaitLines } from '../worker/busy-line.ts'
 import { WorkersReader, writeControl, writeWake } from '../worker/files.ts'
 import {
   cleanHandoffText,
@@ -45,8 +45,11 @@ import {
 } from '../worker/handoff.ts'
 import { placeFilesInInbox } from '../worker/inbox.ts'
 import { type RouteRow, WorkerStore } from '../worker/store.ts'
+import { deafStatus, noteMainHandled } from './deaf.ts'
 import { allowsStart, type GovernorReading, governorNow } from './governor.ts'
 import { tellOldSupervisor } from './old-supervisor-notice.ts'
+import { failureReason, REASON_TEXT, runEnded, wakeDropReason } from './reasons.ts'
+import { GoneWatch } from './rewake.ts'
 import { mainNeedsYou, statusLine } from './status-line.ts'
 import {
   type InterruptedList,
@@ -68,33 +71,6 @@ export type Decision =
   | { to: 'fallback'; thread: string; reason: ErrorCodeT }
   | { to: 'worker'; thread: string; cold: boolean }
 
-const failureReason = (e: WorkerEntryT): ErrorCodeT =>
-  e.error?.code === 'needs_mac'
-    ? 'needs_mac'
-    : e.error?.code === 'folder_claimed'
-      ? 'worker_folder_claimed'
-      : 'worker_unavailable'
-
-const REASON_TEXT: Partial<Record<ErrorCodeT, string>> = {
-  worker_unavailable: 'its session is not available',
-  worker_cap: 'every thread session is busy',
-  usage_governor: 'plan limits are close, so thread sessions are paused',
-  worker_folder_claimed: 'another session is working in its folder',
-  get needs_mac() {
-    return say({ mac: 'its session needs you at the Mac', linux: 'its session needs you at your computer' })
-  },
-}
-
-/**
- * Has the run that claimed a message at `at` definitely ended? Only states that say so count; `stopping` and `parking` are
- * still finishing that turn, and a missing or unreadable date proves nothing.
- */
-function runEnded(e: WorkerEntryT, at: number): boolean {
-  if (e.state === 'parked' || e.state === 'failed' || e.state === 'off') return true
-  if (!e.started_at || !WORKER_LIVE_STATES.includes(e.state)) return false
-  return Date.parse(e.started_at) > at
-}
-
 /**
  * How long a live thread may stay live after the governor's park wake before the bridge writes another. Well past the reader's
  * take (each second) and its next workers.json (every 5 s); well inside WAKE_MAX_AGE_MS, so a retry is never itself stale.
@@ -107,6 +83,7 @@ const REDELIVER_ATTEMPTS = 3
 export class ThreadRouter {
   /** Threads already told their supervisor is older than their settings, this run (old-supervisor-notice.ts). */
   private readonly oldSupervisorTold = new Set<string>()
+  private readonly gone = new GoneWatch(this.reach.bind(this), this.wake.bind(this))
   readonly store: WorkerStore
   readonly workers: WorkersReader
   readonly handoffs: HandoffLedger
@@ -424,6 +401,7 @@ export class ThreadRouter {
         }).catch((e) => this.ctx.log.warn('limits notice not posted', { error: (e as Error).message }))
     }
     this.arm(row)
+    this.syncLines()
   }
 
   /**
@@ -476,7 +454,7 @@ export class ThreadRouter {
     if (!this.claimLate(row.message_id)) return // the worker got it
     const entry = this.workers.read()?.threads[row.thread_id]
     const reason: ErrorCodeT = entry?.state === 'failed' ? failureReason(entry) : 'worker_unavailable'
-    await this.fallbackLate(row.notification, row.thread_id, reason, row.message_id)
+    await this.fallbackLate(row.notification, row.thread_id, reason, row.message_id, false, entry)
   }
 
   /**
@@ -496,11 +474,15 @@ export class ThreadRouter {
   /** `claimForMain` for a message that has a route row: the hand-over intent row is written at once, before any await. */
   private claimLate(messageId: string): boolean {
     if (!this.claimForMain(messageId)) return false
+    const t = this.timers.get(messageId) // its deadline has nothing left to do
+    if (t !== undefined) this.ctx.clock.clearTimeout(t)
+    this.timers.delete(messageId)
     try {
       this.store.beginMainHandover(messageId, this.ctx.clock.now())
     } catch (e) {
       this.ctx.log.warn('main hand-over not recorded', { error: (e as Error).message })
     }
+    this.syncLines() // nothing waits for that message now
     return true
   }
 
@@ -574,13 +556,20 @@ export class ThreadRouter {
    * While the hand-over runs a `main_handover` row stands (written with the claim by `claimLate`, deleted when `mainEmit`
    * returns); only a row left behind is repeated by `resume`.
    */
-  private async fallbackLate(n: Notification, thread: string, reason: ErrorCodeT, claimed: string, again = false) {
+  private async fallbackLate(
+    n: Notification,
+    thread: string,
+    reason: ErrorCodeT,
+    claimed: string,
+    again = false,
+    entry?: WorkerEntryT,
+  ) {
     try {
       // main runs it now, in its own folder: that point replaces the one taken of the worker's
       await waitForRestore(this.ctx, 'main')
       await pointBefore(this.ctx, n, 'main', { replace: again ? 'elsewhere' : true })
       this.claiming.delete(claimed) // the hand-over begins: the claim stays
-      await this.fallback(n, thread, reason, () => this.endMainHandover(claimed))
+      await this.fallback(n, thread, reason, () => this.endMainHandover(claimed), entry)
     } catch (e) {
       if (isStopping(e)) throw e // not delivered, and no failure to tell the owner of: `close()` gave the claim back
       this.claiming.delete(claimed) // a failure of its own: the claim is as it always was
@@ -605,12 +594,18 @@ export class ThreadRouter {
     }
   }
 
-  private async fallback(n: Notification, lead: string, reason: ErrorCodeT, delivered?: () => void) {
+  private async fallback(
+    n: Notification,
+    lead: string,
+    reason: ErrorCodeT,
+    delivered?: () => void,
+    entry?: WorkerEntryT,
+  ) {
     const { ctx } = this
     // the message's own thread: a sub-thread's message held for its parent's lead is still that sub-thread's
     // a thread session's wake is only ever that session's: dropped with a report, never main's own words
     if (n.meta.kind === 'wake') {
-      await dropWake(ctx, n, this.wakeDropReason(n.meta.thread_id ?? '', reason), this.mainEmit)
+      await dropWake(ctx, n, wakeDropReason(ctx, n.meta.thread_id ?? '', reason), this.mainEmit)
       return delivered?.()
     }
     const thread = this.shownIn(n, lead)
@@ -621,10 +616,13 @@ export class ThreadRouter {
       ctx.seen.heldForMain(thread, n.meta.message_id)
     await this.mainEmit({ content: n.content, meta: { ...n.meta, routed: 'fallback', reason } })
     delivered?.()
+    noteMainHandled(ctx, n, lead, thread) // what Main took of this thread's own session (deaf.ts)
     try {
+      // the deadline of a live session says what it was doing (busy, waiting for the owner); any other reason keeps its usual row
+      const said = entry && ownersOwn(n) ? deadlineLine(threadRef(ctx, thread).name, entry) : null
       await postSystemNotice(
         ctx,
-        `Thread session didn't pick this up (${REASON_TEXT[reason] ?? reason}). Main answered.`,
+        said ?? `Thread session didn't pick this up (${REASON_TEXT[reason] ?? reason}). Main answered.`,
         { thread: threadRef(ctx, thread) },
       )
     } catch (e) {
@@ -632,13 +630,18 @@ export class ThreadRouter {
     }
   }
 
-  private wakeDropReason(thread: string, reason: ErrorCodeT): string {
-    const t = this.ctx.config.thread(thread)
-    if (!t) return 'its thread was deleted'
-    if (t.archived) return 'its thread was archived'
-    if (threadSessionMode(this.ctx.config.config, thread) !== 'dedicated')
-      return 'its thread no longer has its own session'
-    return REASON_TEXT[reason] ?? `its session did not take it (${reason})`
+  /** A session that died while a message waited (failed, stopping, supervisor gone): Main takes it now, as at the deadline. */
+  private releaseGone() {
+    for (const [row, reason] of this.gone.rows(this.ctx, this.store, this.workers.read())) {
+      if (!this.claimLate(row.message_id)) continue
+      void this.fallbackLate(row.notification, row.thread_id, reason, row.message_id).catch((e) => {
+        if (!isStopping(e)) this.ctx.log.error('dead-session fallback failed', { error: (e as Error).message })
+      })
+    }
+  }
+
+  private syncLines() {
+    syncWaitLines(this.ctx, this.store.allUnclaimed(), this.workers.read()?.threads, (n, lead) => this.shownIn(n, lead))
   }
 
   /** A thread switched off with messages still waiting: they are main's now, at once. */
@@ -666,9 +669,6 @@ export class ThreadRouter {
         )
         continue
       }
-      const t = this.timers.get(row.message_id)
-      if (t !== undefined) ctx.clock.clearTimeout(t)
-      this.timers.delete(row.message_id)
       if (!this.claimLate(row.message_id)) continue
       void this.fallbackLate(row.notification, row.thread_id, 'worker_unavailable', row.message_id).catch((e) => {
         if (!isStopping(e)) ctx.log.error('switch-off fallback failed', { error: (e as Error).message })
@@ -803,7 +803,7 @@ export class ThreadRouter {
   /**
    * After a (re)start: re-arm every unclaimed route (ones past their deadline fall back now), and finish every hand-over to main
    * that a stop cut short (a `main_handover` row, see `fallbackLate`; an old database has none). The original reason is not
-   * stored: 'worker_unavailable'. A card decision is never replayed to main: its card ends once, as an unknown outcome. A repeat
+   * stored: 'worker_unavailable'. A card decision is never repeated to main after a restart: its card ends once, as an unknown outcome. A repeat
    * that fails for a reason of its own is given up after REDELIVER_ATTEMPTS starts, with an error in the log.
    */
   resume(): void {
@@ -853,6 +853,8 @@ export class ThreadRouter {
     this.noteSessionStarts(file)
     tellOldSupervisor(ctx, file, this.oldSupervisorTold)
     this.releaseSwitchedOff()
+    this.releaseGone()
+    this.syncLines()
     for (const lead of this.handoffs.openLeads())
       if (threadSessionMode(ctx.config.config, lead) !== 'dedicated') this.handoffs.closeLead(lead)
     this.expireUnclaimedHandoffs(now)
@@ -934,6 +936,7 @@ export class ThreadRouter {
     const fresh = supervisorFresh(file, now)
     const cfg = this.ctx.config.config
     const threads: WorkerStatusItemT[] = []
+    const deaf = fresh ? deafStatus(this.ctx.paths.home, now) : undefined // threads Talos cannot type into (deaf.ts)
     for (const t of cfg.threads) {
       if (threadSessionMode(cfg, t.id) !== 'dedicated') continue
       const e = file?.threads[t.id]
@@ -947,6 +950,7 @@ export class ThreadRouter {
         item.error_at = e.error.at
       }
       if (e) Object.assign(item, statusLine(e, now))
+      Object.assign(item, deaf?.get(t.id))
       const w = pendingOf(this.wakes, t.id)
       if (w.total > 0) Object.assign(item, { wakes: w.wakes, wakes_total: w.total })
       threads.push(item)

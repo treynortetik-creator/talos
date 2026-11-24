@@ -11,13 +11,13 @@ import {
   payloadHash,
   signOwnerFrame,
 } from '@talos-app/protocol'
-import { FakeApp, type FakeBridge, fakeClock, mkFrame, sleep, waitFor } from '@talos-app/testkit'
+import { FakeApp, type FakeBridge, fakeClock, mkFrame, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { testAppHeaders } from '../helpers/test-auth.ts'
 import { ORIGIN, startTestRelay, type TestRelay } from './harness.ts'
 import { kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // a test whose waits add up higher (the relay and sockets it starts, each testkit wait at x3) says so itself
 const DAY = 86_400_000
 
 let relay: TestRelay | null = null
@@ -27,6 +27,14 @@ afterEach(async () => {
   await relay?.stop()
   relay = null
 })
+
+/** Everything this socket sent before this has been handled (and what the relay sent to it before the answer has arrived): the relay answers one socket's frames in order. */
+const handled = async (s: FakeApp | FakeBridge) => {
+  const nonce = `after-${Math.random().toString(36).slice(2, 10)}`
+  if (s instanceof FakeApp) s.send(mkFrame('ping', { nonce }))
+  else s.send({ type: 'ping', nonce })
+  await s.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'in' })
+}
 
 const bridgeIn = (b: FakeBridge) => b.rec.frames.filter((r) => r.direction === 'in').map((r) => r.raw)
 
@@ -64,64 +72,79 @@ const messageFrame = () => ({
 })
 
 describe('hub-chat: onOwnerMessage', () => {
-  it('a message signed by a device other than the session is refused, not stored and not sent to the Mac', async () => {
-    const { r, app, bridge, mine, stranger } = await world()
-    const bad = await signedBy(stranger, messageFrame())
-    app.send(bad)
-    const err = await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })
-    expect(err.code).toBe('unauthorized')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
-    expect(r.runtime.store.getEventByFrameId(bad.id as string)).toBeFalsy()
-    expect(r.runtime.store.seen(`of:${bad.id}`)).toBeUndefined()
-    // control: the session's own device is stored and forwarded
-    const good = await signedBy(mine, messageFrame())
-    app.send(good)
-    await bridge.expectFrame('message', (f) => f.id === good.id, { direction: 'in' })
-  })
+  it(
+    'a message signed by a device other than the session is refused, not stored and not sent to the Mac',
+    async () => {
+      const { r, app, bridge, mine, stranger } = await world()
+      const bad = await signedBy(stranger, messageFrame())
+      app.send(bad)
+      const err = await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })
+      expect(err.code).toBe('unauthorized')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
+      expect(r.runtime.store.getEventByFrameId(bad.id as string)).toBeFalsy()
+      expect(r.runtime.store.seen(`of:${bad.id}`)).toBeUndefined()
+      // control: the session's own device is stored and forwarded
+      const good = await signedBy(mine, messageFrame())
+      app.send(good)
+      await bridge.expectFrame('message', (f) => f.id === good.id, { direction: 'in' })
+    },
+    t(50_000),
+  )
 })
 
 describe('hub-cards: onCardResolve and acceptNativeAct', () => {
-  it('a card.resolve from another device is refused on the device check, before the card is even looked up', async () => {
-    const { app, bridge, mine, stranger } = await world()
-    const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
-    await app.expectFrame('card.create', (f) => f.card.id === card.id)
-    const hash = payloadHash(bindingFrom(card))
-    const bad = await signedBy(stranger, {
-      ...mkFrame('card.resolve'),
-      card_id: card.id,
-      action: 'primary',
-      payload_hash: hash,
-    })
-    app.send(bad)
-    expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
-    // the card is still pending and the same tap from the session's own device goes through
-    const good = await signedBy(mine, {
-      ...mkFrame('card.resolve'),
-      card_id: card.id,
-      action: 'primary',
-      payload_hash: hash,
-    })
-    app.send(good)
-    await bridge.expectFrame('card.resolve', (f) => f.id === good.id, { direction: 'in' })
-  })
+  it(
+    'a card.resolve from another device is refused on the device check, before the card is even looked up',
+    async () => {
+      const { app, bridge, mine, stranger } = await world()
+      const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
+      await app.expectFrame('card.create', (f) => f.card.id === card.id)
+      const hash = payloadHash(bindingFrom(card))
+      const bad = await signedBy(stranger, {
+        ...mkFrame('card.resolve'),
+        card_id: card.id,
+        action: 'primary',
+        payload_hash: hash,
+      })
+      app.send(bad)
+      expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
+      // the card is still pending and the same tap from the session's own device goes through
+      const good = await signedBy(mine, {
+        ...mkFrame('card.resolve'),
+        card_id: card.id,
+        action: 'primary',
+        payload_hash: hash,
+      })
+      app.send(good)
+      await bridge.expectFrame('card.resolve', (f) => f.id === good.id, { direction: 'in' })
+    },
+    t(55_000),
+  )
 
-  it('a card.resolve for a card the relay does not know is refused as card_not_pending', async () => {
-    const { r, app, bridge, mine } = await world()
-    const f = await signedBy(mine, {
-      ...mkFrame('card.resolve'),
-      card_id: `c_${newUlid()}`,
-      action: 'primary',
-      payload_hash: `sha256:${'0'.repeat(64)}`,
-    })
-    app.send(f)
-    expect((await app.expectFrame('error', (e) => e.ref === f.id, { direction: 'in' })).code).toBe('card_not_pending')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((x) => x.id === f.id)).toBe(false)
-    expect(r.runtime.store.seen(`of:${f.id}`)).toBeUndefined()
-  })
+  it(
+    'a card.resolve for a card the relay does not know is refused as card_not_pending',
+    async () => {
+      const { r, app, bridge, mine } = await world()
+      const f = await signedBy(mine, {
+        ...mkFrame('card.resolve'),
+        card_id: `c_${newUlid()}`,
+        action: 'primary',
+        payload_hash: `sha256:${'0'.repeat(64)}`,
+      })
+      app.send(f)
+      expect((await app.expectFrame('error', (e) => e.ref === f.id, { direction: 'in' })).code).toBe('card_not_pending')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((x) => x.id === f.id)).toBe(false)
+      expect(r.runtime.store.seen(`of:${f.id}`)).toBeUndefined()
+    },
+    t(40_000),
+  )
 
   it('a notification Approve for an unknown card is refused with 404, and its claim is rolled back so a retry runs fresh', async () => {
     relay = await startTestRelay()
@@ -143,91 +166,111 @@ describe('hub-cards: onCardResolve and acceptNativeAct', () => {
 })
 
 describe('hub-config: onConfigPatch', () => {
-  it('a config.patch from another device is refused on the device check, ahead of the field check', async () => {
-    const { r, app, bridge, mine, stranger } = await world()
-    const patch = () => ({ ...mkFrame('config.patch'), base_rev: 0, patch: { not_a_setting: 1 } })
-    const bad = await signedBy(stranger, patch())
-    app.send(bad)
-    // an unknown field would be config_field_forbidden; the device check comes first
-    expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
-    expect(r.runtime.store.seen(`of:${bad.id}`)).toBeUndefined()
-    // from the session's own device the same patch reaches the field check
-    const own = await signedBy(mine, patch())
-    app.send(own)
-    expect((await app.expectFrame('error', (f) => f.ref === own.id, { direction: 'in' })).code).toBe(
-      'config_field_forbidden',
-    )
-  })
+  it(
+    'a config.patch from another device is refused on the device check, ahead of the field check',
+    async () => {
+      const { r, app, bridge, mine, stranger } = await world()
+      const patch = () => ({ ...mkFrame('config.patch'), base_rev: 0, patch: { not_a_setting: 1 } })
+      const bad = await signedBy(stranger, patch())
+      app.send(bad)
+      // an unknown field would be config_field_forbidden; the device check comes first
+      expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
+      expect(r.runtime.store.seen(`of:${bad.id}`)).toBeUndefined()
+      // from the session's own device the same patch reaches the field check
+      const own = await signedBy(mine, patch())
+      app.send(own)
+      expect((await app.expectFrame('error', (f) => f.ref === own.id, { direction: 'in' })).code).toBe(
+        'config_field_forbidden',
+      )
+    },
+    t(50_000),
+  )
 })
 
 describe('hub-history: history and onMediaFetch', () => {
-  it('a history.request signed by another device is refused and its request id is not spent', async () => {
-    const { r, app, bridge, mine, stranger } = await world()
-    const req = {
-      ...mkFrame('history.request'),
-      request_id: newUlid(),
-      thread_id: 'general',
-      around_id: `m_${newUlid()}`,
-      limit: 50,
-    }
-    const bad = await signedBy(stranger, req)
-    app.send(bad)
-    expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
-    expect(r.runtime.store.seen(`hq:${bad.id}`)).toBeUndefined()
-    // control: the session's own device is forwarded to the Mac
-    const good = await signedBy(mine, { ...req, ...mkFrame('history.request'), request_id: newUlid() })
-    app.send(good)
-    await bridge.expectFrame('history.request', (f) => f.id === good.id, { direction: 'in' })
-    // a second use of the same frame id is refused as already used
-    app.send(good)
-    expect((await app.expectFrame('error', (f) => f.ref === good.id, { direction: 'in' })).code).toBe('sig_invalid')
-  })
+  it(
+    'a history.request signed by another device is refused and its request id is not spent',
+    async () => {
+      const { r, app, bridge, mine, stranger } = await world()
+      const req = {
+        ...mkFrame('history.request'),
+        request_id: newUlid(),
+        thread_id: 'general',
+        around_id: `m_${newUlid()}`,
+        limit: 50,
+      }
+      const bad = await signedBy(stranger, req)
+      app.send(bad)
+      expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
+      expect(r.runtime.store.seen(`hq:${bad.id}`)).toBeUndefined()
+      // control: the session's own device is forwarded to the Mac
+      const good = await signedBy(mine, { ...req, ...mkFrame('history.request'), request_id: newUlid() })
+      app.send(good)
+      await bridge.expectFrame('history.request', (f) => f.id === good.id, { direction: 'in' })
+      // a second use of the same frame id is refused as already used
+      app.send(good)
+      expect((await app.expectFrame('error', (f) => f.ref === good.id, { direction: 'in' })).code).toBe('sig_invalid')
+    },
+    t(55_000),
+  )
 
-  it('a media.fetch signed by another device is refused and never forwarded', async () => {
-    const { app, bridge, mine, stranger } = await world()
-    const bad = await signedBy(stranger, { ...mkFrame('media.fetch'), media_id: `md_${newUlid()}` })
-    app.send(bad)
-    expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
-    await sleep(150)
-    expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
-    const good = await signedBy(mine, { ...mkFrame('media.fetch'), media_id: `md_${newUlid()}` })
-    app.send(good)
-    await bridge.expectFrame('media.fetch', (f) => f.id === good.id, { direction: 'in' })
-  })
+  it(
+    'a media.fetch signed by another device is refused and never forwarded',
+    async () => {
+      const { app, bridge, mine, stranger } = await world()
+      const bad = await signedBy(stranger, { ...mkFrame('media.fetch'), media_id: `md_${newUlid()}` })
+      app.send(bad)
+      expect((await app.expectFrame('error', (f) => f.ref === bad.id, { direction: 'in' })).code).toBe('unauthorized')
+      await handled(bridge) // the relay has answered the refused frame and the Mac's socket is flushed
+      await sleep(t(150)) // timing-ok: negative window, from the refusal answered: nothing was passed on
+      expect(bridgeIn(bridge).some((f) => f.id === bad.id)).toBe(false)
+      const good = await signedBy(mine, { ...mkFrame('media.fetch'), media_id: `md_${newUlid()}` })
+      app.send(good)
+      await bridge.expectFrame('media.fetch', (f) => f.id === good.id, { direction: 'in' })
+    },
+    t(50_000),
+  )
 })
 
 describe('hub-undelivered: the report before the sweep', () => {
-  it('a card the Mac decided is not reported as lost, while a settings change the Mac never saw is', async () => {
-    const clock = fakeClock(new Date().toISOString())
-    const { r, app, bridge } = await world({ clock })
-    const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
-    await app.expectFrame('card.create', (f) => f.card.id === card.id)
-    await bridge.close() // the Mac goes away before either owner frame
-    await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
-    await app.resolveCard(card, 'primary', payloadHash(bindingFrom(card)))
-    await app.sendConfigPatch(0, { quiet_window: null })
-    await waitFor(() => r.runtime.store.outboxDepth() === 2, 5000, 'both owner frames queued')
-    // the card was decided on the Mac itself (its card.update carried the resolution) while the tap sat in the outbox
-    r.runtime.store.setCardState(card.id, {
-      state: 'resolved',
-      resolution: {
-        action: 'primary',
-        at: new Date().toISOString(),
-        edited: false,
-        payload_hash: payloadHash(bindingFrom(card)),
-      },
-    })
+  it(
+    'a card the Mac decided is not reported as lost, while a settings change the Mac never saw is',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      const { r, app, bridge } = await world({ clock })
+      const card = bridge.createCard({ thread_id: 'general', title: 'Ship it?' })
+      await app.expectFrame('card.create', (f) => f.card.id === card.id)
+      await bridge.close() // the Mac goes away before either owner frame
+      await waitFor(() => !r.runtime.hub.bridgeOnline(), 5000, 'bridge gone')
+      await app.resolveCard(card, 'primary', payloadHash(bindingFrom(card)))
+      await app.sendConfigPatch(0, { quiet_window: null })
+      await waitFor(() => r.runtime.store.outboxDepth() === 2, 5000, 'both owner frames queued')
+      // the card was decided on the Mac itself (its card.update carried the resolution) while the tap sat in the outbox
+      r.runtime.store.setCardState(card.id, {
+        state: 'resolved',
+        resolution: {
+          action: 'primary',
+          at: new Date().toISOString(),
+          edited: false,
+          payload_hash: payloadHash(bindingFrom(card)),
+        },
+      })
 
-    clock.set(clock.now() + 8 * DAY)
-    r.runtime.hub.sweep()
-    const system = () => app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')
-    await waitFor(() => system().length >= 1, 5000, 'the settings change is reported')
-    await sleep(150)
-    const texts = system().map((f) => f.message.text)
-    expect(texts).toEqual([expect.stringContaining('A settings change never reached your Mac')])
-  })
+      clock.set(clock.now() + 8 * DAY)
+      r.runtime.hub.sweep()
+      const system = () => app.rec.of('message.stored', 'in').filter((f) => f.message.author === 'system')
+      await waitFor(() => system().length >= 1, 5000, 'the settings change is reported')
+      await handled(app) // the relay's frames to the phone before this have arrived
+      await sleep(t(150)) // timing-ok: negative window, from the one report seen: still exactly one
+      const texts = system().map((f) => f.message.text)
+      expect(texts).toEqual([expect.stringContaining('A settings change never reached your Mac')])
+    },
+    t(85_000),
+  )
 })

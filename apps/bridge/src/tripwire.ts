@@ -4,10 +4,10 @@
 // from outside the app, and the bridge posts one line in the Inbox thread. It then takes the new state as the baseline, so
 // it speaks once per change; it does not undo anything.
 import { createHash } from 'node:crypto'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { jcs } from '@talos-app/protocol'
-import { writeJsonAtomic } from './fsutil.ts'
+import { writeFileAtomic, writeJsonAtomic } from './fsutil.ts'
 
 export type WatchedFile = 'config' | 'devices'
 const NAME: Record<WatchedFile, string> = { config: 'config.json', devices: 'devices.json' }
@@ -112,7 +112,8 @@ function readBaseline(home: string): Baseline {
 export function recordedWrite<T>(file: string, which: WatchedFile, write: () => T): T {
   const home = dirname(file)
   try {
-    writeFileSync(markerFile(home), String(Date.now()), { mode: 0o600 })
+    // a new file each time (fsutil.ts), never a write into the existing one: an older link to the marker goes stale
+    writeFileAtomic(markerFile(home), String(Date.now()), 0o600)
   } catch {
     return write() // no home folder to record in (a test path); the write itself decides what to do
   }

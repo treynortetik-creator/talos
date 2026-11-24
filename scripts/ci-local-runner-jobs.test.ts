@@ -375,11 +375,17 @@ describe('CI_STATUS_PREFIX: a part of check, or a report-only job, posts outside
     }
   })
 
-  it('a job name with a slash, a bad CI_PART_WAIT or CI_PART_POLL, and a part listed twice are refused', async () => {
+  it('a job name with a slash, a bad CI_PART_WAIT, CI_PART_POLL or lock-wait knob (CI_PART_BEAT, CI_PART_BEAT_STALE, CI_PART_LOCK_WAIT_MAX), and a part listed twice are refused', async () => {
     const cases: [string[], Record<string, string>][] = [
       [['--jobs', 'local-ci/x'], {}],
       [['--jobs', 'x'], { CI_PART_WAIT: 'soon' }],
       [['--jobs', 'x'], { CI_PART_POLL: '-1' }],
+      [['--jobs', 'x'], { CI_PART_BEAT: '1.5' }],
+      [['--jobs', 'x'], { CI_PART_BEAT: '9' }], // under the floor of 10 s: a status a second
+      [['--jobs', 'x'], { CI_PART_BEAT: '5', CI_PART_BEAT_MIN: '1' }], // no knob lowers the floor
+      [['--jobs', 'x'], { CI_PART_BEAT_STALE: '0' }],
+      [['--jobs', 'x'], { CI_PART_BEAT_STALE: 'soon' }],
+      [['--jobs', 'x'], { CI_PART_LOCK_WAIT_MAX: '-1' }],
       [['--jobs', 'x'], { CI_REMOTE_PARTS: 'vitest:delphi vitest:cyclops' }],
     ]
     for (const [args, extra] of cases) {

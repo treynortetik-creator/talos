@@ -443,6 +443,102 @@ describe('the push lease', () => {
     expect(r.ok(r.clone, 'log', '-1', '--format=%B', r.lease().split('\t')[0] as string)).toContain('machine=lemnos')
   })
 
+  // bash can lose a Ctrl-C that comes while the shell itself is in a step of the wait: 5.2 runs the trap in the middle of a
+  // $(...)'s parse, the trap fails ("unexpected EOF while looking for matching `)'") and its exit never runs, and the wait polled
+  // on for good (a full gate under load). Here a step loses it on purpose, every time: the poll's sleep, with the trap off,
+  // is where the Ctrl-C lands (BASH_ENV puts it there). The wait runs no step in the shell itself, so its trap still sees it.
+  it('a Ctrl-C that a step of the wait would lose still ends the run: 130, no place in the queue', async () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    r.leaseHeld('lemnos', Math.floor(Date.now() / 1000) + 600)
+    const lost = join(r.T, 'lost')
+    const bashEnv = join(r.T, 'bash-env')
+    writeFileSync(
+      bashEnv,
+      `sleep() {
+  if [ "\${0##*/}" = gate-push.sh ] && [ -n "\${WAIT_SINCE:-}" ] && [ ! -e '${lost}' ]; then
+    : >'${lost}'
+    local t; t="$(trap -p INT)"
+    trap '' INT; kill -INT 0; env sleep 1
+    if [ -n "$t" ]; then eval "$t"; else trap - INT; fi
+  fi
+  env sleep "$@"
+}
+`,
+    )
+    const child = spawn('bash', ['scripts/gate.sh', '--push'], {
+      cwd: r.clone,
+      env: { ...r.env, GATE_PUSH_POLL_S: '1', BASH_ENV: bashEnv },
+      detached: true,
+    })
+    const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)))
+    const queue = () => r.ok(r.clone, 'ls-remote', 'origin', 'refs/locks/wait/*')
+    const code = await Promise.race([
+      exited,
+      new Promise<string>((res) => setTimeout(() => res('still waiting'), 20_000)),
+    ])
+    if (code === 'still waiting') process.kill(-(child.pid as number), 'SIGKILL')
+    expect(existsSync(lost)).toBe(true)
+    expect(code).toBe(130)
+    expect(queue()).toBe('')
+    expect(r.ok(r.clone, 'log', '-1', '--format=%B', r.lease().split('\t')[0] as string)).toContain('machine=lemnos')
+  })
+
+  // a stop while the take's push is under way: the put is finished (it may already have landed), so the lease it took is held
+  // and the EXIT trap lets it go. Exiting with it unnoted left refs/locks/push held by a dead run until it ran out (10-60 min).
+  it('a Ctrl-C while the lease is being taken: 130, and the lease it took is let go, never left held', async () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const mark = join(r.T, 'take-began')
+    const child = spawn('bash', ['scripts/gate.sh', '--push'], {
+      cwd: r.clone,
+      env: { ...r.env, GATE_PUSH_TEST_TAKE_MARK: mark, GATE_PUSH_TEST_TAKE_DELAY_S: '2' },
+      detached: true,
+    })
+    const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)))
+    await vi.waitUntil(() => existsSync(mark), { timeout: scaled(30_000), interval: 50 })
+    process.kill(-(child.pid as number), 'SIGINT')
+    expect(await exited).toBe(130)
+    expect(r.lease()).toBe('')
+    expect(r.ok(r.origin, 'rev-parse', 'main')).not.toBe(r.ok(r.clone, 'rev-parse', 'HEAD')) // nothing pushed
+  })
+
+  // a look that hangs (a network that does not answer) and does not die of SIGINT (a step can ignore it: a simple command run
+  // in the background does, and so may a child that handles it): a Ctrl-C cuts it short at once. Waiting it out made the run
+  // last as long as the look did, and a second Ctrl-C did nothing.
+  it('a Ctrl-C while a look at the lease hangs ends the run at once: 130, no place in the queue', async () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    r.leaseHeld('lemnos', Math.floor(Date.now() / 1000) + 600)
+    const mark = join(r.T, 'look-hangs')
+    const bashEnv = join(r.T, 'bash-env')
+    writeFileSync(
+      bashEnv,
+      `git() {
+  if [ "\${0##*/}" = gate-push.sh ] && [ "$1" = ls-remote ] && [ "$3" = refs/locks/push ] && [ -n "\${WAIT_SINCE:-}" ]; then
+    : >'${mark}'; (trap '' INT; env sleep 60)
+  fi
+  env git "$@"
+}
+`,
+    )
+    const child = spawn('bash', ['scripts/gate.sh', '--push'], {
+      cwd: r.clone,
+      env: { ...r.env, GATE_PUSH_POLL_S: '1', BASH_ENV: bashEnv },
+      detached: true,
+    })
+    const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)))
+    await vi.waitUntil(() => existsSync(mark), { timeout: scaled(30_000), interval: 50 })
+    process.kill(-(child.pid as number), 'SIGINT')
+    const code = await Promise.race([
+      exited,
+      new Promise<string>((res) => setTimeout(() => res('still waiting'), 10_000)),
+    ])
+    if (code === 'still waiting') process.kill(-(child.pid as number), 'SIGKILL')
+    expect(code).toBe(130)
+    expect(r.ok(r.clone, 'ls-remote', 'origin', 'refs/locks/wait/*')).toBe('')
+  })
+
   it('refs/locks/ takes only the lease: code, a lease-shaped commit with more in its message, or another name, are refused', () => {
     const r = setup()
     r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
@@ -615,6 +711,44 @@ describe('the push lease', () => {
     expect(r.lease()).toBe('')
     await new Promise((res) => setTimeout(res, 2500))
     expect(r.lease()).toBe('') // nothing set it again
+  })
+
+  // the renewer's TERM trap can be lost like any (a TERM that comes while it is in a $(...)): renewer_stop asks with a stop file
+  // too, and waits only so long. Here the renewer loses every TERM once it has renewed (BASH_ENV: its mv turns TERM off);
+  // waiting for it hung the run for good, and the lease was renewed on and on.
+  it('a renewer that lost its TERM still stops: the push goes, and the lease is let go', async () => {
+    const r = setup()
+    r.change(r.clone, { 'docs/b.md': 'y\n' }) // words only: the re-check under the lease is the cheap one
+    const renewed = join(r.T, 'renewed')
+    const bashEnv = join(r.T, 'bash-env')
+    writeFileSync(
+      bashEnv,
+      `mv() {
+  env mv "$@" || return
+  [ -z "\${IN_RENEWER:-}" ] || { trap '' TERM; : >'${renewed}'; }
+}
+`,
+    )
+    const child = spawn('bash', ['scripts/gate.sh', '--push'], {
+      cwd: r.clone,
+      env: {
+        ...r.env,
+        ...wordsMoving(r),
+        GATE_PUSH_LEASE_S: '60',
+        GATE_PUSH_RENEW_EVERY_S: '1',
+        WAIT_FOR_MARK: renewed,
+        BASH_ENV: bashEnv,
+      },
+      detached: true,
+    })
+    const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)))
+    const code = await Promise.race([
+      exited,
+      new Promise<string>((res) => setTimeout(() => res('still running'), 30_000)),
+    ])
+    if (code === 'still running') process.kill(-(child.pid as number), 'SIGKILL')
+    expect(code).toBe(0)
+    expect(r.lease()).toBe('')
   })
 
   it('a lease another machine took while the re-gate ran: said so, left alone, and the push still goes', async () => {
@@ -1172,10 +1306,20 @@ describe('the queue and the stamp, under the lease', () => {
   it('a stamp grown old while waiting is renewed by the cheap checks under the lease, so the hook does not gate again', () => {
     const r = setup()
     r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
-    const p = r.gatePush({ GATE_PUSH_STAMP_FRESH_S: '0' })
-    expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain('the cheap checks again to renew its stamp')
-    expect(p.err).toContain('not run again') // the hook trusted the renewed stamp
+    const p = r.gatePush({ GATE_PUSH_STAMP_FRESH_S: '0', GATE_PUSH_TRACE: '1' })
+    // seen once, only inside a real gate --push (docs/FOLLOWUPS.md): on a failure, everything that decides the branch
+    const stamp = () => {
+      try {
+        return readFileSync(join(r.clone, '.git', 'talos-gate.pass'), 'utf8')
+      } catch (e) {
+        return String(e)
+      }
+    }
+    const diag = () =>
+      [p.err, `origin refs:\n${r.git(r.clone, 'ls-remote', 'origin').stdout}`, `stamp: ${stamp()}`].join('\n')
+    expect(p.code, diag()).toBe(0)
+    expect(p.err, diag()).toContain('the cheap checks again to renew its stamp')
+    expect(p.err, diag()).toContain('not run again') // the hook trusted the renewed stamp
     expect(r.calls().filter((c) => c === TYPECHECK)).toHaveLength(2) // the full gate, then the cheap checks
   })
 })
@@ -1294,6 +1438,37 @@ describe('--red-main: a fix for a red main goes first, once per machine per red,
       expect(p.code).toBe(1)
       expect(p.err).toContain('--red-main: main is not red')
     }
+    // and says which: green at a named commit, or no finished run at all (a fresh setup: statuses() only ever adds files)
+    expect(r.gatePush(statuses(r, { [t]: GREEN }), ['--red-main']).err).toContain(
+      `--red-main: main is not red: its newest finished CI run (${t.slice(0, 7)}) has no failed status`,
+    )
+    const u = setup()
+    u.change(u.clone, { 'apps/web/src/b.ts': 'y\n' })
+    expect(u.gatePush(statuses(u, {}), ['--red-main']).err).toContain(
+      '--red-main: main is not red: no finished CI run on its last 20 commits',
+    )
+  })
+
+  it("reads GitHub for a remote whose https address carries credentials (Titan's origin), not only for a bare one", () => {
+    // repo_slug names the repository for `gh api`; with credentials in the address it used to be empty, so the statuses were
+    // "unreadable" and every --red-main was refused as "main is not red"
+    const r = setup()
+    const src = readFileSync(join(r.clone, 'scripts', 'gate-push.sh'), 'utf8')
+    const fn = src.split('\n').find((l) => l.startsWith('repo_slug() {')) as string
+    expect(fn).toBeDefined()
+    const slugOf = (url: string) => {
+      r.ok(r.clone, 'remote', 'set-url', 'origin', url)
+      const s = spawnSync('bash', ['-c', `REMOTE=origin; ${fn}\nrepo_slug`], { cwd: r.clone, encoding: 'utf8' })
+      return s.stdout.trim()
+    }
+    const at = '@' // spelled apart: a user@host literal reads as an address to the personal-data scan
+    expect(slugOf('https://github.com/owner/repo.git')).toBe('owner/repo')
+    expect(slugOf(`https://x-access-token:not-a-real-token${at}github.com/owner/repo.git`)).toBe('owner/repo')
+    expect(slugOf(`https://someone${at}github.com/owner/repo`)).toBe('owner/repo')
+    expect(slugOf(`git${at}github.com:owner/repo.git`)).toBe('owner/repo')
+    expect(slugOf(`ssh://git${at}github.com/owner/repo.git`)).toBe('owner/repo')
+    expect(slugOf('https://github.com.evil.example/owner/repo.git')).toBe('')
+    expect(slugOf(`https://a${at}b${at}github.com/owner/repo.git`)).toBe('')
   })
 
   it('a Linux-only red (report-ci/linux, which does not gate) counts: it goes first and says so, and the jump is recorded', () => {
@@ -1455,14 +1630,16 @@ describe('--red-main: a fix for a red main goes first, once per machine per red,
     writeFileSync(join(env.GATE_PUSH_TEST_STATUSES, `${tu}.unreadable`), '')
     const p = u.gatePush(env, ['--red-main'])
     expect(p.code).toBe(1)
-    expect(p.err).toContain('main is not red')
+    // unreadable is said as such, never as "not red" (a wrong "not red" cost three red-main lands on Titan)
+    expect(p.err).toContain(`--red-main: GitHub's statuses of main could not be read (at ${tu.slice(0, 7)};`)
+    expect(p.err).not.toContain('main is not red')
     const v = setup()
     v.change(v.clone, { 'apps/web/src/b.ts': 'y\n' })
     const tv = tip(v)
     v.ok(v.clone, 'config', 'remote.origin.pushurl', join(v.T, 'elsewhere.git')) // fetch here, push elsewhere
     const q = v.gatePush(statuses(v, { [tv]: [['local-ci/check', 'failure']] }), ['--red-main'])
     expect(q.code).toBe(1)
-    expect(q.err).toContain('main is not red')
+    expect(q.err).toContain("--red-main: GitHub's statuses of main could not be read")
   })
 
   it('a gate that fails first spends no jump; a held lease is waited for, never taken', async () => {

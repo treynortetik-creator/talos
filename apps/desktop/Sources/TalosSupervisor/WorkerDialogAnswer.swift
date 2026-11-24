@@ -29,6 +29,14 @@ extension WorkerManager {
     /// Why nothing was pressed when it was the typing guard (only the popup tells the owner: a card answer says `screen_changed` as before).
     var blocked: Blocked?
     enum Blocked { case typing, unreadable }
+    /// The result reason for a usage-limit answer that stopped part way.
+    static func partialReason(_ s: UsageLimitScreen.Stop) -> DialogResult.Reason {
+      switch s {
+      case .closed: return .closed
+      case .typed: return .typed
+      case .cleared: return .cleared
+      }
+    }
     static func nothing(_ why: DialogResult.Reason? = .screenChanged) -> AnswerOutcome { .init(outcome: .nothingPressed, reason: why) }
     static func blocked(_ b: Blocked) -> AnswerOutcome { .init(outcome: .nothingPressed, reason: .screenChanged, blocked: b) }
   }
@@ -99,23 +107,32 @@ extension WorkerManager {
     let usedPath = dir(id) + "/" + DialogProofsUsed.fileName
     guard !DialogProofsUsed.contains(used, memory: rt[id]?.offer.proofsUsed ?? [], path: usedPath) else { return .nothing(.alreadyAnswered) }
     switch isAuthentic(id, offer, a) {
-    case .no(let why, _): return .nothing(why)
+    case .no(let why, _): return .nothing(why)  // not the owner's: the offer stands, so a forged file can never end it
     case .ok(let choice, let label, _):
-      // on disk before anything is pressed: a copy of this tap is refused whatever happens next, the app going away included
-      let rec = DialogProofsUsed.record(used, memory: rt[id]?.offer.proofsUsed ?? [], path: usedPath) { folderIsReal(id) }
-      rt[id]?.offer.proofsUsed = rec.memory
-      guard rec.written else { return .nothing(nil) }  // not written, so not acted on
-      // The screen was seen to change under this offer: the dialog there now may not be the one the tap was for, however alike it reads.
-      // Checked after the proof is used up, so this tap is refused for good, a relaunch (which forgets what it saw) included.
-      guard rt[id]?.offer.disturbed != true else { return .nothing() }
-      guard let choice, let label else {
-        // login: no key. The Terminals window comes to the thread. With no window to bring (no handler, or it can't), nothing happened.
-        guard let open = openSignIn, open(id) else { return .nothing(nil) }
-        rt[id]?.offer.openedFor = offer.id  // once per dialog id, for the popup's button too
-        return .init(outcome: .opened)
-      }
-      return press(id, offer, choice, label, text: DialogProofCheck.signedText(a))
+      let o = pressVerified(id, offer, a, used: used, usedPath: usedPath, choice: choice, label: label)
+      // The owner's own tap that pressed nothing (the typing guard, clients that could not be read, a changed screen): this offer is over, so the next
+      // look at the same dialog on a settled screen makes a new id, and a new card, instead of leaving the question with a dead card for a day.
+      // Each new card needs a new real tap, so this cannot repeat on its own (`WorkerReoffer`).
+      if o.outcome == .nothingPressed { endOfferAfterRefusedTap(id) }
+      return o
     }
+  }
+
+  private func pressVerified(_ id: String, _ offer: DialogOffer, _ a: DialogAnswerRequest, used: String, usedPath: String, choice: Int?, label: String?) -> AnswerOutcome {
+    // on disk before anything is pressed: a copy of this tap is refused whatever happens next, the app going away included
+    let rec = DialogProofsUsed.record(used, memory: rt[id]?.offer.proofsUsed ?? [], path: usedPath) { folderIsReal(id) }
+    rt[id]?.offer.proofsUsed = rec.memory
+    guard rec.written else { return .nothing(nil) }  // not written, so not acted on
+    // The screen was seen to change under this offer: the dialog there now may not be the one the tap was for, however alike it reads.
+    // Checked after the proof is used up, so this tap is refused for good, a relaunch (which forgets what it saw) included.
+    guard rt[id]?.offer.disturbed != true else { return .nothing() }
+    guard let choice, let label else {
+      // login: no key. The Terminals window comes to the thread. With no window to bring (no handler, or it can't), nothing happened.
+      guard let open = openSignIn, open(id) else { return .nothing(nil) }
+      rt[id]?.offer.openedFor = offer.id  // once per dialog id, for the popup's button too
+      return .init(outcome: .opened)
+    }
+    return press(id, offer, choice, label, text: DialogProofCheck.signedText(a))
   }
 
   /// The screen as `DialogReader` reads it, with a few tries: the plain capture and the one with colours are two looks.
@@ -147,7 +164,7 @@ extension WorkerManager {
 
   func press(_ id: String, _ offer: DialogOffer, _ choice: Int, _ chosen: String, text: String? = nil) -> AnswerOutcome {
     // a tool permission or the agent's question: one number key (and a free-text answer's words), each checked against the offered screen
-    if offer.kind == .toolPermission || offer.kind == .agentQuestion { return pressPane(id, offer, choice, chosen, text: text) }
+    if offer.kind == .toolPermission || offer.kind == .agentQuestion || offer.kind == .usageLimit { return pressPane(id, offer, choice, chosen, text: text) }
     // every key states the offered dialog's kind, and the key guard lets it go only onto that dialog, read exactly (`KeyGuard`)
     guard let intent = KeyGuard.intent(for: offer.kind) else { return .nothing() }
     for _ in 0...offer.options.count {

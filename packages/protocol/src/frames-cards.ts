@@ -37,7 +37,7 @@ export const CardResolveFrame = ownerFrame('card.resolve', {
    */
   text: z.string().min(1).max(120).optional(),
   /**
-   * "Always allow <kind>": with action 'primary' on a card of a SEND_KINDS kind, the owner also allows that kind from now on
+   * "Always allow <kind>": with action 'primary' on a card that offers it (cardOffersAlways), the owner also allows that kind from now on
    * (owner ruling 2026-11-14). Signed with the rest of the frame, so only the owner's own tap carries it; the bridge adds the
    * kind to `always_allow` only after it verifies that signature for this card. Ignored on any other action or kind.
    */

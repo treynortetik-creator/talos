@@ -101,6 +101,15 @@ struct EnvStripIntegrationTests {
     #expect(sess.out.contains("CLAUDE_CODE_CHILD_SESSION=1"), "precondition: the session holds the marker: \(sess.out)")
     let glob = ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "show-environment", "-g"], env: clean)
     #expect(!glob.out.contains("CLAUDE_CODE_CHILD_SESSION"), "precondition: only the session holds it: \(glob.out)")
+    // the session's old process ends first: a restart only ever respawns a DEAD pane (remain-on-exit leaves it), never a live one
+    let panePid = Int32(ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "display-message", "-p", "-t", "=agent:", "#{pane_pid}"], env: clean).out
+      .trimmingCharacters(in: .whitespacesAndNewlines))
+    kill(try #require(panePid), SIGKILL)
+    #expect(
+      r.wait(10) {
+        ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "display-message", "-p", "-t", "=agent:", "#{pane_dead}"], env: clean).out
+          .trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+      }, "the old pane is dead")
     let host = try #require(r.host as? TmuxPtyHost)
     try host.restart(
       executable: "/bin/sh", args: ["-c", "/usr/bin/env > '\(out).tmp' && mv '\(out).tmp' '\(out)'; exec /bin/sleep 300"],

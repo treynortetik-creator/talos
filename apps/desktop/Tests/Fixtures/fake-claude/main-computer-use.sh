@@ -8,7 +8,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 keylog() { [ -z "${FAKE_DLG_KEYLOG:-}" ] || printf '%s\n' "$1" >> "$FAKE_DLG_KEYLOG"; }
 draw() { printf '\033[2J\033[H'; awk 'NR>1{printf "\r\n"} {printf "%s", $0}' "$1"; }
 show_dialog; wait_enter; print_notice
-while [ ! -f "$FAKE_STATE_DIR/cu" ]; do sleep 0.1; done
+while [ ! -f "$FAKE_STATE_DIR/cu" ] && fake_alive; do sleep 0.1; done
 stty -echo -icanon min 1 time 0 2>/dev/null
 draw "$here/../real-2.1.322/computer-use-permissions.txt"
 while :; do

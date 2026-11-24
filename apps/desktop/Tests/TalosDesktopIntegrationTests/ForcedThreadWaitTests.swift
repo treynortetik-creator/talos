@@ -5,9 +5,9 @@ import TalosTestSupport
 
 @testable import TalosSupervisor
 
-/// Update now and the thread agents: Main's turn is waited for as long as it runs, a busy thread agent for at most 5 minutes from the
-/// press (an option), and "Update now anyway" skips only the thread part. The same real rig as ForcedUpdateWaitTests.
-@Suite("Update now: thread agents get 5 minutes", .serialized)
+/// Update now and the thread agents: Main's turn and a busy thread agent are both waited for as long as they run (until the 2 hours every wait has), and
+/// "Update now anyway" is the only way past a thread. The same real rig as ForcedUpdateWaitTests.
+@Suite("Update now: thread agents are waited for like Main", .serialized)
 struct ForcedThreadWaitTests {
   typealias Rig = AutoUpdaterTests.Rig
 
@@ -33,26 +33,43 @@ struct ForcedThreadWaitTests {
   /// Inside the updater's own folder, which only this app can open.
   var markerPath: (Rig) -> String { { $0.home + "/auto-update/update-interrupted.json" } }
 
-  @Test func aBusyThreadHoldsTheUpdateFiveMinutesFromThePressAndThenItGoes() throws {
+  /// Old code: at 300 s from the press the thread reason was dropped and the update went (spawns == 1), cutting the turn off.
+  @Test func aBusyThreadHoldsTheUpdateForAsLongAsItRunsAndThenItGoesWithoutACutOff() throws {
     let r = try Rig()
     r.busy.set([Self.busyThread])
     let u = try Self.ready(r)
     u.updateNow()
     u.queue.sync {}
-    Self.steps(r, u, 9)  // 270 s
-    #expect(r.spawns.get().isEmpty && r.head() == r.a, "still inside the 5 minutes: nothing moved: \(u.status)")
+    Self.steps(r, u, 80)  // 40 minutes: far past the old 5
+    #expect(r.spawns.get().isEmpty && r.head() == r.a, "nothing moved while the thread works: \(u.status)")
     guard case .waitingForTurn(_, _, _, let t?) = u.status else {
       Issue.record("expected a thread wait, got \(u.status)")
       return
     }
-    #expect(t.names == ["Ari Skill"] && t.minutes == 5)
-    #expect(u.status.words.headline == "Waiting for Ari Skill to finish (up to 5 minutes)")
-    #expect(u.status.words.detail.contains("Anything they were still working on may be cut off. You can send it again from the thread."))
-    #expect(!u.status.words.detail.contains("sent to them again"), "nothing is promised that is not done")
-    #expect(u.status.offersSkipThreadWait)
-    Self.steps(r, u, 8)
-    #expect(r.spawns.get().count == 1, "5 minutes passed, the update went: \(u.status)\n\(r.audit())")
-    // the thread that was cut is named for the bridge, which re-sends its turn once
+    #expect(t.names == ["Ari Skill"])
+    #expect(u.status.words.headline == "Waiting for Ari Skill to finish")
+    #expect(u.status.words.detail.contains("press Update now anyway"), "\(u.status.words.detail)")
+    #expect(!u.status.words.detail.contains("minute"), "no short time limit is promised: \(u.status.words.detail)")
+    #expect(u.status.offersSkipThreadWait, "the way to go ahead is offered where it waits on a thread")
+    r.busy.set([])  // the turn ended on its own
+    Self.steps(r, u, 5)
+    #expect(r.spawns.get().count == 1, "it goes once the thread is quiet: \(u.status)\n\(r.audit())")
+    #expect(!FileManager.default.fileExists(atPath: markerPath(r)), "nothing was cut off, so no list of threads")
+    #expect(!r.audit().contains("update_interrupted"))
+  }
+
+  /// "Update now anyway" names the busy thread for the bridge (the Send again card), as before.
+  @Test func updateNowAnywayWritesTheListOfCutOffThreadsPrivately() throws {
+    let r = try Rig()
+    r.busy.set([Self.busyThread])
+    let u = try Self.ready(r)
+    u.updateNow()
+    u.queue.sync {}
+    Self.steps(r, u, 4)
+    u.skipThreadWait()
+    u.queue.sync {}
+    Self.steps(r, u, 5)
+    #expect(r.spawns.get().count == 1, "\(u.status)\n\(r.audit())")
     func mode(_ p: String) -> Int { ((try? FileManager.default.attributesOfItem(atPath: p)[.posixPermissions]) as? Int) ?? -1 }
     #expect(mode(markerPath(r)) == 0o600, "the file is the app's alone")
     #expect(mode(r.home + "/auto-update") == 0o700, "and so is its folder")
@@ -62,46 +79,69 @@ struct ForcedThreadWaitTests {
     let commit = try #require(o["commit"] as? String)
     #expect(commit.count == 40 && commit.allSatisfy { $0.isHexDigit }, "bound to the release's commit, not its version name: \(commit)")
     #expect(o["version"] as? String == "1.5.0")
-    #expect(r.audit().contains("update_now_waiting"))
-    // one line for the thread reason however many looks it lasted, and one more when it changed (the 5 minutes ran out)
-    #expect(r.audit().components(separatedBy: "update_now_waiting").count - 1 == 2, "\(r.audit())")
     #expect(r.audit().contains("why=thread ari_s_cc_skill busy"))
   }
 
-  @Test func theFiveMinutesIsAnOption() throws {
+  /// Old code: the failed write was logged and the update went on, cutting the thread off with no list to send it again from.
+  @Test func updateNowAnywayStopsBeforeUpdatingWhenTheListCannotBeSaved() throws {
     let r = try Rig()
     r.busy.set([Self.busyThread])
-    let u = try Self.ready(r, options: { $0.threadWait = 60 })
+    // a folder where the list goes (with something in it): the list cannot be written there
+    try FileManager.default.createDirectory(atPath: markerPath(r), withIntermediateDirectories: true)
+    try "x".write(toFile: markerPath(r) + "/keep", atomically: true, encoding: .utf8)
+    let u = try Self.ready(r)
     u.updateNow()
     u.queue.sync {}
-    Self.steps(r, u, 1)  // 30 s
-    #expect(r.spawns.get().isEmpty)
-    #expect(u.status.words.headline == "Waiting for Ari Skill to finish (up to 1 minute)")
+    Self.steps(r, u, 2)
+    u.skipThreadWait()
+    u.queue.sync {}
+    Self.steps(r, u, 10)
+    #expect(r.spawns.get().isEmpty, "nothing was swapped: \(u.status)\n\(r.audit())")
+    #expect(r.head() == r.a && r.branch() == "main", "the code folder is back where it was")
+    guard case .failed(let line, _) = u.status else {
+      Issue.record("expected a plain failure line, got \(u.status)")
+      return
+    }
+    #expect(line == AutoUpdate.interruptedListLine("1.5.0", old: "1.4.0"), "\(line)")
+    #expect(r.audit().contains("update_interrupted result=not_written"))
+    // once the list can be written, an Update now goes through
+    try FileManager.default.removeItem(atPath: markerPath(r))
+    r.busy.set([])
+    r.clock.edit { $0 += AutoUpdate.postponeFor }
+    u.updateNow()
+    u.queue.sync {}
     Self.steps(r, u, 8)
-    #expect(r.spawns.get().count == 1, "\(u.status)")
+    #expect(r.spawns.get().count == 1, "\(u.status)\n\(r.audit())")
   }
 
   @Test func severalThreadsAreNamedAsYourThreadAgents() {
     let two = UpdateStatus.ThreadWait(names: ["Trip", "Budget"])
-    #expect(two.line == "Waiting for your thread agents to finish (up to 5 minutes)")
-    #expect(UpdateStatus.ThreadWait(names: []).line == "Waiting for your thread agents to finish (up to 5 minutes)")
-    #expect(UpdateStatus.ThreadWait(names: ["Trip", "Trip"]).line == "Waiting for Trip to finish (up to 5 minutes)")
+    #expect(two.line == "Waiting for your thread agents to finish")
+    #expect(UpdateStatus.ThreadWait(names: [], background: true).line == "Waiting for background work in your threads to finish")
+    #expect(UpdateStatus.ThreadWait(names: []).line == "Waiting for your thread agents to finish", "none named and not background work")
+    #expect(UpdateStatus.ThreadWait(names: ["Trip", "Trip"]).line == "Waiting for Trip to finish")
     let s = UpdateStatus.waitingForTurn(version: "1.5.0", threads: two)
-    #expect(UpdateMenu.title(s) == "Update to 1.5.0: waiting for your thread agents to finish (up to 5 minutes)\u{2026}")
+    #expect(UpdateMenu.title(s) == "Update to 1.5.0: waiting for your thread agents to finish\u{2026}")
     #expect(!UpdateStatus.waitingForTurn(version: "1.5.0", why: ["main running"]).offersSkipThreadWait)
     #expect(UpdateStatus.skipThreadWaitButton == "Update now anyway")
   }
 
-  @Test func backgroundWorkInAThreadAlsoGetsOnlyFiveMinutes() throws {
+  /// A background server that never ends (a dev server a shell started) holds an Update now for ever: the button is the way out.
+  @Test func backgroundWorkInAThreadHoldsUntilItEndsOrTheOwnerGoesAnyway() throws {
     let r = try Rig()
     r.busy.set(["thread background work: zsh (pid 4242)"])
     let u = try Self.ready(r)
     u.updateNow()
     u.queue.sync {}
-    Self.steps(r, u, 3)
-    #expect(u.status.words.headline == "Waiting for your thread agents to finish (up to 5 minutes)")
-    Self.steps(r, u, 16)
+    Self.steps(r, u, 40)
+    #expect(r.spawns.get().isEmpty, "\(u.status)")
+    #expect(u.status.words.headline == "Waiting for background work in your threads to finish")
+    #expect(u.status.offersSkipThreadWait)
+    u.skipThreadWait()
+    u.queue.sync {}
+    Self.steps(r, u, 5)
     #expect(r.spawns.get().count == 1, "\(u.status)")
+    #expect(!FileManager.default.fileExists(atPath: markerPath(r)), "no thread was named, so there is no list")
   }
 
   // MARK: Update now anyway
@@ -117,7 +157,7 @@ struct ForcedThreadWaitTests {
     u.skipThreadWait()
     u.queue.sync {}
     Self.steps(r, u, 5)
-    #expect(r.spawns.get().count == 1, "no 5 minutes: \(u.status)")
+    #expect(r.spawns.get().count == 1, "no wait at all: \(u.status)")
     #expect(r.audit().contains("update_now_anyway"))
   }
 
@@ -134,13 +174,14 @@ struct ForcedThreadWaitTests {
     u.queue.sync {}
     Self.steps(r, u, 40)  // 20 minutes
     #expect(r.spawns.get().isEmpty && r.head() == r.a, "Main's turn is never cut off: \(u.status)")
-    // Main's turn ends; the thread was skipped, so it goes without any further thread wait
+    // Main's turn ends; the thread was skipped by the owner's own press, so it goes without any further thread wait
     r.busy.set([Self.busyThread])
     Self.steps(r, u, 5)
     #expect(r.spawns.get().count == 1, "\(u.status)")
   }
 
-  @Test func afterTheFiveMinutesMainsTurnStillHoldsTheUpdate() throws {
+  /// Old code: the thread's 5 minutes ran out while Main worked, so the thread no longer held the update once Main was done.
+  @Test func whenMainsTurnEndsABusyThreadStillHoldsTheUpdate() throws {
     let r = try Rig()
     r.busy.set(["main running", Self.busyThread])
     let u = try Self.ready(r)
@@ -148,22 +189,50 @@ struct ForcedThreadWaitTests {
     u.queue.sync {}
     Self.steps(r, u, 30)
     #expect(r.spawns.get().isEmpty)
-    r.busy.set([Self.busyThread])  // Main done; the thread's 5 minutes ran out long ago
+    r.busy.set([Self.busyThread])  // Main done; the thread is not
+    Self.steps(r, u, 20)
+    #expect(r.spawns.get().isEmpty, "\(u.status)")
+    #expect(u.status.offersSkipThreadWait, "now it waits on a thread, so the button is there")
+    r.busy.set([])
     Self.steps(r, u, 5)
     #expect(r.spawns.get().count == 1, "\(u.status)")
   }
 
-  @Test func aSecondPressOfUpdateNowDoesNotRestartTheFiveMinutes() throws {
+  /// A thread reason with no id that is not background work (a restart under way) is "your thread agents", never "background work".
+  @Test func aThreadRestartUnderWayIsNotCalledBackgroundWork() throws {
+    let r = try Rig()
+    r.busy.set(["a thread restart is under way"])
+    let u = try Self.ready(r)
+    u.updateNow()
+    u.queue.sync {}
+    Self.steps(r, u, 2)
+    #expect(u.status.words.headline == "Waiting for your thread agents to finish", "\(u.status)")
+  }
+
+  /// The wait has the same 2 hours as Main's: a thread that never ends does not hold it for ever, and the owner is told plainly.
+  @Test func aThreadThatNeverEndsEndsTheWaitAfterTwoHoursWithAPlainLine() throws {
     let r = try Rig()
     r.busy.set([Self.busyThread])
     let u = try Self.ready(r)
     u.updateNow()
     u.queue.sync {}
-    Self.steps(r, u, 8)  // 240 s
-    u.updateNow()  // the window's Install pressed again
+    Self.steps(r, u, 250)  // a little over 2 hours
+    #expect(r.spawns.get().isEmpty && r.head() == r.a, "nothing was cut off: \(u.status)")
+    #expect(u.status == .failed(line: AutoUpdate.busyLine("1.5.0", old: "1.4.0"), logPath: u.logPathForOwner), "\(u.status)")
+    #expect(r.audit().contains("gave_up_waiting"))
+  }
+
+  @Test func aSecondPressOfUpdateNowDoesNotSkipTheThreadWait() throws {
+    let r = try Rig()
+    r.busy.set([Self.busyThread])
+    let u = try Self.ready(r)
+    u.updateNow()
     u.queue.sync {}
     Self.steps(r, u, 8)
-    #expect(r.spawns.get().count == 1, "the clock still counts from the first press: \(u.status)")
+    u.updateNow()  // the window's Install pressed again
+    u.queue.sync {}
+    Self.steps(r, u, 30)
+    #expect(r.spawns.get().isEmpty, "a second press is not the owner's Update now anyway: \(u.status)")
   }
 
   // MARK: the automatic path keeps its rules
@@ -172,7 +241,7 @@ struct ForcedThreadWaitTests {
     let r = try Rig()
     r.busy.set([Self.busyThread])
     let u = try Self.ready(r)  // no Update now
-    Self.steps(r, u, 20)  // 10 minutes: far past the forced path's 5
+    Self.steps(r, u, 20)  // 10 minutes
     #expect(r.spawns.get().isEmpty && !r.posts.get().contains(AutoUpdate.noticeLine("1.5.0")), "\(u.status)")
     if case .waitingForQuiet = u.status {} else { Issue.record("expected waiting for a quiet moment, got \(u.status)") }
     #expect(!FileManager.default.fileExists(atPath: markerPath(r)))

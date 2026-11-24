@@ -11,8 +11,8 @@ blank
 printf '{"v":1,"thread_id":"%s","pid":%d,"at":"2026-10-30T00:00:00.000Z"}\n' "$TALOS_APP_WORKER_THREAD" "$$" > "$d/ready"
 (
   k=1
-  while :; do
-    until [ -f "$FAKE_BLANK_BOX.$k" ]; do sleep 0.1; done
+  while fake_alive; do
+    until [ -f "$FAKE_BLANK_BOX.$k" ] || ! fake_alive; do sleep 0.1; done
     blank; typing_box
     [ -n "${FAKE_BLANK_REPEAT:-}" ] || break
     k=$((k + 1))

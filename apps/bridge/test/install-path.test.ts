@@ -168,14 +168,18 @@ describe('install.sh wrapper', () => {
     expect(r.out).toContain(`${other} is not on your PATH`)
   })
 
-  test('the .mcp.json entry the Mac app reads (#118): an absolute bun, then run --cwd <bridge> --silent start', () => {
+  test('the .mcp.json entry (#118): an absolute bun, --no-env-file, --config=<bridge>/bunfig.toml, then <bridge>/src/server.ts', () => {
     const bin = fakeBunDir()
     const r = install({ home: tempHome(), path: `${bin}:/usr/bin:/bin` })
     const mcp = JSON.parse(readFileSync(join(r.agent, '.mcp.json'), 'utf8')) as {
       mcpServers: { 'talos-app': { command: string; args: string[] } }
     }
     expect(isAbsolute(mcp.mcpServers['talos-app'].command)).toBe(true)
-    expect(mcp.mcpServers['talos-app'].args).toEqual(['run', '--cwd', BRIDGE_DIR, '--silent', 'src/server.ts'])
+    expect(mcp.mcpServers['talos-app'].args).toEqual([
+      '--no-env-file',
+      `--config=${BRIDGE_DIR}/bunfig.toml`,
+      `${BRIDGE_DIR}/src/server.ts`,
+    ])
   })
 
   test("the wrapper does not load the current folder's .env into the CLI or into the claude that `start` launches", () => {

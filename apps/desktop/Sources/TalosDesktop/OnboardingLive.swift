@@ -32,7 +32,7 @@ enum OnboardingLive {
     return OnboardingCoordinator(deps: deps)
   }
 
-  /// Talos's code and tools, the agent's folder, then the scheduler. Each step is the existing one; this reports how far it is.
+  /// Talos's code and tools, then the agent's folder (its one installer run adds the scheduler too). Each step is the existing one; this reports how far it is.
   static func provision(
     agent: AgentFolderFlow, progress: @escaping @Sendable (Int) -> Void, tools: @escaping @Sendable (OnboardingCoordinator.ToolsSignal) -> Void,
     ignoreSpace: Bool = false, schedulerNote: @MainActor (String) -> Void
@@ -57,7 +57,7 @@ enum OnboardingLive {
     progress(ProvisionProgress.agentFolder.0)
     guard await agent.ensureAgentFolder() else { return failure(agent.step) }
     progress(ProvisionProgress.agentFolder.1)
-    if let why = await agent.ensureChronos() { schedulerNote(why) }
+    if let why = agent.schedulerNote { schedulerNote(why) }
     progress(100)
     return .ok
   }

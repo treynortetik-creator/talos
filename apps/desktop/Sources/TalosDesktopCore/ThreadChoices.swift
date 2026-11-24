@@ -61,7 +61,7 @@ public enum ThreadChoices {
   public static func note(_ l: Listing) -> String {
     l.readable
       ? "Where the post goes when the agent keeps crashing. It uses the choice at the moment it posts."
-      : "Couldn't read your threads (the Talos config.json is missing or damaged). The post goes to the default thread."
+      : "Talos's settings file is missing. Set up Talos again. The post goes to the default thread."
   }
 
   /// What a pick means in the file: the default thread is stored as nothing.

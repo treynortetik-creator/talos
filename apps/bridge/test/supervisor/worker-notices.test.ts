@@ -356,34 +356,16 @@ describe('a start refused because the permission hook cannot run', () => {
 })
 
 describe('a pointer held back', () => {
-  it('by a draft: one line after draft_notice_after_s; the line after a clear and a new draft is a new hold', async () => {
+  it('by a draft, scrolled back, a refusal or a pointer that never showed in the box: no line of its own, however long, nor at the drop', async () => {
     const x = setup()
-    x.n.heldPointer('trip', x.r, 'draft', false)
-    x.advance(WORKER_TIMING.draft_notice_after_s - 1)
-    x.n.heldPointer('trip', x.r, 'draft', false)
+    for (const hold of ['draft', 'copy_mode', 'refused', 'unseen'] as const) {
+      x.n.heldPointer('trip', x.r, hold, false)
+      x.advance(WORKER_TIMING.draft_notice_after_s * 3)
+      x.n.heldPointer('trip', x.r, hold, false)
+      x.n.heldAtDrop('trip', x.r, hold)
+    }
     await x.n.settled()
-    expect(x.posts).toHaveLength(0)
-    x.advance(1)
-    x.n.heldPointer('trip', x.r, 'draft', false)
-    x.n.heldPointer('trip', x.r, 'draft', false)
-    await x.n.settled()
-    expect(x.texts()).toEqual([lines.draft(WHERE)])
-    expect(x.posts[0]?.text).toContain('your message has probably gone to the main session')
-    x.n.heldPointer('trip', x.r, null, false)
-    expect(readNotices(x.home, 'trip')[HOLD_KIND.draft]?.open).toBe(false)
-  })
-  it('a pointer that never showed in the box: one line after draft_notice_after_s, in its own words (Fable R5-1)', async () => {
-    const x = setup()
-    x.n.heldPointer('trip', x.r, 'unseen', false)
-    x.advance(WORKER_TIMING.draft_notice_after_s)
-    x.n.heldPointer('trip', x.r, 'unseen', false)
-    x.n.heldPointer('trip', x.r, 'unseen', false)
-    await x.n.settled()
-    expect(x.texts()).toEqual([lines.unseen(WHERE)])
-    expect(x.posts[0]?.text).toContain("didn't appear in the input box")
-    expect(readNotices(x.home, 'trip')[HOLD_KIND.unseen]).toBeDefined()
-    x.n.heldPointer('trip', x.r, null, false) // the hold ended: its record is forgotten, a later one is said again
-    expect(readNotices(x.home, 'trip')[HOLD_KIND.unseen]?.open ?? false).toBe(false)
+    expect(x.posts).toHaveLength(0) // the hub says why a message waits, and says so when Main takes it (pointer_hold)
   })
   it('the Enter that may have answered a prompt: said at once, once; nothing more at the drop', async () => {
     const x = setup()
@@ -395,12 +377,6 @@ describe('a pointer held back', () => {
     x.n.heldAtDrop('trip', x.r, 'enter_uncertain')
     await x.n.settled()
     expect(x.posts).toHaveLength(1)
-  })
-  it('dropped at the deadline while unseen: its line goes then, once', async () => {
-    const x = setup()
-    x.n.heldAtDrop('trip', x.r, 'unseen')
-    await x.n.settled()
-    expect(x.texts()).toEqual([lines.unseen(WHERE)])
   })
   it('a left-over line of ours mixed with other text gets the left-over line', async () => {
     const x = setup()
@@ -431,10 +407,8 @@ describe('no config text in a system row (a thread name an agent or a hand edit 
   it('every line says "This thread’s session", never the thread’s name', () => {
     const texts = [
       lines.dialog('trust', WHERE),
-      lines.draft(WHERE),
       lines.leftover(WHERE),
       lines.noBox(WHERE),
-      lines.copyMode(WHERE),
       lines.needsMac('trust this folder', WHERE),
       lines.turnCut('restart', WHERE),
     ]
@@ -521,58 +495,5 @@ describe('the usage-limit screen in the notices', () => {
     expect(noticeSuppressed(closed, USAGE_LIMIT_KIND, at + 59 * 60)).toBe(true)
     expect(noticeSuppressed(closed, USAGE_LIMIT_KIND, at + 61 * 60)).toBe(false)
     expect(noticeSuppressed(closed, 'trust', at + WORKER_TIMING.notice_debounce_s + 1)).toBe(false)
-  })
-})
-
-describe('a pointer the key guard refused is never silent (Fable R2-1)', () => {
-  it('after the hold wait, one line naming why; nothing before it; and it is said when the message is dropped', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'talos-refused-'))
-    let t = 0
-    const posts: string[] = []
-    const n = new WorkerNotices({
-      home,
-      post: async (_thread, text) => {
-        posts.push(text)
-        return 'sent'
-      },
-      threadName: () => 'Trip',
-      where: () => ({ attach: 'talos-app supervise attach trip', restart: 'r', machine: 'hestia' }),
-      now: () => t,
-      wallS: () => 1_000 + t,
-      audit: () => {},
-    })
-    const r = newNoticeRuntime()
-    n.heldPointer('trip', r, 'refused', false)
-    await n.settled()
-    expect(posts).toEqual([])
-    t += WORKER_TIMING.draft_notice_after_s + 1
-    n.heldPointer('trip', r, 'refused', false)
-    await n.settled()
-    expect(posts).toHaveLength(1)
-    expect(posts[0]).toContain("showing something Talos doesn't type into, so Talos did not type your message there")
-    n.heldPointer('trip', r, 'refused', false)
-    await n.settled()
-    expect(posts).toHaveLength(1)
-    // dropped at the claim deadline before the wait (a warm session): the refused line goes then, once (Fable R3-5)
-    const home2 = mkdtempSync(join(tmpdir(), 'talos-refused-'))
-    const posts2: string[] = []
-    const n2 = new WorkerNotices({
-      home: home2,
-      post: async (_thread, text) => {
-        posts2.push(text)
-        return 'sent'
-      },
-      threadName: () => 'Trip',
-      where: () => ({ attach: 'talos-app supervise attach trip', restart: 'r', machine: 'hestia' }),
-      now: () => 0,
-      wallS: () => 1_000,
-      audit: () => {},
-    })
-    n2.heldAtDrop('trip', newNoticeRuntime(), 'refused')
-    await n2.settled()
-    expect(posts2).toHaveLength(1)
-    expect(posts2[0]).toContain('did not type your message there')
-    rmSync(home, { recursive: true, force: true })
-    rmSync(home2, { recursive: true, force: true })
   })
 })

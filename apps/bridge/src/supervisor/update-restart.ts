@@ -5,7 +5,7 @@
 // and never by cutting into the owner: only while it is quiet as an idle park reads it (no turn, nothing owed or held for it,
 // nothing on the pane asking the owner, no draft in its box, no key in an attached client lately), so one that is always busy
 // simply waits. The spec it was tried for is written BEFORE the try (update_tried_hash, kept across the start it gives), so no
-// spec is tried twice. It holds while the usage governor is not ok or off in a live bridge's fresh status.json, and does
+// spec is tried twice. It holds while the usage governor is not ok, off or unknown (no usage reading yet) in a live bridge's fresh status.json, and does
 // nothing while dedicated.restart_on_update is off. A dry plan refused, a start that fails or a restart that never comes back
 // leaves the session alone (never retried; the last is said as not restarted, not as failed). The owner gets one line in the
 // default thread (updateRestartLine), and a line of its own for what happens after that one was said. None of these restarts
@@ -68,9 +68,10 @@ export class UpdateRestarts {
     this.settleCurrent()
     this.maybeCheck(pending)
     if (this.current || this.queue.length === 0) return this.sayIfDone()
-    // the governor: only while a live bridge says ok or off (a paused governor must not have sessions started into it)
+    // the governor: only while a live bridge says ok, off or unknown (no usage reading yet: a start is allowed then, so a restart is
+    // too); a paused governor must not have sessions started into it, and no live status at all (null) is no reading
     const g = d.updateGovernor?.() ?? null
-    if (g !== 'ok' && g !== 'off') {
+    if (g !== 'ok' && g !== 'off' && g !== 'unknown') {
       if (this.heldSaid !== String(g)) d.audit('update_restart_held', { governor: String(g) })
       this.heldSaid = String(g)
       return
@@ -166,13 +167,15 @@ export class UpdateRestarts {
   /**
    * Quiet as an idle park reads it, and more (Fable R1-2): live and not in a turn, no park waiting, nothing on the pane or in
    * its notes asking the owner, no pointer owed or held, no draft in its box, no key in an attached client lately, and the pane
-   * readable. Anything that cannot be read is not quiet.
+   * readable, and no background work under it (a restart would cut it). Anything that cannot be read, the process table included,
+   * is not quiet.
    */
   private async quiet(w: WorkerRuntime): Promise<boolean> {
     if (w.entry.state !== 'live' || w.turnWait || stuck(w) || w.owed.pending || w.heldFor) return false
     if (w.notes.needsYou !== null || w.notes.promptWatch.current !== null || w.entry.dialog !== undefined) return false
     const host = w.host
     if (!host || (await this.m.slots.isBusy(w))) return false
+    if ((this.m.slots.background(w)?.count ?? 1) > 0) return false // work running, or a table that could not be read
     const rows = await host.visibleRows()
     if (!rows || onScreenAsk(rows)) return false
     const escaped = await host.visibleRowsEscaped()

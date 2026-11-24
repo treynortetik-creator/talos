@@ -78,6 +78,60 @@ struct PaneSelectThreadTests {
     #expect(keys.keys.isEmpty)
   }
 
+  /// L14. Old code: `offerPane` returned for the same screen whatever the offer's time, so the question's number never changed and the phone's card
+  /// stayed dead; the wait below fails.
+  @Test func aQuestionStillOnTheScreenWhenItsCardRunsOutIsOfferedAgainUnderANewNumberAndTheOldTapPressesNothing() throws {
+    let (r, keys, _, owner) = try make("question")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.cardLifetime = 2 }
+    let o = try offered(r)
+    r.mgr.tune { $0.cardLifetime = 600 }  // o keeps its 2 s; the offer that follows it is made with 600 and cannot run out under the tap
+    #expect(r.wait(25) { r.offer.map { $0.id != o.id } ?? false }, "never offered again: \(String(describing: r.offer))")
+    let n = try #require(r.offer)
+    #expect(n.kind == .agentQuestion && n.subject == o.subject && n.options == o.options && n.free_text == o.free_text)
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_old")
+    nothing(r, keys, control: "ctl_old")
+    #expect(r.result?["reason"] as? String == "unverified", "refused for its number: \(String(describing: r.result))")
+    #expect(r.offer?.id == n.id)
+    // the new card answers
+    try r.writeAnswer(n, owner: owner, choice: 0, control: "ctl_new")
+    #expect(r.wait(20) { r.resultControl() == "ctl_new" })
+    #expect(r.result?["outcome"] as? String == "pressed" && r.result?["dialog_id"] as? String == n.id, "\(String(describing: r.result))")
+  }
+
+  /// L14: a verified tap that pressed nothing (a client is typing) ends a question's offer too, so the next settled look makes a new id.
+  @Test func aTapOfTheOwnersThatPressedNothingEndsAQuestionsOfferAndTheNextLookMakesANewOne() throws {
+    let (r, keys, _, owner) = try make("question")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.clientQuiet = 60 }
+    let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 60 }
+    let client = try r.attachClient()
+    defer {
+      if client.isRunning { client.terminate() }
+      client.waitUntilExit()
+    }
+    try r.writeAnswer(o, owner: owner, choice: 0, control: "ctl_1")
+    nothing(r, keys, control: "ctl_1")
+    client.terminate()
+    client.waitUntilExit()
+    r.mgr.tune { $0.dialogSettle = 1 }
+    #expect(r.wait(25) { r.offer.map { $0.id != o.id } ?? false }, "no new offer: \(String(describing: r.offer))")
+  }
+
+  /// A question the owner answered at the phone is gone from the screen: its time running out afterwards offers nothing again.
+  @Test func aQuestionAnsweredAtThePhoneIsNotOfferedAgainAfterItsTimeRunsOut() throws {
+    let (r, keys, _, owner) = try make("question")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.cardLifetime = 6 }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    #expect(r.wait(20) { r.resultControl() == "ctl_1" })
+    #expect(r.result?["outcome"] as? String == "pressed", "\(String(describing: r.result))")
+    usleep(9_000_000)
+    #expect(r.offer == nil || r.offer?.id == o.id, "an answered question was offered again: \(String(describing: r.offer))")
+  }
+
   @Test func aGarbledPromptGetsNoCardAndTheLineSaysSoWithoutATerminal() throws {
     let (r, keys, log, _) = try make("garbled", ackWait: 0)
     defer { r.teardown(); keys.remove() }

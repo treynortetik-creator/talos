@@ -65,6 +65,10 @@ extension BackgroundWork {
   /// The record kind of the line a thread gets when a park cut its background work.
   public static let cutKind = "background cut"
 
+  /// The record kind and the line a thread gets when it starts over the limit because the quiet sessions all have work running.
+  public static let busyKind = "computer busy"
+  public static let busyLine = "Your computer is busy: other threads still have work running in the background, so this one started anyway and nothing was stopped."
+
   /// The thread's one line: how many tasks were running and the first one's command.
   public static func cutLine(_ f: Found) -> String {
     let first = f.first.map { ": \($0)" } ?? ""

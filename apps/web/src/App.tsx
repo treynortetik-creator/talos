@@ -36,7 +36,7 @@ import { SettingsScreen } from './features/settings/SettingsScreen.tsx'
 import { ThemeSync } from './features/settings/ThemeSync.tsx'
 import { TerminalScreen } from './features/terminal/TerminalScreen.tsx'
 import { useThreadSessionsController } from './features/thread-sessions/store.ts'
-import { NowPlaying } from './features/threads/NowPlaying.tsx'
+import { AudioOnLeave } from './features/threads/AudioOnLeave.tsx'
 import { ThreadList } from './features/threads/ThreadList.tsx'
 import { ThreadScreen, ThreadView } from './features/threads/ThreadScreen.tsx'
 import { ClientProvider, type TalosClient, useTalos, useTalosClient } from './lib/client.ts'
@@ -302,6 +302,7 @@ export function App({ client, storage }: { client: TalosClient; storage: Storage
           <AppErrorBoundary>
             <BrowserRouter>
               <RouteTracker />
+              <AudioOnLeave />
               <Routes>
                 <Route path="/enroll" element={FAKE ? <Navigate to="/" replace /> : <EnrollPage />} />
                 <Route path="/login" element={FAKE ? <Navigate to="/" replace /> : <LoginPage />} />
@@ -320,7 +321,6 @@ export function App({ client, storage }: { client: TalosClient; storage: Storage
                   element={
                     <Gate>
                       <Shell />
-                      <NowPlaying />
                     </Gate>
                   }
                 >

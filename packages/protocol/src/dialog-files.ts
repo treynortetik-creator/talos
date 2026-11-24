@@ -20,6 +20,8 @@ import { CardId, IsoTs, ThreadId } from './ids.ts'
  * is a SAFETY question like the bypass disclaimer. `agent_question` is the agent's own question (AskUserQuestion): `subject` is the question, the
  * options are its rows, and `free_text` is the index of the free-text option (`Other…`) when the screen offers one: the card draws a text field for it
  * and the owner's words travel IN the signed frame (`text`). Neither is read off a Linux supervisor's pane yet; the Mac reads both (`PaneSelect`).
+ * `usage_limit` is Claude Code's usage-limit menu: `subject` says in plain words which limit and when it resets, and the options are
+ * only `Stop and wait` (Escape) and `Switch model` (Escape, then `/model`), never a row that spends usage credits. The Mac reads it (`PaneSelect`).
  */
 export const DIALOG_KINDS = [
   'trust',
@@ -29,6 +31,7 @@ export const DIALOG_KINDS = [
   'bypass',
   'tool_permission',
   'agent_question',
+  'usage_limit',
 ] as const
 export const DialogKind = z.enum(DIALOG_KINDS)
 export type DialogKindT = z.infer<typeof DialogKind>
@@ -37,8 +40,14 @@ export type DialogKindT = z.infer<typeof DialogKind>
 export const DIALOG_MAX_OPTIONS = 6
 export const DIALOG_LABEL_MAX = 120
 export const DIALOG_SUBJECT_MAX = 500
-/** How long a dialog can wait for a tap, counted from when the Mac first saw it. */
-export const DIALOG_TTL_S = 900
+/**
+ * How long a dialog card can wait for a tap, counted from when the Mac first saw it: a day. The card is not what keeps a tap safe: it
+ * is closed as soon as its question leaves the screen, an answer is only taken for the exact dialog id on the pane now, and the tap's
+ * own signed time (`DialogProof.maxAgeMs`, 15 minutes) is a separate, unchanged bound. A bridge from before this change still cuts its
+ * card at 15 minutes (it takes the smaller of this and the Mac's `expires_at`), which is the old behaviour. The starting-worker wait
+ * (`dialogLimit`, 900 s) is not this number and does not move.
+ */
+export const DIALOG_TTL_S = 24 * 3600
 /** A file bigger than this is not one of ours and is never read whole (every file except the answer). */
 export const DIALOG_FILE_MAX_BYTES = 4096
 /**
@@ -90,6 +99,13 @@ export const FreeText = z
   .int()
   .min(0)
   .max(DIALOG_MAX_OPTIONS - 1)
+/** The only two choices a usage-limit card has. Any other option (a row that spends credits, say) is not a card. */
+export const USAGE_LIMIT_OPTIONS = ['Stop and wait', 'Switch model'] as const
+export const usageLimitOptionsFit = (d: { kind?: string; dialog_kind?: string; options: string[] }): boolean => {
+  if ((d.dialog_kind ?? d.kind) !== 'usage_limit') return true
+  const allowed: readonly string[] = USAGE_LIMIT_OPTIONS
+  return new Set(d.options).size === d.options.length && d.options.every((o) => allowed.includes(o))
+}
 const freeTextFits = (d: { kind?: string; dialog_kind?: string; options: string[]; free_text?: number | undefined }) =>
   d.free_text === undefined || ((d.dialog_kind ?? d.kind) === 'agent_question' && d.free_text < d.options.length)
 
@@ -133,6 +149,10 @@ export const WorkerDialog = z
   .refine(freeTextFits, {
     path: ['free_text'],
     message: 'only a question has a free-text option, and it is one of its options',
+  })
+  .refine(usageLimitOptionsFit, {
+    path: ['options'],
+    message: 'a usage-limit dialog offers only Stop and wait and Switch model',
   })
 export type WorkerDialogT = z.infer<typeof WorkerDialog>
 
@@ -213,8 +233,10 @@ export const DialogAnswer = z
   .refine(choiceOrOpen, { message: 'exactly one of choice and action' })
 export type DialogAnswerT = z.infer<typeof DialogAnswer>
 
-export const DIALOG_OUTCOMES = ['pressed', 'nothing_pressed', 'opened'] as const
+export const DIALOG_OUTCOMES = ['pressed', 'nothing_pressed', 'opened', 'partial'] as const
 export const DIALOG_NOTHING_REASONS = ['screen_changed', 'already_answered', 'unverified', 'unconfirmed'] as const
+/** Why a usage-limit answer stopped part way (`outcome: 'partial'`): Escape went, so it is never "nothing pressed". */
+export const DIALOG_PARTIAL_REASONS = ['closed', 'typed', 'cleared'] as const
 export const DIALOG_RESULT_SOURCES = ['card', 'mac'] as const
 /**
  * `workers/<thread>/dialog-result.json` (the Mac writes, the bridge reads and deletes): what happened. Strict.
@@ -241,24 +263,31 @@ export const DialogResult = z
       .max(DIALOG_MAX_OPTIONS - 1)
       .optional(),
     label: Label.optional(),
-    reason: z.enum(DIALOG_NOTHING_REASONS).optional(),
+    reason: z.enum([...DIALOG_NOTHING_REASONS, ...DIALOG_PARTIAL_REASONS]).optional(),
     at: IsoTs,
   })
   .refine((r) => r.source === 'mac' || r.control_id !== undefined, {
     path: ['control_id'],
     message: 'a card result names its answer',
   })
-  .refine((r) => r.source === 'card' || r.outcome !== 'nothing_pressed', {
+  .refine((r) => r.source === 'card' || (r.outcome !== 'nothing_pressed' && r.outcome !== 'partial'), {
     path: ['outcome'],
     message: 'a popup press is a press',
   })
+  .refine(
+    (r) =>
+      r.outcome === 'partial'
+        ? r.reason !== undefined && (DIALOG_PARTIAL_REASONS as readonly string[]).includes(r.reason)
+        : r.reason === undefined || (DIALOG_NOTHING_REASONS as readonly string[]).includes(r.reason),
+    { path: ['reason'], message: 'a partial answer says how far it got; nothing_pressed says why' },
+  )
   .refine((r) => r.outcome !== 'pressed' || (r.choice !== undefined && r.label !== undefined), {
     path: ['label'],
     message: 'a press says which option',
   })
-  .refine((r) => r.outcome === 'nothing_pressed' || r.reason === undefined, {
+  .refine((r) => r.outcome === 'nothing_pressed' || r.outcome === 'partial' || r.reason === undefined, {
     path: ['reason'],
-    message: 'only nothing_pressed has a reason',
+    message: 'only nothing_pressed and partial have a reason',
   })
 export type DialogResultT = z.infer<typeof DialogResult>
 

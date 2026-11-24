@@ -47,13 +47,34 @@ public enum PtyHostError: Error, Equatable, CustomStringConvertible {
   /// that no longer exists prints its error line and exits at once, and that line is the only thing that says why.
   case exitedImmediately(rows: [String])
   case alreadyRunning
+  /// tmux did not answer (a timeout, a refused socket) when the start looked at the agent's pane, within the bounded wait. The agent may be
+  /// running: it is neither dead nor to be started again. Its pane is kept and a later tick adopts it (`adoptPending`).
+  /// `launched`: the launch command ran or may have (a timeout, a refusal after it was sent): its launch file stays and the pane is looked for
+  /// by session. Not launched: nothing was created, killed or respawned; the start is decided again on later ticks.
+  case paneUnreadable(launched: Bool)
   public var description: String {
     switch self {
     case .startFailed(let s): return "start failed: \(s)"
     case .exitedImmediately: return "start failed: the agent exited immediately"
     case .alreadyRunning: return "a session is already running"
+    case .paneUnreadable: return "The agent may be running, but Talos could not check it. Trying again."
     }
   }
+}
+
+/// What `attachState` found: the agent is running (attached), nothing is running (tmux said so), or tmux did not answer, which says nothing.
+public enum AttachState: Equatable, Sendable {
+  case running, notRunning, unknown
+}
+
+/// The result of `adoptPending` for a start whose pane could not be read: adopted (its pid is set), gone (tmux said so, or the pane is dead),
+/// or still unknown (ask again on a later tick).
+public enum AdoptOutcome: Equatable, Sendable {
+  case adopted(pid: Int32), gone(rows: [String]), unknown
+  /// The launch command never ran (a new-window that timed out, with every pane answering and none new, long after): launch again.
+  case notLaunched
+  /// The pane runs an agent that started BEFORE this launch: the launch did not take effect. Attach to it; never mark it as this launch's.
+  case olderAgent(pid: Int32)
 }
 
 /// DESKTOP-SPEC 4.6. One host = one session (tmux session `agent`, or one owned pty). Option C makes one per thread.
@@ -63,6 +84,17 @@ public protocol PtyHost: AnyObject, Sendable {
   func start(executable: String, args: [String], env: [String: String], cwd: String) throws
   /// tmux: true if the session exists and its pane is alive (then `childPid` is set and exit watching runs).
   func attachIfRunning() -> Bool
+  /// Like `attachIfRunning`, but a tmux that does not answer is `.unknown`, never "nothing running": nothing is started over it.
+  func attachState() -> AttachState
+  /// Kills the session like `close()`, and says whether tmux confirmed it (the session is gone or already was). False: tmux did not answer, the
+  /// session may still run.
+  func closeChecked() -> Bool
+  /// Consecutive unanswered reads of the agent's pane (any look, the poll included); 0 after an answer. Hosts with no tmux say 0.
+  var unansweredStreak: Int { get }
+  /// The owner chose Start anyway while tmux does not answer: the next start goes ahead over an unknown session (once).
+  func allowStartOverUnknown()
+  /// After a start threw `paneUnreadable`: look at the pane again (one bounded read). Hosts with no such state say gone.
+  func adoptPending() -> AdoptOutcome
   @discardableResult
   func send(keys: [UInt8]) -> SendOutcome
   /// One of the three keys a tap on a dialog may send (`DialogKey`), by name, so the pane gets the bytes its own cursor-key mode wants.
@@ -104,6 +136,14 @@ public protocol PtyHost: AnyObject, Sendable {
 }
 
 extension PtyHost {
+  public func attachState() -> AttachState { attachIfRunning() ? .running : .notRunning }
+  public func closeChecked() -> Bool {
+    close()
+    return true
+  }
+  public var unansweredStreak: Int { 0 }
+  public func allowStartOverUnknown() {}
+  public func adoptPending() -> AdoptOutcome { .gone(rows: []) }
   /// An app-owned pty has no key names: Claude's Select runs with application cursor keys (`ESC O A`, `ESC O B`), Enter is a return.
   public func sendDialogKey(_ key: DialogKey) -> SendOutcome {
     switch key {

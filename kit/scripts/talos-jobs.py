@@ -7,7 +7,7 @@ jobs.json plus a folder jobs/<id>/ holding prompt.md (and optionally a locked gu
 agent folder, and never overwrites a job you have already edited.
 
   talos-jobs.py register   --agent-dir DIR [--chronos-config FILE] [--kit-dir DIR] [--full-access]
-  talos-jobs.py unregister [--chronos-config FILE]            remove every job whose id starts with talos-
+  talos-jobs.py unregister [--only ID]... [--chronos-config FILE]   remove every job whose id starts with talos- (or only the ids named)
   talos-jobs.py list       [--chronos-config FILE]                   shows each job's access: RESTRICTED or FULL ACCESS
   talos-jobs.py access ID --restricted|--full --agent-dir DIR [--kit-dir DIR] [--chronos-config FILE]
                                                             switch one job between the tool-restricted default and
@@ -20,7 +20,8 @@ agent folder, and never overwrites a job you have already edited.
   talos-jobs.py enable  ID [--time HH:MM] [--days SPEC] [--chronos-config FILE]
   talos-jobs.py disable ID [--chronos-config FILE]
   talos-jobs.py validate   [--kit-dir DIR]                    check the shipped job templates (no Chronos needed)
-  talos-jobs.py hook-add    --agent-dir DIR --chronos-dir DIR    register Chronos's SessionStart hook for this agent
+  talos-jobs.py hook-add    --agent-dir DIR --chronos-dir DIR [--replace-from OLD]...   register Chronos's SessionStart hook for this agent
+                            (a hook naming an OLD Talos Chronos folder is repointed; the owner's wrapper and own hooks are kept)
   talos-jobs.py hook-remove --agent-dir DIR
 
 Python 3.9+, standard library only. It reads the Chronos config the same way Chronos does
@@ -265,11 +266,9 @@ def parse_version(text):
 
 TICK_LABEL = "io.github.chronos.tick"
 UPDATE_CHRONOS_HELP = (
-    "To move the Chronos that actually runs your jobs to the version Talos pins: for a NEW agent folder, re-run ./install.sh "
-    "with --reinstall-chronos (it re-runs Chronos's own installer, which rewrites the launchd plist). For an agent you already "
-    "have: git -C ~/.local/share/talos/chronos fetch origin && git -C ~/.local/share/talos/chronos checkout --detach <the "
-    "CHRONOS_PINNED_REF at the top of install.sh> && bash ~/.local/share/talos/chronos/install.sh --workspace <your agent folder> "
-    "(the Chronos clone is a detached checkout, so `git pull` does nothing there).")
+    "To move the Chronos that actually runs your jobs to the one in your Talos clone (apps/chronos): update the clone, then run "
+    "./install.sh again from it (with --reinstall-chronos if it says Chronos is already set up); Chronos's own installer then "
+    "rewrites the launchd plist and keeps your config and jobs.")
 
 
 def tick_runtime():
@@ -526,7 +525,7 @@ def cmd_unregister(a):
         jobs = read_jobs(jf)
         keep = []
         for j in jobs:
-            if isinstance(j, dict) and str(j.get("id", "")).startswith(PREFIX):
+            if isinstance(j, dict) and str(j.get("id", "")).startswith(PREFIX) and (not a.only or j["id"] in a.only):
                 removed.append(j["id"])
             else:
                 keep.append(j)
@@ -769,20 +768,38 @@ def cmd_hook_add(a):
     except Exception as e:
         die("cannot parse %s: %s (left untouched)" % (sp, e))
     entries = cfg.setdefault("hooks", {}).setdefault("SessionStart", [])
+    want = hook_command(hook)
+    found = repointed = False
     for e in entries:
         for h in (e.get("hooks") or []):
-            if HOOK_MARK in str(h.get("command", "")):
-                print("  Chronos SessionStart hook already registered")
-                return 0
-    entries.append({"matcher": "startup|resume",
-                    "hooks": [{"type": "command", "command": hook_command(hook)}]})
+            cmd = str(h.get("command", ""))
+            if HOOK_MARK in cmd:
+                found = True
+                # An entry that runs an OLD Talos copy (the recorded Chronos, the clone an older install made) is pointed at this
+                # one: that clone may be removed, and then every session start would run a hook that is gone. Only that path is
+                # swapped, so the owner's wrapper around the command stays; a Chronos hook that names any other path is the
+                # owner's own and is never touched.
+                if hook in cmd:
+                    continue
+                for old in a.replace_from:
+                    oldhook = os.path.join(os.path.abspath(os.path.expanduser(old)), "hooks", HOOK_MARK)
+                    if oldhook in cmd:
+                        h["command"] = cmd.replace(oldhook, hook)
+                        repointed = True
+                        break
+    if found and not repointed:
+        print("  Chronos SessionStart hook already registered")
+        return 0
+    if not found:
+        entries.append({"matcher": "startup|resume",
+                        "hooks": [{"type": "command", "command": want}]})
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     tmp = sp + ".tmp.%d" % os.getpid()
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, sp)
-    print("  registered the Chronos SessionStart hook in %s" % sp)
+    print("  %s the Chronos SessionStart hook in %s" % ("pointed" if repointed else "registered", sp))
     return 0
 
 
@@ -845,7 +862,9 @@ def main(argv):
     p.add_argument("--agent-dir", required=True)
     p.add_argument("--kit-dir", default=None)
     p.add_argument("--full-access", action="store_true")
-    common(sub.add_parser("unregister"))
+    pu = sub.add_parser("unregister")
+    common(pu)
+    pu.add_argument("--only", action="append", default=[], help="remove only this job id (repeatable); default: every talos-* job")
     common(sub.add_parser("list"))
     p = common(sub.add_parser("enable"))
     p.add_argument("id")
@@ -858,6 +877,8 @@ def main(argv):
     p = sub.add_parser("hook-add")
     p.add_argument("--agent-dir", required=True)
     p.add_argument("--chronos-dir", required=True)
+    p.add_argument("--replace-from", action="append", default=[],
+                   help="an old Talos Chronos folder (the recorded one, the older clone) whose hook path may be swapped for this one")
     p = sub.add_parser("hook-remove")
     p.add_argument("--agent-dir", required=True)
 

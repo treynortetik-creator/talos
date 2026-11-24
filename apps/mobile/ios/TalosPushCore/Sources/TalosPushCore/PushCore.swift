@@ -2,8 +2,8 @@ import Foundation
 import UserNotifications
 
 /// A button on a notification. Both open the app, and neither approves anything from the lock screen. Approve opens the card
-/// armed (the page keeps that in memory; no URL carries it): a high-risk card then starts its normal Approve flow, which asks for Face ID before
-/// anything is sent; any other card is shown with its button focused. A card that changed since the push is simply shown.
+/// armed (the page keeps that in memory; no URL carries it): the card is shown with its button focused and nothing is sent until the
+/// owner taps it (no card asks for Face ID any more). A card that changed since the push is simply shown.
 /// Approve also needs the phone unlocked (`authenticationRequired`), so a lock-screen tap cannot even open that flow.
 public struct PushButton: Equatable, Sendable {
     public let identifier: String

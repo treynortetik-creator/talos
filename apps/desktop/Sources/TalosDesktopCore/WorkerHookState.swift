@@ -56,8 +56,8 @@ extension WorkerHook {
     return runs("SessionStart", "inject") && runs("PreCompact", "save")
   }
 
-  /// The thread's state file as rules name it: the agent folder as given and as it really is (a link in the path), nothing lower-cased
-  /// (the allow side stays narrow: a spelling no rule names asks). A folder whose name Claude Code would read as a glob, a quote or a
+  /// The thread's state file as rules name it: the agent folder as given and as it really is (a link in the path), as written here
+  /// (Claude Code matches a rule without regard to case, so a case variant is named too). A folder whose name Claude Code would read as a glob, a quote or a
   /// control character gets none, so the session asks (the safe side), as the Talos-home fence refuses such a home.
   private static func stateRules(agentDir: String, threadId: String, tail: String) -> [String] {
     guard WorkerSpec.isThreadId(threadId) else { return [] }
@@ -79,16 +79,18 @@ extension WorkerHook {
   }
 
   /// The rules that let a thread's session edit its own live state file without a prompt: that exact path, as Edit( ) (it covers Write). No
-  /// glob, no folder: a sibling (another thread's file, a `.bak`, a `..` path) is not covered.
+  /// glob, no folder. Claude Code matches a rule without regard to case, so a case variant of the name is covered too (on a case-sensitive
+  /// disk it is a different file, and stays allowed).
   public static func stateAllowRules(agentDir: String, threadId: String) -> [String] {
     stateRules(agentDir: agentDir, threadId: threadId, tail: "")
   }
 
-  /// The matching deny rules: Claude Code reads a path rule gitignore-style, where a pattern that names a file also names everything
-  /// under it, so the allow rule would let a session write `<id>.state.md/anything` (Write makes parent folders). Deny wins over
-  /// allow, and `<file>/**` leaves the file itself alone.
+  /// The matching deny rules, `<file>/*`: the allow rule also names everything under the file (gitignore-style) and Write makes parent
+  /// folders. The suffix is `/*`, never `/**`: Claude Code (2.1.330) strips only a trailing `/**` before matching, and a deny of
+  /// `<file>/**` then names the file itself (Edit: "File is in a directory that is denied", `sed -i` refused; a deny beats the allow).
+  /// `<file>/*` names no file and not `<file>/`, and every child.
   public static func stateDenyRules(agentDir: String, threadId: String) -> [String] {
-    stateRules(agentDir: agentDir, threadId: threadId, tail: "/**")
+    stateRules(agentDir: agentDir, threadId: threadId, tail: "/*")
   }
 
   /// The staged files as the launch spec hashes them: a release that changes either restarts sessions for it, as for the permission hook.

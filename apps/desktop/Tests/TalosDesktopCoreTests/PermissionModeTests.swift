@@ -233,14 +233,56 @@ struct PermissionModeRequestTests {
   }
 
   @Test func thePhoneIsToldWhatTheAgentDidAndBypassIsAVisibleRowWithTheWayBack() {
-    let bypass = PermissionModeSetting.changedLine(.bypass, restarting: true)
-    #expect(bypass.hasPrefix("Your agent switched itself to Bypass all."))
+    let bypass = PermissionModeSetting.changedLine(.bypass, apply: .whenIdle)
+    #expect(bypass.hasPrefix("Your agent asked to switch itself to Bypass all, and the setting is saved."))
     #expect(bypass.contains("No permission cards reach your phone") && bypass.contains("If you did not ask for this, change it back"))
     #expect(bypass.contains("\"Start with Bypass all?\""), "the dialog it waits at is named")
-    let ask = PermissionModeSetting.changedLine(.ask, restarting: true)
-    #expect(ask.hasPrefix("The agent asked to switch the permission mode to Ask me."))
+    let ask = PermissionModeSetting.changedLine(.ask, apply: .whenIdle)
+    #expect(ask.hasPrefix("The agent asked to switch the permission mode to Ask me, and the setting is saved."))
     #expect(!ask.contains("as you asked"))
     #expect(PermissionModeSetting.refusedLine(.custom).contains("own custom setting"))
+  }
+
+  /// No line says the mode is active, or that the agent is restarting now, while the restart waits for the agent to finish.
+  @Test func aWaitingChangeIsNeverSaidToBeActiveOrRestartingNow() {
+    for mode in PermissionMode.allCases {
+      let waits = PermissionModeSetting.changedLine(mode, apply: .whenIdle)
+      #expect(waits.contains("takes effect when the agent finishes what it is doing"), "\(waits)")
+      #expect(!waits.contains("restarting the agent now") && !waits.contains("switched itself"), "\(waits)")
+      #expect(waits.contains("To apply it right away, choose \"Restart your agent\" in the menu bar item."), "the way out, in the menu's own words: \(waits)")
+      #expect(!waits.contains("minutes"), "nothing is cut after a timer: \(waits)")
+      #expect(PermissionModeSetting.changedLine(mode, apply: .nextStart).contains("applies the next time the agent starts"))
+    }
+    let saved = PermissionModeSetting.alreadySavedLine(.auto, waiting: true)
+    #expect(saved.contains("not running in it yet") && saved.contains("when the agent finishes") && saved.contains("Restart your agent"), "\(saved)")
+    #expect(PermissionModeSetting.heldByBackgroundLine.contains("background work") && PermissionModeSetting.heldByBackgroundLine.contains("Restart your agent"))
+    #expect(PermissionModeSetting.alreadySavedLine(.auto, waiting: false).contains("next time the agent restarts"))
+    #expect(PermissionModeSetting.saveFailedLine(.ask) == "The agent asked to switch the permission mode to Ask me, but Talos could not save the setting. Nothing changed.")
+  }
+
+  @Test func theSavedModeTheRunningAgentLacksIsNamedUnderTheCards() {
+    let ask = ["--permission-mode", "default"]
+    let bypass = ["--dangerously-skip-permissions"]
+    let n = PermissionModeSetting.notYetActive(saved: ask, running: bypass)
+    #expect(n?.saved == .ask && n?.running == .bypass)
+    #expect(PermissionModeSetting.unappliedLine(saved: .ask, running: .bypass) == "Saved as Ask me. Your agent is still running in Bypass all until it restarts.")
+    #expect(PermissionModeSetting.unappliedUnknownLine(saved: .ask) == "Saved as Ask me. Your agent does not have it until it restarts.")
+    #expect(PermissionModeSetting.notYetActive(saved: ask, running: ask) == nil)
+    #expect(PermissionModeSetting.notYetActive(saved: ask, running: nil) == nil, "no agent known: nothing to say")
+    #expect(PermissionModeSetting.notYetActive(saved: ["--permission-mode", "plan"], running: bypass) == nil, "custom is not one of the three")
+  }
+
+  @Test func theWaitMarkerReadsOnlyExactlyAsWritten() {
+    let ok = PermissionPendingMarker.encode(mode: .auto, savedAtMs: 1_700_000_000_000)
+    #expect(PermissionPendingMarker.parse(ok) == .auto)
+    #expect(PermissionPendingMarker.parse(nil) == nil)
+    #expect(PermissionPendingMarker.parse(Data()) == nil)
+    #expect(PermissionPendingMarker.parse(Data("{".utf8)) == nil)
+    #expect(PermissionPendingMarker.parse(Data(#"{"v":2,"mode":"auto","saved_at":1}"#.utf8)) == nil, "another version")
+    #expect(PermissionPendingMarker.parse(Data(#"{"v":1,"mode":"plan","saved_at":1}"#.utf8)) == nil, "a mode the picker does not have")
+    #expect(PermissionPendingMarker.parse(Data(#"{"v":1,"mode":"auto"}"#.utf8)) == nil, "no time")
+    #expect(PermissionPendingMarker.parse(Data(repeating: 0x20, count: 2000)) == nil, "too big")
+    #expect(PermissionModeSetting.keepsRunningLine(.ask).contains("keeps running in that mode"))
   }
 
   @Test func theMacPopupNamesTheModeTheChangedLaunchStartsIn() {

@@ -197,6 +197,13 @@ fi
 case "$JOBS" in */*) echo "ci-local: a job name has no slash: '$JOBS'" >&2; exit 64 ;; esac
 case "${CI_PART_WAIT:-120}" in '' | *[!0-9]*) echo "ci-local: CI_PART_WAIT is whole seconds" >&2; exit 64 ;; esac
 case "${CI_PART_POLL:-30}" in '' | .* | *.*.* | *[!0-9.]*) echo "ci-local: CI_PART_POLL is seconds" >&2; exit 64 ;; esac
+for _v in CI_PART_BEAT CI_PART_BEAT_STALE CI_PART_LOCK_WAIT_MAX; do # a part queued for a lock (jobs-check.sh, part_lockwait)
+  case "${!_v:-0}" in *[!0-9]*) echo "ci-local: $_v is whole seconds" >&2; exit 64 ;; esac
+done
+# a status a beat, and GitHub keeps 1,000 for a context of a commit: never faster than every 10 s, from anywhere (a runner's .env, the
+# workflow, a variable); the tests' own seam is a function of the script's copy, never a knob (jobs-check.sh, part_beat_secs)
+[ "$((10#${CI_PART_BEAT:-30}))" -ge 10 ] && [ "$((10#${CI_PART_BEAT_STALE:-1}))" -ge 1 ] ||
+  { echo "ci-local: CI_PART_BEAT is 10 seconds or more, CI_PART_BEAT_STALE 1 or more" >&2; exit 64; }
 # CI_REMOTE_PARTS: the parts of check another machine runs, "<part>:<machine> ..." (the plan's gating parts; a part in shadow is
 # not listed, so it runs here too). Machine names are the workflow job names, read from the jobs API.
 for _p in ${CI_REMOTE_PARTS:-}; do
@@ -340,6 +347,7 @@ trap '[ -z "$RUN_DIR" ] || { : > "$RUN_DIR/cancelled"; } 2>/dev/null; exit 130' 
 ci_reap_dead_runs "$CI_RUNS" "$LOCKS" # whatever a run killed outright left behind, before this one asks for a slot
 T_ASKED=$(date +%s)
 ci_acquire_slot "$LOCKS" "${SHA:0:7}${PR:+ PR $PR}" || exit 1
+wait_cut_unless "$LOCKS/slot-${CI_SLOT:-none}" "a free slot" # a wait that was cut off falls through to here, with no slot (jobs-check.sh)
 export TALOS_CI_NESTED=1
 
 # The run may have queued for a long time: test what the PR (or ref) points at now, and post statuses only for that.
@@ -373,6 +381,7 @@ until ci_lock_try "$SHALOCK" "slot $CI_SLOT"; do
   [ "$(date +%s)" -lt "$SHADEADLINE" ] || { echo "ci-local: timed out waiting for the run testing $SHORT" >&2; exit 1; }
   sleep "$CI_POLL"
 done
+wait_cut_unless "$SHALOCK" "the run testing $SHORT" # the same, with the commit's lock not had
 IFS=',' read -r -a WANT <<< "$JOBS"
 if [ -n "${CI_REMOTE_JOBS:-}" ]; then
   _keep=()
@@ -663,7 +672,7 @@ parts_poll() { # each part's state, from its ci-part/ statuses of this attempt a
       awk -F'\t' '$1 == "error" { f = 1 } END { exit !f }'; then st=gone
     else
       case "$(printf '%s\n' "$jobs" | awk -F'\t' -v m="$m" '$1 == m { print $2; exit }')" in
-        in_progress) st=working ;;
+        in_progress) st="$(part_lockwait "$rows" "$RESULTS/part-state-$p.seen")" ;; # working, or queued for a lock on its machine
         *) st=gone ;; # queued, waiting, completed without an answer, or unreadable: nobody is working on it
       esac
     fi
@@ -707,6 +716,7 @@ fold_poll() { # fold_poll <part context> <machine> <state file> <its "gone" coun
       # gone from the job list (its job ended, or its name is not there) must be seen twice in a row: a list read a moment early
       # must not take the packages back on one look
       if [ "$st" = gone ]; then n=$((n + 1)); [ "$n" -ge 2 ] || st=working; else n=0; fi
+      [ "$st" != working ] || st="$(part_lockwait "$rows" "$RESULTS/$3.seen")" # working, or queued for a lock on its machine
     fi
   fi
   [ "$st" != unread ] || n=0 # "twice in a row" means two readable looks with nothing between
@@ -726,6 +736,8 @@ run_job() { # run_job <job>: one job start to finish; leaves "<exit code> <secon
   echo "bun: $(ci_bun_version) ($(command -v bun 2>/dev/null || echo not on PATH))" >> "$log" # the bun this job runs
   # Where this job's test runners write each test that failed once and passed when run again ("<test>\t<file>"); report() reads it.
   export CI_FLAKE_FILE="$RESULTS/$j.flaky"
+  # where a part's lock wait is written for the main shell to post (turn.sh, ci_part_beat); a plain variable, never exported
+  if [ "${CI_STATUS_PREFIX:-local-ci}" = ci-part ] && [ "$STATUS" = 1 ]; then CI_LOCKWAIT_FILE="$RESULTS/$j.lockwait"; else CI_LOCKWAIT_FILE=""; fi
   : > "$CI_FLAKE_FILE"
   # check's per-test file (scripts/ci-test-results.ts): Vitest's and the bun runner's reports, gathered after the suites. Only
   # check's: the jobs after it in the same group must not inherit them.
@@ -911,6 +923,9 @@ for i in ${SKIP_JOBS[@]+"${!SKIP_JOBS[@]}"}; do report "${SKIP_JOBS[$i]}" 0 0 "$
 # Every job at once (the browser job waits for check, see job_browser), except the two Swift jobs: they share a SwiftPM cache and a
 # build of them wants every core, so the iPhone shell waits for the Mac app.
 UNIQUE="" SWIFT=()
+# the run's jobs, for the turn (scripts/ci-local/turn.sh): a run whose every job that has not ended waits on a part of another machine
+# does not hold the turn from a gate; a job is marked while it waits (ci_fold_wait in its fold loops)
+printf '%s\n' "${WANT[@]}" | awk '!seen[$0]++' > "$RUN_DIR/jobs"
 for j in "${WANT[@]}"; do
   case " $UNIQUE " in *" $j "*) continue ;; esac
   UNIQUE="$UNIQUE $j"
@@ -928,7 +943,8 @@ FAILED=() HELD=() REFUSED=() WAITING="$UNIQUE" PART_POLLED=0 JOB_TIMES=""
 while [ -n "${WAITING// /}" ]; do
   STILL=""
   for j in $WAITING; do
-    if [ -f "$RESULTS/$j" ] || ! kill -0 "$(cat "$RESULTS/$j.group")" 2>/dev/null; then
+    # read, not $(cat): no $(...) in this loop while it only waits, see after its done
+    if [ -f "$RESULTS/$j" ] || ! { read -r _grp < "$RESULTS/$j.group" && kill -0 "$_grp"; } 2>/dev/null; then
       if [ -f "$RESULTS/$j" ]; then
         read -r rc secs why < "$RESULTS/$j"
         report "$j" "$rc" "$secs" "$why"
@@ -955,19 +971,23 @@ while [ -n "${WAITING// /}" ]; do
     [ $(($(date +%s) - CHECK_POLLED)) -ge "${_poll:-0}" ]; then
     check_part_poll; CHECK_POLLED=$(date +%s)
   fi
+  part_beat_post # a part queued for a lock says so (jobs-check.sh)
   [ -z "${WAITING// /}" ] || sleep 1
 done
+[ -z "${WAITING// /}" ] || wait_cut_off # the loop ends with every job reported; anything else is a cut (jobs-check.sh)
 
 T_DONE=$(date +%s)
 echo "ci-local: timing: waited $((T_SLOT - T_ASKED))s, setup $((T_SETUP - T_SLOT))s, jobs $((T_DONE - T_SETUP))s"
 # timings.tsv: date, sha, slot, jobs, waited, setup, jobs' wall time, failures, then each job that ran as <job>=<wall>/<own steps>
 # seconds (its wall time less the time it waited for another job: browser's wall includes the whole of check), then the desktop
 # job's pty use, pty=<peak /dev/ttys*>/<kern.tty.ptmx_max>, or - when it did not run (appended: older rows have nine columns),
-# then the bun the run started with, bun=<version> (bun=none without one; appended: older rows have ten columns).
+# then the bun the run started with, bun=<version> (bun=none without one; appended: older rows have ten columns), then the
+# seconds of Chronos's suite inside check, chronos=<seconds> or chronos=- when it did not run (appended: older rows have eleven).
 _pty="$(cat "$RESULTS/desktop.pty" 2>/dev/null)"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
+_chronos="$(cat "$RESULTS/chronos.secs" 2>/dev/null)"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
   "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" "$JOB_TIMES" "${_pty:--}" "bun=$RUN_BUN" \
-  >> "$CACHE/logs/timings.tsv"
+  "chronos=${_chronos:--}" >> "$CACHE/logs/timings.tsv"
 [ ${#HELD[@]} -eq 0 ] || echo "::warning::ci-local: failed here, not posted: the owning machine's pass for this attempt stands: ${HELD[*]} ($SHORT)"
 if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ] && [ ${#POSTFAIL[@]} -gt 0 ]; then
   echo "ci-local: FAILED: the jobs passed, but these statuses were not posted: ${POSTFAIL[*]} ($SHORT)"; exit 1

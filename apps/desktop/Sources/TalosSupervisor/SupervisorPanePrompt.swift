@@ -15,7 +15,7 @@ import TalosDesktopCore
 /// tmux client may be typing. A key whose delivery is unknown is remembered briefly (`Timings.safetyUnsentMemory`), and the unchanged screen is offered
 /// again after it, as the safety popups do.
 extension Supervisor {
-  static let paneLifetime: Double = 900
+  static let paneLifetime: Double = 86400  // a day: DIALOG_TTL_S in the protocol
 
   /// The phone line for a standing offer whose card the phone has not acknowledged (the bridge is down, or the relay has no card feature): after
   /// `paneCardWait`, once per offer, through the CLI path (`postToPhone`). A card the bridge acknowledged (`dialog-card.json` naming the offer)
@@ -62,7 +62,7 @@ extension Supervisor {
     let seen = options.wallClock() / 1000
     if let o = l.paneOffer, l.paneBound == s.bound, let expires = ISOTime.parse(o.expires_at), seen < expires { return }
     let o = DialogOffer(
-      id: DialogOffer.newId(), kind: s.kind == .toolPermission ? .toolPermission : .agentQuestion, subject: s.displaySubject,
+      id: DialogOffer.newId(), kind: DialogReader.Kind(rawValue: s.kind.rawValue) ?? .agentQuestion, subject: s.displaySubject,
       options: PaneSelect.offered(s), cursor: nil, free_text: PaneSelect.freeTextOption(s), seen_at: ISOTime.string(seen),
       expires_at: ISOTime.string(seen + Self.paneLifetime))
     guard o.isValid else { return }
@@ -91,6 +91,8 @@ extension Supervisor {
         case .number(let n): return sendKey(intent) { $0.sendSelectNumber(n) }
         case .text(let t): return sendKey(intent) { $0.sendAnswerText(t) }
         case .enter: return sendKey(intent) { $0.sendDialogKey(.enter) }
+        case .escape: return sendKey(intent) { $0.sendEscape() }
+        case .backspaces(let n): return sendKey(intent) { $0.send(keys: Array(repeating: 0x7f, count: n)) }
         }
       },
       awake: { [self] in options.awake() }, echoWait: WorkerManager.echoWait)
@@ -101,6 +103,11 @@ extension Supervisor {
       l.paneAnswered = bound
       l.paneOffer = nil
       audit("main_pane_answered", ["session": l.sessionId, "kind": offer.kind.rawValue, "choice": "\(choice)", "dialog": offer.id])
+    case .usageStopped(let stop):
+      // Escape went and the answer stopped: spent (no second key for this offer), and the screen is not the offered one any more
+      l.panePressedFor = offer.id
+      l.paneOffer = nil
+      audit("main_pane_usage_stopped", ["session": l.sessionId, "dialog": offer.id, "how": stop.rawValue])
     case .unknown, .partial:
       // delivery unknown, or a free-text answer stopped after its first key: this offer is spent; the unchanged screen is offered again after the memory
       l.panePressedFor = offer.id
@@ -115,7 +122,7 @@ extension Supervisor {
 
   /// A click on button `choiceIndex` of Main's popup, after the popup layer has checked it was the owner's own hand.
   func paneClick(_ choice: Int, label: String, offer: DialogOffer, launch l: inout Launch) -> PopupAnswerResult {
-    guard offer.kind == .toolPermission || offer.kind == .agentQuestion, offer.options.indices.contains(choice),
+    guard offer.kind == .toolPermission || offer.kind == .agentQuestion || offer.kind == .usageLimit, offer.options.indices.contains(choice),
       ExactText.equal(offer.options[choice], label), choice != offer.free_text, ExactText.equal(offer.id, l.paneOffer?.id ?? "")
     else { return .nothing(.screenChanged) }
     guard l.panePressedFor != offer.id else { return .nothing(.alreadyAnswered(by: nil)) }
@@ -123,6 +130,7 @@ extension Supervisor {
     case .delivered: return .pressed(choice: choice, label: label)
     case .unknown: return .nothing(.unconfirmed)
     case .blocked(let b): return .nothing(b == .typing ? .typing : .couldNotCheck)
+    case .usageStopped(let s): return .nothing(.stopped(s))
     case .changed, .partial: return .nothing(.screenChanged)
     }
   }
@@ -142,7 +150,11 @@ extension Supervisor {
     let resultPath = dir + "/" + DialogResult.fileName
     if l.paneControlsSeen.contains(a.controlId) || DialogResult.controlId(path: resultPath) == a.controlId { return }
     l.paneControlsSeen = Array((l.paneControlsSeen + [a.controlId]).suffix(64))
-    let o = takePane(offer, a, thread: thread, usedPath: dir + "/" + DialogProofsUsed.mainFileName, launch: &l)
+    let (o, verified) = takePane(offer, a, thread: thread, usedPath: dir + "/" + DialogProofsUsed.mainFileName, launch: &l)
+    // The owner's own tap that pressed nothing ends this offer, so the next settled look at the same screen makes a new id and a new card instead of
+    // leaving the question with a failed card for a day. A tap that did not prove itself never does (a forged file cannot end an offer), and each new
+    // card needs a new real tap.
+    if verified, o.outcome == .nothingPressed { l.paneOffer = nil }
     let data = DialogResult.encode(
       dialogId: a.dialogId, controlId: a.controlId, outcome: o.outcome, choice: o.choice, label: o.label, reason: o.reason, at: options.wallClock() / 1000)
     try? AtomicFile.write(data, to: resultPath, mode: 0o600)
@@ -150,13 +162,13 @@ extension Supervisor {
 
   private func takePane(
     _ offer: DialogOffer, _ a: DialogAnswerRequest, thread: String, usedPath: String, launch l: inout Launch
-  ) -> WorkerManager.AnswerOutcome {
+  ) -> (WorkerManager.AnswerOutcome, verified: Bool) {
     let nowMs = options.wallClock()
-    guard !a.isStale(nowMs: nowMs) else { return .nothing(.unverified) }
-    guard ExactText.equal(a.dialogId, offer.id) else { return .nothing(.unverified) }
-    guard let expires = ISOTime.parse(offer.expires_at), nowMs / 1000 < expires else { return .nothing() }
+    guard !a.isStale(nowMs: nowMs) else { return (.nothing(.unverified), false) }
+    guard ExactText.equal(a.dialogId, offer.id) else { return (.nothing(.unverified), false) }
+    guard let expires = ISOTime.parse(offer.expires_at), nowMs / 1000 < expires else { return (.nothing(), false) }
     let used = DialogProofsUsed.key(dialogId: a.dialogId, proof: a.proof)
-    guard !DialogProofsUsed.contains(used, memory: l.paneProofsUsed, path: usedPath) else { return .nothing(.alreadyAnswered) }
+    guard !DialogProofsUsed.contains(used, memory: l.paneProofsUsed, path: usedPath) else { return (.nothing(.alreadyAnswered), false) }
     let pane = DialogProofCheck.Pane(
       thread: thread, dialogId: offer.id, kind: offer.kind, subject: offer.subject, options: offer.options, freeText: offer.free_text)
     let devices = talosAppHome + "/devices.json"
@@ -164,7 +176,7 @@ extension Supervisor {
       a,
       env: .init(pinnedKey: { DeviceKeys.pinnedKey($0, devicesPath: devices) }, nowMs: nowMs, pane: pane, alreadyPressed: l.panePressedFor == offer.id))
     switch verdict {
-    case .no(let why, _): return .nothing(why)
+    case .no(let why, _): return (.nothing(why), false)
     case .ok(let choice, let label, _):
       // on disk before the key: a tap that could not be recorded as used presses nothing
       let home = talosAppHome
@@ -172,13 +184,14 @@ extension Supervisor {
         SafePath.isRealFolder(home + "/workers") && SafePath.isRealFolder(home + "/workers/" + thread)
       }
       l.paneProofsUsed = rec.memory
-      guard rec.written else { return .nothing(nil) }
-      guard let choice, let label else { return .nothing(.unverified) }
+      guard rec.written else { return (.nothing(nil), true) }
+      guard let choice, let label else { return (.nothing(.unverified), true) }
       switch pressPane(offer, choice, text: DialogProofCheck.signedText(a), launch: &l) {
-      case .delivered: return .init(outcome: .pressed, choice: choice, label: label)
-      case .unknown: return .init(outcome: .nothingPressed, reason: .unconfirmed)
-      case .blocked(let b): return .blocked(b == .typing ? .typing : .unreadable)
-      case .changed, .partial: return .nothing()
+      case .delivered: return (.init(outcome: .pressed, choice: choice, label: label), true)
+      case .unknown: return (.init(outcome: .nothingPressed, reason: .unconfirmed), true)
+      case .blocked(let b): return (.blocked(b == .typing ? .typing : .unreadable), true)
+      case .usageStopped(let s): return (.init(outcome: .partial, choice: choice, label: label, reason: WorkerManager.AnswerOutcome.partialReason(s)), true)
+      case .changed, .partial: return (.nothing(), true)
       }
     }
   }

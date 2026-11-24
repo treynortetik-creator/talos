@@ -206,14 +206,10 @@ describe('the thread notices on the Windows PC', () => {
     lines.dialog('trust', w),
     lines.login(w),
     lines.prompt({ kind: 'tool', title: 'Run a command?' } as never, w),
-    lines.draft(w),
     lines.noBox(w),
     lines.leftover(w),
     lines.turnCut('restart', w),
-    lines.refused(w),
     lines.enterUncertain(w),
-    lines.unseen(w),
-    lines.copyMode(w),
     lines.hookMissing('the hook is gone', 'trip', w),
     lines.needsMac('folder trust', w),
   ]
@@ -228,7 +224,7 @@ describe('the thread notices on the Windows PC', () => {
       // the line's own first sentence is kept (the sign-in line opens with its action, Sign in to Claude again)
       expect(l.startsWith('This thread') || l.startsWith('Talos') || l.startsWith('Sign in to Claude again')).toBe(true)
     }
-    expect(win.filter((l) => l.endsWith(WINDOWS_OPEN_SESSION)).length).toBe(11)
+    expect(win.filter((l) => l.endsWith(WINDOWS_OPEN_SESSION)).length).toBe(7) // four holds' lines (draft, refused, unseen, copy mode) are gone
     expect(lines.login(winWhere)).toContain(WINDOWS_SIGN_IN)
   })
   test('the usage-limit line points at the pane only where it can be opened', () => {

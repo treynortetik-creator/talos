@@ -10,7 +10,10 @@
 # darwin gate outside it.
 set -uo pipefail
 cd "${1:-.}" 2>/dev/null || exit 0
+# The last line: what a test that drives the installers' Mac branch names (a run with Chronos, the scheduler harness, the kit self-test and its
+# copy), or the tag "mac-list:". Such a test passes on Linux through stubs and can break on a Mac alone (2026-11-22: 12 of them did).
 RE='darwin|apfs|APFS|clonefile|F_GETPATH|/usr/bin/security|launchctl|xcrun|sw_vers|osascript|mdls|ditto|codesign|pbcopy'
+RE="$RE|chronos: true|--with-chronos'|root-install-sched-harness|talos_copy_kit|test-install.sh|mac-list:"
 # list <runner> <file-name regex> <dir...>: the files under those dirs (no node_modules, no .git) that the runner takes and that
 # match RE. A grep that fails (2: unreadable): exit 1, never a quietly short list.
 list() {

@@ -29,7 +29,7 @@ const alive = (pid: number) => spawnSync('kill', ['-0', String(pid)]).status ===
 const started = (f: string) =>
   vi.waitUntil(() => existsSync(f) && readFileSync(f, 'utf8').trim() !== '', { timeout: 30_000, interval: 25 })
 
-function repo(jobs = '', tools: Record<string, string> = {}) {
+function repo(jobs = '', tools: Record<string, string> = {}, pre = '') {
   const T = mkdtempSync(join(tmpdir(), 'cilr-'))
   dirs.push(T)
   const git = (cwd: string, ...a: string[]) =>
@@ -46,7 +46,13 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   git(T, 'clone', '-q', origin, clone)
   mkdirSync(join(clone, 'scripts'))
   const copy = join(clone, 'scripts', 'ci-local.sh')
-  writeFileSync(copy, readFileSync(script, 'utf8').replace('\ncd "$WT"\n', `\n${jobs}\ncd "$WT"\n`))
+  // `pre` is code run before the run asks for its slot (a wait the jobs' own stubs come too late to reach)
+  writeFileSync(
+    copy,
+    readFileSync(script, 'utf8')
+      .replace('\ncd "$WT"\n', `\n${jobs}\ncd "$WT"\n`)
+      .replace('\nT_ASKED=$(date +%s)\n', `\n${pre}\nT_ASKED=$(date +%s)\n`),
+  )
   copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
   // the helpers ci-local.sh runs from its own folder
   for (const h of ['ci-swift-retry.sh', 'ci-flake-vitest.ts'])
@@ -395,6 +401,81 @@ job_mx() { ci_mutex "$LOCKS" docker sleep 120; }`
       expect(r.posted(), prefix).toMatch(new RegExp(`state=error .*context=${prefix}/long .*not tested:`))
       expect(r.posted(), prefix).not.toContain('context=local-ci/')
     }
+  })
+
+  // bash 5.2 runs a TERM trap that comes due while the shell parses a $(...) in the middle of that parse: the trap fails (no cancelled
+  // marker, no exit 130) and the same parse error cuts off the command it was in, the main loop. That race is what a loaded machine
+  // hits; here the cut is made the same way on purpose (an expansion error in the loop's own step, once the job is going).
+  it('a main loop cut off with a job unreported (a cancel whose trap bash lost) ends as cancelled, never as all green', async () => {
+    const r = repo(
+      'job_long() { sleep 120 & echo "$!" > "$HOME/child"; wait; }\njob_check() { :; }\n' +
+        'part_beat_post() { [ -e "$HOME/child" ] || return 0; local x; x=$((1 +)); }',
+    )
+    const run = r.start([...withStatus, '--jobs', 'long'], { ...repoArgs, CI_STATUS_PREFIX: 'ci-part' })
+    await started(join(r.home, 'child'))
+    expect(await run.done).toBe(130)
+    expect(run.out()).not.toContain('all green')
+    expect(r.posted()).toMatch(/state=error .*context=ci-part\/long .*not tested:/)
+    expect(alive(Number(readFileSync(join(r.home, 'child'), 'utf8').trim()))).toBe(false)
+    expect(r.runs()).toEqual([])
+  })
+
+  // The same cut in the waits before the jobs start, the commonest time a run is cancelled: the cut abandons the whole command (the
+  // wait for a slot, or the wait for the commit's lock) and the script went on, unslotted or unlocked, deaf to the cancel.
+  // Here it is made on purpose, with an expansion error in a step of the wait itself.
+  const CUT = 'local x; x=$((1 +))'
+  const ranStub = 'job_long() { : > "$HOME/ran"; }\njob_check() { :; }'
+  const slotsLeft = (r: { locks: () => string[] }) => r.locks().filter((l) => /^(slot|sha)-/.test(l))
+
+  it('the wait for a free slot cut off (a cancel whose trap bash lost) ends as cancelled: no slot, no jobs, nothing posted', async () => {
+    const r = repo(ranStub, {}, `ci_legacy_busy() { ${CUT}; }`)
+    const run = r.start([...withStatus, '--jobs', 'long'], repoArgs)
+    expect(await run.done, run.out()).toBe(130)
+    expect(run.out()).toMatch(/::error::.*wait for a free slot was cut off/)
+    expect(run.out()).not.toContain('all green')
+    expect(existsSync(join(r.home, 'ran'))).toBe(false)
+    expect(r.posted()).toBe('')
+    expect(slotsLeft(r)).toEqual([])
+  })
+
+  it('the wait for the commit already being tested cut off ends as cancelled: the lock was never had, so no jobs run', async () => {
+    // the commit's lock reads as held by someone else, and the wait's first pause is the step that is cut (once: the wait for the jobs sleeps too)
+    const pre = `eval "$(declare -f ci_lock_try | sed '1s/ci_lock_try/ci_lock_try_real/')"\nci_lock_try() { case "$1" in */sha-*) return 1 ;; esac; ci_lock_try_real "$@"; }\nsleep() { [ ! -e "$HOME/cut" ] || { command sleep "$@"; return; }; : > "$HOME/cut"; ${CUT}; }`
+    const r = repo(ranStub, {}, pre)
+    const run = r.start([...withStatus, '--jobs', 'long'], repoArgs)
+    expect(await run.done, run.out()).toBe(130)
+    expect(run.out()).toMatch(/::error::.*wait for the run testing [0-9a-f]{7} was cut off/)
+    expect(run.out()).not.toContain('all green')
+    expect(existsSync(join(r.home, 'ran'))).toBe(false)
+    expect(r.posted()).toBe('')
+    expect(slotsLeft(r)).toEqual([]) // the slot it did take is let go
+  })
+
+  it('a cut right after the slot is taken (its turn and queue ticket still to let go) ends as cancelled and leaves no ticket or turn lock', async () => {
+    // two heavy slots: the run waits in locks.queue/admit and holds the turn lock through the take; the first look at the turn lock after
+    // slot-1 exists is the step that is cut (once)
+    const pre = `eval "$(declare -f ci_turn_leave | sed '1s/ci_turn_leave/ci_turn_leave_real/')"\nci_turn_leave() { if [ -d "$LOCKS/slot-1" ] && [ ! -e "$HOME/cut" ]; then : > "$HOME/cut"; ${CUT}; fi; ci_turn_leave_real "$@"; }`
+    const r = repo(ranStub, {}, pre)
+    const run = r.start([...withStatus, '--jobs', 'long'], { ...repoArgs, TALOS_HEAVY_SLOTS: '2' })
+    expect(await run.done, run.out()).toBe(130)
+    expect(existsSync(join(r.home, 'cut'))).toBe(true)
+    expect(run.out()).toMatch(/::error::.*wait for a free slot was cut off/)
+    expect(existsSync(join(r.home, 'ran'))).toBe(false)
+    expect(r.posted()).toBe('')
+    expect(r.locks().filter((l) => /^(slot|sha|mutex-turn)/.test(l))).toEqual([])
+    const admit = join(r.cache, 'locks.queue/admit')
+    expect(existsSync(admit) ? readdirSync(admit) : []).toEqual([])
+  })
+
+  it('a cut after the commit lock was made and owned, before this run recorded it as held, ends as cancelled', async () => {
+    const pre = `eval "$(declare -f ci_new_owner | sed '1s/ci_new_owner/ci_new_owner_real/')"\nci_new_owner() { ci_new_owner_real "$@" || return 1; case "$1" in */sha-*) ${CUT} ;; esac; }`
+    const r = repo(ranStub, {}, pre)
+    const run = r.start([...withStatus, '--jobs', 'long'], repoArgs)
+    expect(await run.done, run.out()).toBe(130)
+    expect(run.out()).toMatch(/::error::.*wait for the run testing [0-9a-f]{7} was cut off/)
+    expect(existsSync(join(r.home, 'ran'))).toBe(false)
+    expect(r.posted()).toBe('')
+    expect(slotsLeft(r)).toEqual([]) // owned, though not in CI_HELD: the exit lets it go (ci_release_owned)
   })
 
   it('a dead part run found by the next run (its record left whole) is closed under its own prefix, the bare rows under theirs', async () => {

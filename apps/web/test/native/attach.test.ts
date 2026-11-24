@@ -17,13 +17,13 @@ const threadId = config.threads[0]?.id ?? 'general'
 function setup(pinned: boolean) {
   const posted: Array<Record<string, unknown>> = []
   const bridge = createShellBridge({ post: (m) => posted.push(m as Record<string, unknown>) })
-  const listeners: Record<string, Array<(f: unknown) => void>> = {}
+  const listeners: Record<string, Array<(f: unknown, meta?: { catchup?: boolean }) => void>> = {}
   const sendMessage = vi.fn(async () => ({ clientMsgId: 'x', state: 'sent' as const }))
   const store = createStore(() => ({ ...initialClientState(), config, devicePinned: pinned, threads: config.threads }))
   const client = {
     store,
     sendMessage,
-    onFrame(type: string, fn: (f: unknown) => void) {
+    onFrame(type: string, fn: (f: unknown, meta?: { catchup?: boolean }) => void) {
       const list = listeners[type] ?? []
       listeners[type] = list
       list.push(fn)
@@ -37,8 +37,8 @@ function setup(pinned: boolean) {
     client,
     shell,
     sendMessage,
-    emit: (t: string, f: unknown) => {
-      for (const l of listeners[t] ?? []) l(f)
+    emit: (t: string, f: unknown, meta?: { catchup?: boolean }) => {
+      for (const l of listeners[t] ?? []) l(f, meta)
     },
   }
 }
@@ -178,6 +178,23 @@ describe('startNativeNotify', () => {
     const n = t.posted.filter((m) => m.type === 'notify')
     expect(n).toHaveLength(1)
     expect(JSON.stringify(n[0])).not.toContain('SECRET')
+  })
+  it('a replayed (catch-up) reply or card makes no banner; the same live frames do', () => {
+    const t = setup(true)
+    startNativeNotify(t.client, t.bridge, { background: () => true, now: () => new Date('2026-01-05T18:00:00Z') })
+    const card = { type: 'card.create', card: { id: 'c1', thread_id: threadId } }
+    const sentAlways = reply({
+      sent_always_allowed: true,
+      message: { author: 'system', thread_id: threadId, text: 'x' },
+    })
+    t.emit('reply', reply(), { catchup: true })
+    t.emit('reply', sentAlways, { catchup: true })
+    t.emit('card.create', card, { catchup: true })
+    expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(0)
+    t.emit('reply', reply(), { catchup: false })
+    t.emit('reply', reply())
+    t.emit('card.create', card)
+    expect(t.posted.filter((m) => m.type === 'notify')).toHaveLength(3)
   })
   it('visible page, silent reply and owner message make none', () => {
     const t = setup(true)

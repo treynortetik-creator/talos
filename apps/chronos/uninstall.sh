@@ -1,0 +1,57 @@
+#!/bin/bash
+# Chronos uninstaller. Unloads and removes the two launchd agents on a Mac, or stops and removes the systemd user timer on Linux.
+# Leaves your data alone unless --purge.
+#   ./uninstall.sh [--purge] [--yes]
+#   --purge  also delete ~/.chronos (state, logs, history, UI token), ~/.config/chronos (config, jobs)
+#            and the copied runtime in ~/.local/share/chronos. Asks first unless --yes.
+# Only touches the labels io.github.chronos.tick and io.github.chronos.ui, and the units chronos-tick.timer and .service.
+set -u
+PURGE=0; YES=0
+for a in "$@"; do
+  case "$a" in --purge) PURGE=1 ;; --yes) YES=1 ;; -h|--help) sed -n '2,7p' "$0"; exit 0 ;; *) echo "unknown option: $a" >&2; exit 2 ;; esac
+done
+AGENTS="${CHRONOS_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"
+UIDN="$(id -u)"
+# Linux has no launchd: nothing was loaded there, and no plist was written (install.sh's Linux branch). Its systemd user timer goes.
+if [ "$(uname -s)" != Darwin ]; then
+  CHRONOS_NO_LAUNCHCTL=1
+  UNITS="${CHRONOS_SYSTEMD_DIR:-$HOME/.config/systemd/user}"
+  SYSTEMCTL=systemctl
+  [ "${CHRONOS_TEST_MODE:-}" = 1 ] && SYSTEMCTL="${CHRONOS_SYSTEMCTL:-systemctl}"
+  if [ -f "$UNITS/chronos-tick.timer" ] || [ -f "$UNITS/chronos-tick.service" ]; then
+    "$SYSTEMCTL" --user disable --now chronos-tick.timer >/dev/null 2>&1 && echo "stopped chronos-tick.timer"
+    rm -f "$UNITS/chronos-tick.timer" "$UNITS/chronos-tick.service" && echo "removed the chronos-tick units from $UNITS"
+    "$SYSTEMCTL" --user daemon-reload >/dev/null 2>&1 || true
+  fi
+fi
+# a pretend HOME's plists are not this user's: the system launchctl is never asked to unload them (launchd-guard.sh)
+SRC="$(cd "$(dirname "$0")" && pwd)"
+if [ -z "${CHRONOS_NO_LAUNCHCTL:-}" ] && [ -f "$SRC/launchd-guard.sh" ]; then
+  . "$SRC/launchd-guard.sh"
+  if chronos_launchd_refused; then
+    CHRONOS_NO_LAUNCHCTL=1
+    echo "not unloaded: this HOME ($HOME) is not your own home folder, so launchctl was not asked to unload the Chronos agents. Run it as yourself with your own HOME to unload them."
+  fi
+fi
+for label in io.github.chronos.tick io.github.chronos.ui; do
+  if [ -z "${CHRONOS_NO_LAUNCHCTL:-}" ]; then launchctl bootout "gui/$UIDN/$label" 2>/dev/null && echo "unloaded $label"; fi
+  [ -f "$AGENTS/$label.plist" ] && rm -f "$AGENTS/$label.plist" && echo "removed $AGENTS/$label.plist"
+done
+if [ "$PURGE" = 1 ]; then
+  CONFIG="${CHRONOS_CONFIG:-$HOME/.config/chronos/config.json}"
+  CONFIG_DIR="$(dirname "$CONFIG")"
+  # Only delete the config folder when it is a folder of its own named "chronos". A CHRONOS_CONFIG that sits
+  # directly in $HOME (or anywhere shared) must never turn --purge into "delete that whole folder".
+  if [ "$(basename "$CONFIG_DIR")" = chronos ]; then TARGETS=("$HOME/.chronos" "$CONFIG_DIR" "$HOME/.local/share/chronos")
+  else TARGETS=("$HOME/.chronos" "$HOME/.local/share/chronos"); echo "note: $CONFIG_DIR is not a chronos folder, so it is kept; delete your config and jobs there by hand."; fi
+  echo "--purge will delete: ${TARGETS[*]}"
+  if [ "$YES" != 1 ]; then read -r -p "Type 'purge' to continue: " ans; [ "$ans" = purge ] || { echo "aborted; data kept."; exit 1; }; fi
+  for t in "${TARGETS[@]}"; do
+    # a git checkout is someone's clone (Chronos cloned straight into ~/.local/share/chronos), not a copy install.sh made: keep it
+    if [ -e "$t/.git" ]; then echo "kept $t: it is a git checkout, not a copy install.sh made; delete it by hand if you mean to."; continue; fi
+    rm -rf "$t"
+  done
+  echo "purged."
+else
+  echo "Data kept (~/.chronos, ~/.config/chronos). Use --purge to delete it."
+fi

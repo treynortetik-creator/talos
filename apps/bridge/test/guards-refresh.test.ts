@@ -495,7 +495,10 @@ describe('guards refresh: refusals write nothing and remove nothing', () => {
         expect(refresh(x, { bun: cellarBun(x, '6.0.0') }).line).toBe(`${REFRESH_LINE} refused damaged`),
       )
     } finally {
-      for (const k of ['TALOS_KIT_HOME', 'TALOS_VENDOR_DIR']) if (saved[k] === undefined) delete process.env[k]
+      for (const k of ['TALOS_KIT_HOME', 'TALOS_VENDOR_DIR']) {
+        if (saved[k] === undefined) delete process.env[k]
+        else process.env[k] = saved[k]
+      }
     }
   })
 

@@ -70,6 +70,14 @@ function setup(tools: Record<string, string> = {}) {
   *"/statuses?"*) cat "${T}/rows" 2>/dev/null ;;
   *"/jobs"*) cat "${T}/jobs" 2>/dev/null ;;
   *"/pulls/"*) echo "\${GH_PR_STATE:-open}" ;;
+  *"auth token"*) echo "$*" >> "${T}/gh-auth-calls"; echo "\${GH_FAKE_LOGIN_TOKEN:-}" ;;
+  *"/actions/runners"*)
+    echo "gh-runners: GH_TOKEN=$GH_TOKEN" >> "${T}/gh-runners-calls"
+    if [ -f "${T}/runners-slow" ]; then sleep 30; fi
+    if [ -f "${T}/runners-fail" ]; then echo "gh: Resource not accessible by integration (HTTP 403)" >&2; exit 1; fi
+    if [ -f "${T}/runners" ]; then cat "${T}/runners"; else
+      for l in talos-ci talos-ci-delphi talos-ci-cyclops talos-ci-report talos-ci-linux talos-ci-linux-b; do printf 'online\tself-hosted,%s\n' "$l"; done
+    fi ;;
 esac
 exit 0`,
   )
@@ -92,9 +100,30 @@ exit 0`,
   }
   const called = () => (existsSync(calls) ? readFileSync(calls, 'utf8') : '')
   const rows = (lines: string[]) => writeFileSync(join(T, 'rows'), `${lines.join('\n')}\n`)
+  // the repository's runners as `gh api ... --jq` prints them: status, TAB, labels; every machine online unless a test says otherwise
+  const runners = (lines: string[]) => writeFileSync(join(T, 'runners'), `${lines.join('\n')}\n`)
+  const runnersFail = () => writeFileSync(join(T, 'runners-fail'), '')
+  const runnersSlow = () => writeFileSync(join(T, 'runners-slow'), '')
+  const authCalls = () => (existsSync(join(T, 'gh-auth-calls')) ? readFileSync(join(T, 'gh-auth-calls'), 'utf8') : '')
+  const runnerCalls = () =>
+    existsSync(join(T, 'gh-runners-calls')) ? readFileSync(join(T, 'gh-runners-calls'), 'utf8') : ''
   const jobs = (lines: string[]) => writeFileSync(join(T, 'jobs'), `${lines.join('\n')}\n`)
   mkdirSync(join(T, 'home'))
-  return { T, clone, real, run, called, rows, jobs, local: join(clone, 'scripts/ci-local.sh') }
+  return {
+    T,
+    clone,
+    real,
+    run,
+    called,
+    rows,
+    runners,
+    runnersFail,
+    runnersSlow,
+    authCalls,
+    runnerCalls,
+    jobs,
+    local: join(clone, 'scripts/ci-local.sh'),
+  }
 }
 const push = (sha: string) => ({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: sha })
 const outputs = (out: string) =>
@@ -1437,5 +1466,159 @@ describe("ci-runner.sh preflight: the owner's Mac, before anything of the run is
   it('not the owner machine (no CI_OWNER_MACHINE=1): nothing to check', () => {
     const s = setup({ dseditgroup: 'exit 0' })
     expect(s.run('preflight', { CI_LOCAL_SCRIPT: s.local }).code).toBe(0)
+  })
+})
+
+describe('ci-runner.sh plan: a part is never handed to a machine that is not online (scripts/ci-runner/online.sh)', () => {
+  const titan = { CI_TITAN_CHECK: 'on', CI_CHECK_WAIT: '1800', CI_TITAN_BROWSER: 'e2e', CI_BROWSER_E2E_WAIT: '1800' }
+  const all = [
+    'online\tself-hosted,macOS,ARM64,talos-ci',
+    'online\tself-hosted,Linux,X64,talos-ci-report',
+    'online\tself-hosted,Linux,X64,talos-ci-linux',
+    'online\tself-hosted,Linux,X64,talos-ci-linux-b',
+  ]
+  it('Titan online: check and the e2e packages go to it, as before', () => {
+    const s = setup()
+    s.runners(all)
+    const r = s.run('plan', { ...push(s.real), ...titan })
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({
+      check_titan: 'ci-part',
+      check_wait: '1800',
+      browser_e2e: 'ci-part',
+      e2e_wait: '1800',
+    })
+    expect(r.err).not.toContain('is online')
+  })
+
+  it('Titan offline: no part goes to it, and the plan says why', () => {
+    const s = setup()
+    s.runners(
+      all.map((l) =>
+        l.includes('talos-ci-linux,') || l.endsWith('talos-ci-linux') ? l.replace('online', 'offline') : l,
+      ),
+    )
+    const r = s.run('plan', { ...push(s.real), ...titan })
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', check_wait: '', browser_e2e: '', e2e_wait: '' })
+    expect(r.err).toContain(
+      'plan: CI_TITAN_CHECK=on, but no runner labelled talos-ci-linux is online (its runner is offline)',
+    )
+    expect(r.err).toContain('plan: CI_TITAN_BROWSER=e2e, but no runner labelled talos-ci-linux is online')
+  })
+
+  it('Titan offline: image (on) is not handed over either: no remote job, no fallback', () => {
+    const s = setup()
+    s.runners(all.filter((l) => !l.endsWith('talos-ci-linux')))
+    const r = s.run('plan', { ...push(s.real), CI_TITAN_IMAGE: 'on' })
+    expect(outputs(r.out)).toMatchObject({ titan: '', remote_jobs: '', fallback: '' })
+    expect(r.err).toContain('no runner labelled talos-ci-linux is online (no runner of this repository has that label)')
+  })
+
+  it('the runners cannot be read (a 403): nothing goes to another machine, and the line says it could not be read', () => {
+    const s = setup()
+    s.runnersFail()
+    const r = s.run('plan', { ...push(s.real), ...titan, CI_DELPHI: 'on', CI_HESTIA: 'on' })
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', browser_e2e: '', delphi: '', hestia: '', remote_parts: '' })
+    expect(r.err).toContain('the runners list could not be read (gh api exit 1)')
+  })
+
+  it("no token at all: this Mac's login of the repository owner is read by name; none: nothing goes", () => {
+    const s = setup()
+    s.runners(all)
+    const r = s.run('plan', { ...push(s.real), ...titan, GH_TOKEN: '', GH_FAKE_LOGIN_TOKEN: 'owner-token' })
+    expect(outputs(r.out)).toMatchObject({ check_titan: 'ci-part' })
+    expect(s.runnerCalls()).toContain('GH_TOKEN=owner-token')
+    const n = setup()
+    n.runners(all)
+    const r2 = n.run('plan', { ...push(n.real), ...titan, GH_TOKEN: '', GH_FAKE_LOGIN_TOKEN: '' })
+    expect(outputs(r2.out)).toMatchObject({ check_titan: '', browser_e2e: '' })
+    expect(r2.err).toContain('no token')
+  })
+
+  it('a machine with no runner in the repository (Delphi, Cyclops) is not handed a shard; one that is online still is', () => {
+    const s = setup()
+    s.runners(all.concat('online\tself-hosted,macOS,ARM64,talos-ci-cyclops'))
+    const r = s.run('plan', { ...push(s.real), CI_DELPHI: 'on', CI_CYCLOPS: 'on' })
+    const o = outputs(r.out)
+    expect(o.delphi).toBe('')
+    expect(o.cyclops).toBe('bridge-shard-2')
+    expect(o.remote_parts).toBe('bridge-shard-2:cyclops')
+    expect(r.err).toContain('CI_DELPHI=on, but no runner labelled talos-ci-delphi is online')
+  })
+
+  it("the hostile nightly's report-only copies need Titan's second runner (talos-ci-linux-b)", () => {
+    const s = setup()
+    s.runners(all.filter((l) => !l.endsWith('talos-ci-linux-b')))
+    const r = s.run('plan', { ...push(s.real), ...titan, CI_HOSTILE: '1', CI_TITAN_HOSTILE: 'shadow' })
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', browser_e2e: '', linux_label: '' })
+    expect(r.err).toContain('no runner labelled talos-ci-linux-b is online')
+    const ok = setup()
+    ok.runners(all)
+    const r2 = ok.run('plan', { ...push(ok.real), ...titan, CI_HOSTILE: '1', CI_TITAN_HOSTILE: 'shadow' })
+    expect(outputs(r2.out)).toMatchObject({
+      check_titan: 'report-ci',
+      browser_e2e: 'report-ci',
+      linux_label: 'talos-ci-linux-b',
+    })
+  })
+
+  it('every switch off: the runners are not asked at all', () => {
+    const s = setup()
+    const r = s.run('plan', push(s.real))
+    expect(r.code, r.err).toBe(0)
+    expect(s.runnerCalls()).toBe('')
+  })
+
+  it('CI_RUNNERS_TOKEN wins over GH_TOKEN; with neither, the owner is asked for by name (gh auth token --user owner)', () => {
+    const s = setup()
+    s.runners(all)
+    s.run('plan', { ...push(s.real), ...titan, CI_RUNNERS_TOKEN: 'runners-token', GH_TOKEN: 'job-token' })
+    expect(s.runnerCalls()).toContain('GH_TOKEN=runners-token')
+    expect(s.authCalls()).toBe('')
+    const n = setup()
+    n.runners(all)
+    n.run('plan', { ...push(n.real), ...titan, GH_TOKEN: '', GH_FAKE_LOGIN_TOKEN: 'owner-token' })
+    expect(n.authCalls()).toContain('auth token --hostname github.com --user owner')
+  })
+
+  it('an answer that is not had within the limit is an unreadable list: nothing goes, an annotation says so', () => {
+    const s = setup()
+    s.runners(all)
+    s.runnersSlow()
+    const r = s.run('plan', { ...push(s.real), ...titan, CI_ONLINE_TIMEOUT_S: '1' })
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', browser_e2e: '' })
+    expect(r.err).toContain(
+      '::warning::plan: CI_TITAN_CHECK=on, but no runner labelled talos-ci-linux is online (the runners list could not be read (gh api exit 142))',
+    )
+  })
+
+  it('two runners with one label, one offline: the label is online; labels match without regard to case', () => {
+    const s = setup()
+    s.runners(['offline\tself-hosted,Linux,X64,talos-ci-linux', 'online\tself-hosted,Linux,X64,Talos-CI-Linux'])
+    const r = s.run('plan', { ...push(s.real), ...titan })
+    expect(outputs(r.out)).toMatchObject({ check_titan: 'ci-part', browser_e2e: 'ci-part' })
+  })
+
+  it('a dispatch that lists only some jobs: the runners are still asked, and a part its list leaves out is not planned either way', () => {
+    const s = setup()
+    s.runners(all)
+    const r = s.run('plan', {
+      GITHUB_EVENT_NAME: 'workflow_dispatch',
+      INPUT_REF: 'main',
+      INPUT_JOBS: 'mod',
+      ...titan,
+    })
+    expect(r.code, r.err).toBe(0)
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', browser_e2e: '' })
+  })
+
+  it('the hostile nightly with CI_TITAN_HOSTILE off hands nothing anywhere and asks nothing', () => {
+    const s = setup()
+    const r = s.run('plan', { ...push(s.real), ...titan, CI_HOSTILE: '1' })
+    expect(outputs(r.out)).toMatchObject({ check_titan: '', browser_e2e: '', linux_label: '' })
+    expect(s.runnerCalls()).toBe('')
   })
 })

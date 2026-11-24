@@ -26,8 +26,12 @@ import Foundation
 ///   transcript's newest turn is the model's pending one and the blank wait has passed: `MainWatch.blankStallReady`). The gate allows it
 ///   only on the idle prompt: Claude's input box live and EMPTY (nobody typing), no select, prompt or dialog anywhere, and no working line (a
 ///   spinner is `.interrupt`'s case). One Escape per message: a second would open Claude Code's rewind menu (the sender never repeats it).
-/// - And, independently, never a key while Claude Code's usage-limit menu is anywhere on the pane (`UsageLimitScreen`), nor when the pane
-///   cannot be read, nor with no intent stated.
+/// - `.usageLimit(binding)`: the usage-limit card's three keys, and nothing else on that screen. `.escape` only while the menu is up and is exactly
+///   the one the card was made for (`PaneSelect` `bound`: model, reset and every row). `.typeModel` and `.enterModel` only after it, on the idle
+///   prompt for the same limit (its headline still shows): the box live and empty for the typing, holding exactly `/model` for the Enter, no
+///   select or dialog on the pane.
+/// - And, independently, never a key while Claude Code's usage-limit menu is anywhere on the pane (`UsageLimitScreen`) except that `.escape`
+///   above, nor when the pane cannot be read, nor with no intent stated.
 public enum KeyGuard {
   public enum BoxHolds: String, Sendable { case empty, ours }
 
@@ -58,6 +62,8 @@ public enum KeyGuard {
     /// have the same `bound` (kind, tool, subject, every numbered row; not the cursor). `freeText` is the question's free-text row, whose label
     /// the owner's typing replaces.
     case pane(PaneBinding)
+    /// A key of the usage-limit card's answer (`UsageBinding`).
+    case usageLimit(UsageBinding)
     /// Escape for a stalled model request on Main (the box empty, the working line up, no dialog or select anywhere).
     case interrupt
     /// Escape for a frozen request with no working line on the pane: the idle prompt, box empty, no dialog (the sender checks the transcript and the wait).
@@ -70,9 +76,34 @@ public enum KeyGuard {
       case .dialog(let k): return k.rawValue
       case .devWarning: return DialogKind.devChannels.rawValue
       case .pane(let b): return b.kind.rawValue
+      case .usageLimit(let b): return "usage-limit-\(b.step.rawValue)"
       case .interrupt: return "interrupt"
       case .interruptBlank: return "interrupt-blank"
       }
+    }
+  }
+
+  /// The three keys a usage-limit answer sends (`Intent.usageLimit`): Escape, the typed `/model`, and its Enter.
+  public enum UsageStep: String, Sendable, CaseIterable {
+    case escape, typeModel, enterModel
+    /// The Backspaces that clear the `/model` Talos typed when its Enter was refused: only while the box holds exactly that.
+    case clearModel
+  }
+
+  /// What a usage-limit key is tied to: the menu the card was made for (`PaneSelect.Screen.bound`), the limit it is about
+  /// (`UsageLimitScreen.limitKey`), and which of the three keys this is.
+  public struct UsageBinding: Equatable, Sendable {
+    public var bound: String
+    public var limit: String
+    public var step: UsageStep
+    /// The idle prompt's signature (`idleSignature`) from the read that saw the menu gone, just after the Escape: the later steps are tied to THAT
+    /// screen, not only to a headline that stays on the pane. nil on the Escape itself.
+    public var idle: String?
+    public init(bound: String, limit: String, step: UsageStep, idle: String? = nil) {
+      self.bound = bound
+      self.limit = limit
+      self.step = step
+      self.idle = idle
     }
   }
 
@@ -107,7 +138,7 @@ public enum KeyGuard {
     case .devChannels: return .dialog(.devChannels)
     case .login: return nil
     // the two pane Selects state `.pane` with the offer's own binding (`PaneSelect`), never an intent by kind alone
-    case .toolPermission, .agentQuestion: return nil
+    case .toolPermission, .agentQuestion, .usageLimit: return nil
     case .apiKey: return .dialog(.apiKey)
     case .bypass: return .dialog(.bypass)
     }
@@ -121,8 +152,28 @@ public enum KeyGuard {
     var all = escaped
     while let l = all.last, InputBoxAttributes.stripEscapes(l).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { all.removeLast() }
     let rows = all.map(InputBoxAttributes.stripEscapes)
-    if UsageLimitScreen.read(rows) != nil { return Refusal("usage_limit") }
+    if UsageLimitScreen.read(rows) != nil {
+      // the menu is up: only the card's Escape, for exactly this menu
+      if case .usageLimit(let b) = intent, b.step == .escape, let s = PaneSelect.read(rows: rows), s.kind == .usageLimit,
+        ExactText.equal(s.bound, b.bound), ExactText.equal(UsageLimitScreen.limitKey(s.limit ?? .init()), b.limit)
+      {
+        return nil
+      }
+      return Refusal("usage_limit")
+    }
     switch intent {
+    case .usageLimit(let b):
+      // after Escape: the menu is gone (checked above), the same limit's headline is still on the pane, and it is the screen the menu-gone read saw
+      guard b.step != .escape, let seen = UsageLimitScreen.lastLimit(rows), ExactText.equal(seen, b.limit),
+        let idle = b.idle, let now = idleSignature(rows), ExactText.equal(now, idle)
+      else { return Refusal("not_usage_limit") }
+      switch b.step {
+      case .typeModel: return boxRefusal(escaped: all, rows: rows, holds: .empty)
+      case .enterModel: return boxRefusal(escaped: all, rows: rows, holds: .ours, text: UsageLimitScreen.modelCommand, slashList: true)
+      // Backspaces delete only what Talos typed: the box holds exactly `/model` and nothing else is asked of the screen under it
+      case .clearModel: return boxRefusal(escaped: all, rows: rows, holds: .ours, text: UsageLimitScreen.modelCommand, lenient: true)
+      case .escape: return Refusal("not_usage_limit")
+      }
     case .box(let holds): return boxRefusal(escaped: all, rows: rows, holds: holds)
     case .dialog(let kind):
       return dialogLive(rows, kind) ? nil : Refusal("not_\(kind.rawValue)")
@@ -158,26 +209,73 @@ public enum KeyGuard {
   }
 
   /// Claude's input box is what is live, empty or holding exactly Talos's line, with only status rows under it.
-  static func boxRefusal(escaped: [String], rows: [String], holds: BoxHolds) -> Refusal? {
+  /// `text`: what `.ours` means (Talos's pointer line, or `/model` for the usage-limit answer). `slashList`: the rows under the box may be the list of
+  /// slash commands Claude Code draws for a typed `/…` (indented rows that all start with `/`), not only status rows. Anything else under the box refuses.
+  static func boxRefusal(escaped: [String], rows: [String], holds: BoxHolds, text: String = PointerTyper.text, slashList: Bool = false, lenient: Bool = false) -> Refusal? {
     guard let box = PointerTyper.inputBox(rows: rows) else { return Refusal("no_input_box") }
     // Claude Code draws its box from column 0: its top rule, its pointer row and its bottom rule. A frame drawn indented (by a status
     // line, say) is never the box (the Linux guard's `boxAtColumn0`)
     let atColumn0 = { (i: Int) in rows[i].first.map { $0 != " " } == true }
     guard atColumn0(box.lowerBound - 1), atColumn0(box.lowerBound), atColumn0(box.upperBound) else { return Refusal("box_not_at_column_0") }
     // under the box only Claude Code's own status rows (a rule, a second frame, a menu: none of them is one)
-    if let strange = BoxFrame.strangeRowUnder(rows, bottomRule: box.upperBound) {
+    if !lenient, let strange = BoxFrame.strangeRowUnder(rows, bottomRule: box.upperBound), !(slashList && isSlashList(rows, below: box.upperBound)) {
       return Refusal("row_under_box", row: String(strange.prefix(120)))
     }
     let draft = InputBoxAttributes.draftPresent(escapedRows: escaped)
     switch holds {
     case .empty: return draft == false ? nil : Refusal("box_not_empty")
     case .ours:
-      guard draft == true, BoxFrame.exactBoxText(rows, box: box) == PointerTyper.text else { return Refusal("box_not_our_line") }
+      guard draft == true, BoxFrame.exactBoxText(rows, box: box) == text else { return Refusal("box_not_our_line") }
       // the Enter (and the Backspaces with it): also no select or dialog anywhere on the pane, read in this same capture, with nothing
       // awaited between this verdict and the key. A select drawn after this capture is the residual (docs/SECURITY.md); `EnterDetection`
       // looks for it after the Enter. The Linux guard's `prompt_on_pane`.
-      return selectUp(rows) ? Refusal("prompt_on_pane") : nil
+      // a slash list whose cursor is on exactly `/model` is the one thing under the box that may look like a select (its `❯` row): the prompt check
+      // then reads the pane down to the box's bottom rule only
+      let checked = slashList && isSlashList(rows, below: box.upperBound) ? Array(rows[...box.upperBound]) : rows
+      return !lenient && selectUp(checked) ? Refusal("prompt_on_pane") : nil
     }
+  }
+
+  /// Claude's input box on `rows` holds exactly `text` (typed words drawn as Claude draws them), whatever is under it.
+  public static func boxHolds(_ rows: [String], _ text: String) -> Bool {
+    guard let box = PointerTyper.inputBox(rows: rows.map(InputBoxAttributes.stripEscapes)) else { return false }
+    return BoxFrame.exactBoxText(rows.map(InputBoxAttributes.stripEscapes), box: box) == text
+  }
+
+  /// Every non-blank row under the box is one of the slash-command list's: indented, at most 8 of them, each starting with `/` (after an optional
+  /// cursor mark), AND the Enter would run `/model`: Enter runs the HIGHLIGHTED row, so exactly one row carries the cursor mark and its command (the
+  /// first word) is exactly `/model`; with no mark at all, the first row must be exactly `/model`. A cursor on `/memory`, on a project command such as
+  /// `/model-x`, or on two rows refuses. Not captured from a real Claude Code yet: a list drawn otherwise refuses the Enter (`row_under_box`, whose
+  /// shape is audited) and the typed `/model` is cleared (`UsageStep.clearModel`).
+  static func isSlashList(_ rows: [String], below rule: Int) -> Bool {
+    let under = rows[(rule + 1)...].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    guard (1...8).contains(under.count) else { return false }
+    var commands: [(word: String, marked: Bool)] = []
+    for r in under {
+      guard r.first == " " else { return false }
+      var t = Substring(r.trimmingCharacters(in: .whitespaces))
+      var marked = false
+      if t.first == DialogMatcher.Strings.pointer {
+        marked = true
+        t = t.dropFirst().drop { $0 == " " }
+      }
+      guard t.first == "/" else { return false }
+      commands.append((String(t.prefix { $0 != " " && $0 != "\u{00A0}" }), marked))
+    }
+    let marks = commands.filter(\.marked)
+    if marks.count > 1 { return false }
+    if let m = marks.first { return m.word == UsageLimitScreen.modelCommand }
+    return commands.first?.word == UsageLimitScreen.modelCommand
+  }
+
+  /// The idle prompt as a screen generation: the last three non-blank rows above Claude's input box (its headline, the stopped turn), read after the
+  /// menu went. Typing into the box changes nothing above it; a new answer, a new turn or another menu does, and then no key of the answer goes.
+  public static func idleSignature(_ rows: [String]) -> String? {
+    let plain = rows.map(InputBoxAttributes.stripEscapes)
+    guard let box = PointerTyper.inputBox(rows: plain), box.lowerBound >= 1 else { return nil }
+    let above = plain[..<(box.lowerBound - 1)].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    guard !above.isEmpty else { return nil }
+    return above.suffix(3).joined(separator: "\u{1F}")
   }
 
   /// The shapes of the status parts Talos does not know under Claude's input box on this pane (`BoxFrame.unknownShapes`), for the audit

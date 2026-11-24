@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import Testing
 import TalosDesktopCore
+import TalosSupervisor
 
 @testable import TalosDesktop
 
@@ -85,5 +86,61 @@ struct UpdateWindowGuiTests {
     c.apply(.waitingForTurn(version: "1.5.0", why: ["main running"]))
     let (_, root2) = host(c)
     #expect(!buttons(root2).contains { $0.title == UpdateStatus.skipThreadWaitButton })
+  }
+
+  /// Old code: a failed update's window offered "Check again", so a failed update that needs repair had no Try again.
+  @Test func aFailedUpdateOffersTryAgain() {
+    _ = NSApplication.shared
+    let c = UpdateController()
+    c.orderFront = { _ in }
+    c.apply(.failed(line: AutoUpdate.repairLine("1.5.0", old: "1.4.0"), logPath: "~/x"))
+    let (_, root) = host(c)
+    let titles = buttons(root).map(\.title)
+    #expect(titles.contains("Try again") && !titles.contains("Check again"), "\(titles)")
+  }
+
+  /// Old code: Try again reached the repair from one button and only while the controller's own status was "failed". Here the status is
+  /// something else, and the UPDATER (which holds the record) decides: Check again and About's button both retry the repair first, and
+  /// no new check starts while it still fails.
+  @Test func everyOwnerPressedCheckRetriesAWaitingRepairBeforeAnyCheck() async throws {
+    _ = NSApplication.shared
+    let home = NSTemporaryDirectory() + "talos-ua-\(UUID().uuidString.prefix(8))"
+    try FileManager.default.createDirectory(atPath: home + "/auto-update", withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    var p = AutoUpdate.Pending(
+      version: "1.5.0", old_version: "1.4.0", checkout: home + "/no-such-folder", old_ref: "main", old_head: String(repeating: "a", count: 40),
+      helper_pid: 0, started_at: ISOTime.string(Date().timeIntervalSince1970))
+    p.commit = String(repeating: "b", count: 40)
+    p.repair = true
+    try JSONEncoder().encode(p).write(to: URL(fileURLWithPath: home + "/auto-update/pending.json"))
+    let o = AutoUpdater.Options(talosHome: home, appPath: home + "/Talos.app", appVersion: "1.4.0", keys: [])
+    let c = UpdateController()
+    var h = AutoUpdater.Hooks(settings: { (true, nil) }, checkout: { nil }, look: { [] }, post: { _ in }, env: { [:] })
+    h.onStatus = { s in Task { @MainActor in c.apply(s) } }
+    let u = AutoUpdater(options: o, hooks: h)
+    #expect(u.needsRepair(), "the updater knows, whatever the controller shows")
+    c.orderFront = { _ in }
+    c.updater = u
+    c.apply(.idle)  // not .failed
+    c.probe = { .upToDate("1.4.0") }
+    c.checkAgain()
+    for _ in 0..<60 {
+      if case .failed = c.status { break }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+    #expect(c.checksStarted == 0, "the repair came first and it still fails, so no check started")
+    guard case .failed(let line, _) = c.status else {
+      Issue.record("expected the repair line, got \(c.status)")
+      return
+    }
+    #expect(line == AutoUpdate.repairLine("1.5.0", old: "1.4.0"))
+    c.apply(.idle)
+    c.checkFromAbout()
+    for _ in 0..<60 {
+      if case .failed = c.status { break }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+    #expect(c.checksStarted == 0, "About's button goes the same way")
+    #expect(c.status.words.headline == "The update didn\u{2019}t work")
   }
 }

@@ -52,7 +52,10 @@ public enum ThreadStateSeed {
     if dirThere, st.st_mode & S_IFMT != S_IFDIR { return .problem("\(dir) is not a plain folder") }
     var fst = stat()
     if lstat(file, &fst) == 0 {
-      return fst.st_mode & S_IFMT == S_IFLNK ? .problem("\(file) is a link") : .exists
+      if fst.st_mode & S_IFMT == S_IFLNK { return .problem("\(file) is a link") }
+      // a folder (or anything else) there is not a state file: the session's rules deny what is under it, and it would not be read
+      if fst.st_mode & S_IFMT != S_IFREG { return .problem("\(file) is not a regular file") }
+      return .exists
     }
     if errno != ENOENT { return .problem("\(file) could not be made: \(String(cString: strerror(errno)))") }
     if dry { return .created }

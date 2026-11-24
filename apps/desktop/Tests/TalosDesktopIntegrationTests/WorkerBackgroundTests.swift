@@ -153,8 +153,10 @@ struct WorkerBackgroundTests {
     #expect(line.contains("why=cap") && line.hasSuffix(" bg=0"), "\(line)")
   }
 
-  /// When every quiet session has background work, the longest idle is parked all the same, and its thread is told what was cut.
-  @Test func whenEveryCandidateHasBackgroundWorkTheLongestIdleGoesAndItsThreadIsTold() throws {
+  /// T7 (audit 2026-11-22): when every quiet session has background work, none is stopped. The new one starts over the limit and its
+  /// thread gets one plain line; once that work ends, the count comes back down (the longest idle quiet one is parked then). Before,
+  /// the longest idle was parked with its work and its thread told what was cut.
+  @Test func whenEveryCandidateHasBackgroundWorkNoneIsStoppedAndTheNewOneStartsOverTheLimit() throws {
     let (r, notices, log) = try rig(threads: ["trip", "garden"], maxLive: 1)
     var started: [Int32?] = []
     defer {
@@ -171,14 +173,23 @@ struct WorkerBackgroundTests {
     usleep(800_000)
     try r.wake("garden")
     #expect(r.wait(20) { r.up("garden") }, "\(r.why("garden"))")
-    #expect(r.state("trip") == "parked", "\(r.why("trip"))")
-    #expect(!ProcessInspect.groupAlive(pid))
+    #expect(r.staysUp(for: 3, "trip was stopped to make room"))
+    #expect(r.state("trip") == "live", "\(r.why("trip"))")
+    #expect(ProcessInspect.groupAlive(pid), "the session with background work was stopped")
+    #expect(parkLines(log, "trip").isEmpty, "\(parkLines(log, "trip"))")
+    #expect(logLines(log).contains { $0.hasSuffix("worker_start_over_limit thread=garden") }, "\(logLines(log))")
+    #expect(r.wait(5) { notices.all.contains { $0.thread == "garden" && $0.text == BackgroundWork.busyLine } }, "\(notices.all)")
+    usleep(2_500_000)  // garden is quiet by now, and over the limit: the work that forced that is not charged to it
+    #expect(r.state("garden") == "live", "\(r.why("garden"))")
+    #expect(parkLines(log, "garden").isEmpty, "garden was parked while the work ran: \(parkLines(log, "garden"))")
+    #expect(notices.all.filter { $0.text == BackgroundWork.busyLine }.count == 1, "one line, not one per tick: \(notices.all)")
+    #expect(!notices.all.contains { $0.text.hasPrefix("Parked while") }, "nothing was cut: \(notices.all)")
+    // the work ends: the count comes back down, the longest idle quiet session goes (trip), with nothing cut
+    mark(r, "trip", "done")
+    #expect(r.wait(15) { r.state("trip") == "parked" }, "\(r.why("trip")) \(logLines(log))")
     let line = try #require(parkLines(log, "trip").first)
-    #expect(line.contains("why=cap") && line.hasSuffix(" bg=1"), "\(line)")
-    #expect(r.wait(5) { notices.all.contains { $0.thread == "trip" && $0.text.hasPrefix("Parked while 1 background task(s) were running: until [ -f ") } }, "\(notices.all)")
-    let told = notices.all.filter { $0.text.hasPrefix("Parked while") }
-    #expect(told.count == 1, "one line: \(told)")
-    #expect(told.first.map { $0.text.count <= "Parked while 1 background task(s) were running: .".count + 60 } == true, "\(told)")
+    #expect(line.contains("why=cap") && line.hasSuffix(" bg=0"), "\(line)")
+    #expect(r.state("garden") == "live")
   }
 
   /// A session that dies on its own (a crash) is logged as one. Its Bash tool shell is detached, as the CLI's are, so it outlives claude

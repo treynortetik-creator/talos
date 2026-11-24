@@ -3,7 +3,7 @@
 //                and which service is the relay, asks to confirm, and keeps the token in the key store.
 //   update       the agent may run it unless "Lock Talos settings" is on (agent-cli.ts decides): one redeploy, then it watches /healthz.
 //   auto on|off  whether the bridge redeploys by itself when a new release appears (relay/auto.ts). `off` is always allowed.
-//   disconnect   removes what connect (or the Mac app) left here; runs again with nothing to do.
+//   disconnect   removes what connect (or the Mac app) left here; runs again with nothing to do. Gated for an agent like `update` (agent-cli.ts).
 // The token is never printed, logged or written to a file of the Talos home; the only place it goes besides Railway's one header is
 // the key store (files.ts names the item).
 import { RelayConnectFile, type RelayConnectFileT, type SecretStore } from '@talos-app/protocol'

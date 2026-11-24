@@ -1,22 +1,47 @@
 // N11 hardening: the start-up orphan sweep closes a session claim only when the bridge that owns it is gone.
 // A second bridge (a test, another agent folder, a restart overlap) must not close a live bridge's run.
 
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { newUlid } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { psInfo } from '../../src/lifecycle.ts'
 import { InstanceRegistry } from '../../src/schedules/instances.ts'
-import { ChronosBox, draft, MON_0700_EDT, type SchedHarness, sleep, startSched, tempHome, waitFor } from './harness.ts'
+import {
+  ChronosBox,
+  draft,
+  MON_0700_EDT,
+  SCHED_START_MS,
+  type SchedHarness,
+  sleep,
+  startSched,
+  tempHome,
+  waitFor,
+} from './harness.ts'
 
 const AFTER_0730 = '2026-10-05T11:31:00Z'
 const DS = '2026-10-05'
 const RUN = 'r_01JBF3V7Q8K2M4N6P8R0S2T4V6'
+
+setDefaultTimeout(t(30_000)) // a test that starts a bridge says SCHED_START_MS plus its own waits itself
+
+/** The start (the bridge, the schedule loops armed), the sweep's marker wait (10 s at x3), the quiet-window ping (3 s at x3). */
+const WITH_MARKER = SCHED_START_MS + t(30_000)
+const QUIET = SCHED_START_MS + t(15_000)
 
 let h: SchedHarness | undefined
 afterEach(async () => {
   await h?.stop()
   h = undefined
 })
+
+/** Every frame the relay sent before this has REACHED the bridge (it answers a ping at once, in order; its queues may still be working): it proves arrival, not that the bridge has finished with them. */
+const pinged = async (x: SchedHarness) => {
+  const nonce = `after-${newUlid().slice(-12)}`
+  x.relay.sendToBridge({ type: 'ping', nonce }, { durable: false })
+  await x.relay.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'from_bridge' })
+}
 
 /** A pid that existed and is certainly not running now. */
 function deadPid(): number {
@@ -67,58 +92,84 @@ async function startNext(box: ChronosBox, home: string) {
 }
 
 describe('orphan sweep only closes claims whose owner is gone', () => {
-  test('a claim owned by a live instance (running pid) is not closed by another instance starting', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_live', process.pid, psStart(process.pid))
-    const box = boxWithClaimBy('bi_live')
-    const x = await startNext(box, home)
-    await x.advance(5 * 60_000)
-    await sleep(300)
-    expect(markers(box)).toEqual([])
-  })
+  test(
+    'a claim owned by a live instance (running pid) is not closed by another instance starting',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_live', process.pid, psStart(process.pid))
+      const box = boxWithClaimBy('bi_live')
+      const x = await startNext(box, home)
+      await x.advance(5 * 60_000) // the start-up sweep ran before armed; this lets the five minutes' timers fire
+      await pinged(x) // start point (bridge side: the ping has reached the bridge); then a quiet window
+      await sleep(t(300))
+      expect(markers(box)).toEqual([])
+    },
+    QUIET,
+  )
 
-  test('a claim owned by a dead instance (pid not running) is closed as session_ended', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_dead', deadPid(), 'Mon Jan  1 00:00:00 2024')
-    const box = boxWithClaimBy('bi_dead')
-    await startNext(box, home)
-    await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
-    expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
-  })
+  test(
+    'a claim owned by a dead instance (pid not running) is closed as session_ended',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_dead', deadPid(), 'Mon Jan  1 00:00:00 2024')
+      const box = boxWithClaimBy('bi_dead')
+      await startNext(box, home)
+      await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
+      expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
+    },
+    WITH_MARKER,
+  )
 
-  test('a claim owned by an instance that stopped cleanly is closed as session_ended', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_done', process.pid, psStart(process.pid), { stopped_at: '2026-10-05T11:00:00Z' })
-    const box = boxWithClaimBy('bi_done')
-    await startNext(box, home)
-    await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
-    expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
-  })
+  test(
+    'a claim owned by an instance that stopped cleanly is closed as session_ended',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_done', process.pid, psStart(process.pid), { stopped_at: '2026-10-05T11:00:00Z' })
+      const box = boxWithClaimBy('bi_done')
+      await startNext(box, home)
+      await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
+      expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
+    },
+    WITH_MARKER,
+  )
 
-  test('a recycled pid (running, but started at another time) counts as gone', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_old', process.pid, OTHER_START)
-    const box = boxWithClaimBy('bi_old')
-    await startNext(box, home)
-    await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
-    expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
-  })
+  test(
+    'a recycled pid (running, but started at another time) counts as gone',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_old', process.pid, OTHER_START)
+      const box = boxWithClaimBy('bi_old')
+      await startNext(box, home)
+      await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
+      expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
+    },
+    WITH_MARKER,
+  )
 
-  test('a claim whose ownership is unknown (no record for the owner) is left alone', async () => {
-    const home = tempHome('ow')
-    const box = boxWithClaimBy('bi_stranger')
-    const x = await startNext(box, home)
-    await x.advance(5 * 60_000)
-    await sleep(300)
-    expect(markers(box)).toEqual([])
-  })
+  test(
+    'a claim whose ownership is unknown (no record for the owner) is left alone',
+    async () => {
+      const home = tempHome('ow')
+      const box = boxWithClaimBy('bi_stranger')
+      const x = await startNext(box, home)
+      await x.advance(5 * 60_000) // the start-up sweep ran before armed; this lets the five minutes' timers fire
+      await pinged(x) // start point (bridge side: the ping has reached the bridge); then a quiet window
+      await sleep(t(300))
+      expect(markers(box)).toEqual([])
+    },
+    QUIET,
+  )
 
-  test('a claim with no owner instance in its owner file is left alone', async () => {
-    const home = tempHome('ow')
-    const box = boxWithClaimBy('')
-    await startNext(box, home)
-    expect(markers(box)).toEqual([])
-  })
+  test(
+    'a claim with no owner instance in its owner file is left alone',
+    async () => {
+      const home = tempHome('ow')
+      const box = boxWithClaimBy('')
+      await startNext(box, home)
+      expect(markers(box)).toEqual([])
+    },
+    QUIET,
+  )
 })
 
 /** What the sidecar remembers of a run this instance claimed (schedules-meta.json). */
@@ -134,51 +185,68 @@ function sidecarClaim(home: string, instance: string) {
 }
 
 describe('Chronos 0.3.1 sends no bridge_instance: the sidecar names the owner', () => {
-  test('a dead owner recorded in the sidecar is closed', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_dead', deadPid(), 'Mon Jan  1 00:00:00 2024')
-    sidecarClaim(home, 'bi_dead')
-    const box = boxWithClaimBy(null)
-    await startNext(box, home)
-    await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
-    expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
-  })
+  test(
+    'a dead owner recorded in the sidecar is closed',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_dead', deadPid(), 'Mon Jan  1 00:00:00 2024')
+      sidecarClaim(home, 'bi_dead')
+      const box = boxWithClaimBy(null)
+      await startNext(box, home)
+      await waitFor(() => markers(box).length > 0, 10_000, 'the failed- marker')
+      expect(markers(box)).toEqual(['failed-daily-digest-2026-10-05'])
+    },
+    WITH_MARKER,
+  )
 
-  test('a live owner recorded in the sidecar is left alone', async () => {
-    const home = tempHome('ow')
-    record(home, 'bi_live', process.pid, psStart(process.pid))
-    sidecarClaim(home, 'bi_live')
-    const box = boxWithClaimBy(null)
-    const x = await startNext(box, home)
-    await x.advance(5 * 60_000)
-    await sleep(300)
-    expect(markers(box)).toEqual([])
-  })
+  test(
+    'a live owner recorded in the sidecar is left alone',
+    async () => {
+      const home = tempHome('ow')
+      record(home, 'bi_live', process.pid, psStart(process.pid))
+      sidecarClaim(home, 'bi_live')
+      const box = boxWithClaimBy(null)
+      const x = await startNext(box, home)
+      await x.advance(5 * 60_000) // the start-up sweep ran before armed; this lets the five minutes' timers fire
+      await pinged(x) // start point (bridge side: the ping has reached the bridge); then a quiet window
+      await sleep(t(300))
+      expect(markers(box)).toEqual([])
+    },
+    QUIET,
+  )
 
-  test('no sidecar record for the run: left alone', async () => {
-    const home = tempHome('ow')
-    const box = boxWithClaimBy(null)
-    await startNext(box, home)
-    expect(markers(box)).toEqual([])
-  })
+  test(
+    'no sidecar record for the run: left alone',
+    async () => {
+      const home = tempHome('ow')
+      const box = boxWithClaimBy(null)
+      await startNext(box, home)
+      expect(markers(box)).toEqual([])
+    },
+    QUIET,
+  )
 })
 
 describe('a superseded bridge is still alive', () => {
-  test('after a 4409 its instance is not gone while the process lives, and it is gone after a real stop', async () => {
-    const home = tempHome('ow')
-    const box = new ChronosBox(MON_0700_EDT)
-    h = await startSched({ box, home, now: AFTER_0730, instance: 'bi_sup' })
-    await waitFor(() => h?.bridge.ctx.schedules?.armed === true, 15_000, 'arm')
-    const reg = new InstanceRegistry(join(home, 'instances'))
-    expect(reg.stateOf('bi_sup')).toBe('alive')
-    h.relay.kickBridge(4409)
-    await waitFor(() => h?.bridge.client?.superseded === true, 10_000, 'superseded')
-    expect(JSON.parse(readFileSync(join(home, 'instances', 'bi_sup.json'), 'utf8')).stopped_at).toBeUndefined()
-    expect(reg.stateOf('bi_sup')).toBe('alive')
-    await h.stop()
-    h = undefined
-    expect(reg.stateOf('bi_sup')).toBe('gone')
-  })
+  test(
+    'after a 4409 its instance is not gone while the process lives, and it is gone after a real stop',
+    async () => {
+      const home = tempHome('ow')
+      const box = new ChronosBox(MON_0700_EDT)
+      h = await startSched({ box, home, now: AFTER_0730, instance: 'bi_sup' })
+      await waitFor(() => h?.bridge.ctx.schedules?.armed === true, 15_000, 'arm')
+      const reg = new InstanceRegistry(join(home, 'instances'))
+      expect(reg.stateOf('bi_sup')).toBe('alive')
+      h.relay.kickBridge(4409)
+      await waitFor(() => h?.bridge.client?.superseded === true, 10_000, 'superseded')
+      expect(JSON.parse(readFileSync(join(home, 'instances', 'bi_sup.json'), 'utf8')).stopped_at).toBeUndefined()
+      expect(reg.stateOf('bi_sup')).toBe('alive')
+      await h.stop()
+      h = undefined
+      expect(reg.stateOf('bi_sup')).toBe('gone')
+    },
+    SCHED_START_MS + t(75_000),
+  )
 })
 
 describe('InstanceRegistry host', () => {

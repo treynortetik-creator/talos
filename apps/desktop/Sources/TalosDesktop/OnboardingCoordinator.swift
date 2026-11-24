@@ -36,7 +36,7 @@ final class OnboardingCoordinator: ObservableObject {
   struct Deps {
     var home: String = NSHomeDirectory()
     var now: () -> Date = Date.init
-    /// Fetches Talos, makes the agent's folder, adds the scheduler. Reports the bar (0...100) and Apple's-tools states as it goes.
+    /// Fetches Talos, makes the agent's folder (one installer run, the scheduler included). Reports the bar (0...100) and Apple's-tools states as it goes.
     /// `ignoreSpace`: skip the free-space check ("Try anyway"): Apple's own installer then has the final say.
     var provision:
       (

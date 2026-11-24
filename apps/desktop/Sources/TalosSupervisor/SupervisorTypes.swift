@@ -47,6 +47,8 @@ extension Supervisor {
     /// screen are conversation (a transcript that quotes them) and the exit is a crash, also for a start still on its warning. The
     /// contract's `MAIN_RESTART.resume_error_within_s` (one number for every platform; 10 s was too tight on a loaded machine).
     public var resumeMissingWindow: Double = MainRestartContract.resumeErrorWithinS
+    /// How long tmux must stay unanswered (and for `Supervisor.unreachableReads` looks) before the owner is told once.
+    public var unreachableAfter: Double = 60
     /// The contract's `MAIN_RESTART.cannot_launch_tries`: tries of a restart after a crash that cannot launch at all, before it gives up.
     public var cannotLaunchTries: Int = MainRestartContract.cannotLaunchTries
     /// The contract's `MAIN_RESTART.clean_exits_per_hour` (packages/protocol/src/supervisor.ts; `ConfigFileReadTests.theCleanExitCapIsTheContractsNumber` reads the
@@ -225,6 +227,9 @@ extension Supervisor {
     public var mainNarrowed: String?
     /// The saved launch command is not the one this agent started with (`LaunchPending`): the Session tab offers a restart.
     public var launchPending = false
+    /// tmux has not answered about the agent's pane for `Supervisor.unreachableReads` looks over `Timings.unreachableAfter` seconds: the agent is left as
+    /// it is (never stopped or started on an unanswered question) and the looks go on. Cleared on the first answer.
+    public var agentUnreachable = false
     /// The saved arguments the running agent was started from, nil when not known (a pane found running with another command). Thread
     /// sessions are held to these, never to a saved command the agent has not started with (`LaunchPending.argsForThreads`).
     public var runningArgs: [String]?
@@ -243,6 +248,10 @@ extension Supervisor {
     var resumeId: String?
     var sessionId: String
     var startedAt: Double
+    /// The stall clock's pause (`pauseStartClockWhileUnanswered`) lives and dies with THIS launch: the last tick it was paused, and the total
+    /// moved so far (capped), so nothing of it can reach the next launch.
+    var stallPauseTick: Double?
+    var stallPausedTotal: Double = 0
     var childPid: Int32
     /// The child's start time (seconds since 1970; 0 if unread). A pid number alone is never "ours" (pid reuse).
     var leaderStart: Double = 0

@@ -12,6 +12,7 @@ import { ensureDir, writeFileAtomic } from '../fsutil.ts'
 import { WINDOWS_OPEN_SESSION, WINDOWS_SIGN_IN } from '../owner-words.ts'
 import { workerDir } from '../worker/files.ts'
 import { plainPath } from '../worker/project-settings.ts'
+import { busyLine } from './bg-work.ts'
 import { detectPrompt, isIdle, isToolPrompt, type Prompt } from './dialog-reader.ts'
 import { DialogAbsence, PromptWatch } from './prompt-watch.ts'
 import { liveDialog, type Screen } from './screen.ts'
@@ -48,14 +49,13 @@ export const HOLD_KIND = {
   draft: 'unsent text',
   noBox: 'no input box',
   leftover: 'left-over line',
-  copyMode: 'copy mode',
-  refused: 'something Talos does not type into',
-  unseen: 'pointer not in the input box',
   enterUncertain: 'enter may have answered',
 } as const
 export const NEEDS_MAC_KIND = 'needs_mac'
 /** The record kind of the line for a park that cut background work (the Mac's `BackgroundWork.cutKind`). */
 export const BG_CUT_KIND = 'background cut'
+/** The record kind of the line for a start over the limit (the Mac's `BackgroundWork.busyKind`). */
+export const BUSY_KIND = 'computer busy'
 
 /** A thread name as a line may show it: no control characters, trimmed, at most 40 characters; null when nothing is left. */
 export function cleanTitle(s: string | null | undefined): string | null {
@@ -158,10 +158,6 @@ export const lines = {
     w.windows
       ? `This thread's session is waiting on ${promptWhat(p)}. ${WINDOWS_OPEN_SESSION}`
       : `This thread's session is waiting on ${promptWhat(p)}; attach on ${w.machine} to answer: ${w.attach}`,
-  draft: (w: Where) =>
-    w.windows
-      ? `This thread's session has unsent text in its input box; your message has probably gone to the main session. ${WINDOWS_OPEN_SESSION}`
-      : `This thread's session has unsent text in its input box; your message has probably gone to the main session. Attach on ${w.machine} to finish or clear it: ${w.attach}`,
   noBox: (w: Where) =>
     w.windows
       ? `This thread's session isn't showing its input box yet. ${WINDOWS_OPEN_SESSION}`
@@ -175,24 +171,12 @@ export const lines = {
       ? `This thread's session was still in a turn when it had to ${why === 'restart' || why === 'fresh' || why === 'config' ? 'restart' : 'stop'}, and the turn ran past its time limit, so Talos cut it. ${WINDOWS_OPEN_SESSION}`
       : `This thread's session was still in a turn when it had to ${why === 'restart' || why === 'fresh' || why === 'config' ? 'restart' : 'stop'}, and the turn ran past its time limit, so Talos cut it. Attach on ${w.machine} to see where it stopped: ${w.attach}`,
   /** The key guard refused the pointer: the session shows something other than its empty input box (key-guard.ts). */
-  refused: (w: Where) =>
-    w.windows
-      ? `This thread's session is showing something Talos doesn't type into, so Talos did not type your message there; it has probably gone to the main session. ${WINDOWS_OPEN_SESSION}`
-      : `This thread's session is showing something Talos doesn't type into, so Talos did not type your message there; it has probably gone to the main session. Attach on ${w.machine} to see it: ${w.attach}`,
   /** The pointer was typed and never showed in the input box: it went somewhere else, and is not typed again (owed-pointer.ts). */
   /** The pointer's Enter may have answered a prompt that opened just then (enter-check.ts): said at once, once per pointer. */
   enterUncertain: (w: Where) =>
     w.windows
       ? `Talos pressed Enter as a prompt appeared in this thread's session; check what it approved. ${WINDOWS_OPEN_SESSION}`
       : `Talos pressed Enter as a prompt appeared in this thread's session; check what it approved. Attach on ${w.machine} to see it: ${w.attach}`,
-  unseen: (w: Where) =>
-    w.windows
-      ? `Talos typed your message's pointer into this thread's session, but it didn't appear in the input box, so Talos didn't press Enter or type it again; the message has probably gone to the main session. ${WINDOWS_OPEN_SESSION}`
-      : `Talos typed your message's pointer into this thread's session, but it didn't appear in the input box, so Talos didn't press Enter or type it again; the message has probably gone to the main session. Attach on ${w.machine} to see what the session is showing: ${w.attach}`,
-  copyMode: (w: Where) =>
-    w.windows
-      ? `This thread's session is scrolled back (tmux copy mode), so Talos can't tell it about your message; it has probably gone to the main session. ${WINDOWS_OPEN_SESSION}`
-      : `This thread's session is scrolled back (tmux copy mode), so Talos can't tell it about your message; it has probably gone to the main session. Attach on ${w.machine} and press q to leave it: ${w.attach}`,
   /** The Mac's LaunchChange.folderLine: a new folder in the thread's settings started a new conversation there. */
   folder: () => "Started a new conversation in this thread's new folder.",
   /** Starts are refused while Main runs in restricted mode (its code-running tools are off, and a worker cannot be held to it). */
@@ -310,14 +294,12 @@ export type NoticeRuntime = {
   dlg: NoticeSlot
   held: NoticeSlot
   noBox: { since: number | null; notice: NoticeSlot }
-  copyMode: { since: number | null; notice: NoticeSlot }
-  refusedHold: { since: number | null; notice: NoticeSlot }
-  unseenHold: { since: number | null; notice: NoticeSlot }
   enterHold: { since: number | null; notice: NoticeSlot }
   mcpMissing: NoticeSlot
   mcpRefused: NoticeSlot
   folder: NoticeSlot
   settingsIgnored: NoticeSlot
+  lockNote: NoticeSlot
   draftSince: number | null
   /** The records were checked against the screen since this supervisor took the worker over. */
   recordsChecked: boolean
@@ -335,6 +317,9 @@ export type NoticeRuntime = {
   /** The line for a park that cut background work: its own slot, so it never replaces a turn-cut or needs_mac line. */
   bgCut: NoticeSlot
   bgCutLine: string | null
+  /** The line for a start over the limit: its own slot, kept for `retry` until it went (or three clear failures). */
+  busy: NoticeSlot
+  busyLine: string | null
 }
 
 /**
@@ -355,14 +340,12 @@ export const newNoticeRuntime = (): NoticeRuntime => ({
   dlg: newSlot(),
   held: newSlot(),
   noBox: { since: null, notice: newSlot() },
-  copyMode: { since: null, notice: newSlot() },
-  refusedHold: { since: null, notice: newSlot() },
-  unseenHold: { since: null, notice: newSlot() },
   enterHold: { since: null, notice: newSlot() },
   mcpMissing: newSlot(),
   mcpRefused: newSlot(),
   folder: newSlot(),
   settingsIgnored: newSlot(),
+  lockNote: newSlot(),
   draftSince: null,
   recordsChecked: false,
   screenText: null,
@@ -373,6 +356,8 @@ export const newNoticeRuntime = (): NoticeRuntime => ({
   failedLine: null,
   bgCut: newSlot(),
   bgCutLine: null,
+  busy: newSlot(),
+  busyLine: null,
 })
 
 export type NoticeDeps = {
@@ -543,11 +528,8 @@ export class WorkerNotices {
     const h = hold === 'no_box' && r.needsYou !== null ? null : hold
     this.draftHold(id, r, h === 'draft', leftover)
     this.noBoxHold(id, r, h === 'no_box')
-    // scrolled back; refused by the key guard; typed and never seen in the box: never silent, the same wait as a draft's (a frame
-    // mid-redraw passes), then once, each with its own kind
-    this.timedHold(id, r.copyMode, HOLD_KIND.copyMode, lines.copyMode, h === 'copy_mode')
-    this.timedHold(id, r.refusedHold, HOLD_KIND.refused, lines.refused, h === 'refused')
-    this.timedHold(id, r.unseenHold, HOLD_KIND.unseen, lines.unseen, h === 'unseen')
+    // scrolled back, refused by the key guard, typed and never seen in the box, and a draft: no line of their own any more. The
+    // hub says why a message waits (`pointer_hold` in workers.json) and, when Main takes it, says so itself.
     // the Enter that may have answered a prompt: at once (the owner should look now), once per pointer
     this.timedHold(id, r.enterHold, HOLD_KIND.enterUncertain, lines.enterUncertain, h === 'enter_uncertain', 0)
   }
@@ -576,9 +558,9 @@ export class WorkerNotices {
   }
 
   /**
-   * The pointer was dropped at its claim deadline while a hold kept it back (the message has gone to Main): the hold's line goes
-   * now, as it would have after its wait, and the hold is over. Here the deadline (90 s warm) comes before draft_notice_after_s,
-   * where the Mac keeps an unrestored pointer waiting behind a draft and tells the thread after the wait.
+   * The pointer was dropped at its claim deadline while a hold kept it back (the message has gone to Main). Only a missing input box
+   * still says its line here; the draft, scrolled-back, refused and typed-but-not-seen holds have none (the hub says why Main
+   * answered), and the hold is over.
    */
   heldAtDrop(
     id: string,
@@ -591,11 +573,7 @@ export class WorkerNotices {
       this.heldPointer(id, r, null, false)
       return
     }
-    if (hold === 'draft') this.send(id, r.held, HOLD_KIND.draft, lines.draft(where))
-    else if (hold === 'copy_mode') this.send(id, r.copyMode.notice, HOLD_KIND.copyMode, lines.copyMode(where))
-    else if (hold === 'refused') this.send(id, r.refusedHold.notice, HOLD_KIND.refused, lines.refused(where))
-    else if (hold === 'unseen') this.send(id, r.unseenHold.notice, HOLD_KIND.unseen, lines.unseen(where))
-    else if (r.needsYou === null) this.send(id, r.noBox.notice, HOLD_KIND.noBox, lines.noBox(where))
+    if (hold === 'no_box' && r.needsYou === null) this.send(id, r.noBox.notice, HOLD_KIND.noBox, lines.noBox(where))
     this.heldPointer(id, r, null, false)
   }
 
@@ -613,7 +591,6 @@ export class WorkerNotices {
     if (t - r.draftSince < WORKER_TIMING.draft_notice_after_s) return
     const where = this.d.where(id)
     if (leftover) this.send(id, r.held, HOLD_KIND.leftover, lines.leftover(where))
-    else this.send(id, r.held, HOLD_KIND.draft, lines.draft(where))
   }
 
   private noBoxHold(id: string, r: NoticeRuntime, held: boolean): void {
@@ -668,6 +645,19 @@ export class WorkerNotices {
     resetSlot(r.mcpRefused)
     if (m.length > 0) this.send(id, r.mcpMissing, `mcp missing: ${[...m].sort().join(',')}`, lines.missingServers(m))
     if (f.length > 0) this.send(id, r.mcpRefused, `mcp refused: ${[...f].sort().join(',')}`, lines.refusedServers(f))
+  }
+
+  /** A start over the limit: one line, at most one in the notice window however often the thread is woken (the Mac's tellComputerBusy). */
+  computerBusy(id: string, r: NoticeRuntime): void {
+    resetSlot(r.busy)
+    r.busyLine = busyLine
+    this.retry(id, r)
+  }
+
+  /** The extra lock stayed on because config.json could not be read: one line, once per launch. */
+  lockNote(id: string, r: NoticeRuntime, text: string): void {
+    resetSlot(r.lockNote)
+    this.send(id, r.lockNote, 'lock note', text)
   }
 
   /** The folder's own settings files say what a thread session may not carry (they are not loaded): once per launch. */
@@ -728,6 +718,7 @@ export class WorkerNotices {
   retry(id: string, r: NoticeRuntime): void {
     if (r.failedLine) this.send(id, r.failed, r.failedLine.kind, r.failedLine.text)
     if (r.bgCutLine) this.send(id, r.bgCut, BG_CUT_KIND, r.bgCutLine)
+    if (r.busyLine) this.send(id, r.busy, BUSY_KIND, r.busyLine)
   }
 
   /** The pane is gone: what it showed is over (the clocks and the notices start again with the next one). */

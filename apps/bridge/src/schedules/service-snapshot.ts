@@ -19,6 +19,7 @@ import { hostLabel, localZone } from './discovery.ts'
 import { syncBackgroundMemory } from './job-memory-background.ts'
 import type { ScheduleService } from './service.ts'
 import { FAILURE_STATUSES, FAILURE_WORDS, failKeys, NOTICE_MAX_AGE_MS } from './service-shared.ts'
+import { withMainMark } from './sidecar.ts'
 
 /** Never throws: a hung or unreadable scheduler is a snapshot with a health issue, from the last good one when we have it. */
 export async function safeSnapshot(this: ScheduleService): Promise<ScheduleSnapshotT> {
@@ -90,7 +91,7 @@ export function overlay(this: ScheduleService, snap: ScheduleSnapshotT): Schedul
           ...(n.status && n.status !== 'running' && (r.status === 'failed' || r.status === 'ok')
             ? { status: n.status }
             : {}),
-          ...(n.summary ? { summary: n.summary.slice(0, 280) } : {}),
+          ...(withMainMark(n) ? { summary: (withMainMark(n) as string).slice(0, 280) } : {}),
           ...(n.late_note ? { late_note: n.late_note.slice(0, 280) } : {}),
           ...(n.report ? { has_report: true } : {}),
         },

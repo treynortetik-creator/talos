@@ -32,9 +32,9 @@ It interviews you and builds its own config.
 
 - **macOS**, **Claude Code CLI**, Python 3.9+ and git. The core needs no pip and no npm; every dependency is
   an opt-in flag (semantic search needs Python 3.10+, the Talos app needs Bun on the Mac).
-- Scheduling is done by [Chronos](https://github.com/treynortetik-creator/chronos) 0.2.2 or later (pinned to a commit on its main branch after 0.3.1, `3cf20fc`; `--chronos-ref` needs the full 40-character sha), installed for you
-  when you ask (`./install.sh --with-chronos` at the repository root; the kit's own `kit/install.sh` installs it unless you pass
-  `--no-chronos`). It is **optional**.
+- Scheduling is done by Chronos, which lives in this repository (`apps/chronos`; nothing is cloned or fetched). The root
+  `./install.sh` sets it up on every Mac install, and the kit's own `kit/install.sh` installs it unless you pass `--no-chronos`.
+  A Chronos you made yourself is never taken over without `--reinstall-chronos`. It is **optional**: `--no-chronos` skips it.
 - The config is a **hot file**: one-line triggers keyed `[R-nn]`, a ledger for the stories, a length lint, and
   hooks that enforce what prose could not.
 - MIT licensed. Read [the Security model](#security-model) before you connect it to anything.
@@ -58,9 +58,9 @@ cd ~/talos-agent && claude
 Opt-in flags, each explained below: `--with-memory-search` (semantic search), `--with-reranker` (`--reranker-auto` is the root installer's default: the same, skipped under 3 GiB of memory), `--with-voice` (a neural
 voice), `--with-qwen-voice`, `--with-parakeet`, `--with-diarize` (the suggested local models,
 [`setup/local-models.md`](setup/local-models.md)), `--with-vault DIR` (a private personal vault), `--global-pointer`
-(point every Claude Code session at the agent's memory), `--notify talos|macos` (needs `--with-chronos`). Chronos is off unless you
-pass `--with-chronos`; to add it later to an agent that exists, run `./install.sh --with-chronos` again. Nothing optional is on by
-default.
+(point every Claude Code session at the agent's memory), `--notify talos|macos` (where Chronos sends job reports). Chronos comes
+with every Mac install, from `apps/chronos` in the repository, with its Claude jobs off; an agent made before that gets it the next
+time you run `./install.sh`. Nothing else optional is on by default.
 
 Then tell it: **`Read BOOTSTRAP.md and set me up.`** It interviews you in short waves (about 25 minutes to a
 working agent, 45-60 to finish), builds its own config and memory, and tells you to restart it. Come back
@@ -254,9 +254,9 @@ Room); the continuity hook, the pre-tool guard and the status line are turned of
 | `check-vault.py` | PreToolUse (Write, Edit, MultiEdit) | only with a personal vault: asks before a term from YOUR `<vault>/_guard-terms.txt` is written outside the vault (the kit ships no terms) |
 | `hands-free.py` | PostToolUse, Stop | while the user has asked for audio replies (`hands-free.py on 60`), blocks a long text-only chat reply, and blocks once when audio went out with under about 200 characters of text (audio always travels with the full text) |
 | `action-rules.py` | PreToolUse (Bash, file writes, `mcp__*`) | looks every call up in `hooks/action-rules.yaml` (starter set) and `~/.config/talos/action-rules.yaml` (yours, read first): `never` is refused; `ask` shows Claude Code's permission prompt live and is refused when unattended. A table for the calls you list, not a sandbox |
-| `memory-reflex.py` | UserPromptSubmit | a name in your message that matches exactly one note in your wiki (title, `aliases:` or an unambiguous surname) gets up to three pointers injected before the agent answers. No model, no search, under 150 ms, never hard-coded names; a name that matches two notes gets nothing |
+| `memory-reflex.py` | UserPromptSubmit | a name in your message that matches exactly one note in your wiki (title, `aliases:` or an unambiguous surname) gets up to three pointers injected before the agent answers. No model, no search, under 150 ms, never hard-coded names; a name that matches two notes gets nothing. After those exact forms, and ranked last, a person can also be found by initial and surname (`R. Harlow`), reversed (`Harlow, Robin`), or with a one-letter typo in a surname of five letters or more when the first name matches; an ambiguous form still gets nothing. Each pointer shows the note's date (`updated:`, else `created:`, else undated), and a title or description is cleaned first (hidden characters removed, fake control tags defused, an order-like line flagged). A note is pointed at once per session until a compaction or a clear (a SessionStart entry for those two sources runs `memory-reflex.py reset`), after which it can be offered again. Only your own words are looked up (a plain prompt or a channel message whose trust is exactly `owner`; outside text such as an email, a web page or a peer's message gets nothing), and the pointers arrive inside a data block marked as your note, reference only |
 | `compaction-guard.py` | PreCompact | writes the corrections logged in `.learnings/` over the last three days, an open hands-free window and an owed reply to the state folder; `session-start.py` hands them back in the same block as the digest after a compaction. A thread session of the Talos app does nothing here only when its supervisor registered `thread-state.py` for it (`TALOS_APP_THREAD_STATE=1`): then `thread-state.py` keeps that thread's own carry. |
-| `thread-state.py` | SessionStart, PreCompact (a thread session of the Talos app only, and only when the app's supervisor registers it in that session's own settings, not in the agent folder's: the Linux supervisor does; the Mac app's own supervisor and a Talos distro do not yet) | puts the thread's own live state file, `threads/<id>.state.md` in the agent folder, back in front of that thread's session at start, resume, clear, fork and after a compaction (with the thread's own carry of recent corrections, kept in the state folder per thread), and the thread keeps the file current. Main and every other session get nothing from it. The file is read only if no link is on its path, and is cut at 9,000 characters. Kill switch: `thread-state.off` |
+| `thread-state.py` | SessionStart, PreCompact (a thread session of the Talos app only, and only when the app's supervisor registers it in that session's own settings, not in the agent folder's: the Linux supervisor and the Mac app's own supervisor both do; a Talos distro does not yet) | puts the thread's own live state file, `threads/<id>.state.md` in the agent folder, back in front of that thread's session at start, resume, clear, fork and after a compaction (with the thread's own carry of recent corrections, kept in the state folder per thread), and the thread keeps the file current. Main and every other session get nothing from it. The file is read only if no link is on its path, and is cut at 9,000 characters, or sooner: everything the hook prints (header, notices, the wrapper, the carry, the state) shares one cap of 9,500 characters, under Claude Code's 10,000-character hook limit. The state comes first and keeps what the cap leaves (a state under 8,000 characters always fits whole); the carry is trimmed to fit with a `(cut here: N more characters in <file>)` line. Kill switch: `thread-state.off` |
 | `bsd-sed-guard.py` | PreToolUse (Bash) | refuses the GNU form `sed -i 's/a/b/' file`, which on macOS treats the script as a backup suffix; stands down if your `sed` is not Apple's |
 | `statusline.py` | status line (set at project level, so it applies when you work in the agent folder; delete the `statusLine` block in `.claude/settings.json` to use your own) | `Opus \| ██░░░░░░░░ 23% \| 7d: 12% \| handoff: 3h` (no jq needed) |
 
@@ -466,9 +466,9 @@ launchd (every 5 min) -> Chronos tick -> claim the job -> claude -p in Chronos's
 
 `./install.sh` does the bundling. Concretely it:
 
-1. clones Chronos to `~/.local/share/talos/chronos` and checks out a **pinned commit** (Chronos has no
-   release tags yet; the pin lives at the top of `install.sh` as `CHRONOS_PINNED_REF`, and the installer
-   aborts if the checkout does not match it), **or** uses a local checkout you pass as `--chronos-path DIR`;
+1. uses the Chronos in this repository, `apps/chronos` (the standalone Chronos repository is frozen and no
+   longer maintained: Chronos is maintained in Talos, see `apps/chronos/PROVENANCE.md`), **or** a Chronos you
+   pass as `--chronos-path DIR` (for development). Nothing is cloned or fetched;
 2. runs Chronos's own `install.sh --workspace <your agent folder>`, unless a Chronos config already exists
    (then it leaves your Chronos alone, and warns if that Chronos's workspace is a different folder, because
    scheduled runs start in the workspace and only load an agent's `CLAUDE.md` and hooks from there;
@@ -499,7 +499,7 @@ python3 scripts/talos-jobs.py enable talos-morning-brief --time 07:03 --days wee
 python3 scripts/talos-jobs.py list
 ```
 
-**What Chronos 0.2 adds** (this kit pins Chronos at a commit on its main branch after 0.3.1; everything from 0.1 keeps working):
+**What Chronos 0.2 adds** (this kit installs the Chronos in `apps/chronos` of the Talos repository; everything from 0.1 keeps working):
 
 - **Restricted jobs (0.2.2).** A job with `"restricted": true` has its *scheduled* runs started with a narrow tool
   list instead of `--dangerously-skip-permissions`. Every Claude job Talos ships is restricted. Chronos older than
@@ -548,7 +548,7 @@ restricted run does not auto-load `CLAUDE.md`, see the security section). The in
 (`--set-chronos-workspace` fixes it). Running a second agent needs a second Chronos config until Chronos grows a
 per-job workspace.
 
-**Skipping Chronos.** Do not pass `--with-chronos` to the root `./install.sh` (or pass `--no-chronos` to `kit/install.sh`), or run `./uninstall.sh` later. You lose scheduled jobs
+**Without Chronos.** It comes with every Mac install now; `kit/install.sh --no-chronos` leaves it out, and `./uninstall.sh` removes it later. You lose scheduled jobs
 and nothing else; the continuity hook, the wiki, the interview and the scripts do not depend on it. Talos adds
 no launchd agent of its own (Chronos's two are `io.github.chronos.tick` and `io.github.chronos.ui`).
 
@@ -748,7 +748,7 @@ is you not pasting the data in.
   recall); it fails open and has a kill switch.
 - Chronos is macOS-only, ticks every five minutes, and a sleeping laptop runs nothing (catch-up covers the gap
   after wake, not a day-long absence).
-- The Chronos pin is a commit, not a signed release. Review what you clone.
+- Chronos runs from the Talos repository you cloned (`apps/chronos`), not from a signed release. Review what you clone.
 - Sub-agents inherit the agent's `CLAUDE.md` and can reach anything on disk; "isolation" in this kit means a
   context boundary only. (A restricted *job* is different: its tool list applies to the whole run.)
 - A restricted job's guarantee is Claude Code's permission system working as documented. A bug there, or an
@@ -798,7 +798,7 @@ Chronos hook entry from `.claude/settings.json`.
 ## FAQ
 
 **Do I need Chronos?** No. Without it you have the memory, the wiki, the interview and the guard, and nothing
-runs on a timer. Skipping it is the default at the repository root, and you can add it later with `./install.sh --with-chronos`.
+runs on a timer. It comes with every Mac install, its Claude jobs off until you enable them.
 
 **Is it autonomous?** No. It drafts, you approve. Anything irreversible asks first in a live session. The scheduled
 jobs are *restricted*: Claude Code refuses anything outside a short tool list (no send, post, delete, web fetch or

@@ -135,7 +135,14 @@ extension Supervisor {
     // A start that shows nothing Talos recognises must not wait forever. Only when the owner has not already been told
     // something (the cold-start question, a refused restart, a dialog) that explains why it is still starting. A held
     // question about the dev-channel dialog explains the wait only while that dialog is still on screen.
-    if phase == .starting, needsYou == nil || (needsYouNamesTheDialog && !dialogOnScreen && !unread), now - l.startedAt >= timings.startWait {
+    // While tmux does not answer the start cannot be judged: it is "can't check" (said once, in its own words), never "stalled", and the stall
+    // clock does not run through it (`pauseStartClockWhileUnanswered`).
+    let paused = pauseStartClockWhileUnanswered(&l, now)
+    // After the pause's cap the clock runs again, but the owner who already has the truthful "can't check" line is not also told "stalled"
+    let saidCantCheck = l.stallPausedTotal >= Self.stallPauseCap && doubt.unreachable.told
+    if !paused, !saidCantCheck, phase == .starting, needsYou == nil || (needsYouNamesTheDialog && !dialogOnScreen && !unread),
+      now - l.startedAt - l.stallPausedTotal >= timings.startWait
+    {
       raiseNeedsYou(.startStalled, key: "start", launch: &l)
     }
 
@@ -238,16 +245,17 @@ extension Supervisor {
     let env = launchEnv()
     let pid = l.childPid
     agentsPollInFlight = true
+    let started = clock.now()  // when this look was asked for: a change saved later is only judged by a look that began after it
     let probe = self.probe
     let queue = q
     let me = WeakRef(self)
     pollQ.async {
       let entries = probe.agents(claude: claude, env: env)
-      queue.async { me.value?.handleAgents(entries, pid: pid) }
+      queue.async { me.value?.handleAgents(entries, pid: pid, started: started) }
     }
   }
 
-  private func handleAgents(_ entries: [AgentEntry]?, pid: Int32) {
+  private func handleAgents(_ entries: [AgentEntry]?, pid: Int32, started: Double) {
     agentsPollInFlight = false
     guard var l = launch, l.childPid == pid, phase == .running || phase == .starting else { return }
     recordHolders(&l)
@@ -255,6 +263,7 @@ extension Supervisor {
     if let entries {
       if let e = AgentsList.interactive(entries, pid: pid) {
         agentActivity = e.status
+        recovery.freshPollStart = started
         l.agentsMisses = 0
         // It's listed again: no longer stuck, whatever the slot holds now (a dialog may have taken it).
         if needsYou == .stuck { needsYou = nil }

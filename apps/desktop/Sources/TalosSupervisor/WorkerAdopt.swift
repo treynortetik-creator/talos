@@ -27,6 +27,7 @@ extension WorkerManager {
       r.restartTimes = e.restarts.compactMap(ISOTime.parse)
       r.adoptPending = !WorkersFile.restingStates.contains(e.state)
       rt[id] = r
+      restoreDeaf(id)  // a thread told it cannot be typed into keeps its run (WorkerDeaf.swift)
       if r.adoptPending { adoptOne(id, now: t) }
     }
     dirty = true
@@ -47,11 +48,13 @@ extension WorkerManager {
       r.entry.pane_pid = 0
       r.entry.parked_at = r.entry.parked_at ?? ISOTime.string(t)
       rt[id] = r
+      endDeafRun(id)  // a run restored from the notice record ends with the pane it was seen on
+      rt[id]?.deaf.watch = DeafWatch()
       dirty = true
     }
     let session = run(tmux(id).hasSession())
     guard session.ok else {
-      if TmuxCommands.saysGone(status: session.status, stderr: session.err, timedOut: session.timedOut) { notRunning() }
+      if goneForSure(session, group: e.pane_pid) { notRunning() }
       return
     }
     let read = run(tmux(id).paneState())

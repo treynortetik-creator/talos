@@ -2,10 +2,11 @@ import Foundation
 import TalosDesktopCore
 
 /// What an Update now knows about the thread agents: when it was pressed (awake), whether "Update now anyway" was pressed, and the
-/// thread ids the last look named as busy (they get their turn sent again after the restart).
+/// thread ids the last look named as busy (they get their turn sent again after the restart). `listFailed`: the list could not be saved.
 struct ForcedThreads {
   var pressedAt: Double?
   var skip = false
+  var listFailed = false
   var busy: [String] = []
   init(pressedAt: Double? = nil) { self.pressedAt = pressedAt }
 }
@@ -54,11 +55,11 @@ extension AutoUpdater {
         forcedWhySaid = said
         audit("update_now_waiting", ["version": ready.manifest.version, "why": why.isEmpty ? "quiet looks" : why.joined(separator: "; "), "draft": "\(plan)"])
       }
-      // only thread agents left (Main is quiet): their limited wait is said, with the button that skips it; Main's own turn has none
+      // only thread agents left (Main is quiet): the wait is said as theirs, with the button that skips it; Main's own turn has none
       var threads: UpdateStatus.ThreadWait?
       if !split.threads.isEmpty, !why.contains(where: { !AutoUpdate.isThreadReason($0) }) {
         let names = split.threads.compactMap(AutoUpdate.threadId).map(hooks.threadName)
-        threads = UpdateStatus.ThreadWait(names: names, minutes: max(1, Int((options.threadWait / 60).rounded(.up))))
+        threads = UpdateStatus.ThreadWait(names: names, background: names.isEmpty && split.threads.contains { $0.hasPrefix(AutoUpdate.threadBackgroundReason) })
       }
       setStatus(.waitingForTurn(version: ready.manifest.version, why: threads == nil ? why : [], draft: plan, threads: threads))
     case .gaveUp:
@@ -69,15 +70,14 @@ extension AutoUpdater {
     }
   }
 
-  /// A look's reasons, split for an Update now: `hold` is what still holds it (Main's reasons, and the thread agents' until their wait
-  /// is over or was skipped), `threads` the thread agents' reasons that hold it now. Main's draft never holds it.
+  /// A look's reasons, split for an Update now: `hold` is what still holds it (Main's reasons, and the thread agents' until the owner
+  /// pressed Update now anyway; the 2-hour limit of the whole wait applies to both), `threads` the thread agents' reasons that hold it now. Main's draft never holds it.
   func forcedSplit(_ raw: [String], now: Double) -> (hold: [String], threads: [String]) {
     let all = raw.filter { $0 != AutoUpdate.mainDraftReason }
     let theirs = all.filter(AutoUpdate.isThreadReason)
     let main = all.filter { !AutoUpdate.isThreadReason($0) }
     forcedThreads.busy = theirs.compactMap(AutoUpdate.threadId)
-    let over = forcedThreads.skip || now - (forcedThreads.pressedAt ?? now) >= options.threadWait
-    return over ? (main, []) : (main + theirs, theirs)
+    return forcedThreads.skip ? (main, []) : (main + theirs, theirs)
   }
 
   /// The automatic path on a draft: it still waits, until the text has been the same for `draftStaleAfter` (successive looks at the
@@ -140,6 +140,11 @@ extension AutoUpdater {
       audit("draft_not_kept", ["why": "partial", "version": ready.manifest.version])
       return false
     }
+    // the list of the threads this cuts off comes first: if it cannot be saved nothing else has been done, and the update stops
+    if forced, !writeInterruptedMarker(ready.manifest.version, commit: ready.manifest.gitSha) {
+      forcedThreads.listFailed = true
+      return false
+    }
     // saved as late as possible, so what the owner typed up to now is what comes back
     let kept = hooks.keepDraft(ready.manifest.version)
     audit("draft", ["result": "\(kept)"])
@@ -150,17 +155,24 @@ extension AutoUpdater {
       }
       hooks.post(AutoUpdate.draftLostLine)
     }
-    if forced { writeInterruptedMarker(ready.manifest.version, commit: ready.manifest.gitSha) }
     return true
   }
 
   /// Like a postponement, but its own wait starts now: the draft is already old enough, so the next window tries the copy again.
   func postponeForDraftCopy(_ ready: Ready) {
+    if forcedThreads.listFailed {  // not a draft: the list of interrupted threads could not be saved, so nothing went ahead
+      forcedThreads.listFailed = false
+      audit("postponed", ["version": ready.manifest.version, "why": "the list of interrupted threads could not be saved"])
+      forced = false
+      fail(AutoUpdate.interruptedListLine(ready.manifest.version, old: options.appVersion ?? "this version"))
+      phase = .waiting(ready, QuietWait(since: hooks.awake()), notBefore: hooks.awake() + options.postponeFor)
+      return
+    }
     audit("postponed", ["version": ready.manifest.version, "why": "a copy of the unsent text could not be kept whole"])
     phase = .waiting(ready, QuietWait(since: hooks.awake()), notBefore: hooks.awake() + options.postponeFor)
   }
 
-  /// "Update now anyway": the rest of the thread agents' wait is skipped. Main's running turn is not: it still holds the update.
+  /// "Update now anyway": the thread agents' wait is skipped. Main's running turn is not: it still holds the update.
   public func skipThreadWait() {
     queue.async {
       guard self.forced, case .waiting = self.phase, !self.forcedThreads.skip else { return }
@@ -173,7 +185,8 @@ extension AutoUpdater {
   /// Right before the swap: the threads that were still busy are named for the bridge (`update-interrupted.json` in the Talos home), which
   /// sends a turn the update cut off once more (apps/bridge/src/router/update-resend.ts). No busy thread: no file, so a list left by an
   /// earlier update never applies to this one.
-  func writeInterruptedMarker(_ version: String, commit: String) {
+  /// False: the list could not be written (or an old one could not be removed), and the update must not go ahead.
+  func writeInterruptedMarker(_ version: String, commit: String) -> Bool {
     // inside the updater's own folder (0700), as a 0600 file: the bridge accepts it from nowhere else
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
@@ -181,16 +194,18 @@ extension AutoUpdater {
     let ids = Array(Set(forcedThreads.busy)).sorted()
     guard !ids.isEmpty else {
       try? FileManager.default.removeItem(atPath: path)
-      return
+      return !FileManager.default.fileExists(atPath: path)  // an old list left behind would be read as this update's
     }
     // bound to the release's commit (what the bridge runs), not to the version name
     let o: [String: Any] = ["v": 1, "at": ISOTime.string(hooks.wall()), "version": version, "commit": commit, "threads": ids]
-    guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else { return }
+    guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else { return false }
     do {
       try AtomicFile.write(d, to: path, mode: 0o600)
       audit("update_interrupted", ["threads": ids.joined(separator: ",")])
+      return true
     } catch {
-      audit("update_interrupted", ["result": "not_written"])  // the update still goes: only the second send is lost, and it is said here
+      audit("update_interrupted", ["result": "not_written"])  // the update stops here: cutting threads off with no list would lose their messages
+      return false
     }
   }
 }

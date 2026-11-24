@@ -3,8 +3,7 @@ import TalosDesktopCore
 
 /// Option C: a thread session's background work and its parks (docs/OPTION-C.md, "Idle"). A session whose turn has ended may still
 /// have work running under it: a Bash tool command in the background, a `sleep` that is its own waker. The idle park waits for it;
-/// the cap takes a session with none first. Every park writes one line in the app's log, and a park that cut background work (the cap
-/// when every quiet session had some, the owner's stop, an update, the governor) says so in its thread.
+/// the cap takes a session with none, and never one with some (the new session starts over the limit instead). Every park writes one line in the app's log, and a park that cut background work (the owner's stop, an update, the governor) says so in its thread.
 ///
 /// A crash is logged with `bg=unknown`: Claude Code starts each Bash tool shell detached (its own process group and session, an empty
 /// environment; measured on 2.1.325), so once claude has gone nothing ties its shells to it but their parent, which is gone too.

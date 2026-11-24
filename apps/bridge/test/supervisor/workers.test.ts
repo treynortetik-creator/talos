@@ -21,6 +21,7 @@ import {
   type PtyLaunch,
   type PtySendResult,
   parseWorkersFile,
+  WORKER_POINTER,
   WORKER_POINTER_TEXT,
   WORKER_TIMING,
   type WorkerEntryT,
@@ -1113,19 +1114,18 @@ describe('what a worker’s pane tells the owner (P3d3, part 4b-i)', () => {
     expect(x.posts[0]?.[1]).toContain(`waiting on a 'Bash command' prompt;`)
     expect(x.posts[0]?.[1]).not.toContain('Do you want to proceed?') // screen text never speaks in Talos's voice
   })
-  it('a pointer held by the owner’s draft until its claim deadline: one line then (the message went to Main), never typed onto the draft', async () => {
+  it('a pointer held by the owner’s draft until its claim deadline: no line of its own (the hub says why), never typed onto the draft', async () => {
     const x = setup({ threads: NAMED })
     await live(x)
     x.host().box = 'half a thought'
     wake(x)
     await x.tick()
-    await x.tick(CLAIM_DEADLINE_MS / 1000 - 5)
-    expect(x.posts).toHaveLength(0)
-    await x.tick(5)
+    await x.tick(WORKER_TIMING.draft_notice_after_s + 5)
     await ticks(x, 5)
-    expect(x.posts.map((p) => p[1])).toEqual([
-      "This thread's session has unsent text in its input box; your message has probably gone to the main session. Attach on devbox to finish or clear it: talos-app supervise attach trip",
-    ])
+    expect(x.posts).toHaveLength(0)
+    await x.tick(CLAIM_DEADLINE_MS / 1000)
+    await ticks(x, 5)
+    expect(x.posts).toHaveLength(0)
     expect(x.host().box).toBe('half a thought')
     expect(x.host().submitted).toEqual([])
   })
@@ -1252,6 +1252,96 @@ describe('what a worker’s pane tells the owner (P3d3, part 4b-i)', () => {
     expect(x.posts.map((p) => p[1])).toEqual([
       "This thread's session isn't showing its input box yet. Attach on devbox to see what it's waiting on: talos-app supervise attach trip",
     ])
+  })
+  describe('pointer_hold in workers.json (why the session cannot take the message now)', () => {
+    const hold = (x: ReturnType<typeof setup>) =>
+      diskRecord(x).pointer_hold as { reason: string; since: string } | undefined
+    it('a draft in the box: written as soon as the hold starts, with a wall-clock `since` that stays fixed', async () => {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      expect(hold(x)).toBeUndefined()
+      x.host().box = 'half a thought'
+      wake(x)
+      await x.tick()
+      await x.tick()
+      const first = hold(x)
+      expect(first?.reason).toBe('draft')
+      expect(Number.isFinite(Date.parse(first?.since ?? ''))).toBe(true)
+      await x.tick(30)
+      await x.tick(30)
+      expect(hold(x)).toEqual(first) // the same hold: the same time
+    })
+    it('scrolled back (copy mode) is `scrolled`; a draft on top of it wins; a refusal alone is `refused`, from the first one', async () => {
+      const a = setup({ threads: NAMED })
+      await live(a)
+      a.host().mode = true
+      wake(a)
+      await a.tick()
+      await a.tick()
+      expect(hold(a)?.reason).toBe('scrolled')
+      a.host().box = 'half a thought' // the box is still on the pane under the scroll
+      await a.tick()
+      await a.tick()
+      expect(hold(a)?.reason).toBe('draft')
+      const b = setup({ threads: NAMED })
+      await live(b)
+      b.host().sendText = async () => 'refused' as const
+      wake(b)
+      await b.tick()
+      await b.tick()
+      expect(hold(b)?.reason).toBe('refused')
+    })
+    it('typed and never seen in the box is `typed_unseen`', async () => {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      x.host().sendText = async () => 'sent' as const // swallowed: the box never shows it
+      wake(x)
+      await x.tick()
+      await x.tick(WORKER_POINTER.screen_lag_s + 2)
+      await x.tick()
+      expect(hold(x)?.reason).toBe('typed_unseen')
+    })
+    it('a different reason is a new hold with its own `since`', async () => {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      x.host().box = 'half a thought'
+      wake(x)
+      await x.tick()
+      await x.tick()
+      const draft = hold(x)
+      x.host().box = ''
+      x.host().mode = true
+      await x.tick(20)
+      await x.tick()
+      expect(hold(x)?.reason).toBe('scrolled')
+      expect(hold(x)?.since).not.toBe(draft?.since)
+    })
+    it('cleared as soon as the pointer is no longer owed (the owner cleared the draft and it was typed)', async () => {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      x.host().box = 'half a thought'
+      wake(x)
+      await x.tick()
+      await x.tick()
+      expect(hold(x)?.reason).toBe('draft')
+      x.host().box = ''
+      await ticks(x, 4)
+      expect(x.host().submitted).toEqual([WORKER_POINTER_TEXT])
+      expect(hold(x)).toBeUndefined()
+    })
+    it('cleared as soon as the session has no pane (it crashed while held)', async () => {
+      const x = setup({ threads: NAMED })
+      await live(x)
+      x.host().box = 'half a thought'
+      wake(x)
+      await x.tick()
+      await x.tick()
+      expect(hold(x)?.reason).toBe('draft')
+      x.host().exit(1)
+      await x.tick()
+      expect(diskRecord(x).state).not.toBe('live')
+      expect(hold(x)).toBeUndefined()
+    })
   })
 })
 
@@ -1590,21 +1680,131 @@ describe('background work holds the idle park and steers the cap (the Mac’s Wo
     expect(lines(x, 'worker_parked', 'a')).toEqual([])
     expect(x.host('a').signals).toEqual([])
   })
-  it('when every quiet session has background work, the longest idle is parked all the same and its thread is told', async () => {
+  const BUSY_LINE =
+    'Your computer is busy: other threads still have work running in the background, so this one started anyway and nothing was stopped.'
+  const busyPosts = (x: ReturnType<typeof setup>) => x.posts.filter(([, t]) => t === BUSY_LINE).map(([id]) => id)
+  const capParks = (x: ReturnType<typeof setup>) =>
+    x.audit.filter(([e, f]) => e === 'worker_parked' && f?.why === 'cap').map(([, f]) => f?.thread)
+  const wokeUp = (x: ReturnType<typeof setup>, id: string) =>
+    writeWake(x.home, {
+      v: 1,
+      thread_id: id,
+      message_ids: ['m_01HZZZZZZZZZZZZZZZZZZZZZZZ'],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'message',
+      action: 'pointer',
+    })
+  /** The hub's ready, then past the busy window: the new session is quiet, so the cap's own tick has it in its list. */
+  const settle = async (x: ReturnType<typeof setup>, id: string) => {
+    x.ready(id)
+    await ticks(x, 3, WORKER_TIMING.busy_window_s + 1)
+  }
+  /** Two sessions up, a 60 s apart (the first idle longer), then a third asked for. */
+  const twoThenStart = async (x: ReturnType<typeof setup>, third = 'c') => {
+    await live(x, 'a')
+    await x.tick(60)
+    await live(x, 'b')
+    await x.tick(60)
+    await x.m.start(third)
+  }
+  it('T7: when every quiet session has background work, none is stopped: the new one starts over the limit with one plain line', async () => {
+    const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => 2 })
+    x.setProcs(table(x, () => ['a', 'b']))
+    await twoThenStart(x)
+    await settle(x, 'c')
+    // R1-1: quiet now, over the limit, and not the cap's choice: the work that forced the overflow is not charged to it
+    expect(x.audit.filter(([e]) => e === 'worker_parked')).toEqual([])
+    expect(['a', 'b', 'c'].map((id) => x.m.state(id))).toEqual(['live', 'live', 'live'])
+    expect(x.host('a').signals).toEqual([])
+    expect(x.host('b').signals).toEqual([])
+    expect(lines(x, 'worker_start_over_limit', 'c')).toHaveLength(1)
+    expect(busyPosts(x)).toEqual(['c']) // once, to the thread that started, not per tick
+    expect(x.posts.filter(([, t]) => t.startsWith('Parked while'))).toEqual([])
+  })
+  it('T7: the line waits for the start to really happen: a start the plan refuses says nothing', async () => {
     const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => 2 })
     x.setProcs(table(x, () => ['a', 'b']))
     await live(x, 'a')
     await x.tick(60)
     await live(x, 'b')
     await x.tick(60)
+    x.setPlan(() => ({ refused: { code: 'start_failed', detail: 'x' } })) // refused after the cap said yes
     await x.m.start('c')
-    await x.tick()
-    expect(lines(x, 'worker_parked', 'a').map((f) => [f?.why, f?.bg])).toEqual([['cap', '1']])
-    expect(lines(x, 'worker_parked', 'b')).toEqual([])
-    const told = x.posts.filter(([, t]) => t.startsWith('Parked while'))
-    expect(told).toEqual([
-      ['a', 'Parked while 1 background task(s) were running: until [ -f /tmp/a.done ]; do sleep 15; done.'],
-    ])
+    await ticks(x, 2)
+    expect(x.m.state('c')).toBe('failed')
+    expect(busyPosts(x)).toEqual([])
+    expect(lines(x, 'worker_start_over_limit', 'c')).toEqual([])
+  })
+  it('T7: a session whose background state cannot be read counts as having work, so it is not stopped either', async () => {
+    const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => 2 })
+    x.setProcs(() => null)
+    await twoThenStart(x)
+    await settle(x, 'c')
+    expect(x.audit.filter(([e]) => e === 'worker_parked')).toEqual([])
+    expect(x.m.state('c')).toBe('live')
+    expect(busyPosts(x)).toEqual(['c'])
+  })
+  it('T7: the count comes down once the background work ends (the longest idle is parked then), and not before', async () => {
+    const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => 2 })
+    let busy = ['a', 'b']
+    x.setProcs(table(x, () => busy))
+    await twoThenStart(x)
+    await settle(x, 'c')
+    expect(capParks(x)).toEqual([]) // R1-1: not the new, quiet c either, however long the work runs
+    expect(['a', 'b', 'c'].filter((id) => x.m.state(id) === 'live')).toHaveLength(3)
+    busy = []
+    await ticks(x, 3)
+    expect(capParks(x)).toEqual(['a'])
+    expect(['a', 'b', 'c'].filter((id) => ['live', 'busy'].includes(x.m.state(id)))).toHaveLength(2)
+  })
+  it('T7: a lowered limit (3 to 1) parks the clean ones that no longer fit, never the one with work, then it too when that work ends', async () => {
+    let max = 3
+    const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => max })
+    let busy = ['a']
+    x.setProcs(table(x, () => busy))
+    await live(x, 'a')
+    await x.tick(60)
+    await live(x, 'b')
+    await x.tick(60)
+    await live(x, 'c')
+    await x.tick(60)
+    max = 1
+    await ticks(x, 4)
+    expect(capParks(x)).toEqual(['b']) // a has work; c is the one clean session the limit of 1 leaves room for
+    expect(x.m.state('a')).toBe('live')
+    expect(x.m.state('c')).toBe('live')
+    busy = []
+    await ticks(x, 4)
+    expect(capParks(x)).toEqual(['b', 'a'])
+  })
+  it('T7: several starts over the limit grow by one per thread started (each says it once), never per tick, and none stops work', async () => {
+    const x = setup({ threads: [T('a'), T('b'), T('c'), T('d')], maxLive: () => 2 })
+    x.setProcs(table(x, () => ['a', 'b', 'c']))
+    await twoThenStart(x)
+    await settle(x, 'c')
+    await x.m.start('d')
+    await settle(x, 'd')
+    await ticks(x, 6)
+    expect(x.audit.filter(([e]) => e === 'worker_parked')).toEqual([])
+    expect(busyPosts(x).sort()).toEqual(['c', 'd'])
+  })
+  it('T7: a start held for a slot while every session is in a turn starts over the limit when they go quiet with work, and is not dropped', async () => {
+    const x = setup({ threads: [T('a'), T('b'), T('c')], maxLive: () => 2 })
+    x.setProcs(table(x, () => ['a', 'b']))
+    await live(x, 'a')
+    await live(x, 'b')
+    for (const id of ['a', 'b']) x.host(id).output = x.wall() + 3600_000 // both in a turn
+    wokeUp(x, 'c')
+    await ticks(x, 2)
+    expect(x.m.state('c')).not.toBe('live') // held: nothing to park, no room
+    expect(x.audit.filter(([e]) => e === 'worker_parked')).toEqual([])
+    for (const id of ['a', 'b']) x.host(id).output = 0 // turns end; their background work runs on
+    await ticks(x, 3, WORKER_TIMING.busy_window_s + 1)
+    await settle(x, 'c')
+    expect(x.m.state('c')).toBe('live')
+    expect(x.audit.filter(([e]) => e === 'worker_cap_dropped')).toEqual([])
+    expect(x.audit.filter(([e]) => e === 'worker_parked')).toEqual([])
+    expect(busyPosts(x)).toEqual(['c'])
   })
   it('a crash is logged once, with its background work unknown, and the thread is told no number', async () => {
     const x = setup({ threads: [T('trip')] })
@@ -2644,12 +2844,12 @@ describe('the P3d3 review’s lows (P3d4, part 3)', () => {
     const x = setup({ threads: [T('a'), T('c')], maxLive: () => 1 })
     await live(x, 'a')
     x.host('a').output = x.wall() + 3600_000 // a is in its turn: every slot busy
-    // a wake from a minute ago: its cold deadline comes well before the hold's own limit
+    // a wake from two minutes ago: its cold deadline (3 min) comes well before the hold's own limit
     writeWake(x.home, {
       v: 1,
       thread_id: 'c',
       message_ids: ['m_01HZZZZZZZZZZZZZZZZZZZZZZZ'],
-      at: new Date(x.wall() - 60_000).toISOString(),
+      at: new Date(x.wall() - 120_000).toISOString(),
       reason: 'message',
       action: 'pointer',
     })
@@ -2678,7 +2878,7 @@ describe('the P3d3 review’s lows (P3d4, part 3)', () => {
       v: 1,
       thread_id: 'c',
       message_ids: ['m_01HZZZZZZZZZZZZZZZZZZZZZZZ'],
-      at: new Date(x.wall() - 60_000).toISOString(),
+      at: new Date(x.wall() - 120_000).toISOString(),
       reason: 'message',
       action: 'pointer',
     })
@@ -3600,6 +3800,38 @@ describe('restart on update (update-restart.ts)', () => {
     expect(w.x.m.state('trip')).toBe('parking')
     expect(lines(w.x)).toEqual(['Updated or instructions changed: Trip restarts when its turn ends.'])
   })
+  it('background work under it (or a process table that cannot be read) keeps an update restart queued until the work ends', async () => {
+    const w = world()
+    await live(w.x)
+    w.spec.v = H('b')
+    let state: 'work' | 'none' | 'unreadable' = 'work'
+    w.x.setProcs((): Proc[] | null => {
+      if (state === 'unreadable') return null
+      const pid = w.x.host('trip').pid
+      const out: Proc[] = [
+        { pid, ppid: 1, name: '2.1.325', argv: ['/home/alex/.local/bin/claude', '--settings', '{}'] },
+      ]
+      if (state === 'work') {
+        const cmd =
+          "source /home/alex/.claude/shell-snapshots/s.sh 2>/dev/null || true && eval 'until [ -f /tmp/t.done ]; do sleep 15; done' < /dev/null"
+        out.push({ pid: pid + 2000, ppid: pid, name: 'zsh', argv: ['/bin/zsh', '-c', cmd] })
+        out.push({ pid: pid + 3000, ppid: pid + 2000, name: 'sleep', argv: null })
+      }
+      return out
+    })
+    await w.update()
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('live')
+    expect(w.x.events()).not.toContain('update_restart')
+    state = 'unreadable'
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('live')
+    expect(w.x.events()).not.toContain('update_restart')
+    state = 'none'
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('parking')
+    expect(w.x.events()).toContain('update_restart')
+  })
   it('a session in a turn waits and is named; its restart afterwards is said in a line of its own (Fable R1-1)', async () => {
     const w = world()
     await live(w.x)
@@ -3617,7 +3849,7 @@ describe('restart on update (update-restart.ts)', () => {
       'Updated or instructions changed: restarted Trip.',
     ])
   })
-  it('held unless the governor is ok or off; nothing while the setting is off; no burst for a spec tried', async () => {
+  it('held unless the governor is ok, off or unknown; nothing while the setting is off; no burst for a spec tried', async () => {
     let governor: string | null = 'paused'
     let on: boolean | null = true
     const w = world({ governor: () => governor, on: () => on })
@@ -3641,6 +3873,21 @@ describe('restart on update (update-restart.ts)', () => {
     const n = w.x.events().filter((e) => e === 'update_restart').length
     await w.update()
     expect(w.x.events().filter((e) => e === 'update_restart')).toHaveLength(n)
+  })
+  it('an unknown usage reading restarts a quiet session like a start does (L13); a real over-limit reading or no live status still holds', async () => {
+    let governor: string | null = 'park_all'
+    const w = world({ governor: () => governor })
+    await live(w.x)
+    w.spec.v = H('b')
+    await w.update()
+    expect(w.x.m.state('trip')).toBe('live')
+    governor = null
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('live')
+    governor = 'unknown'
+    await w.update()
+    expect(w.x.m.state('trip')).toBe('parking')
+    expect(w.x.events().filter((e) => e === 'update_restart_held')).toHaveLength(2)
   })
   it('a spec tried is never tried again, even when the start it gave records another spec', async () => {
     const w = world()

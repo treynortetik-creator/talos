@@ -10,7 +10,7 @@ What to remove, in order. Nothing here happens automatically; that is on purpose
 
    That unregisters the `talos-*` jobs from Chronos (their entries and prompt folders), removes the
    Chronos session hook from the agent's `.claude/settings.json`, and deletes **only the files the kit
-   itself wrote** in `~/.config/talos`: `agent-dir`, `chronos-dir`, `vault-dir`, `notify/` (the wrappers),
+   itself wrote** in `~/.config/talos`: `agent-dir`, `chronos-dir`, `chronos-not-added.json` and `.log` (what a new install leaves when the scheduler could not be added), `vault-dir`, `notify/` (the wrappers),
    and the legacy files `notify.env`, `notify.env.example`, `telegram.json` and `telegram-mirror.on` that older
    kit versions wrote. (An old `notify.env` can hold a bot token; this deletes it, and you should revoke that bot.)
    Everything else in that folder is kept and printed as `kept <name> (not the kit's)`: the Talos app's data

@@ -27,7 +27,7 @@ struct MainUsageLimitTests {
     FileManager.default.createFile(atPath: r.stateDir + "/ul", contents: nil)
     #expect(r.wait(15) { r.sup.status.needsYou == .dialog("usage limit") }, "\(String(describing: r.sup.status.needsYou)) audit: \(r.audit)")
     let line =
-      "Main hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen: one of its options spends usage credits. To go on now, press Esc in Main's pane, then /model <another model>."
+      "Main hit the usage limit for Fable. It resets 4pm (Europe/Paris). Talos pressed nothing on that screen. Its choices come as a card when Talos can read them."
     #expect(r.wait(10) { r.posts.contains { $0.contains(line) } }, "posts: \(r.posts)")
     #expect(r.wait(15) { (check(r)?["needs_you"] as? [String: Any])?["kind"] as? String == "usage limit" }, "\(String(describing: check(r)))")
     // the reset as an instant, beside the kind: the next 4pm in the zone the screen names

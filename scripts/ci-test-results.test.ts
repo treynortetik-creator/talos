@@ -131,7 +131,7 @@ describe("check's per-test file (scripts/ci-test-results.ts)", () => {
     expect(sorted.stdout.trim().split('\n')).toEqual(text.split('\n').slice(3, 5))
   })
 
-  it("the bridge's runner (test-parallel.ts) with TALOS_TEST_JUNIT_DIR: a flaky file, a crashed one, a skip, all in the file", () => {
+  it("the bridge's runner (test-parallel.ts) with TALOS_TEST_JUNIT_DIR: a failed file (not run again), a crashed one, a skip, all in the file", () => {
     const d = tmp()
     const fx = join(d, 'fx')
     mkdirSync(join(fx, 'test'), { recursive: true })
@@ -155,17 +155,17 @@ describe('grp', () => {
       `import { test } from 'bun:test'\ntest('x', () => {})\nprocess.exit(3)\n`,
     )
     const out = join(d, 'results')
-    const r = spawnSync(
-      'bun',
-      ['run', join(ROOT, 'apps/bridge/scripts/test-parallel.ts'), '--jobs', '2', '--retry-failed', fx],
-      { cwd: ROOT, encoding: 'utf8', env: { ...cleanEnv(), TALOS_TEST_JUNIT_DIR: join(out, 'bun') } },
-    )
+    const r = spawnSync('bun', ['run', join(ROOT, 'apps/bridge/scripts/test-parallel.ts'), '--jobs', '2', fx], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...cleanEnv(), TALOS_TEST_JUNIT_DIR: join(out, 'bun') },
+    })
     expect(r.status, r.stdout + r.stderr).not.toBe(0) // the crashed file is red
     expect(build(out, 'abc123', 'titan').text.split('\n')).toEqual([
       '# talos-check-tests v1 abc123 titan',
       'bun\tapps/bridge/test/crash.test.ts\t*\tfail',
       'bun\tapps/bridge/test/flaky.test.ts\tgrp > not today\tskip',
-      'bun\tapps/bridge/test/flaky.test.ts\tgrp > second time lucky\tflaky',
+      'bun\tapps/bridge/test/flaky.test.ts\tgrp > second time lucky\tfail',
       '',
     ])
   })

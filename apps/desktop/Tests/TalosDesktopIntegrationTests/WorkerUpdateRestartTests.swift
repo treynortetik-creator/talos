@@ -247,7 +247,7 @@ struct WorkerUpdateRestartTests {
     #expect(r.launched("trip")?.update_tried_hash == new && r.launched("trip")?.spec_hash == new)
   }
 
-  @Test func theGovernorHoldsTheQueueUnlessAFreshStatusSaysOkOrOff() throws {
+  @Test func theGovernorHoldsTheQueueUnlessAFreshStatusSaysOkOffOrUnknown() throws {
     let r = try WorkerRig()
     defer { r.teardown() }
     let release = UpdateBox("r1")
@@ -261,7 +261,7 @@ struct WorkerUpdateRestartTests {
     release.value = "r2"
     #expect(r.wait(5) { r.audits("update_restart_queued").count == 1 })
     #expect(r.wait(5) { r.audits("update_restart_held governor=paused").count == 1 }, "\(r.auditLines)")
-    for (g, age, want) in [("park_all", 0.0, "park_all"), ("ok", 120.0, "missing"), ("unknown", 0.0, "unknown")] {
+    for (g, age, want) in [("park_all", 0.0, "park_all"), ("ok", 120.0, "missing")] {
       try r.status(governor: g, age: age)
       #expect(r.wait(5) { r.audits("update_restart_held governor=\(want)").count == 1 }, "\(g): \(r.auditLines)")
     }
@@ -269,6 +269,61 @@ struct WorkerUpdateRestartTests {
     usleep(1_000_000)
     #expect(r.starts.count == 1, "held: nothing restarted")
     try r.status(governor: "off")
+    #expect(r.wait(15) { r.liveCount("trip") == 2 }, "\(r.why("trip")) \(r.auditLines)")
+  }
+
+  /// L13 (audit 2026-11-22): a start is allowed while the usage reading is "unknown", and a quiet session's update restart is too. Before,
+  /// only "ok" and "off" passed, so with no recent usage number idle sessions kept the old version. A real over-limit reading ("park_all")
+  /// and a status that is stale (nothing live to read) still hold.
+  @Test func anUnknownUsageReadingRestartsAQuietSessionLikeAStartDoes() throws {
+    let r = try WorkerRig()
+    defer { r.teardown() }
+    let release = UpdateBox("r1")
+    let said = UpdateBox<[String]>([])
+    r.updatingManager(release: release, lines: said)
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.liveCount("trip") == 1 }, "\(r.why("trip"))")
+    try r.instructions("trip", "changed")
+    try r.status(governor: "park_all")
+    release.value = "r2"
+    #expect(r.wait(5) { r.audits("update_restart_held governor=park_all").count == 1 }, "\(r.auditLines)")
+    #expect(r.starts.count == 1, "a real over-limit reading still blocks")
+    try r.status(governor: "unknown")
+    #expect(r.wait(15) { r.liveCount("trip") == 2 }, "\(r.why("trip")) \(r.auditLines)")
+    #expect(r.audits("update_restart_held governor=unknown").isEmpty, "unknown is not a hold")
+  }
+
+  /// A restart would cut background work (a Bash tool command still going), and an unreadable process table is not "none": either keeps
+  /// the session queued, the way a draft does, until the work has ended. L13 lets more restarts through the governor, so this matters more.
+  @Test func backgroundWorkOrAnUnreadableProcessTableKeepsAnUpdateRestartQueued() throws {
+    let r = try WorkerRig()
+    defer { r.teardown() }
+    let release = UpdateBox("r1")
+    let said = UpdateBox<[String]>([])
+    r.updatingManager(release: release, lines: said)
+    let look = UpdateBox("work")
+    let paneBox = UpdateBox<Int32>(0)
+    r.mgr.procTable = { [look, paneBox] in
+      let pane = paneBox.value
+      if look.value == "unreadable" { return nil }
+      let claude = BackgroundWork.Proc(pid: pane, ppid: 1, name: "2.1.325", argv: ["/home/alex/.local/share/claude/versions/2.1.325"])
+      return look.value == "work" ? [claude, BackgroundWork.Proc(pid: 9001, ppid: pane, name: "zsh")] : [claude]
+    }
+    r.mgr.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.liveCount("trip") == 1 }, "\(r.why("trip"))")
+    paneBox.value = try #require(r.entry("trip")?.pane_pid)
+    try r.instructions("trip", "changed")
+    try r.status(governor: "ok")
+    release.value = "r2"
+    #expect(r.wait(5) { r.audits("update_restart_queued").count == 1 }, "\(r.auditLines)")
+    #expect(r.staysUp(for: 3, "restarted with background work running"))
+    #expect(r.starts.count == 1)
+    look.value = "unreadable"
+    #expect(r.staysUp(for: 2, "restarted with the process table unreadable"))
+    #expect(r.starts.count == 1)
+    look.value = "none"
     #expect(r.wait(15) { r.liveCount("trip") == 2 }, "\(r.why("trip")) \(r.auditLines)")
   }
 
@@ -601,6 +656,72 @@ struct WorkerUpdateRestartGuardsTests {
     usleep(1_500_000)
     #expect(r.starts.count == 2, "restarted once")
     #expect(notices.value.filter { $0.contains("guard hook can't start") }.count == 1)
+  }
+
+  /// The exception to "an update restart waits for background work": a session whose guard hook cannot start has every guarded call
+  /// denied, so it is restarted even while work runs under it (or the process table cannot be read).
+  @Test func aGoneGuardHookRestartsEvenWithBackgroundWorkRunning() throws {
+    let r = try WorkerRig()
+    defer { r.teardown() }
+    let old = try Self.scratchBun("old-bun")
+    let new = try Self.scratchBun("new-bun")
+    defer { for p in [old, new] { try? FileManager.default.removeItem(atPath: p) } }
+    let guards = GuardsSettings.path(talosHome: r.talosHome)
+    try FileManager.default.createDirectory(atPath: r.talosHome + "/guards", withIntermediateDirectories: true)
+    try Self.guardsSettings(bun: old, cli: Self.cli).write(toFile: guards, atomically: true, encoding: .utf8)
+    try r.status(governor: "ok")
+    let notices = UpdateBox<[String]>([])
+    let m = hookManager(r, notices: notices)
+    let paneBox = UpdateBox<Int32>(0)
+    m.procTable = { [paneBox] in
+      let pane = paneBox.value
+      let claude = BackgroundWork.Proc(pid: pane, ppid: 1, name: "2.1.325", argv: ["/home/alex/.local/share/claude/versions/2.1.325"])
+      return [claude, BackgroundWork.Proc(pid: 9001, ppid: pane, name: "zsh")]  // a task that never ends
+    }
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.liveCount("trip") == 1 }, "\(r.why("trip"))")
+    paneBox.value = try #require(r.entry("trip")?.pane_pid)
+    try FileManager.default.removeItem(atPath: old)
+    try Self.guardsSettings(bun: new, cli: Self.cli).write(toFile: guards, atomically: true, encoding: .utf8)
+    #expect(r.wait(20) { r.liveCount("trip") == 2 }, "restarted though work ran: \(r.why("trip")) \(r.auditLines)")
+    #expect(r.audits("update_restart_queued thread=trip why=guard_hook_gone").count == 1)
+  }
+
+  /// R2-1: queued as an ordinary restart first (waiting behind background work), and then its guard hook goes: it is now the blocked
+  /// kind and restarts at once, even though the work still runs. The queue entry is not added twice.
+  @Test func aRestartQueuedAsOrdinaryBecomesAGoneHookRestartWhenTheHookGoes() throws {
+    let r = try WorkerRig()
+    defer { r.teardown() }
+    let old = try Self.scratchBun("old-bun")
+    let new = try Self.scratchBun("new-bun")
+    defer { for p in [old, new] { try? FileManager.default.removeItem(atPath: p) } }
+    let guards = GuardsSettings.path(talosHome: r.talosHome)
+    try FileManager.default.createDirectory(atPath: r.talosHome + "/guards", withIntermediateDirectories: true)
+    try Self.guardsSettings(bun: old, cli: Self.cli).write(toFile: guards, atomically: true, encoding: .utf8)
+    try r.status(governor: "ok")
+    let release = UpdateBox("r1")
+    let said = UpdateBox<[String]>([])
+    let m = r.updatingManager(release: release, lines: said)
+    let paneBox = UpdateBox<Int32>(0)
+    m.procTable = { [paneBox] in
+      let pane = paneBox.value
+      let claude = BackgroundWork.Proc(pid: pane, ppid: 1, name: "2.1.325", argv: ["/home/alex/.local/share/claude/versions/2.1.325"])
+      return [claude, BackgroundWork.Proc(pid: 9001, ppid: pane, name: "zsh")]  // a task that never ends
+    }
+    m.startTicking()
+    try r.wake("trip")
+    #expect(r.wait(10) { r.liveCount("trip") == 1 }, "\(r.why("trip"))")
+    paneBox.value = try #require(r.entry("trip")?.pane_pid)
+    try r.instructions("trip", "changed")
+    release.value = "r2"
+    #expect(r.wait(5) { r.audits("update_restart_queued thread=trip").count == 1 }, "\(r.auditLines)")
+    #expect(r.staysUp(for: 2, "an ordinary restart waits for the work"))
+    #expect(r.starts.count == 1)
+    try FileManager.default.removeItem(atPath: old)
+    try Self.guardsSettings(bun: new, cli: Self.cli).write(toFile: guards, atomically: true, encoding: .utf8)
+    #expect(r.wait(20) { r.liveCount("trip") == 2 }, "\(r.why("trip")) \(r.auditLines)")
+    #expect(r.audits("update_restart_queued thread=trip").count == 1, "queued once, not again for the hook")
   }
 
   @Test func whenTheGuardsBunIsGoneTooTheThreadIsToldAboutButNotRestartedIntoTheSameGoneBun() throws {

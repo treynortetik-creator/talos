@@ -6,6 +6,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -20,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SPEC_HASH_PATTERN } from '@talos-app/protocol'
 import { leadSettings } from '../../src/lead/settings.ts'
+import { osSandboxForStart } from '../../src/supervisor/plan-wiring.ts'
 import { KIT_MARKETPLACE, MANAGED_SETTINGS, ROOTED_KIT } from '../../src/supervisor/rooted-kit.ts'
 import { classifyUpdate } from '../../src/supervisor/update-check.ts'
 import {
@@ -1991,5 +1993,81 @@ describe('the ceiling’s .claude.json is Main’s own, from the environment Mai
     })
     expect(mainNarrowedMode([], { CLAUDE_CONFIG_DIR: '~/x' })).toContain('not an absolute path')
     expect(mainNarrowedMode([], { CLAUDE_CONFIG_DIR: '/x' })).toBeNull()
+  })
+})
+
+describe('the extra lock’s check runs again right before the session starts', () => {
+  function plan(osSandbox: boolean | 'kept_on') {
+    const root = tmp()
+    const userHome = join(root, 'home')
+    const agentDir = join(userHome, 'agent')
+    const talosHome = join(userHome, '.talos')
+    const trip = join(userHome, 'trip')
+    for (const d of [agentDir, talosHome, trip, join(userHome, '.claude')]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(agentDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'talos-app': {} } }))
+    writeFileSync(join(talosHome, 'devices.json'), '{}', { mode: 0o600 })
+    const p = workerPlanner({
+      threadFolders: () => [],
+      kitVendor: sealedRelease(),
+      talosHome,
+      userHome,
+      agentDir,
+      claudeDir: join(userHome, '.claude'),
+      resolveClaude: () => '/usr/bin/claude',
+      mainArgs: () => ['--permission-mode=default'],
+      managedDir: NO_MANAGED,
+      osSandbox: () => osSandbox,
+    })({
+      thread: { id: 'trip', cwd: trip, model: 'inherit', effort: null, parentCwd: null },
+      sessionId: '11111111-2222-3333-4444-555555555555',
+      resume: false,
+      nonce: 'ab'.repeat(16),
+      baseEnv: { PATH: '/usr/bin', HOME: userHome, TALOS_APP_BRIDGE: '1' },
+    })
+    if ('refused' in p) throw new Error(p.refused.detail)
+    return { launch: p.launch, talosHome, root, lockNote: p.lockNote }
+  }
+  onCaseExactTmp('a link made after the plan and before the start is refused; clear before it', () => {
+    const { launch, talosHome, root } = plan(true)
+    expect(launch.beforeStart).toBeDefined()
+    expect(launch.beforeStart?.()).toBeNull()
+    linkSync(join(talosHome, 'devices.json'), join(root, 'extra'))
+    expect(launch.beforeStart?.()).toContain('has another name')
+  })
+  onCaseExactTmp(
+    'config.json unreadable with the lock on before: it stays on for the launch and the plan carries the owner’s line',
+    () => {
+      const p = plan('kept_on')
+      expect(p.launch.beforeStart).toBeDefined()
+      expect(p.lockNote).toBe("Talos couldn't read its settings, so the extra lock stays on")
+      expect(plan(true).lockNote).toBeUndefined()
+    },
+  )
+  onCaseExactTmp(
+    'config.json unreadable and the lock never on: the launch has no lock and the plan carries no line',
+    () => {
+      const w = mkdtempSync(join(realpathSync(tmpdir()), 'talos-osbx-lockoff-'))
+      const said: string[] = []
+      try {
+        writeFileSync(join(w, 'config.json'), '{ nope')
+        expect(osSandboxForStart(w, (e, f) => said.push(`${e} ${f?.lock}`))).toBe(false)
+        expect(said).toEqual(['os_sandbox_config_unreadable kept off'])
+        const p = plan(false)
+        expect(p.launch.beforeStart).toBeUndefined()
+        expect(p.lockNote).toBeUndefined()
+        // and with a good reading of "on" before it: kept on, audited as such
+        writeFileSync(join(w, 'config.json'), '{"os_sandbox": true}')
+        expect(osSandboxForStart(w, () => {})).toBe(true)
+        writeFileSync(join(w, 'config.json'), '')
+        said.length = 0
+        expect(osSandboxForStart(w, (e, f) => said.push(`${e} ${f?.lock}`))).toBe('kept_on')
+        expect(said).toEqual(['os_sandbox_config_unreadable kept on'])
+      } finally {
+        rmSync(w, { recursive: true, force: true })
+      }
+    },
+  )
+  onCaseExactTmp('with the switch off the launch carries no re-check', () => {
+    expect(plan(false).launch.beforeStart).toBeUndefined()
   })
 })

@@ -1,7 +1,7 @@
 // Test harness: a real Bridge (live mode) wired to the testkit's FakeRelay, with notifications captured in memory.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CardT, CONFIG_PROPOSE_FEATURE, type JwkP256T } from '@talos-app/protocol'
+import { type CardT, CLAIM_DEADLINE_MS, CONFIG_PROPOSE_FEATURE, type JwkP256T } from '@talos-app/protocol'
 import {
   FakeApp,
   FakeRelay,
@@ -10,6 +10,7 @@ import {
   mkFrame,
   sleep,
   waitFor,
+  waitScale,
 } from '@talos-app/testkit'
 import { Bridge, type BridgeOptions } from '../src/bridge.ts'
 import type { Clock } from '../src/clock.ts'
@@ -17,6 +18,13 @@ import { loadEnv } from '../src/config.ts'
 import { createLogger } from '../src/log.ts'
 import type { Notification } from '../src/notify.ts'
 import { testTempDir } from './temp-dirs.ts'
+
+/** startHarness's own waits (ms before the testkit's x3): the relay's `ready`, the socket authed, the post-ready config.sync acked. */
+const START_READY_MS = 3000 // expectFrame's default
+const START_AUTHED_MS = 10_000
+const START_SYNCED_MS = 10_000
+/** The longest startHarness can wait for a bridge it starts (9 + 30 + 30 s at x3): a test that starts one has this on top of its own waits. */
+export const HARNESS_START_MS = (START_READY_MS + START_AUTHED_MS + START_SYNCED_MS) * waitScale()
 
 export const fixture = (name: string) => join(import.meta.dir, 'fixtures', name)
 
@@ -57,11 +65,15 @@ export async function startHarness(
     bridge?: Partial<BridgeOptions>
     config?: (c: ReturnType<typeof loadExampleConfig>) => ReturnType<typeof loadExampleConfig>
     startBridge?: boolean
+    /** Called as each start stage is reached (a test that dumps its timings when it fails): relay up, app connected, bridge made, ready seen, authed, synced. */
+    stage?: (name: string) => void
   } = {},
 ): Promise<Harness> {
   // the relay judges a card's expiry on the same clock as the Mac, or a card made on an injected clock would already be old
   const { clock } = opts
+  const stage = opts.stage ?? (() => {})
   const relay = await new FakeRelay({ ...(clock ? { now: () => clock.now() } : {}), ...opts.relay }).start()
+  stage('relay started')
   const home = opts.home ?? tempHome()
   mkdirSync(home, { recursive: true })
   const cfg = (opts.config ?? ((c) => c))(loadExampleConfig('default'))
@@ -78,6 +90,7 @@ export async function startHarness(
   )
   const app = new FakeApp({ relayWs: relay.wsBase })
   await app.connect()
+  stage('app connected')
   const pinned: Record<string, JwkP256T> = opts.pinApp === false ? {} : { [app.device.deviceId]: app.device.publicJwk }
   const now = new Date().toISOString()
   writeFileSync(
@@ -111,13 +124,17 @@ export async function startHarness(
     notes.push(n)
   })
   if (opts.startBridge !== false) {
+    stage('bridge created')
     bridge.start()
     await relay.expectFrame('ready', () => true, { direction: 'to_bridge' })
+    stage('relay saw ready')
     // `ready` is recorded by the relay BEFORE the bridge reads it. Wait for the bridge's own side: the socket authed
     // (so ephemeral frames send and durable ones go out instead of queueing) and the post-ready config.sync acked.
     // Keyed on `connected`, so it holds after a restart too.
-    await waitFor(() => bridge.client?.connected === true, 10_000, 'the bridge socket to be authed')
-    await waitFor(() => bridge.ctx.store.outboxCount() === 0, 10_000, 'the post-ready config.sync to be acked')
+    await waitFor(() => bridge.client?.connected === true, START_AUTHED_MS, 'the bridge socket to be authed')
+    stage('bridge socket authed')
+    await waitFor(() => bridge.ctx.store.outboxCount() === 0, START_SYNCED_MS, 'the post-ready config.sync to be acked')
+    stage('config.sync acked')
   }
   return {
     relay,
@@ -138,6 +155,25 @@ export async function startHarness(
 }
 
 export { sleep, waitFor }
+
+/**
+ * The bridge's own lines to the owner (author `system`), one per message id, in the order they first reached the relay. A durable
+ * frame is resent after a reconnect until the relay acks it, and the receiver dedupes on id, so the same line can cross the wire twice
+ * (a pane Run's channel change redials the relay just as its line goes out). Counting wire frames made "one line" flake.
+ */
+export function systemNotices(x: { relay: { frames: { direction: string; raw: unknown }[] } }): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const f of x.relay.frames) {
+    const raw = f.raw as { type?: string; message?: { id?: string; author?: string; text?: string } }
+    if (f.direction !== 'from_bridge' || raw.type !== 'reply' || raw.message?.author !== 'system') continue
+    const id = raw.message.id ?? `noid:${out.length}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(String(raw.message.text))
+  }
+  return out
+}
 
 /**
  * Signs an owner frame as the paired app would, then pushes it straight to the bridge. The FakeRelay refuses
@@ -202,6 +238,25 @@ export async function advanceSteps(
     if (client)
       await waitFor(() => !client.connected || client.silentForMs <= PONG_DUE_MS, 10_000, 'the pong for a clock step')
     else await sleep(40)
+  }
+}
+
+/**
+ * Moves a fake clock past a thread session's claim deadline (`ms`, default just over CLAIM_DEADLINE_MS, which is minutes now):
+ * one long jump with `set` (no timer runs in it), then short steps so the timers that came due fire, in order. A long run of
+ * short steps would take seconds of real time and outlast a test's own timeout.
+ */
+export async function pastClaimDeadline(
+  clock: { now(): number; set(ms: number): void; advance(ms: number): void },
+  ms = CLAIM_DEADLINE_MS + 1_000,
+  /** Called after the jump and after each step: renew the supervisor's heartbeat (a stale one hands the message to main early). */
+  beat: () => void = () => {},
+) {
+  if (ms > 30_000) clock.set(clock.now() + ms - 30_000)
+  beat()
+  for (let left = Math.min(ms, 30_000); left > 0; left -= 10_000) {
+    await advanceSteps(clock, Math.min(10_000, left), 10_000)
+    beat()
   }
 }
 

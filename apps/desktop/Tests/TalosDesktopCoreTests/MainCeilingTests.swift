@@ -346,7 +346,7 @@ struct MainOwnSettingsOneReadTests {
     }
     #expect(reads == 1)
     #expect(manager.components(separatedBy: "mainSettingsOrRefuse(").count - 1 == 1, "asked once, in requestStart")
-    #expect(manager.components(separatedBy: "start(id, s, resume: resume, now: t, own: own)").count - 1 == 2, "both starts get that read")
+    #expect(manager.components(separatedBy: "start(id, s, resume: resume, now: t, own: own)").count - 1 == 3, "every start gets that read")
     #expect(!manager.contains("PrivilegeCeiling.mainDenyRules(") && !manager.contains("PrivilegeCeiling.mainDefaultMode("), "the ceiling comes from the read")
   }
 }

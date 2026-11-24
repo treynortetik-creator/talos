@@ -9,7 +9,8 @@ import { formatDuration, timeLabel } from '../../lib/format.ts'
 import { Button, cn, Input } from '../../ui/index.ts'
 import { FrameOverlay, SandboxedFrame } from '../../ui/SandboxedFrame.tsx'
 import { pageFrameUrl, pageShareLabel } from '../pages/pagesData.ts'
-import { useDock } from '../threads/audioDock.ts'
+import { audioLineText, useAudioLine } from '../threads/AudioLines.tsx'
+import { audioPlayer, useAudio } from '../threads/audioPlayer.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import type { LibraryRow } from './libraryLogic.ts'
 import {
@@ -346,8 +347,8 @@ const stateWords = (st: OpenState | undefined) =>
         : null
 
 /**
- * What a tap on a row does: a link that opens the file (on the tap itself, as the timeline's file links do), the dock for
- * audio, "get it from your Mac" for a file the relay no longer has, nothing for a file the Mac removed.
+ * What a tap on a row does: a link that opens the file (on the tap itself, as the timeline's file links do), the message player for
+ * audio (a Play / Pause toggle), "get it from your Mac" for a file the relay no longer has, nothing for a file the Mac removed.
  */
 function Opener({
   f,
@@ -361,6 +362,8 @@ function Opener({
   children: React.ReactNode
 }) {
   const st = o.states[rowKey(f)]
+  // The row is the only control for audio started here (there is no floating player), so it is a Play / Pause toggle.
+  const playing = useAudio((d) => d.item?.key === `${f.message_id}:${f.file.media_id}` && d.playing)
   if (f.removed) return <div className={className}>{children}</div>
   if (st === 'fetching')
     return (
@@ -370,8 +373,8 @@ function Opener({
     )
   if (isAudio(f))
     return (
-      <button type="button" className={className} onClick={() => void o.play(f)}>
-        <span className="sr-only">Play </span>
+      <button type="button" className={className} onClick={() => (playing ? audioPlayer.pause() : void o.play(f))}>
+        <span className="sr-only">{playing ? 'Pause ' : 'Play '}</span>
         {children}
       </button>
     )
@@ -427,9 +430,11 @@ function List({ rows, o, from, threadName, onPage }: RowProps) {
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate font-medium">{f.file.name}</span>
                       {!f.removed && (
-                        <span className="truncate text-xs text-text-2">
-                          {words ?? `From ${from(f)} · ${threadName(f.thread_id)} thread · ${sizeLabel(f.file)}`}
-                        </span>
+                        <RowWords
+                          f={f}
+                          words={words ?? `From ${from(f)} · ${threadName(f.thread_id)} thread · ${sizeLabel(f.file)}`}
+                          className="truncate text-xs text-text-2"
+                        />
                       )}
                     </span>
                     <span className="shrink-0 text-xs text-text-2">{clockLabel(f.created_at)}</span>
@@ -524,7 +529,7 @@ function Table({ rows, o, from, threadName, onPage, agent }: RowProps) {
                   {isAudio(f) && !f.removed && <span aria-hidden="true">▶</span>}
                   <span className="truncate">{f.file.name}</span>
                 </Opener>
-                {words && <span className="block text-xs text-text-2">{words}</span>}
+                <RowWords f={f} words={words} className="block text-xs text-text-2" />
                 {!f.removed && isAudio(f) && <Progress f={f} />}
               </td>
               <td className={td}>
@@ -545,13 +550,24 @@ function Table({ rows, o, from, threadName, onPage, agent }: RowProps) {
   )
 }
 
-/** An audio row's progress while the dock plays it. */
+/** A row's second line: what the player says about this audio row (refused, waiting for data) takes the place of `words`. */
+function RowWords({ f, words, className }: { f: SentFileT; words: string | null; className: string }) {
+  const line = useAudioLine(`${f.message_id}:${f.file.media_id}`)
+  const text = line ? audioLineText(line) : words
+  return text ? (
+    <span className={className} data-testid={line ? `audio-${line}` : undefined}>
+      {text}
+    </span>
+  ) : null
+}
+
+/** An audio row's progress while the player plays it. */
 function Progress({ f }: { f: SentFileT }) {
   const key = `${f.message_id}:${f.file.media_id}`
   // plain values only: a selector that builds an object re-renders forever (React #185)
-  const mine = useDock((d) => d.item?.key === key)
-  const cur = useDock((d) => (d.item?.key === key ? d.cur : 0))
-  const known = useDock((d) => (d.item?.key === key ? d.duration : 0))
+  const mine = useAudio((d) => d.item?.key === key)
+  const cur = useAudio((d) => (d.item?.key === key ? d.cur : 0))
+  const known = useAudio((d) => (d.item?.key === key ? d.duration : 0))
   const p = mine ? { cur, dur: known || (f.file.duration_ms ?? 0) / 1000 } : null
   if (!p || p.dur <= 0) return null
   return (

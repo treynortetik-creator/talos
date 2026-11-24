@@ -244,7 +244,11 @@ while True:
         r = {"decision": "none", "reason": "told"}
     else:
         r = {"decision": "none", "reason": "?"}
-    c.sendall((json.dumps(dict(r, t="rule_result", id=m["id"])) + "\n").encode()); c.close()
+    try:                        # a hook that gave up (its notice budget, the "stall" mode) has closed its end: not the hub's death
+        c.sendall((json.dumps(dict(r, t="rule_result", id=m["id"])) + "\n").encode())
+    except OSError:
+        pass
+    c.close()
 PY
 hub(){ rm -f "$TH/up" "$TH/got.jsonl"; python3 "$SB/fakehub.py" "$TH" "${1:-1}" & HUBPID=$!; for _ in $(seq 50); do [ -e "$TH/up" ] && break; sleep 0.1; done; }
 unhub(){ kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; }
@@ -630,6 +634,23 @@ out="$(python3 -c 'import json;print(json.dumps({"tool_name":"Bash","cwd":"/tmp"
 rm -f "$SD/action-rules.off"
 grep -q '"action-rules.off"\|KILL_NAME = "action-rules.off"' "$A/hooks/action-rules.py" && ok || no "kill switch name is not a literal"
 grep -q 'command:' "$SB/agent/hooks/action-rules.yaml" && ! grep -q 'rm -rf ~$' "$SB/agent/hooks/action-rules.yaml" && ok || no "starter yaml sanity"
+# a stdout whose reader is already gone (Claude Code closed it): a deny or an ask still blocks (exit 2), an allow exits 0, and never
+# Python's exit-time flush error (exit 120: a non-blocking error, so the call would go through). The read end is closed before the
+# hook starts, so this needs no timing.
+python3 - "$A" <<'PY' && ok || no "a closed stdout: a deny or ask did not exit 2, or an allow did not exit 0 (or a traceback)"
+import json, os, subprocess, sys
+bad = []
+for cmd, env, want in (("ls", {}, 0), ("rm -rf ~", {}, 2), ("npm publish", {}, 2), ("npm publish", {"CHRONOS_RUN": "1"}, 2),
+                       ("npm publish", {"TALOS_ACTION_RULES_OFF": "1"}, 0)):
+    r, w = os.pipe(); os.close(r)
+    p = subprocess.run([sys.executable, "hooks/action-rules.py", "check"], cwd=sys.argv[1], stdout=w, stderr=subprocess.PIPE,
+                       input=json.dumps({"tool_name": "Bash", "cwd": "/tmp", "tool_input": {"command": cmd}}).encode(),
+                       env=dict(os.environ, **env))
+    os.close(w)
+    if p.returncode != want or b"Traceback" in p.stderr or b"Exception ignored" in p.stderr:
+        bad.append("%r %r: exit %d (want %d) %s" % (cmd, env, p.returncode, want, p.stderr.decode()[-120:].strip()))
+assert not bad, bad
+PY
 
 if [ "${TALOS_TEST_NOYAML:-0}" != 1 ]; then
   echo "action-rules: again with PyYAML hidden (the built-in reader)"

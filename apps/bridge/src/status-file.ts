@@ -5,10 +5,13 @@
 // Only the LIVE bridge writes it. A worker or a headless process (`talos-app post`, `codex run`) never constructs a
 // StatusWriter, so it cannot overwrite the live file. A bridge that was superseded (4409) writes one last `superseded`
 // snapshot and pauses until it rejoins, and even that write is skipped when a newer, living bridge has already written its own file.
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+import { sessionMarkerInherited, startupTalosChannel } from './claude-env.ts'
 import type { Clock } from './clock.ts'
 import { readJsonFile, writeJsonAtomic } from './fsutil.ts'
 import type { Logger } from './log.ts'
+import { realFileSync } from './real-file.ts'
 
 export type StatusMode = 'live' | 'headless' | 'superseded'
 
@@ -33,7 +36,8 @@ export type BridgeStatusFile = {
   claude_session_marker_inherited: boolean | 'unknown'
   /**
    * The usage governor now (router/governor.ts): what the Linux supervisor's restart-on-update queue holds on (it restarts
-   * only while this is `ok` or `off` in a live, fresh file). Null from a bridge that predates it, or one that could not read it.
+   * only while this is `ok`, `off` or `unknown` in a live, fresh file). Null from a bridge that predates it, or one that could
+   * not read it.
    */
   governor: GovernorStateT | null
   /**
@@ -54,7 +58,32 @@ export type BridgeStatusFile = {
    * no claude above it.
    */
   talos_channel: 'on' | 'off' | 'unknown'
+  /**
+   * Where the Mac app is installed (an absolute folder ending in .app that exists), for `talos-app facts`. The Mac hands it to the
+   * agent it starts in TALOS_APP_BUNDLE and this bridge, the file's only writer, copies it here at start. The key is left out (never
+   * null) on Linux, from a Mac build that does not set it, and for a value that is not such a folder; a reader treats absent as unknown.
+   */
+  app_path?: string
   updated_at: string
+}
+
+/** The one key a writer may leave out; `STATUS_KEYS` are the ones always there. */
+export const STATUS_OPTIONAL_KEYS = ['app_path'] as const
+
+/**
+ * The folder a TALOS_APP_BUNDLE value names, or undefined: only an absolute path ending in .app that is a folder now (a link to one
+ * stands for the real folder). Anything else, a relative path, a file, a missing folder or a path with a control character, is no answer.
+ */
+export function validAppPath(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !isAbsolute(raw) || !raw.endsWith('.app')) return undefined
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return undefined
+  try {
+    const real = realFileSync(raw)
+    return real.endsWith('.app') && statSync(real).isDirectory() ? real : undefined
+  } catch {
+    return undefined
+  }
 }
 export const GOVERNOR_STATES = ['ok', 'paused', 'park_all', 'off', 'unknown'] as const
 export type GovernorStateT = (typeof GOVERNOR_STATES)[number]
@@ -149,6 +178,10 @@ export function parseStatusFile(raw: unknown): BridgeStatusFile | undefined {
       typeof o.last_stop_at === 'string' && !Number.isNaN(Date.parse(o.last_stop_at)) ? o.last_stop_at : null,
     // an older bridge never wrote it, and a value this build does not know is not trusted: 'unknown', never a failure
     talos_channel: o.talos_channel === 'on' || o.talos_channel === 'off' ? o.talos_channel : 'unknown',
+    // an older bridge, or one without the Mac's variable, never wrote it; a value that is not an absolute .app path is dropped, not trusted
+    ...(typeof o.app_path === 'string' && isAbsolute(o.app_path) && o.app_path.endsWith('.app')
+      ? { app_path: o.app_path }
+      : {}),
     updated_at: o.updated_at,
   }
 }
@@ -185,6 +218,15 @@ export function runningBridge(l: BridgeLiveness): { running: boolean; startedFro
   return { running: false, startedFrom: null }
 }
 
+/** What the live bridge works out once at start for its status file: what it inherited, the channel state and where the Mac app is. */
+export function statusStartFacts(env: { appBundle?: string | undefined }, log: Logger) {
+  return {
+    sessionMarkerInherited: sessionMarkerInherited(),
+    talosChannel: startupTalosChannel(log),
+    appPath: validAppPath(env.appBundle),
+  }
+}
+
 export type StatusWriterOptions = {
   path: string
   clock: Clock
@@ -196,6 +238,8 @@ export type StatusWriterOptions = {
   sessionMarkerInherited?: boolean | 'unknown'
   /** What talosChannelState found at start (default 'unknown'). */
   talosChannel?: 'on' | 'off' | 'unknown'
+  /** `validAppPath` of TALOS_APP_BUNDLE, worked out once at start; left out of the file when undefined. */
+  appPath?: string | undefined
   snapshot: () => StatusSnapshot
   pid?: number
   alive?: (pid: number) => boolean
@@ -298,6 +342,7 @@ export class StatusWriter {
         main_resend: true,
         last_stop_at: body.last_stop_at ?? null,
         talos_channel: this.o.talosChannel ?? 'unknown',
+        ...(this.o.appPath ? { app_path: this.o.appPath } : {}),
         updated_at: new Date(this.o.clock.now()).toISOString(),
       }
       writeJsonAtomic(this.o.path, file, 0o600)

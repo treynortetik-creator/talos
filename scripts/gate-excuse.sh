@@ -65,15 +65,13 @@ excuse_check() {
 }
 
 # tstep <name> <command...>: a test step. As step, unless there is something to do with a failure: gate.sh --push asked for excuses
-# (GATE_EXCUSE_MAIN and GATE_EXCUSE_OUT), or the known-flakes list is here (scripts/gate-flakes.sh). Then its output is kept (and
-# shown as it runs), and a failure is read first by flake_rerun (only known flaky tests failed and each passes alone: the step
-# passes), then by excuse_check (only tests failing on main already: excused, the gate goes on), each saying which tests and why.
-# Otherwise it refuses as always, with what each found added.
+# (GATE_EXCUSE_MAIN and GATE_EXCUSE_OUT). Then its output is kept (and shown as it runs), and a failure is read by excuse_check
+# (only tests failing on main already: excused, the gate goes on), saying which tests and why. Otherwise it refuses as always,
+# with what it found added. No test is ever run again to make a step pass (the owner's rule: no retries anywhere).
 tstep() {
-  local name="$1" t log rc why="" excusing=1 flaking=0
+  local name="$1" t log rc why="" excusing=1
   { [ -n "${GATE_EXCUSE_MAIN:-}" ] && [ -n "${GATE_EXCUSE_OUT:-}" ]; } || excusing=0
-  ! declare -F flake_rerun >/dev/null || ! flake_ready || flaking=1
-  if [ "$excusing" = 0 ] && [ "$flaking" = 0 ]; then
+  if [ "$excusing" = 0 ]; then
     step "$@"
     return
   fi
@@ -88,11 +86,6 @@ tstep() {
     say "$name ok ($((SECONDS - t)) s)"
     return 0
   fi
-  FLAKE_WHY=""
-  if [ "$flaking" = 1 ] && flake_rerun "$log" "$name"; then
-    rm -f "$log"
-    return 0
-  fi
   if [ "$excusing" = 1 ] && why="$(excuse_check "$log")"; then
     rm -f "$log"
     say "$name failed, EXCUSED: $why"
@@ -100,9 +93,9 @@ tstep() {
   fi
   rm -f "$log"
   [ "$excusing" = 1 ] && why="; not excused: $why" || why=""
-  refuse "$name failed (above)$why${FLAKE_WHY:+; $FLAKE_WHY}"
+  refuse "$name failed (above)$why"
 }
 
 # rstep <name> <command...>: a test step that is never excused as red on main (vitest related picks a test because it imports a
-# changed file), only reread as known flaky tests.
+# changed file): as a plain step.
 rstep() { GATE_EXCUSE_MAIN="" GATE_EXCUSE_OUT="" tstep "$@"; }

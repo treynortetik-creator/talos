@@ -58,7 +58,7 @@ export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResu
     const msg: InboundMessage = { ...row.notification, content: neutralizeControlTags(row.notification.content) }
     if (ownerWords(meta)) {
       // never throws and never logs the words; any failure is a message with no pointers, exactly as before
-      const notes = lookupNotes(ctx, row.notification.content)
+      const notes = lookupNotes(ctx, row.notification.content, thread)
       if (notes.length) msg.notes = notes
     }
     messages.push(msg)

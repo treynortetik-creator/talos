@@ -137,22 +137,22 @@ public enum SessionSwitcher {
   static func threadDetail(_ e: WorkersFile.Entry, waiting: String?) -> String {
     if !WorkersFile.restingStates.contains(e.state), let waiting {
       if waiting == WorkerNotice.draftKind {
-        return "Unsent text is in its input box. Your message has probably gone to the main session. Finish or clear it here."
+        return "Unsent text is in its input box, so Talos is holding your message back. Finish or clear it here."
       }
       if waiting == WorkerNotice.leftoverKind {
         return "Its input box holds text that may include an old line from Talos. Clear it here."
       }
       if waiting == WorkerNotice.refusedKind {
-        return "It is showing something Talos doesn't type into. Your message has probably gone to the main session. See what it is here."
+        return "Talos can't send it messages: its screen shows something Talos doesn't recognise. If it stays that way, your main agent answers your messages. See what it is here."
       }
       if waiting == WorkerNotice.enterUncertainKind {
         return "Talos pressed Enter as a prompt appeared here. Check what it approved here."
       }
       if waiting == WorkerNotice.unseenKind {
-        return "Talos's line for your message never showed in its input box. Your message has probably gone to the main session. See what it is showing here."
+        return "Talos's line for your message never showed in its input box. See what it is showing here."
       }
       if waiting == WorkerNotice.noBoxKind {
-        return "Its input box isn't showing yet. Your message has probably gone to the main session. Check what the session is waiting on here."
+        return "Its input box isn't showing yet. Check what the session is waiting on here."
       }
       return "Waiting on a \"\(waiting)\" prompt. Answer it here."
     }
@@ -260,34 +260,20 @@ public enum WorkerNotice {
   public static let leftoverKind = "left-over line"
 
   public static func leftoverLine() -> String {
-    "This thread's session has text in its input box that may include an old line from Talos, so Talos left it alone. Open this thread in Terminals to clear it."
+    "This thread's session has text in its input box that may include an old line from Talos, so Talos left it alone. To clear it, restart this thread's session from this thread's settings (Its own agent, then Restart)."
   }
 
   public static func noBoxLine() -> String {
-    "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on."
+    "This thread's session isn't showing its input box yet. If it stays that way, restart this thread's session from this thread's settings (Its own agent, then Restart)."
   }
 
-  public static func draftLine() -> String {
-    "This thread's session has unsent text in its input box; your message has probably gone to the main session. Open this thread in Terminals to finish or clear it."
-  }
-
-  /// The `needs you` reason for a pointer the key guard refused (`KeyGuard`): the pane shows something other than Claude's input box, empty
-  /// or holding Talos's own line. The Linux supervisor's HOLD_KIND.refused, the same words.
+  /// The `needs you` reason for a thread whose pane shows something other than Claude's input box (`DeafWatch`, the deaf-thread alarm),
+  /// after ten minutes. The Linux supervisor's HOLD_KIND.refused, the same words. Its line is `deafLine` (DeafThread.swift).
   public static let refusedKind = "something Talos does not type into"
-
-  /// The thread's line for it: the Linux supervisor's `lines.refused`, with the Mac's way to the pane.
-  public static func refusedLine() -> String {
-    "This thread's session is showing something Talos doesn't type into, so Talos did not type your message there; it has probably gone to the main session. Open this thread in Terminals to see it."
-  }
 
   /// The `needs you` reason for a pointer typed and, `screenLag` later, never seen in the input box (a menu kept the focus with an empty box
   /// drawn under it, or the keys were lost): never typed a second time on top. The Linux supervisor's HOLD_KIND.unseen.
   public static let unseenKind = "pointer not in the input box"
-
-  /// The thread's line for it: the Linux supervisor's `lines.unseen`, with the Mac's way to the pane.
-  public static func unseenLine() -> String {
-    "Talos typed your message's pointer into this thread's session, but it didn't appear in the input box, so Talos didn't press Enter or type it again; the message has probably gone to the main session. Open this thread in Terminals to see what the session is showing."
-  }
 
   /// The `needs you` reason for a pointer whose Enter may have answered a prompt that opened as it went (`EnterDetection`): held, never
   /// entered a second time. The Linux supervisor's hold kind, the same words.
@@ -300,10 +286,6 @@ public enum WorkerNotice {
 
   /// The `needs you` reason for a pointer held back because the pane is scrolled back (tmux's copy mode), where keys are not typing.
   public static let copyModeKind = "scrolled back"
-
-  public static func copyModeLine() -> String {
-    "This thread's session is scrolled back, so Talos can't type into it; your message has probably gone to the main session. Open this thread in Terminals and press q to return to the prompt."
-  }
 
   /// The record kind of the line for a turn cut after a relaunch (`turnCutLine`).
   public static let turnCutKind = "turn cut"

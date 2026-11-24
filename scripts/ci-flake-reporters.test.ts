@@ -117,7 +117,7 @@ describe('every Playwright config retries once and reports flakes in CI, and onl
   for (const c of configs) {
     it(c, async () => {
       const text = readFileSync(join(root, c), 'utf8')
-      expect(text).toContain('retries: process.env.CI_FLAKE_FILE ? 1 : 0')
+      expect(text).toContain('retries: 0,')
       const path = /\[\['list'\], \.\.\.\(process\.env\.CI_FLAKE_FILE \? \[\['([^']+)'\] as const\] : \[\]\)\]/.exec(
         text,
       )?.[1]

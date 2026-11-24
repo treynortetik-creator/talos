@@ -58,7 +58,7 @@ struct WorkerNoBoxTests {
     usleep(3_500_000)  // well past two more timeouts: still one
     #expect(log.all.count == 1, "once per hold, not every timeout: \(log.all)")
     #expect(log.all.first?.thread == "trip")
-    #expect(log.all.first?.text == "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on.")
+    #expect(log.all.first?.text == "This thread's session isn't showing its input box yet. If it stays that way, restart this thread's session from this thread's settings (Its own agent, then Restart).")
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
     #expect(r.up("trip"), "the worker is kept, never stopped for this: \(r.why("trip"))")
     #expect(r.starts.count == 1)

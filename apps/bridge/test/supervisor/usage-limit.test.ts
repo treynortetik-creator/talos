@@ -528,12 +528,28 @@ describe('the key guard: an allowlist, by what the sender means to press (key-gu
     }
   })
   it('status rows under the box: the shared vectors (Pantheon’s spec for parts not yet captured, 2026-11-14)', () => {
-    expect(VECTORS.status_row_vectors.vectors.length).toBeGreaterThanOrEqual(40)
+    expect(VECTORS.status_row_vectors.vectors.length).toBeGreaterThanOrEqual(110)
     expect(VECTORS.status_row_probes.probes.length).toBeGreaterThanOrEqual(271)
     for (const v of [...VECTORS.status_row_vectors.vectors, ...VECTORS.status_row_probes.probes]) {
       const screen = ['⏺ Done.', ...box, ...v.rows]
       expect(keysAllowed(screen, { type: 'box', holds: 'empty' }), v.name).toBe(v.box_empty)
     }
+  })
+  it('2.1.330 draws "⧉ <artifact name>" after the mode head (real-2.1.330-canvas): the empty box takes keys, nothing looser does', () => {
+    const fixture = join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.330-canvas/footer-row.ansi.txt')
+    const row = parseCapture(readFileSync(fixture, 'utf8')).filter((r) => r.trim() !== '')
+    expect(row.length).toBe(1)
+    const empty = { type: 'box', holds: 'empty' } as const
+    expect(keysAllowed(['⏺ Done.', ...box, ...row], empty)).toBe(true)
+    // the same row quoted in the box (a pasted message): the box is not empty
+    const quoted = ['⏺ Done.', rule, `❯ ${(row[0] as string).trim()}`, rule, ...row]
+    expect(keysAllowed(quoted, empty)).toBe(false)
+    for (const bad of [
+      '  ⧉ canvas',
+      '  Run this? ⏵⏵ bypass permissions on · ⧉ canvas',
+      '  ⏸ manual mode on · ⚠ low yes',
+    ])
+      expect(keysAllowed(['⏺ Done.', ...box, bad], empty), bad).toBe(false)
   })
   it('a cut known part is known only as the last part; elsewhere it is an unknown part, held to the positive shape', () => {
     const ok = (under: string) => keysAllowed(['⏺ Done.', ...box, under], { type: 'box', holds: 'empty' })
@@ -545,6 +561,16 @@ describe('the key guard: an allowlist, by what the sender means to press (key-gu
     expect(ok('  ⏸ manual mode on · sure')).toBe(false) // one short word: an answer
     expect(ok('  ⏸ manual mode on · Later')).toBe(false) // a capital: not the shape
     expect(ok('  ⏸ do you want to run rm on · fine by me')).toBe(false) // a mode nobody captured: read exactly
+  })
+  it('a refused panel row is audited as "panel <shape>", in the block or starting like one (32 hours went unseen)', () => {
+    takeUnknownShapes()
+    const under = (...r: string[]) => ['⏺ Done.', ...box, ...r]
+    expect(keysAllowed(under('  ⏺ main', '  ◯ 1) Qq Zz 99'), { type: 'box', holds: 'empty' })).toBe(false)
+    expect(takeUnknownShapes()).toEqual([{ event: 'status_part_refused', shape: 'panel 13:aANspu' }])
+    expect(keysAllowed(under('  ◯ Zq Zq Zq'), { type: 'box', holds: 'empty' })).toBe(false)
+    expect(takeUnknownShapes()).toEqual([{ event: 'status_part_refused', shape: 'panel 10:aAsu' }])
+    expect(keysAllowed(under('  ⏺ main', '  odd row here'), { type: 'box', holds: 'empty' })).toBe(false)
+    expect(takeUnknownShapes()).toEqual([{ event: 'status_part_refused', shape: 'panel 12:as' }])
   })
   it('a part refused for its shape is audited by its length and kinds, once per run; an uncaptured mode by its head', () => {
     takeUnknownShapes()

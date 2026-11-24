@@ -9,7 +9,9 @@ import {
   CLAIM_DEADLINE_MS,
   keyNotSent,
   POINTER_CLIENT_QUIET_MS,
+  type PointerHoldReasonT,
   type PtySendResult,
+  strongestPointerHold,
   WORKER_POINTER,
   WORKER_POINTER_TEXT,
 } from '@talos-app/protocol'
@@ -148,6 +150,24 @@ export type PointerStep = {
   wroteLine: boolean
   /** The pane was read this tick (false: a read failed or copy mode was on, and `held` says nothing). */
   looked: boolean
+  /**
+   * The `pointer_hold` reason for workers.json (protocol WorkerPointerHold), the strongest of the holds that apply at once:
+   * typed_unseen > draft > scrolled > refused. Null: none this tick.
+   */
+  hold?: PointerHoldReasonT | null
+}
+
+/** The `pointer_hold` reason a single `held` stands for; the holds that are not the owner's to clear (no box, an Enter check) have none. */
+export function holdReasonOf(held: PointerStep['held']): PointerHoldReasonT | null {
+  return held === 'unseen'
+    ? 'typed_unseen'
+    : held === 'draft'
+      ? 'draft'
+      : held === 'copy_mode'
+        ? 'scrolled'
+        : held === 'refused'
+          ? 'refused'
+          : null
 }
 
 /** A dialog the guard must not type into: what liveDialog sees, plus `extraDialog` (a prompt nobody named, P3d3 part 4). */
@@ -191,6 +211,7 @@ export async function typeOwedPointer(o: {
     held: null,
     wroteLine: false,
     looked: true,
+    hold: holdReasonOf(more.held ?? null),
     ...more,
   })
   // the typing guard, like the screen: a client list that cannot be read is not "nobody is typing"
@@ -200,7 +221,16 @@ export async function typeOwedPointer(o: {
   // in copy mode nothing typed is typing; a mode that cannot be read is not "no mode"
   const mode = await o.pane.inCopyMode()
   // scrolled back: held, and said so (its own notice); a mode that cannot be read says nothing yet
-  if (mode === true) return step(true, { held: 'copy_mode' })
+  if (mode === true) {
+    // the box and our own line can still be read from the rows under the scroll: whatever else holds the pointer counts too, and the
+    // strongest wins (typed_unseen > draft > scrolled > refused)
+    const l0 = look(escaped, extra)
+    const applying: string[] = ['scrolled']
+    if (s.enterOwed && s.unseenSince !== null && o.awake - s.unseenSince > WORKER_POINTER.screen_lag_s && !l0.typed)
+      applying.push('typed_unseen')
+    if (l0.typed && !l0.ours) applying.push('draft')
+    return step(true, { held: 'copy_mode', hold: strongestPointerHold(applying) })
+  }
   if (mode !== false) return step(true, { looked: false })
   const l = look(escaped, extra)
   const draft = l.typed && !l.ours

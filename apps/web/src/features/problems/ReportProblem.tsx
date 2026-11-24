@@ -6,6 +6,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTalosClient } from '../../lib/client.ts'
 import { useStorage } from '../../lib/storageContext.tsx'
 import { Button, Textarea } from '../../ui/index.ts'
+import { withAudioTrace } from './audioTrace.ts'
 import { ownerReport } from './capture.ts'
 import { ProblemController as Controller, type ProblemController, problems } from './controller.ts'
 
@@ -97,7 +98,10 @@ export function ReportProblem({
   // When the report was sent: set on the first try of a report and kept across a resend of that same report.
   const sentAt = useRef<{ id: string; at: string } | null>(null)
 
-  const report = useMemo(() => ownerReport(steps, ctl.env(), error, reportId), [steps, error, ctl, reportId])
+  const report = useMemo(
+    () => ownerReport(withAudioTrace(steps), ctl.env(), error, reportId),
+    [steps, error, ctl, reportId],
+  )
 
   const pick = async (file: File | undefined) => {
     setShotError(null)

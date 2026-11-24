@@ -4,7 +4,7 @@
 // Two kinds of marker keep the text honest, and `test/help/help-truth.test.ts` checks every one against the code:
 //   [[Name]]   a name on screen (a button, a switch, a menu item, a tab). It must exist in the app's own source.
 //   {{talos-app logs}}   a Terminal command. Its first word after `talos-app` must be a command the CLI really has.
-//   ((Settings → Agent → Timezone))   a path on screen. Its first part must be a real Settings section, Mac settings tab or
+//   ((Settings → Agent → Timezone))   a path on screen. Its first part must be a real Settings section, Talos Settings tab or
 //                        menu, and each later part must be a label on that very section or tab. Any other arrow in the text fails.
 // They work in prose, steps, row notes, limits and key text alike.
 // A row's `where` is a path (Settings, then a section, then a label). The test checks the section is a row of the real
@@ -17,7 +17,7 @@ export type Place = 'settings' | 'mac' | 'thread' | 'menubar' | 'topmenu' | 'ter
 /** How each place reads on the page. Test: these names are the ones the rest of this file uses. */
 export const PLACE_NAME: Record<Place, string> = {
   settings: 'Settings',
-  mac: 'Mac settings',
+  mac: 'Talos Settings',
   thread: 'Thread settings',
   menubar: 'Menu bar',
   topmenu: 'Top menu',
@@ -56,7 +56,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: '[[Mac settings]] is a separate window that only the Mac app has. It holds what belongs to this Mac, in five sections: [[Your agent]], [[Phone & Mac]], [[Privacy & access]], [[General]] and [[Advanced]]. Advanced is the quiet one, for how your agent starts, its folder and the address of your Talos server. Open it from the Talos menu at the top of the screen ([[Settings…]], or ⌘,) or from the Talos icon in the Mac menu bar.',
+        text: '[[Talos Settings]] is a separate window that only the Mac app has. It holds what belongs to this Mac, in five sections: [[Your agent]], [[Phone & Mac]], [[Privacy & access]], [[General]] and [[Advanced]]. Advanced is the quiet one, for how your agent starts, its folder and the address of your Talos server. Open it from the Talos menu at the top of the screen ([[Settings…]], or ⌘,) or from the Talos icon in the Mac menu bar.',
       },
       {
         kind: 'p',
@@ -74,7 +74,7 @@ export const HELP_SECTIONS: Section[] = [
           {
             q: 'See my devices, or end one',
             where: [w('settings', 'Account', 'Your devices')],
-            note: '[[Remove]] ends that device’s access. On the Mac, ((Mac settings → Phone & Mac)) has See and remove your devices, which opens this list.',
+            note: '[[Remove]] ends that device’s access. On the Mac, ((Talos Settings → Phone & Mac)) has See and remove your devices, which opens this list.',
           },
           { q: 'Sign out of this phone or browser', where: [w('settings', 'Account', 'Sign out of this device')] },
           { q: 'Sign out of every device', where: [w('settings', 'Account', 'Sign out everywhere')] },
@@ -197,8 +197,8 @@ export const HELP_SECTIONS: Section[] = [
           { q: 'macOS permissions, such as notifications', where: [w('mac', 'Privacy & access')] },
           { q: 'The Quick message shortcut', where: [w('mac', 'General', 'Quick message', 'Change shortcut')] },
           {
-            q: 'The Companion, the little character on screen',
-            where: [w('mac', 'General', 'Show the Companion'), w('menubar', 'Show Companion')],
+            q: 'The Talos character, the little figure on screen',
+            where: [w('mac', 'General', 'Show the Talos character'), w('menubar', 'Show Talos character')],
           },
           {
             q: 'Start Talos at login, or show a Dock icon',
@@ -249,16 +249,16 @@ export const HELP_SECTIONS: Section[] = [
         kind: 'steps',
         items: [
           'On a Mac that is not set up yet, Talos opens [[Set up Talos…]] by itself (it is also in the Menu bar). It gets itself ready, you sign in to Claude, and you choose whether to connect your phone. Then your agent starts and says hello. Nothing else is needed here.',
-          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its tool settings, plus the hooks of any tool apps you have, change) or Choose (a Talos agent folder you already have). To use your own start-up command instead, open ((Mac settings → Advanced → Take over or import)), paste the whole command and press Import.',
-          'Connect this Mac: [[Connect this Mac…]] in the Window menu, in the Menu bar, or in ((Mac settings → Phone & Mac)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
-          'Allow the macOS permissions in ((Mac settings → Privacy & access)).',
+          'To use a folder you already have, choose [[Use a folder I already have…]] in the Menu bar. Type or browse to the folder, then press Create (a new Talos agent in a new or empty folder), Adopt (a Claude Code folder you already use: a card shows what would change, and only its tool settings, plus the hooks of any tool apps you have, change) or Choose (a Talos agent folder you already have). To use your own start-up command instead, open ((Talos Settings → Advanced → Take over or import)), paste the whole command and press Import.',
+          'Connect this Mac: [[Connect this Mac…]] in the Window menu, in the Menu bar, or in ((Talos Settings → Phone & Mac)). Talos shows four words in a small Sign this Mac in window: press The words match when they are the same as the Talos window (They don\u2019t match if they differ). With the button you never type in a terminal. If the button cannot start it, the Set up Talos window shows the exact command with a Copy button. Run it in Terminal, paste the link it prints into the Talos window (not a browser), and type y in Terminal when the four words match.',
+          'Allow the macOS permissions in ((Talos Settings → Privacy & access)).',
           'Start your agent: ((Menu bar → Start your agent)). The first start of an agent folder shows a confirmation in a Talos popup that you answer yourself.',
           'Add your phone: run {{talos-app enroll}} in Terminal. For a phone browser, open the link it prints on the phone. For the iPhone app, copy the link and paste it into the app with [[Paste a setup link]] on its sign-in screen: opening the link on the iPhone opens Safari, which sets up a Home Screen copy instead.',
         ],
       },
       {
         kind: 'p',
-        text: 'Anything you change in Mac settings before step 1 is kept, and joins your setup when you Create, Adopt, Choose or Import.',
+        text: 'Anything you change in Talos Settings before step 1 is kept, and joins your setup when you Create, Adopt, Choose or Import.',
       },
     ],
   },
@@ -284,7 +284,7 @@ export const HELP_SECTIONS: Section[] = [
             q: 'The app says my Mac is offline',
             steps: [
               'Look at the Talos icon in the Mac menu bar. A head with a slash through it means your agent, Talos on your Mac or the Talos server is down. Choose [[Start your agent]] if your agent is stopped.',
-              'A Mac that has gone to sleep cannot answer. While it is plugged in, [[Keep my Mac awake while it’s plugged in]] in ((Mac settings → General)) stops it sleeping on its own. A closed lid or Sleep from the Apple menu still puts it to sleep.',
+              'A Mac that has gone to sleep cannot answer. While it is plugged in, [[Keep my Mac awake while it’s plugged in]] in ((Talos Settings → General)) stops it sleeping on its own. A closed lid or Sleep from the Apple menu still puts it to sleep.',
               'In Terminal, {{talos-app status}} and {{talos-app doctor}} say what is wrong in plain lines, and {{talos-app logs}} shows the log of Talos on your Mac.',
               '((Settings → Health)) on your phone shows what the server can see, even while the Mac is off.',
             ],
@@ -303,7 +303,7 @@ export const HELP_SECTIONS: Section[] = [
             q: 'The agent is stuck on a dialog',
             steps: [
               'A dot on the Talos icon in the Mac menu bar means something needs you. Choose ((Menu bar → Advanced → Show my agent’s screen…)) and answer the dialog in the pane yourself.',
-              'To have Talos show it for you, turn on [[Show my agent’s screen when it needs me]] in ((Mac settings → Advanced)).',
+              'To have Talos show it for you, turn on [[Show my agent’s screen when it needs me]] in ((Talos Settings → Advanced)).',
             ],
           },
           {
@@ -360,7 +360,7 @@ export const HELP_SECTIONS: Section[] = [
               {
                 keys: '⌃⌥Space',
                 what: 'Quick message',
-                when: 'From any app. This is the default; change it in ((Mac settings → General → Change shortcut)). In the box, ⌘↩ sends and Esc closes it.',
+                when: 'From any app. This is the default; change it in ((Talos Settings → General → Change shortcut)). In the box, ⌘↩ sends and Esc closes it.',
               },
             ],
           },
@@ -486,7 +486,7 @@ export const HELP_SECTIONS: Section[] = [
     blocks: [
       {
         kind: 'p',
-        text: 'Logs. The Mac app writes its log to ~/Library/Logs/Talos/supervisor.log. ((Mac settings → Advanced)) has [[Show the Mac app’s log]], which opens it in Finder, and [[Show settings file]] for your Mac settings file. Talos on your Mac writes bridge.log in ~/.config/talos/app (or the folder named by TALOS_APP_HOME). {{talos-app logs}} prints it, and {{talos-app report}} makes one file you can send with a bug report; it has keys, tokens and your home folder removed.',
+        text: 'Logs. The Mac app writes its log to ~/Library/Logs/Talos/supervisor.log. ((Talos Settings → Advanced)) has [[Show the Mac app’s log]], which opens it in Finder, and [[Show settings file]] for your Talos Settings file. Talos on your Mac writes bridge.log in ~/.config/talos/app (or the folder named by TALOS_APP_HOME). {{talos-app logs}} prints it, and {{talos-app report}} makes one file you can send with a bug report; it has keys, tokens and your home folder removed.',
       },
       {
         kind: 'p',
@@ -494,7 +494,7 @@ export const HELP_SECTIONS: Section[] = [
       },
       {
         kind: 'p',
-        text: 'Uninstalling. Turn off [[Open Talos when I log in]] in ((Mac settings → General)), choose [[Disconnect this Mac…]] in ((Mac settings → Phone & Mac)), then quit Talos and delete Talos.app from the Applications folder inside your home folder. Your settings are in ~/Library/Application Support/Talos and your logs in ~/Library/Logs/Talos; delete them if you want them gone. To remove the rest, follow “Uninstalling” in docs/SETUP.md. It lists the talos-app entry in the agent folder’s .mcp.json, the ~/.config/talos/app folder (your message history is in there) and the Railway project.',
+        text: 'Uninstalling. Turn off [[Open Talos when I log in]] in ((Talos Settings → General)), choose [[Disconnect this Mac…]] in ((Talos Settings → Phone & Mac)), then quit Talos and delete Talos.app from the Applications folder inside your home folder. Your settings are in ~/Library/Application Support/Talos and your logs in ~/Library/Logs/Talos; delete them if you want them gone. To remove the rest, follow “Uninstalling” in docs/SETUP.md. It lists the talos-app entry in the agent folder’s .mcp.json, the ~/.config/talos/app folder (your message history is in there) and the Railway project.',
       },
     ],
   },

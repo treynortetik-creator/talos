@@ -305,7 +305,7 @@ import Testing
   @Test func theLineSaysWhenWhatAndWhatToDoInPlainWords() throws {
     let utc = try #require(TimeZone(identifier: "UTC"))
     let line = SupervisorNotice.mainStalled(since: Date(timeIntervalSince1970: 1_794_304_500), timeZone: utc)
-    #expect(line.contains("9:55") && line.contains("3 min") && line.contains("Esc") && line.contains("send again"), "\(line)")
+    #expect(line.contains("9:55") && line.contains("3 min") && line.contains("Restart agent in Settings") && !line.contains("Esc") && line.contains("send again"), "\(line)")
   }
 
   // MARK: a frozen request with no working line on the pane (the owner's Mac, 2026-11-19: 186 s of nothing after a tool result)

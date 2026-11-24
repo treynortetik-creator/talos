@@ -129,6 +129,31 @@ describe.skipIf(!hasFlock)('the heavy lock shared across WSL distros (CI_SHARED_
     expect(readdirSync(w.root).filter((n) => n.startsWith('shared-suites.lock.ci.'))).toEqual([])
   })
 
+  it('a part queued behind the other distro tells its main shell what it waits for, since when, and stops once it has the lock', async () => {
+    const w = world()
+    const release = join(w.root, 'release')
+    const a = w.distro().run('request-a', w.mark('a', `while [ ! -f "${release}" ]; do sleep 0.1; done`))
+    await w.seen('a start')
+    const cd = w.distro()
+    const beat = join(w.root, 'lockwait') // the file the part's job writes (CI_LOCKWAIT_FILE): ci-local.sh's main shell posts from it
+    const LOCKS_SH = join(here, 'ci-local/locks.sh')
+    const ciScript = `CI_NONCE=ci$$ CI_POLL=0.1 CI_LOCK_TIMEOUT=${30 * F} CI_SLOT=1 CI_LOCKWAIT_FILE="${beat}"; . "${LOCKS_SH}"; ci_mutex "${cd.env.TALOS_CI_CACHE}/locks" suites bash -c '${w.mark('ci', 'true')}'`
+    const ci = spawn('bash', ['-c', ciScript], { env: { ...cd.env, CI_SHARED_LOCK: w.file }, stdio: 'ignore' })
+    kids.push(ci)
+    await vi.waitUntil(
+      () => existsSync(beat) && readFileSync(beat, 'utf8').includes('which the other WSL distro holds'),
+      { timeout: 20_000 * F, interval: 25 },
+    )
+    const [since, last, what] = readFileSync(beat, 'utf8').trim().split('\t') // since, the last beat (epoch seconds), what it waits for
+    expect(Number(since)).toBeGreaterThan(1_700_000_000)
+    expect(Number(last)).toBeGreaterThanOrEqual(Number(since))
+    expect(what).toBe('the heavy lock, which the other WSL distro holds')
+    writeFileSync(release, '')
+    expect(await exited(a)).toBe(0)
+    expect(await exited(ci)).toBe(0)
+    expect(existsSync(beat)).toBe(false) // the lock is had: no longer a wait
+  })
+
   it('a fresh CI marker holds a request back even with the lock free; once it goes stale the request goes', async () => {
     const w = world()
     writeFileSync(`${w.file}.ci.handmade`, '') // a CI run waiting, as far as the request can tell

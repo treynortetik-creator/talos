@@ -12,6 +12,7 @@
 import {
   type AgentConfigPath,
   type AgentConfigT,
+  type AlwaysKind,
   agentConfigPatch,
   applyMergePatch,
   bindingFrom,
@@ -24,21 +25,21 @@ import {
   CUSTOM_THEMES_FEATURE,
   clipUnits,
   configCardCandidate,
+  configChangesOfferAlways,
   describeChange,
   type FolderRoots,
-  isSendKind,
+  isAlwaysKind,
   newId,
   payloadHash,
   readConfigPath,
   resolveConfigChanges,
-  type SendKind,
   subThreadPatchIssue,
   subThreadWarnings,
   undoText,
   validateCard,
   verifyConfigPayload,
 } from '@talos-app/protocol'
-import { kindPlural } from '../always-allow.ts'
+import { alwaysAllowedNow, kindPlural } from '../always-allow.ts'
 import type { LedgerRow } from '../cards-ledger.ts'
 import { localClock } from '../clock-meta.ts'
 import { type BridgeContext, defaultThreadRef, postSystemNotice, threadRef } from '../context.ts'
@@ -103,12 +104,12 @@ const changedText = (changes: ConfigChange[], config: AgentConfigT) =>
 const toldId = (cardId: string) => `m_${[...cardId.slice(2)].reverse().join('')}`
 
 /** The send kinds a change ADDS to always_allow (an add is always a card, Pantheon 2026-11-14); empty for none or a removal. */
-export function alwaysAllowAdded(changes: readonly ConfigChange[]): SendKind[] {
-  const out: SendKind[] = []
+export function alwaysAllowAdded(changes: readonly ConfigChange[]): AlwaysKind[] {
+  const out: AlwaysKind[] = []
   for (const c of changes) {
     if (c.path !== 'always_allow' || !Array.isArray(c.new)) continue
     const before = Array.isArray(c.old) ? (c.old as string[]) : []
-    for (const k of c.new as string[]) if (isSendKind(k) && !before.includes(k)) out.push(k)
+    for (const k of c.new as string[]) if (isAlwaysKind(k) && !before.includes(k)) out.push(k)
   }
   return out
 }
@@ -210,7 +211,11 @@ export class ConfigProposals {
     const hasOther = resolved.changes.some((c) => !isSetupChange(c))
     const quiet = !locked && addsAlways.length === 0 && strictlyQuiet(ctx, opts.scope)
     const otherOk = asked && !locked && addsAlways.length === 0 && fenceQuiet
-    const direct = (!setup || quiet) && (!hasOther || otherOk)
+    // A standing "Always allow settings changes" from the owner's tap: an ordinary-setting change goes through without a card
+    // (never a trust key, a never-pass change, or a row that the value or the config makes high: configChangesOfferAlways with the current config), and never while the lock is on. He is told at once, as for any direct change.
+    const granted =
+      !locked && alwaysAllowedNow(ctx, 'config') && configChangesOfferAlways(resolved.changes, ctx.config.config)
+    const direct = granted || ((!setup || quiet) && (!hasOther || otherOk))
     const now = ctx.clock.now()
     this.proposalAt = this.proposalAt.filter((t) => now - t < 3600_000)
     const warnings = [...(resolved.warnings ?? [])]
@@ -268,7 +273,7 @@ export class ConfigProposals {
           ...drawn,
           primary_label:
             addsAlways.length === 1
-              ? `Always allow ${kindPlural(addsAlways[0] as SendKind)}`
+              ? `Always allow ${kindPlural(addsAlways[0] as AlwaysKind)}`
               : `Always allow ${addsAlways.length} kinds`,
           risk: 'high' as const,
         }

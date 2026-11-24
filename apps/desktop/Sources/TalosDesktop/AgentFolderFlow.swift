@@ -99,6 +99,9 @@ final class AgentFolderFlow: ObservableObject {
   private var autoTried = false
   /// The folder box.
   @Published var path: String
+  /// Set by the last Create when the folder is fine but the installer left its "scheduler not added" marker: the plain words, once.
+  /// The setup screens read it; the checklist's card carries it in its own note.
+  private(set) var schedulerNote: String?
   /// Whether Claude is signed in, from the checklist's last check. false keeps the session from starting; nil does not.
   var signedIn: Bool?
   /// The new setup starts the agent itself once the owner reaches its end (sign-in and phone come first), so `finish` makes the folder
@@ -133,10 +136,13 @@ final class AgentFolderFlow: ObservableObject {
     guard await ensureCheckout(then: .create) else { return }
     guard let (dir, repo) = target(for: .create) else { return }
     step = .working("Creating your agent in \(dir). This can take a few minutes.")
+    schedulerNote = nil
     let env = deps.environment
-    let outcome = await Task.detached { Self.runInstall(repo: repo, dir: dir, env: env()) }.value
-    switch outcome {
-    case .done: finish(dir, repo: repo)
+    let home = deps.home
+    // ONE installer run does everything, the scheduler included; the app never runs it a second time
+    let result = await Task.detached { Self.runInstall(repo: repo, dir: dir, env: env(), home: home) }.value
+    switch result.outcome {
+    case .done: finish(dir, repo: repo, schedulerLater: result.schedulerLater)
     case .failed(let why), .needsConfirm(let why): step = .failed(why)
     }
   }
@@ -293,25 +299,11 @@ final class AgentFolderFlow: ObservableObject {
   /// installer refusal (a folder that is not empty and not a Talos agent) stays on the card; nothing is deleted. true: set up.
   @discardableResult
   func ensureAgentFolder() async -> Bool {
+    schedulerNote = nil
     if model.configured { return true }
     if path.trimmingCharacters(in: .whitespaces).isEmpty { path = AutoSetup.defaultAgentDir }
     await create()
     return model.configured
-  }
-
-  /// Adds Chronos to the agent folder (the scheduler, pinned by the kit, its jobs off until the agent finishes its own setup). Never
-  /// fatal: the agent exists whatever this says. nil: added; else the plain words for why not.
-  func ensureChronos() async -> String? {
-    guard let repo = deps.repoRoot().flatMap({ $0.isEmpty ? nil : $0 }) ?? deps.recordedRoot().flatMap({ $0.isEmpty ? nil : $0 }) else {
-      return AgentFolderSetup.chronosLater
-    }
-    let dir = PathUtil.expandTilde(path.trimmingCharacters(in: .whitespaces), home: NSHomeDirectory())
-    guard dir.hasPrefix("/") else { return AgentFolderSetup.chronosLater }
-    let env = deps.environment
-    let r = await Task.detached {
-      ProcessRunner.run(["/bin/bash"] + AgentFolderSetup.chronosArguments(repo: repo, dir: dir), env: env(), cwd: repo, timeout: 900)
-    }.value
-    return r.ok ? nil : AgentFolderSetup.chronosLater
   }
 
   /// Yes to the kit update card: run the update as a preview. It changes nothing; the real update is a command for Terminal.
@@ -420,7 +412,7 @@ final class AgentFolderFlow: ObservableObject {
 
   /// The folder is ready: name it in `desktop.json`, start the session if Claude is signed in, and say what happened. A kit 1.x
   /// folder that was adopted (`kitUpdate`) also gets the update card; one Create just installed is current.
-  private func finish(_ dir: String, repo: String, kitUpdate: Bool = false) {
+  private func finish(_ dir: String, repo: String, kitUpdate: Bool = false, schedulerLater: Bool = false) {
     let wasConfigured = model.configured
     if let why = model.useAgentFolder(dir, launchArgs: AgentFolderSetup.launchArgs(repo: repo)) {
       step = .failed(why)
@@ -443,6 +435,10 @@ final class AgentFolderFlow: ObservableObject {
     if let f = FirstRun.protectedFolder(dir, home: NSHomeDirectory()) {
       note += " The folder is inside \(f), which macOS protects, so macOS asks Talos once."
     }
+    if schedulerLater {
+      schedulerNote = AgentFolderSetup.chronosLater
+      if !holdStart { note += " " + AgentFolderSetup.chronosLater }
+    }
     if kitUpdate, let v = AgentFolderSetup.kit1Version(in: dir) {
       let command = (["bash"] + AgentFolderSetup.upgradeArguments(repo: repo, dir: dir)).map(LaunchSpec.shellQuote).joined(separator: " ")
       step = .offerUpgrade(dir: dir, version: v, command: command, note: note)
@@ -453,13 +449,21 @@ final class AgentFolderFlow: ObservableObject {
 
   // MARK: running things (off the main thread)
 
-  nonisolated static func runInstall(repo: String, dir: String, env: [String: String]) -> AgentFolderSetup.Outcome {
+  /// The one installer run. The marker is looked for in the environment this very child gets (same HOME, same XDG_CONFIG_HOME).
+  nonisolated static func runInstall(repo: String, dir: String, env: [String: String], home: String)
+    -> (outcome: AgentFolderSetup.Outcome, schedulerLater: Bool)
+  {
+    let existed = AgentFolderSetup.agentExisted(dir: dir, repo: repo)
     let r = ProcessRunner.run(
       ["/bin/bash"] + AgentFolderSetup.installArguments(repo: repo, dir: dir), env: env, cwd: repo, timeout: 1800)
     if r.timedOut {
-      return .failed("The installer took too long and was stopped. \(dir) may hold a partial copy: move it aside, then press Create again.")
+      return (.failed("The installer took too long and was stopped. \(dir) may hold a partial copy: move it aside, then press Create again."), false)
     }
-    return AgentFolderSetup.createOutcome(status: r.status, stderr: r.err)
+    let marker = AgentFolderSetup.chronosMarkerPresent(at: AgentFolderSetup.chronosMarkerPath(env: env, fallbackHome: home))
+    let res = AgentFolderSetup.installResult(
+      status: r.status, stderr: r.err, agentExisted: existed, markerPresent: marker,
+      connected: AgentFolderSetup.connectedToTalos(dir))
+    return (res.outcome, res.schedulerLater)
   }
 
   enum AdoptMode { case dryRun, connect, repoint }

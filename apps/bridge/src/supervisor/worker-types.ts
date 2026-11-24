@@ -3,6 +3,7 @@
 import type {
   DialogKeyKind,
   JwkP256T,
+  PointerHoldReasonT,
   PtyDialogKey,
   PtyExit,
   PtyLaunch,
@@ -86,6 +87,8 @@ export type WorkerPlan =
       cwd: string
       /** Servers on the thread's MCP list it starts without: not found anywhere, or never allowed. Told once per launch. */
       mcpLeftOut?: { missing: string[]; refused: string[] }
+      /** config.json could not be read and the extra lock was kept on: one plain line for the owner. */
+      lockNote?: string
       /** The folder's own settings files, which the session does not load (--setting-sources=user): told once per launch. */
       settingsIgnored?: string
       /** This launch's spec hash (launch-spec.ts), kept as WorkerLaunched.spec_hash for restart-on-update. */
@@ -206,6 +209,8 @@ export type WorkerRuntime = {
   owed: OwedState
   /** Why the pointer waits, as last told (the notice says it once per change). */
   heldFor?: 'draft' | 'no_box' | 'copy_mode' | 'refused' | 'unseen' | 'enter_uncertain' | null
+  /** The `pointer_hold` workers.json carries while the pointer is owed and the session has a pane (worker-status.ts): reason, and the wall-clock ISO time this hold began. */
+  hold?: { reason: PointerHoldReasonT; since: string } | null
   /** What the pane told the owner (worker-notices.ts). */
   notes: NoticeRuntime
   /** The dialog offered for a card, and the answers taken for it (worker-dialogs.ts). */

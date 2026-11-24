@@ -1,0 +1,11 @@
+{
+  "api": 1,
+  "chronos": "0.5.1",
+  "session_runner": "hook",
+  "approval_required": false,
+  "features": [
+    "times",
+    "meta",
+    "memory"
+  ]
+}

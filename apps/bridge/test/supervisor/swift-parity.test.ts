@@ -14,6 +14,7 @@ import {
   CLAIM_DEADLINE_COLD_MS,
   CLAIM_DEADLINE_MS,
   DIALOG_CARD_WAIT_MS,
+  DIALOG_TTL_S,
   folderSame,
   MAIN_RESTART_CHECK_FILE,
   MAIN_RESTART_CHECK_MAX_BYTES,
@@ -96,6 +97,15 @@ describe('the thread-session timings are the Mac’s', () => {
     expect(swiftNumber(manager, 'draftNoticeAfter')).toBe(WORKER_TIMING.draft_notice_after_s)
     expect(swiftNumber(manager, 'cardAckWait')).toBe(DIALOG_CARD_WAIT_MS / 1000)
     expect(swiftNumber(manager, 'cardLifetime')).toBe(WORKER_TIMING.card_lifetime_s)
+    // a card lives a day (the question leaving the screen closes it sooner); the wait of a STARTING worker at a dialog is its own 15 minutes
+    expect(WORKER_TIMING.card_lifetime_s).toBe(DIALOG_TTL_S)
+    expect(WORKER_TIMING.start_dialog_s).toBe(900)
+    expect(swiftNumber(manager, 'dialogLimit')).toBe(900)
+    expect(swiftNumber(swift('TalosSupervisor/SupervisorPanePrompt.swift'), 'paneLifetime')).toBe(DIALOG_TTL_S)
+    expect(swiftNumber(swift('TalosSupervisor/SupervisorDevCard.swift'), 'devCardLifetime')).toBe(DIALOG_TTL_S)
+    // the two Mac-only popups that never become a card keep their 15 minutes
+    expect(swiftNumber(swift('TalosSupervisor/SupervisorSafetyPopup.swift'), 'safetyLifetime')).toBe(900)
+    expect(swiftNumber(swift('TalosSupervisor/SupervisorFirstStart.swift'), 'apiKeyLifetime')).toBe(900)
     expect(swiftNumber(manager, 'noticeDebounce')).toBe(WORKER_TIMING.notice_debounce_s)
     expect(swiftNumber(manager, 'promptDebounce')).toBe(WORKER_TIMING.prompt_debounce_s)
     expect(swiftNumber(manager, 'noticeRetry')).toBe(WORKER_TIMING.notice_retry_s)
@@ -574,10 +584,14 @@ describe('the thread-state hook is the Mac’s', () => {
     expect(spec).toContain('WorkerHook.stateRegistered(settings: settings')
     expect(specTs).toContain("if ((stateVar === '1') !== stateRegistered)")
   })
-  it('the allow and deny rules: the same spelling, the same refusals', () => {
+  it('the state file’s allow rule and its `<file>/*` child deny: the same spelling, the same refusals', () => {
     const allow = stateFileAllowRules('/home/alex/agent', 'trip')
     expect(allow).toEqual(['Edit(//home/alex/agent/threads/trip.state.md)'])
-    expect(stateFileDenyRules('/home/alex/agent', 'trip')).toEqual(allow.map((r) => r.replace(/\)$/, '/**)')))
+    // the deny is the children only (`/*`): a `/**` deny also names the file itself in Claude Code 2.1.330 and refuses its Edit
+    expect(stateFileDenyRules('/home/alex/agent', 'trip')).toEqual(allow.map((r) => r.replace(/\)$/, '/*)')))
+    expect(stateFileDenyRules('/home/alex/agent/', 'trip')).toEqual(stateFileDenyRules('/home/alex/agent', 'trip'))
+    expect(macTest).toContain('tail: "/*")')
+    expect(macTest).not.toContain('tail: "/**")')
     // the Mac's test holds its output to the same string (with a trailing slash given, as TS trims it)
     expect(macTest).toContain('== ["Edit(//home/alex/agent/threads/trip.state.md)"]')
     expect(stateFileAllowRules('/home/alex/agent/', 'trip')).toEqual(allow)
@@ -593,8 +607,9 @@ describe('the thread-state hook is the Mac’s', () => {
       expect(stateFileAllowRules(bad, 'trip'), bad).toEqual([])
     for (const bad of ['../x', 'Trip'] as const) expect(stateFileAllowRules('/home/alex/agent', bad)).toEqual([])
     expect(state).toContain('CharacterSet(charactersIn: "*?[]{}()!\\\\\\"\'`")')
-    expect(state).toContain('stateRules(agentDir: agentDir, threadId: threadId, tail: "/**")')
-    // nothing lower-cased on the allow side, on either
+    expect(state).toContain('stateRules(agentDir: agentDir, threadId: threadId, tail: "/*")')
+    expect(state).not.toContain('"/**"')
+    // nothing lower-cased when the rules are written, on either (Claude Code matches without regard to case)
     expect(state).not.toContain('lowercased()')
   })
   it('the staged files are in the launch spec’s files under the same names', () => {

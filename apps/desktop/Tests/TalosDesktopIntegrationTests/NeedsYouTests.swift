@@ -173,7 +173,7 @@ struct NeedsYouTests {
     #expect(o.subject?.hasPrefix("/private/tmp/tcap-ny-proj.") == true)
     #expect(o.id.count == 22, "16 random bytes, base64url: \(o.id)")
     let seen = try #require(ISOTime.parse(o.seen_at)), expires = try #require(ISOTime.parse(o.expires_at))
-    #expect(abs(expires - seen - 900) < 0.01, "a card lives 900 s from the first sighting")
+    #expect(abs(expires - seen - 86400) < 0.01, "a card lives a day from the first sighting")
     #expect(abs(Date().timeIntervalSince1970 - seen) < 30)
     // it is in the file the bridge reads
     let raw = try #require(FileManager.default.contents(atPath: r.talosHome + "/workers.json"))
@@ -607,12 +607,90 @@ struct NeedsYouTests {
     defer { r.teardown(); keys.remove() }
     r.mgr.tune { $0.cardLifetime = 2 }
     let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 600 }  // not offered again meanwhile (its own test below): the old id is what this one asserts
     try r.ack(o.id)
     usleep(3_000_000)
     try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
     nothing(r, keys, reason: nil)
     #expect(log.all.isEmpty, "a dialog that had a card is the bridge's to speak for, expired or not: \(log.all)")
     #expect(r.state("trip") == "starting", "a dialog nobody answered stops no worker here: \(r.why("trip"))")
+  }
+
+  // MARK: a question left standing (L14)
+
+  /// Old code: an offer whose time was up was never replaced while the same dialog stood, so `r.offer.id` stayed `o.id` for good and the wait fails.
+  @Test func aDialogStillOnTheScreenWhenItsCardRunsOutIsOfferedAgainUnderANewNumber() throws {
+    let (r, keys, _, _) = try make("trust", ackWait: 1)
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.cardLifetime = 2 }
+    let o = try offered(r)
+    #expect(r.wait(20) { r.offer.map { $0.id != o.id } ?? false }, "never offered again: \(String(describing: r.offer))")
+    let n = try #require(r.offer)
+    #expect(n.kind == o.kind && n.subject == o.subject && n.options == o.options, "the same question, not another")
+    #expect((ISOTime.parse(n.expires_at) ?? 0) > Date().timeIntervalSince1970, "a new offer has its own time")
+    #expect(keys.keys.isEmpty, "offering again presses nothing: \(keys.keys)")
+  }
+
+  /// Old code: nothing changed the offer, so the old card's tap met the same id and only the time check refused it; with a new offer standing the
+  /// refusal must be for the number, and the new card must still answer.
+  @Test func aTapOnTheOldCardPressesNothingAndTheNewCardStillAnswers() throws {
+    let (r, keys, _, owner) = try make("trust", ackWait: 1)
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.cardLifetime = 2 }
+    let o = try offered(r)
+    r.mgr.tune { $0.cardLifetime = 600 }  // o keeps its 2 s (fixed when it was made); the offer that follows it is made with 600, so it cannot run out under a tap
+    #expect(r.wait(20) { r.offer.map { $0.id != o.id } ?? false })
+    let n = try #require(r.offer)
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: "unverified")  // refused for its NUMBER (the new offer has time left, so it is not the time check)
+    #expect(r.offer?.id == n.id, "the old tap changed the standing offer")
+    try r.writeAnswer(n, owner: owner, choice: 1, control: "ctl_2")
+    #expect(r.wait(15) { r.resultControl() == "ctl_2" })
+    #expect(r.result?["outcome"] as? String == "pressed" && r.result?["dialog_id"] as? String == n.id, "\(String(describing: r.result))")
+    _ = r.wait(5) { keys.keys.count >= 2 }
+    #expect(keys.keys == ["DOWN", "ENTER"], "one answer, one set of keys: \(keys.keys)")
+  }
+
+  /// L14, a verified tap of the owner's that pressed nothing ends the offer: the card has failed, so the next look at the same dialog on a settled screen
+  /// makes a new id (a new card) instead of leaving the question with a dead card. Old code left the same id standing, so the wait below fails.
+  @Test func aTapOfTheOwnersThatPressedNothingEndsTheOfferAndTheNextLookMakesANewOne() throws {
+    let (r, keys, _, owner) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    r.mgr.tune { $0.clientQuiet = 60 }
+    let o = try offered(r)
+    r.mgr.tune { $0.dialogSettle = 60 }  // the client's attach may redraw the pane; the offer is the one the tap meets
+    let client = try r.attachClient()
+    defer {
+      if client.isRunning { client.terminate() }
+      client.waitUntilExit()
+    }
+    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: nil)  // the typing guard: nothing pressed
+    client.terminate()
+    client.waitUntilExit()
+    r.mgr.tune { $0.dialogSettle = 1 }
+    #expect(r.wait(25) { r.offer.map { $0.id != o.id } ?? false }, "no new offer for the same dialog: \(String(describing: r.offer))")
+    #expect(keys.keys.isEmpty)
+  }
+
+  /// A tap that does not prove itself (an unpaired device) never ends an offer: a forged file cannot take the card away.
+  @Test func aForgedTapNeverEndsTheOffer() throws {
+    let (r, keys, _, _) = try make("trust")
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    try r.writeAnswer(o, owner: TestOwner(), choice: 1, control: "ctl_1")
+    nothing(r, keys, reason: "unverified")
+    usleep(3_000_000)
+    #expect(r.offer?.id == o.id, "a forged answer ended the offer")
+  }
+
+  /// Time not up: the same offer stands (no churn of numbers, no second card).
+  @Test func aDialogWhoseCardHasTimeLeftKeepsItsNumber() throws {
+    let (r, keys, _, _) = try make("trust", ackWait: 1)
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    usleep(3_000_000)
+    #expect(r.offer?.id == o.id, "an offer with time left was replaced")
   }
 
   @Test func whileTheOwnerIsTypingNothingIsSent() throws {
@@ -838,7 +916,10 @@ struct NeedsYouTests {
     nothing(r, keys, reason: nil)
     // control: with clients readable again, a tap goes through
     r.mgr.tune { $0.tmux = real }
-    try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_2")
+    // the owner's tap that pressed nothing ended that offer: the next look makes a new id, and the tap is for that one (the old id's is refused)
+    #expect(r.wait(25) { r.offer.map { $0.id != o.id } ?? false }, "no new offer: \(String(describing: r.offer))")
+    let n = try #require(r.offer)
+    try r.writeAnswer(n, owner: owner, choice: 1, control: "ctl_2")
     #expect(r.wait(15) { r.resultControl() == "ctl_2" })
     #expect(r.result?["outcome"] as? String == "pressed")
   }
@@ -1016,7 +1097,8 @@ struct NeedsYouTests {
     let o = try offered(r)
     r.mgr.tune { $0.dialogSettle = 60 }  // the old offer still stands; the screen under it is another dialog
     FileManager.default.createFile(atPath: trigger, contents: nil)
-    usleep(1_500_000)
+    // the other dialog is on the pane (the fake swaps within its own poll), not a guess at how long that takes
+    #expect(r.wait(10) { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("MCP server") }, "control: the other dialog was drawn")
     try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
     #expect(r.wait(15) { r.resultControl() == "ctl_1" })
     #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")

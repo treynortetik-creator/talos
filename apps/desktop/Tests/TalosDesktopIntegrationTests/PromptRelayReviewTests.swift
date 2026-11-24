@@ -6,6 +6,7 @@ import TalosTestSupport
 
 /// An attached tmux client with a tty (`script`), the way a Terminals window is one. Its activity time is the attach.
 private func attachClient(socket: String, session: String, home: String, wait r: (Double, () -> Bool) -> Bool) throws -> Process {
+  #expect(Rig.pinWindowSize(socket: socket, session: session), "control: the window is pinned to its size")
   let client = Process()
   client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
   client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=\(session)"]

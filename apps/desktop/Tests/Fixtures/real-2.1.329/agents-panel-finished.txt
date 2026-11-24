@@ -1,0 +1,13 @@
+⏺ Done.
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 10 background tasks · esc to interrupt · ↓ to manage
+  ⏺ main
+  ◯ talos-builder  waiting on 3 shells · Update now: busy threads wait 5 min max · since Friday 2:08 PM
+  ◯ talos-builder  waiting on 1 shell · Mac updater git hardening (Swift) · since Saturday 10:19 AM
+  ◯ talos-builder  Waiting for fam.out test results                4h 12m 9s · ↓ 360.1k tokens
+  ◯ talos-builder  Running anUngrantedAppsWindowNeverAppearsInAnAgentCapture t… stopped · 1d 16h 25m · ↓ 407.9k tokens
+  ◯ talos-builder  Polling gate6.log for results                                 stopped · 11h 0m 9s · ↓ 506.8k tokens
+  ↓ 2 more

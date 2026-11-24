@@ -95,12 +95,6 @@ else
   tstep() { step "$@"; }
   rstep() { step "$@"; }
 fi
-# A test step that fails only on known flaky tests (scripts/known-flakes.txt: owner, expiry) reruns each alone; every one passing
-# alone passes the step (flake_rerun, scripts/gate-flakes.sh, reached through tstep and rstep). Without the file, a plain step.
-if [ -f scripts/gate-flakes.sh ]; then
-  # shellcheck source=scripts/gate-flakes.sh
-  . scripts/gate-flakes.sh
-fi
 trap 'say "stopped"; exit 130' INT TERM
 
 # ---- how long a test may take here ------------------------------------------------------------------------------------------
@@ -502,8 +496,7 @@ elif [ "$FAST" = 1 ] && [ "${#BUN[@]}" -gt 0 ]; then
     bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts --jobs "$0" --files "$1"' "$FAST_JOBS" "$FAST_LIST"
 elif [ "${#BUN[@]}" -gt 0 ]; then
   # the paths are relative to the repository; bun runs in apps/bridge
-  # a known flake rerun alone gets this step's own per-test limit (flake_alone: test-parallel's 20 s x factor in the other steps)
-  FLAKE_BUN_TIMEOUT_MS=$((5000 * TALOS_TEST_TIME_FACTOR)) tstep "tests (bridge files)" bash -c 'cd apps/bridge && exec bun test --timeout=$((5000 * TALOS_TEST_TIME_FACTOR)) "${@#apps/bridge/}"' bun-tests "${BUN[@]}"
+  tstep "tests (bridge files)" bash -c 'cd apps/bridge && exec bun test --timeout=$((5000 * TALOS_TEST_TIME_FACTOR)) "${@#apps/bridge/}"' bun-tests "${BUN[@]}"
 fi
 # e2e: one worker (its relay runs inside the worker), Chromium (the config's one project)
 if [ "$E2E_ALL" = 1 ]; then

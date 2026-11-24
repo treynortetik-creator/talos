@@ -743,6 +743,11 @@ CREATE TABLE IF NOT EXISTS fts_files (media_id TEXT PRIMARY KEY, ord INTEGER NOT
 5. Non-empty rule: text, url, note or ≥ 1 file. A photo-only share is valid.
 6. Build the Message: author `owner`, via `share`, thread `inbox`, `text` = note, `share_content` = {text, url, title}.
    Store it, emit it, send `share.item`, update `last_used_*`.
+   With an `Idempotency-Key` header (16-64 of `A-Za-z0-9_-`, else 400) the same key on the same token is answered
+   `202` with the first `share_id` and nothing else is done; the key is recorded with the Mac's queue entry in one
+   transaction, kept 2 days, and never recorded for a refused or failed share (docs/SHARE.md "Sending twice"). The apps'
+   `message.stored` commits just before that transaction, so a failure between them leaves one extra Inbox row on retry;
+   the Mac gets one `share.item`. The body is read with the request deadline, so a stalled upload frees its key.
 7. Answer `202 {share_id}`.
 
 **Signed `/share` page** (Android `share_target`, bookmarklet, `?text=&url=&title=`):

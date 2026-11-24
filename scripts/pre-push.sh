@@ -78,12 +78,8 @@ scan_commit() { # scan_commit <commit> <whole tree: 1|0>: the commit's message a
   rm -rf "$d"; SCAN_DIR=""
   return $rc
 }
-personal() {
-  local common main="" l sha base commits c bad=0 d
-  if [ ! -f scripts/check-no-personal.sh ]; then
-    echo "pre-push: scripts/check-no-personal.sh is missing, so the personal-data check could not run; $SCAN_ENDS" >&2
-    return 1
-  fi
+private_lists() { # sets EXTRA_RULES and EXTRA_DOCS: this run's own lists plus the main checkout's private ones (gitignored, so a worktree lacks them)
+  local common main="" d
   EXTRA_RULES="${CHECK_EXTRA_RULES:-}" EXTRA_DOCS="${CHECK_PRIVATE_DOCS:-}"
   if common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then main="$(dirname "$common")"; fi
   if [ ! -f scripts/personal-denylist.txt ] && [ -n "$main" ] && [ -f "$main/scripts/personal-denylist.txt" ]; then
@@ -95,6 +91,14 @@ personal() {
       EXTRA_DOCS="${EXTRA_DOCS:+$EXTRA_DOCS:}$d"
     done < "$main/scripts/private-docs.txt"
   fi
+}
+personal() {
+  local l sha base commits c bad=0
+  if [ ! -f scripts/check-no-personal.sh ]; then
+    echo "pre-push: scripts/check-no-personal.sh is missing, so the personal-data check could not run; $SCAN_ENDS" >&2
+    return 1
+  fi
+  private_lists
   if [ ! -f scripts/personal-denylist.txt ] && [ "${EXTRA_RULES#*personal-denylist.txt}" = "$EXTRA_RULES" ]; then
     echo "pre-push: no private list (scripts/personal-denylist.txt) here or in the main checkout; only the generic personal-data rules ran" >&2
   fi
@@ -124,6 +128,45 @@ nl_names() {
   case "$out" in *$'\036'*) return 3 ;; esac
   printf '%s\n' "$out"
 }
+# A fleet status line (scripts/fleet-state-push.sh): refs/fleet/<name> or refs/fleet/_roster, a commit with no parent and ONE regular
+# file (headline, or roster), every line 1-160 printable ASCII (a headline: exactly one), personal-data clean. It must be the only
+# ref in the push (a delete too). It gets no gate: nothing here is code.
+fleet_refuse() { echo "pre-push: REFUSED: a fleet ref push: $1" >&2; exit 1; }
+fleet_check() { # fleet_check <local sha> <remote ref>
+  local lsha="$1" rref="$2" name file lines line tree_line
+  name="${rref#refs/fleet/}"
+  if [ "$name" = _roster ]; then file=roster; else
+    printf '%s\n' "$name" | grep -Eqx '[a-z][a-z0-9-]{0,31}' || fleet_refuse "$rref is not refs/fleet/<name> (lowercase, digits, -) or refs/fleet/_roster"
+    file=headline
+  fi
+  [ "$lsha" != "$ZERO" ] || return 0 # a delete, alone (the caller has checked that)
+  [ "$(git cat-file -t "$lsha" 2>/dev/null)" = commit ] || fleet_refuse "$rref must point at a commit"
+  [ "$(git rev-list --parents -n 1 "$lsha" | wc -w | tr -d ' ')" = 1 ] || fleet_refuse "the commit must have no parent"
+  tree_line="$(git ls-tree "$lsha")" || fleet_refuse "cannot read the tree"
+  [ "$(printf '%s\n' "$tree_line" | wc -l | tr -d ' ')" = 1 ] && [ "$(printf '%s\n' "$tree_line" | cut -f2)" = "$file" ] &&
+    [ "$(printf '%s\n' "$tree_line" | cut -d' ' -f1-2)" = "100644 blob" ] || fleet_refuse "the tree must be exactly one regular file named $file"
+  [ "$(git cat-file -s "$lsha:$file")" -le 65536 ] || fleet_refuse "the $file is too big"
+  if git cat-file blob "$lsha:$file" | LC_ALL=C grep -aq '[^ -~]'; then fleet_refuse "the $file holds a character that is not printable ASCII"; fi
+  lines=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lines=$((lines + 1))
+    [ "${#line}" -ge 1 ] && [ "${#line}" -le 160 ] || fleet_refuse "every line of the $file is 1 to 160 characters"
+  done < <(git cat-file blob "$lsha:$file")
+  [ "$lines" -ge 1 ] || fleet_refuse "the $file is empty"
+  [ "$file" = roster ] || [ "$lines" = 1 ] || fleet_refuse "a headline is exactly one line"
+  private_lists
+  scan_commit "$(git rev-parse "$lsha^{commit}")" 1 || fleet_refuse "the personal-data check failed (above)"
+  return 0
+}
+REFS_IN="$(cat)" # the whole push, to see whether it is a fleet push and whether anything rides along
+FLEET_N="$(printf '%s\n' "$REFS_IN" | awk 'NF >= 3 && $3 ~ /^refs\/fleet\// { n++ } END { print n + 0 }')"
+if [ "$FLEET_N" != 0 ]; then
+  [ "$(printf '%s\n' "$REFS_IN" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || fleet_refuse "it must be the only ref in the push"
+  read -r _lref lsha rref _rsha <<<"$REFS_IN"
+  fleet_check "$lsha" "$rref"
+  echo "pre-push: a fleet status line: the checks passed; no gate runs for it" >&2
+  exit 0
+fi
 ANY=0 ALL=0 SHAS="" GATE_BASE="" HANDOFF=0
 while read -r _lref lsha rref rsha; do
   [ -n "${lsha:-}" ] || continue
@@ -246,7 +289,7 @@ while read -r _lref lsha rref rsha; do
     PUSHES="$PUSHES$lsha none"$'\n'
     ALL=1 # no idea what this push contains: check everything
   fi
-done
+done <<<"$REFS_IN"
 [ "$ANY" = 1 ] || [ "$HANDOFF" = 1 ] || exit 0
 # The "Verified:" trailer (scripts/verified-trailer.sh, the verify skill): each commit says what was driven and where the evidence is,
 # or "none - <reason>". TALOS_VERIFIED_TRAILER=off|observe|enforce (default observe: one line to stderr and to the log for each

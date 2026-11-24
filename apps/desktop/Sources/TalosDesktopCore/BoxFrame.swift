@@ -29,22 +29,56 @@ public enum BoxFrame {
     #"^add 'set -g focus-events on' to ~/\.tmux\.conf and reattach for focus tracking$"#,
   ].map { try! NSRegularExpression(pattern: $0) }
 
+  /// The artifact part Claude Code 2.1.330 draws on the footer row once an Artifact canvas is open (real-2.1.330-canvas:
+  /// `⏵⏵ bypass permissions on (shift+tab to cycle) · ⧉ canvas · esc to interrupt`): `⧉` and the artifact's name (file name without its
+  /// extension, or its title, cut at 24 characters), or `⧉ N` with several. So the name is any text: 1 to 24 characters (code points; the
+  /// cut "…" counts), no hidden character (the row is refused whole for one), and no " · " or double space (a part ends there). Read only
+  /// on the row of a mode part (after it, at any place, cut or not), once, never as a row of its own.
+  static let artifactGlyph = "⧉ "
+  static func artifactPart(_ p: String) -> Bool {
+    let t = jsTrim(p)
+    guard t.hasPrefix(artifactGlyph) else { return false }
+    let n = t.unicodeScalars.count - 2
+    return n >= 1 && n <= 24
+  }
+
   /// JavaScript's white space and line terminators: what `\s` and `trim()` mean in the Linux twin (box-frame.ts). ICU's `\s` and
   /// Foundation's `.whitespaces` are other sets, so the rows are split and trimmed with this one and both sides read a row alike.
   static let jsSpaceClass = #"[\t\n\x{0B}\f\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]"#
   static let jsSpace: CharacterSet = CharacterSet(charactersIn: "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
     .union(CharacterSet(charactersIn: "\u{2000}"..."\u{200A}"))
 
-  /// A whole status row of its own shape: the agents panel (real-2.1.322/idle-agents-panel), the main session's row exactly, and a
-  /// subagent's row with its name, task, time and tokens. (Talos's own thread status line: `talosStatusLine`.) `\w` and `\s` spelled
-  /// as JavaScript reads them (ASCII word characters, `jsSpaceClass`).
-  static let statusRows: [NSRegularExpression] = [
-    #"^⏺ main$"#,
-    // a subagent's row: its name, its task (cut with "…" or left out on a narrow pane), its time and, when the pane has room, its token
-    // count with either arrow (real-2.1.322/idle-agents-panel; real-2.1.325-status/subagent-busy at 120, 60 and 30 columns)
-    #"^◯ [A-Za-z0-9_.-]+(?: \(\+N\))?(?:"# + jsSpaceClass + #"{2,}\S.*?)?"# + jsSpaceClass
-      + #"+Ns(?: · [↑↓](?: N(?:\.N)?k? tokens)?)?$"#,
-  ].map { try! NSRegularExpression(pattern: $0) }
+  /// The agents panel Claude Code draws under the footer (real-2.1.322/idle-agents-panel, real-2.1.325-status, real-2.1.329), read by its
+  /// BLOCK, never by a row's tail (the tail is the agent's task text and takes any form): an exact unfocused `⏺ main` straight under the box or
+  /// under a status row, then contiguous agent rows (at most `panelAgentsMax`), then at most one `↓ N more`, last, and only after an agent row.
+  /// An agent row is an optional tree connector (├ └), `◯ ` and printable text: no hidden character, no `❯` (focus always draws it), no `⏺`, no
+  /// option number first ("◯ 1."). Viewing an agent turns the first row into `◯ main`, which opens no block. A row of these shapes anywhere
+  /// else refuses, and its shape goes to the audit as `panel <shape>` (`panelShapes`).
+  static let panelAgentsMax = 5
+  static let panelMore = try! NSRegularExpression(pattern: #"^↓ N more\z"#)
+
+  enum PanelRow { case main, agent, more }
+
+  /// How a row reads as a panel row (cleaned, no hidden character), or nil.
+  static func panelRow(_ row: String) -> PanelRow? {
+    let raw = DialogMatcher.clean(row)
+    if hasHiddenScalars(raw) { return nil }
+    if raw == "⏺ main" { return .main }
+    if matches(panelMore, digitsAsN(raw)) { return .more }
+    var t = Substring(raw)
+    if let f = t.first, f == "├" || f == "└", t.dropFirst().first == " " { t = t.dropFirst(2) }
+    guard t.hasPrefix("◯ ") else { return nil }
+    let body = String(t.dropFirst(2))
+    guard !body.isEmpty, !body.contains("❯"), !body.contains("⏺"), optionFirst.firstMatch(in: body, range: NSRange(location: 0, length: (body as NSString).length)) == nil
+    else { return nil }
+    return .agent
+  }
+
+  /// A row that starts like the panel's (`◯ `, `⏺ `, `↓ `, a tree connector): when it refuses its shape is audited.
+  static func startsLikePanel(_ row: String) -> Bool {
+    let t = DialogMatcher.clean(row)
+    return ["◯ ", "⏺ ", "↓ ", "├ ", "└ "].contains { t.hasPrefix($0) }
+  }
 
   /// The status line Talos sets in every thread session's own settings (WorkerSpec, WorkerUsage.recorderSource), the same text on Linux
   /// (the protocol's USAGE_RECORDER_PY): "Talos", then ": <model>" (a letter or digit first, then at most 7 of [A-Za-z0-9 .()+-]; the
@@ -142,6 +176,10 @@ public enum BoxFrame {
   /// The general shape of a mode head (a glyph, lower-case words, "on"): one that is not a `modeHead` is a mode Talos has not seen, read
   /// exactly and audited.
   static let modeLike = try! NSRegularExpression(pattern: #"^(?:⏸|⏵⏵) [a-z ]+ on(?: \(shift\+tab(?: to cycle\))?)?\z"#)
+  /// The symbols that may open an unknown part, an allowlist of the footer symbols seen in 2.1.330 (the artifact mark and the warning
+  /// sign): every other symbol refuses and is audited, so a selection list's marks and pointers can never open one. box-frame.ts, the same.
+  static func neutralGlyph(_ u: Unicode.Scalar) -> Bool { u.value == 0x29C9 || u.value == 0x26A0 }
+
   /// One unknown part's shape, positively: ASCII lower-case letters, digits, space and / + . : , - only.
   static let unknownShapeRule = try! NSRegularExpression(pattern: #"^[a-z0-9 /+.:,\-]{1,24}\z"#)
   /// A single short word (four letters or fewer) is never an unknown part: a select's "yes", "deny", "ok" would be one.
@@ -155,7 +193,14 @@ public enum BoxFrame {
   /// first, `optionFirst`, no "y/n" and not the word "enter" in it; a hint shaped "x to y" stays one by design), read on the
   /// part trimmed. Anything else on a row that opens unknown parts refuses the row (and its shape goes to the audit, `refusedShape`).
   static func unknownPart(_ p: String) -> Bool {
-    let t = jsTrim(p)
+    var t = jsTrim(p)
+    // one allowlisted symbol and a space may open it ("⚠ low disk"); the text after it is read by the same rules
+    let sc = Array(t.unicodeScalars)
+    if sc.count > 2, neutralGlyph(sc[0]), sc[1] == " " {
+      t = String(String.UnicodeScalarView(sc[2...]))
+      // after a symbol an answer word anywhere in it ("⚠ low yes") refuses as well
+      if t.range(of: #"(?<![a-z0-9])(?:yes|no|ok|y|n)(?![a-z0-9])"#, options: .regularExpression) != nil { return false }
+    }
     let range = NSRange(location: 0, length: (t as NSString).length)
     return matches(unknownShapeRule, t) && !matches(shortWord, t) && optionFirst.firstMatch(in: t, range: range) == nil && !t.contains("y/n")
       && enterWord.firstMatch(in: t, range: range) == nil
@@ -222,7 +267,6 @@ public enum BoxFrame {
     if hasHiddenScalars(raw) { return .refused(shape: nil) }
     let c = digitsAsN(raw)
     if c.isEmpty { return .row(RowReading(kind: .claude, unknown: [])) }
-    if statusRows.contains(where: { matches($0, c) }) { return .row(RowReading(kind: .claude, unknown: [])) }
     let ps = parts(raw)
     if claudeParts(ps) { return .row(RowReading(kind: .claude, unknown: [])) }
     let first = jsTrim(ps[0])
@@ -237,8 +281,12 @@ public enum BoxFrame {
       return matches(modeLike, digitsAsN(first)) ? .refused(shape: "mode " + refusedShape(first)) : .refused(shape: nil)
     }
     var unknown: [String] = []
+    var sawMode = head, sawArtifact = false
     for (i, p) in rest.enumerated() {
+      if matches(modeHead, jsTrim(p)) { sawMode = true }
       if claudePart(p) || (i == rest.count - 1 && cutPart(p)) { continue }
+      // the artifact part: only after a mode part, once
+      if sawMode && !sawArtifact && artifactPart(p) { sawArtifact = true; continue }
       guard unknownPart(p) else { return .refused(shape: refusedShape(p)) }
       unknown.append(jsTrim(p))
     }
@@ -264,10 +312,12 @@ public enum BoxFrame {
   /// for the audit (`status_part_refused`): what a new Claude Code draws there that Talos should capture and add.
   public static func refusedShapes(_ rows: [String], bottomRule: Int) -> [String] {
     guard bottomRule + 1 < rows.count else { return [] }
-    return rows[(bottomRule + 1)...].compactMap { r in
+    var out = rows[(bottomRule + 1)...].compactMap { r -> String? in
       if case .refused(let shape?) = readRowDetailed(r) { return shape }
       return nil
     }
+    if let p = strangeRowDetail(rows, bottomRule: bottomRule)?.panel { out.append(p) }
+    return out
   }
 
   /// The row is (or begins with) Talos's own thread status line (`rowKind`).
@@ -278,24 +328,53 @@ public enum BoxFrame {
 
   /// The first row under the box that is not a status row (its cleaned text), or nil when every row is one. `bottomRule`: the box's
   /// bottom rule row. Strict: a user's own status line is not a status row; Talos's own is allowed once (`rowKind`).
-  public static func strangeRowUnder(_ rows: [String], bottomRule: Int) -> String? {
+  public static func strangeRowUnder(_ rows: [String], bottomRule: Int) -> String? { strangeRowDetail(rows, bottomRule: bottomRule)?.row }
+
+  /// `strangeRowUnder` with, for the audit, the `panel <shape>` of the refused row when it is in or starts like the agents panel.
+  static func strangeRowDetail(_ rows: [String], bottomRule: Int) -> (row: String, panel: String?)? {
     guard bottomRule + 1 < rows.count else { return nil }
     var talosRows = 0
     var unknownRows = 0
+    // the agents panel as one block (`panelRow`): `⏺ main` (none yet), its agent rows, "↓ N more" last
+    var open = false, done = false, agents = 0
+    func refuse(_ i: Int, panelRelated: Bool) -> (row: String, panel: String?) {
+      let row = DialogMatcher.clean(rows[i])
+      return (row, panelRelated || startsLikePanel(rows[i]) ? "panel " + refusedShape(row) : nil)
+    }
     for i in (bottomRule + 1)..<rows.count {
+      if let p = panelRow(rows[i]) {
+        // directly under the box or under a status row, with the blank spacer Claude Code draws between them passed over
+        var j = i - 1
+        while j > bottomRule, DialogMatcher.clean(rows[j]).isEmpty { j -= 1 }
+        let after = j == bottomRule || readRow(rows[j]) != nil
+        switch p {
+        case .main:
+          if open || done || !after { return refuse(i, panelRelated: false) }
+          open = true
+        case .agent:
+          agents += 1
+          if !open || done || agents > panelAgentsMax { return refuse(i, panelRelated: true) }
+        case .more:
+          if !open || done || agents < 1 { return refuse(i, panelRelated: true) }
+          done = true
+        }
+        continue
+      }
+      let inBlock = open && !done
+      if open { open = false; done = true }
       // a solid rule (another frame; `clean` would read it as blank) is never a status row
-      if DialogMatcher.isFrameRule(rows[i]) { return String(rows[i].trimmingCharacters(in: .whitespaces).prefix(20)) }
-      guard let read = readRow(rows[i]) else { return DialogMatcher.clean(rows[i]) }
+      if DialogMatcher.isFrameRule(rows[i]) { return (String(rows[i].trimmingCharacters(in: .whitespaces).prefix(20)), nil) }
+      guard let read = readRow(rows[i]) else { return refuse(i, panelRelated: inBlock) }
       let kind = read.kind
       // parts Talos does not know: on one row under the box at most
       if !read.unknown.isEmpty {
         unknownRows += 1
-        if unknownRows > 1 { return DialogMatcher.clean(rows[i]) }
+        if unknownRows > 1 { return (DialogMatcher.clean(rows[i]), nil) }
       }
       // Talos's own status line is one row, new form or old (`oldRecorderRow`): a second of either is not it
       if kind == .recorder {
         talosRows += 1
-        if talosRows > 1 { return DialogMatcher.clean(rows[i]) }
+        if talosRows > 1 { return (DialogMatcher.clean(rows[i]), nil) }
       }
     }
     return nil

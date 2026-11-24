@@ -27,12 +27,14 @@ import {
   jcs,
   NEVER_DEDICATED_THREADS,
   OWNER_FRAME_TYPES,
+  POINTER_HOLD_REASONS,
   parseFrame,
   parseWorkersFile,
   SessionKind,
   SessionState,
   SUPERVISOR_STALE_MS,
   sessionFieldsIssue,
+  strongestPointerHold,
   supervisorFresh,
   Thread,
   threadSessionMode,
@@ -371,9 +373,9 @@ describe('worker constants', () => {
       expect(WORKER_FORBIDDEN_ARGS).toContain(a)
   })
 
-  it('deadlines: cold resume waits longer than a warm pointer; the cap hold is 2 min', () => {
-    expect(CLAIM_DEADLINE_MS).toBe(90_000)
-    expect(CLAIM_DEADLINE_COLD_MS).toBeGreaterThan(CLAIM_DEADLINE_MS)
+  it('deadlines: a live session gets 10 min, one being started 3 min; the cap hold is 2 min', () => {
+    expect(CLAIM_DEADLINE_MS).toBe(600_000)
+    expect(CLAIM_DEADLINE_COLD_MS).toBe(180_000)
     expect(CAP_HOLD_MS).toBe(120_000)
   })
 })
@@ -527,5 +529,45 @@ describe('workers.status main_needs_you', () => {
     const ny = { kind: 'sign in', since: '2026-11-13T11:50:00.000Z' }
     expect(WorkersStatus.parse({ ...base, main_needs_you: ny }).main_needs_you).toEqual(ny)
     expect(WorkersStatus.parse({ ...base, main_needs_you: { kind: '' } }).main_needs_you).toBeUndefined()
+  })
+})
+
+describe('pointer_hold on a workers.json entry (why a session cannot take the owner message right now)', () => {
+  const at = '2026-11-13T12:00:00.000Z'
+  const entryOf = (extra: Record<string, unknown>) => {
+    const r = parseWorkersFile(
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: at, workers_supported: true },
+        threads: { trip: { state: 'live', tmux: 't-trip', cwd: '/home/alex/trip', ...extra } },
+      }),
+    )
+    return r?.threads.trip
+  }
+  it('the four reasons, highest precedence first: typed_unseen > draft > scrolled > refused', () => {
+    expect([...POINTER_HOLD_REASONS]).toEqual(['typed_unseen', 'draft', 'scrolled', 'refused'])
+    expect(strongestPointerHold(['refused', 'scrolled'])).toBe('scrolled')
+    expect(strongestPointerHold(['scrolled', 'draft', 'refused'])).toBe('draft')
+    expect(strongestPointerHold(['refused', 'draft', 'typed_unseen', 'scrolled'])).toBe('typed_unseen')
+    expect(strongestPointerHold([])).toBeNull()
+  })
+  it('absent reads as none; a known reason and its fixed `since` are kept', () => {
+    expect(entryOf({})?.pointer_hold).toBeUndefined()
+    expect(entryOf({ pointer_hold: { reason: 'draft', since: at } })?.pointer_hold).toEqual({
+      reason: 'draft',
+      since: at,
+    })
+  })
+  it('a reason this build does not know is kept as a string (the reader shows the generic line), never refused', () => {
+    expect(entryOf({ pointer_hold: { reason: 'tea_break', since: at } })?.pointer_hold).toEqual({
+      reason: 'tea_break',
+      since: at,
+    })
+    expect(strongestPointerHold(['tea_break'])).toBeNull()
+  })
+  it('a value that does not fit costs only the field, never the entry or the file', () => {
+    for (const bad of [{ reason: '', since: at }, { reason: 'draft', since: 'yesterday' }, 'draft', 7, { since: at }])
+      expect(entryOf({ pointer_hold: bad })).toMatchObject({ state: 'live' })
+    expect(entryOf({ pointer_hold: { reason: 'draft', since: 'yesterday' } })?.pointer_hold).toBeUndefined()
   })
 })

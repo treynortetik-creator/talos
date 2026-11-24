@@ -90,7 +90,8 @@ git clone https://github.com/<you>/talos.git && cd talos   # your own fork; SETU
 
 That gets you an agent on your Mac. The relay on Railway, the bridge key and your phone are `SETUP.md` steps 4 to 7. Kit options
 (`--with-vault DIR`, `--with-memory-search`, `--with-parakeet` and the rest of the list in `kit/install.sh --help`) pass straight
-through, and `--with-chronos` adds the scheduler; `--relay-url https://<host>` also sets up the bridge.
+through; the scheduler (Chronos) comes with a Mac install, and a Chronos you made yourself is left alone unless you pass
+`--reinstall-chronos`; `--relay-url https://<host>` also sets up the bridge.
 
 `--agent-dir <path>` picks another folder (a non-empty folder that is not a Talos agent is refused, and a CLAUDE.md you
 tuned is never overwritten); `--yes` skips the prompt.

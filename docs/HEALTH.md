@@ -68,14 +68,15 @@ another bridge has replaced stops watching. `TALOS_APP_ALERT_NTFY_URL` has no to
 
 ## Settings → Health
 
-| Row          | Reads                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------ |
-| Relay        | Up since, version. Red if storage is nearly full                                                 |
-| Mac bridge   | Connected, or `offline since 22:41` (amber, red after 12 hours)                                  |
-| Talos mod    | Reporting, quiet, `Not installed`, or unknown while the Mac is offline                           |
-| Scheduler    | The cached scheduler state (when Schedules is on)                                                |
-| Mac disk     | Free space (only while the bridge is connected and reports it); amber under 4 GB, red under 2 GB |
-| Phone alerts | Push on this device, ntfy on, or red `Nobody can be alerted`                                     |
+| Row             | Reads                                                                                                                                                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Relay           | Up since, version. Red if storage is nearly full                                                                                                                                                                                                                               |
+| Mac bridge      | Connected, or `offline since 22:41` (amber, red after 12 hours)                                                                                                                                                                                                                |
+| Talos mod       | Reporting, quiet, `Not installed`, or unknown while the Mac is offline                                                                                                                                                                                                         |
+| Scheduler       | The cached scheduler state (when Schedules is on)                                                                                                                                                                                                                              |
+| Mac disk        | Free space (only while the bridge is connected and reports it); amber under 4 GB, red under 2 GB                                                                                                                                                                               |
+| Phone alerts    | Push on this device, ntfy on, or red `Nobody can be alerted`                                                                                                                                                                                                                   |
+| A thread's name | Only while Talos cannot send that thread messages (its screen shows something Talos doesn't recognise): amber, with the minutes and the refused tries this hour. If it stays that way, your main agent answers its messages. `talos-app doctor` has the same as a warning row. |
 
 The thread screens show one banner per Mac problem, each with what happened and what to do: the connection just dropped
 (under 5 minutes), the Mac is probably asleep or its session has stopped (over 5 minutes), the server turned away the Mac's

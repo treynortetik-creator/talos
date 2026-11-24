@@ -40,7 +40,7 @@ describe('a result or report cut at its limit', () => {
       const sent: Array<{ result?: { text: string } }> = []
       const self = {
         ctx: {
-          ledger: { finish: () => true },
+          ledger: { finish: () => true, get: () => undefined },
           clock: { now: () => 0 },
           transport: { sendDurable: async (f: never) => void sent.push(f) },
           log: { warn: () => {} },

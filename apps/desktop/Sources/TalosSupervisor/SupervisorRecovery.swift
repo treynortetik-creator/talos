@@ -12,6 +12,15 @@ struct RecoveryState {
   /// The same for the agent's permission-mode request (SupervisorPermissionMode.swift), and when (awake clock) one was last acted on.
   var permissionHandledId: String?
   var permissionActedAt: Double?
+  /// A saved change from the agent that waits for Main to finish before the restart (SupervisorPermissionPending.swift). In memory only:
+  /// after a relaunch the saved mode simply applies at the next start.
+  var permissionPending: PermissionPending?
+  /// The process list the pending change reads for background work (a test swaps it).
+  var procTable: @Sendable () -> [BackgroundWork.Proc]? = { ProcTable.live() }
+  /// When the newest `claude agents` look that listed Main's pane BEGAN (the supervisor's clock): `status.agentActivity` is only as new as that.
+  var freshPollStart: Double = -.infinity
+  /// The launch (its pid) whose leftover marker has been looked at once (SupervisorPermissionPending.swift).
+  var markerLookedFor: Int32?
   /// The saved arguments of the newest launch that got to `.running` (its development-channel dialog answered): what Main really runs
   /// with. Thread sessions are held to these, so a saved change is never passed on before Main runs in it.
   var confirmedArgs: [String]?
@@ -51,6 +60,8 @@ struct RecoveryState {
   /// `main-restart-check.json` (SupervisorRestartCheck.swift): what came of the newest request, the one still being followed, and
   /// when the file was last written.
   var restartCheck = RestartCheckState()
+  /// How often Main's start lines go out (row 12) and the one post in flight: their own gate, apart from the request lines'.
+  var startLines = MainRestartCheck.PhoneLines()
 }
 
 /// The Mac half of "Restart agent" on the phone, and the one automatic restore. The decisions are
@@ -61,6 +72,7 @@ extension Supervisor {
 
   func recoveryTick(_ now: Double) {
     permissionModeTick(now)
+    permissionPendingTick(now)
     if phase != .starting { recovery.postColdStart = false }
     guard !recovery.restoreInFlight else { return }
     let file = AgentRequestFile.read(path: requestPath)

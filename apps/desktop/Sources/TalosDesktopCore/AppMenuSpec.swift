@@ -63,7 +63,7 @@ public enum AppMenuSpec {
       Item(.showTalos, "Show Talos", key: "t"),
       Item(.showTerminal, MacWords.showAgentScreen),  // no key: ⌘K is search in the Talos window
       Item(.quickCompose, MacWords.quickMessage, key: "n"), nil,
-      Item(.companionToggle, "Show Companion"),
+      Item(.companionToggle, "Show Talos character"),
       Item(.signIn, MacWords.connectThisMac),
       Item(.signOut, MacWords.signOutWindow), nil,
       Item(.setupChecklist, "Set up Talos\u{2026}"),

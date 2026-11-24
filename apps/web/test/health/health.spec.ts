@@ -207,3 +207,39 @@ test('axe: Health is clean in light and dark, healthy and broken', async ({ page
   await expect(row(page, 'alerts')).toHaveAttribute('data-tone', 'bad')
   await expectAxeClean(page)
 })
+
+test('a thread Talos cannot type into: one amber row with its minutes and refused tries, at phone width; gone when it clears', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await open(page, () => statusOf())
+  const emit = (deaf: { minutes: number; refusals_1h: number } | null) =>
+    page.evaluate((d) => {
+      const c = (
+        window as unknown as { __talos: { emit: (t: string, f: unknown) => void; store: { getState: () => unknown } } }
+      ).__talos
+      c.emit('workers.status', {
+        status: {
+          supported: true,
+          supervisor_online: true,
+          threads: [{ thread_id: 'general', state: 'live', ...(d ? { deaf: d } : {}) }],
+          governor: { state: 'ok' },
+          at: new Date().toISOString(),
+        },
+      })
+    }, deaf)
+  await expect(row(page, 'typing:general')).toHaveCount(0) // nothing to say while nothing is wrong
+  await emit({ minutes: 11, refusals_1h: 640 })
+  const r = row(page, 'typing:general')
+  await expect(r).toBeVisible()
+  await expect(r).toHaveAttribute('data-tone', 'warn')
+  await expect(r).toContainText("Talos can't send it messages")
+  await expect(r).toContainText('11 min')
+  await expect(r).toContainText('640 tries refused this hour')
+  await expect(r).toContainText('your main agent answers its messages')
+  // phone width: the row wraps, the page does not scroll sideways
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expectAxeClean(page)
+  await emit(null)
+  await expect(row(page, 'typing:general')).toHaveCount(0) // clears itself when typing works again
+})

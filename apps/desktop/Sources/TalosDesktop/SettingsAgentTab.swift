@@ -55,6 +55,9 @@ extension SettingsView {
         if reading == .custom {
           SettingsCaption(PermissionModeSetting.customLine, size: 12)
         }
+        if let line = unappliedLine {
+          SettingsCaption(line, size: 12).accessibilityIdentifier("permission-unapplied-line")
+        }
         if !modeNote.isEmpty {
           SettingsCaption(modeNote, size: 12).accessibilityIdentifier("permission-mode-note")
         }
@@ -72,6 +75,16 @@ extension SettingsView {
     } message: { _ in
       Text(PermissionModeSetting.askFirstBody)
     }
+  }
+
+  /// The saved mode the running agent does not have yet: named with the running mode when it is known, else without it (a launch the
+  /// app attached to after a relaunch). Nil when the agent is not up or has what is saved.
+  private var unappliedLine: String? {
+    guard model.sessionIsUp, case .mode(let saved) = PermissionModeSetting.read(cfg.args) else { return nil }
+    if let n = PermissionModeSetting.notYetActive(saved: cfg.args, running: model.status.runningArgs) {
+      return PermissionModeSetting.unappliedLine(saved: n.saved, running: n.running)
+    }
+    return model.status.runningArgs == nil && model.status.launchPending ? PermissionModeSetting.unappliedUnknownLine(saved: saved) : nil
   }
 
   private func modeCard(_ m: PermissionMode, picked: Bool) -> some View {
@@ -101,9 +114,25 @@ extension SettingsView {
   }
 
   /// A choice among the cards: the mode already in force does nothing; a running agent is restarted for you, and asked about first
-  /// only while it is on a turn.
+  /// only while it is on a turn. The saved mode the running agent does not have yet is not "in force": choosing it again restarts the
+  /// agent the same way ("Restart to apply").
   func chooseMode(_ mode: PermissionMode) {
-    guard loaded, PermissionModeSetting.evaluate(mode, against: model.configNow) != .unchanged else { return }
+    guard loaded else { return }
+    if PermissionModeSetting.evaluate(mode, against: model.configNow) == .unchanged {
+      // the saved mode the running agent does not have (known to differ, or not known to match after a relaunch): restart to apply
+      let differs =
+        PermissionModeSetting.notYetActive(saved: model.configNow.args, running: model.status.runningArgs)?.saved == mode
+        || (model.status.runningArgs == nil && model.status.launchPending)
+      guard model.sessionIsUp, differs else { return }
+      switch model.permissionModeFollowUp {
+      case .askFirst: confirmRestart = true
+      case .restartNow:
+        model.restartToApply()
+        modeNote = PermissionModeSetting.restartingNote
+      case .saveOnly: break
+      }
+      return
+    }
     // a half-typed start-up command would save over the new flag: it is saved or reverted first
     guard launchDraft == launchLoaded else {
       modeNote = PermissionModeSetting.unsavedNote

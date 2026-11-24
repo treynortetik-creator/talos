@@ -55,18 +55,65 @@ public enum PermissionModeSetting {
   public static let askFirstBody = "Changing this restarts your agent and ends what it is doing. Restart it now?"
   public static let savedNotRunning = "Saved. It applies when your agent starts."
 
+  /// When a change the agent asked for takes effect.
+  public enum Apply: Equatable, Sendable {
+    /// Nothing runs: the next start.
+    case nextStart
+    /// Talos restarts the agent once it has finished what it is doing, whether the change gives it more or less freedom: nothing it
+    /// is doing is cut.
+    case whenIdle
+  }
+
+  /// The way to apply a waiting change right away: the menu bar item's own words (`MacWords.restartAgent`).
+  static let rightAway = "To apply it right away, choose \"\(MacWords.restartAgent)\" in the menu bar item."
+
   /// The lines the phone gets about an agent's request: fixed words, never the agent's own text.
-  public static func changedLine(_ mode: PermissionMode, restarting: Bool) -> String {
-    let tail = restarting
-      ? "Talos is restarting the agent now, and the new start waits for you to confirm the development-channel dialog at the Mac (\"Start with \(mode.label)?\")."
-      : "It applies the next time the agent starts."
+  public static func changedLine(_ mode: PermissionMode, apply: Apply) -> String {
+    let tail: String
+    switch apply {
+    case .nextStart: tail = "It applies the next time the agent starts."
+    case .whenIdle:
+      tail = "It takes effect when the agent finishes what it is doing. \(rightAway) The new start then waits for you to confirm the development-channel dialog at the Mac (\"Start with \(mode.label)?\")."
+    }
     // Bypass all is said plainly and with the way back: a row the owner sees, so an injected switch cannot go unseen
     if mode == .bypass {
-      return "Your agent switched itself to \(mode.label). No permission cards reach your phone in this mode. If you did not ask for this, change it back in \(MacSettingsText.agentPath). \(tail)"
+      return "Your agent asked to switch itself to \(mode.label), and the setting is saved. No permission cards reach your phone in this mode. If you did not ask for this, change it back in \(MacSettingsText.agentPath). \(tail)"
     }
-    return "The agent asked to switch the permission mode to \(mode.label). \(tail)"
+    return "The agent asked to switch the permission mode to \(mode.label), and the setting is saved. \(tail)"
   }
-  public static func alreadyLine(_ mode: PermissionMode) -> String { "The permission mode is already \(mode.label). Nothing changed." }
+  /// Said once, when background work is what the waiting change is held by.
+  public static let heldByBackgroundLine =
+    "The new permission mode is saved and waits for the background work your agent has running. \(rightAway)"
+  /// The save did not work: nothing changed and nothing restarts.
+  public static func saveFailedLine(_ mode: PermissionMode) -> String {
+    "The agent asked to switch the permission mode to \(mode.label), but Talos could not save the setting. Nothing changed."
+  }
+  /// The mode is already the saved one but the running agent does not have it yet.
+  public static func alreadySavedLine(_ mode: PermissionMode, waiting: Bool) -> String {
+    "The permission mode is already saved as \(mode.label), but the agent is not running in it yet. "
+      + (waiting ? "It takes effect when the agent finishes what it is doing. \(rightAway)" : "It applies the next time the agent restarts.")
+  }
+  public static func alreadyLine(_ mode: PermissionMode) -> String {
+    "The permission mode is already \(mode.label), and your agent keeps running in that mode. Nothing changed."
+  }
+  /// The agent asked for a change that took effect in the saved file only because the running agent already has that mode.
+  public static func keepsRunningLine(_ mode: PermissionMode) -> String {
+    "The agent asked to switch the permission mode to \(mode.label), and the setting is saved. Your agent keeps running in that mode, so nothing restarts."
+  }
+
+  /// A saved mode the running agent does not have yet: (saved, running); nil when they are the same or either is not one of the three.
+  public static func notYetActive(saved: [String], running: [String]?) -> (saved: PermissionMode, running: PermissionMode)? {
+    guard let running, case .mode(let s) = read(saved), case .mode(let r) = read(running), s != r else { return nil }
+    return (s, r)
+  }
+  /// The one line under the cards when the app knows the saved launch is not the running one but not what the running mode is.
+  public static func unappliedUnknownLine(saved: PermissionMode) -> String {
+    "Saved as \(saved.label). Your agent does not have it until it restarts."
+  }
+  /// The one line under the cards while that is so.
+  public static func unappliedLine(saved: PermissionMode, running: PermissionMode) -> String {
+    "Saved as \(saved.label). Your agent is still running in \(running.label) until it restarts."
+  }
   public static func refusedLine(_ why: PermissionModeRequest.Refusal) -> String {
     switch why {
     case .locked: return "The agent asked to change the permission mode, but Talos settings are locked. Nothing changed."
@@ -305,5 +352,27 @@ public enum LaunchPending {
 
   public static func argsForThreads(saved: [String], running: [String]?, pending: Bool) -> [String] {
     pending ? (running ?? []) : saved
+  }
+}
+
+/// `permission-pending.<session>.json` beside desktop.json: a change of the agent's that is saved and still waits for Main to finish, so a
+/// relaunch of the app keeps waiting. Anything that does not read exactly as written here is no marker at all.
+public enum PermissionPendingMarker {
+  public static let maxBytes = 1024
+
+  public static func fileName(session: String) -> String { "permission-pending.\(session).json" }
+
+  public static func encode(mode: PermissionMode, savedAtMs: Double) -> Data {
+    let o: [String: Any] = ["v": 1, "mode": mode.rawValue, "saved_at": Int64(savedAtMs)]
+    return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data()
+  }
+
+  public static func parse(_ data: Data?) -> PermissionMode? {
+    guard let data, !data.isEmpty, data.count <= maxBytes,
+      let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      (o["v"] as? NSNumber)?.intValue == 1, o["saved_at"] is NSNumber,
+      let m = o["mode"] as? String, let mode = PermissionMode(rawValue: m)
+    else { return nil }
+    return mode
   }
 }

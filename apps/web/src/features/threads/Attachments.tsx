@@ -7,7 +7,8 @@ import { formatBytes, formatDuration } from '../../lib/format.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconExpand, IconFile, IconLink, IconPause, IconPlay } from '../../ui/icons.tsx'
 import { FrameOverlay, SandboxedFrame } from '../../ui/SandboxedFrame.tsx'
-import { audioDock, type DockItem, savedPosition, useDock } from './audioDock.ts'
+import { AudioLine, useAudioLine } from './AudioLines.tsx'
+import { type AudioItem, audioPlayer, savedPosition, useAudio } from './audioPlayer.ts'
 import { rememberOpener } from './ImageViewer.tsx'
 import { MarkdownFileCard } from './MarkdownFileCard.tsx'
 import { MediaStatus } from './MediaStatus.tsx'
@@ -21,14 +22,14 @@ import { useDelivery } from './useDelivery.ts'
 // ---- voice-note playback order (consecutive notes auto-play) ---------------------------------------------------
 type Player = { play(): void }
 /**
- * `ids` are the voice-note messages in order; `items` is what the dock needs to play each one after the thread is gone
- * (its media id, title and thread). The dock captures the notes after the one he taps when playback starts.
+ * `ids` are the voice-note messages in order; `items` is what the player needs to play each one while its row is scrolled out
+ * (its media id and title). The player captures the notes after the one he taps when playback starts.
  */
-export type VoiceOrder = { ids: string[]; players: Map<string, Player>; items?: Map<string, DockItem> }
+export type VoiceOrder = { ids: string[]; players: Map<string, Player>; items?: Map<string, AudioItem> }
 export const VoiceOrderContext = createContext<VoiceOrder>({ ids: [], players: new Map(), items: new Map() })
 
 const SNIPPET = 60
-/** The pill's title: a voice note reads as its first words once transcribed, a file as its name. */
+/** The lock-screen title: a voice note reads as its first words once transcribed, a file as its name. */
 function titleFor(att: AttachmentRefT, variant: 'voice_note' | 'audio', transcript?: MessageT['transcript']): string {
   if (variant === 'audio') return att.name
   const text = transcript?.status === 'failed' ? '' : (transcript?.text ?? '').trim().replace(/\s+/g, ' ')
@@ -43,7 +44,7 @@ export function useVoiceOrder(messages: MessageT[]): VoiceOrder {
   )
   const ids = useMemo(() => voice.map((m) => m.id), [voice])
   const items = useMemo(() => {
-    const out = new Map<string, DockItem>()
+    const out = new Map<string, AudioItem>()
     for (const m of voice) {
       const att = (m.attachments ?? []).find((a) => a.kind === 'voice_note')
       if (!att) continue
@@ -51,7 +52,8 @@ export function useVoiceOrder(messages: MessageT[]): VoiceOrder {
         key: m.id,
         mediaId: att.media_id,
         title: titleFor(att, 'voice_note', m.transcript),
-        threadId: m.thread_id,
+        mime: att.mime,
+        size: att.size,
         ...(att.duration_ms ? { durationMs: att.duration_ms } : {}),
       })
     }
@@ -121,18 +123,19 @@ function fitBars(all: number[]): number[] {
 }
 
 /**
- * A row's view of the app-level player (`audioDock.ts`): playing, position and duration for this clip, and the actions.
+ * A row's view of the app-level player (`audioPlayer.ts`): playing, position and duration for this clip, and the actions.
  * While some other clip is loaded the row shows its own saved spot. Chrome's MediaRecorder WebM has no duration, so the
- * attachment's `duration_ms` stands in until the dock knows the real one.
+ * attachment's `duration_ms` stands in until the player knows the real one.
  */
 export function useAudioPlayer(att: AttachmentRefT, key: string, probeS = 0) {
-  const mine = useDock((s) => s.item?.key === key)
-  const playing = useDock((s) => s.item?.key === key && s.playing)
-  const cur = useDock((s) => (s.item?.key === key ? s.cur : savedPosition(att.media_id)))
-  const real = useDock((s) => (s.item?.key === key ? s.duration : 0))
+  const mine = useAudio((s) => s.item?.key === key)
+  const playing = useAudio((s) => s.item?.key === key && s.playing)
+  const cur = useAudio((s) => (s.item?.key === key ? s.cur : savedPosition(att.media_id)))
+  const real = useAudio((s) => (s.item?.key === key ? s.duration : 0))
+  const refused = useAudio((s) => s.item?.key === key && s.refused)
   const fallback = att.duration_ms ? att.duration_ms / 1000 : probeS
   const duration = real > 0 ? real : fallback
-  return { mine, playing, cur, duration }
+  return { mine, playing, cur, duration, refused }
 }
 
 function Waveform({
@@ -207,97 +210,123 @@ function Waveform({
   )
 }
 
+/** Drops the file a probe element holds, so the element costs nothing while React removes it. */
+function releaseProbe(a: HTMLAudioElement): void {
+  try {
+    a.removeAttribute('src')
+    a.load()
+  } catch {
+    /* jsdom */
+  }
+}
+
 export function AudioPlayer({
   att,
   messageId,
   variant,
   transcript,
-  threadId,
 }: {
   att: AttachmentRefT
   messageId: string
   variant: 'voice_note' | 'audio'
   transcript?: MessageT['transcript']
-  threadId?: string
 }) {
   const { src, onError, state: mediaState, retry: retryMedia } = useMediaSrc(att)
   const order = useContext(VoiceOrderContext)
   // Agent audio has no `duration_ms` (the bridge never sends one): the probe element's own metadata supplies the length.
   const [probeS, setProbeS] = useState(0)
+  const [probed, setProbed] = useState('')
   const { mine, playing, cur, duration } = useAudioPlayer(att, messageId, probeS)
-  const speed = useDock((s) => s.speed)
+  const speed = useAudio((s) => s.speed)
+  const line = useAudioLine(messageId)
   const [open, setOpen] = useState(false)
   const bars = useMemo(() => fitBars(peaks(att.waveform)), [att.waveform])
   const progress = duration ? Math.min(1, cur / duration) : 0
   const title = titleFor(att, variant, transcript)
-  const item = useMemo<DockItem>(
+  const item = useMemo<AudioItem>(
     () => ({
       key: messageId,
       mediaId: att.media_id,
       title,
-      ...(threadId ? { threadId } : {}),
+      mime: att.mime,
+      size: att.size,
       ...(att.duration_ms ? { durationMs: att.duration_ms } : probeS > 0 ? { durationMs: probeS * 1000 } : {}),
     }),
-    [messageId, att.media_id, att.duration_ms, probeS, title, threadId],
+    [messageId, att.media_id, att.duration_ms, att.mime, att.size, probeS, title],
   )
-  /** The voice notes after this one, captured now: the dock keeps playing them after this row (and the thread) is gone. */
-  const following = useCallback((): DockItem[] => {
+  /** The voice notes after this one, captured now: the player keeps going with them when this row has scrolled out of view. */
+  const following = useCallback((): AudioItem[] => {
     const i = order.ids.indexOf(messageId)
     if (i < 0) return []
     return order.ids.slice(i + 1).flatMap((id) => order.items?.get(id) ?? [])
   }, [order, messageId])
 
-  // The dock reaches back to this row for a load error (the rehydrate) and takes the new URL when the Mac sends the file.
+  // The player reaches back to this row for a load error (the rehydrate) and takes the new URL when the Mac sends the file.
   const live = useRef({ src, onError })
   live.current = { src, onError }
   useEffect(() => {
-    audioDock.ensure()
-    return audioDock.registerRow(messageId, () => live.current)
+    audioPlayer.ensure()
+    return audioPlayer.registerRow(messageId, () => live.current)
   }, [messageId])
-  // Only a URL that changed while this row was mounted (the Mac sent the file, or Retry) reloads the dock. A row mounting
+  // Only a URL that changed while this row was mounted (the Mac sent the file, or Retry) reloads the player. A row mounting
   // with its own fresh state (gen 0) onto a clip playing from a rehydrated URL must not.
   const seenSrc = useRef<{ id: string; src: string } | null>(null)
   useEffect(() => {
     const seen = seenSrc.current
     seenSrc.current = { id: messageId, src }
-    if (seen && seen.id === messageId && seen.src !== src) audioDock.rowSrcChanged(messageId, src)
+    if (seen && seen.id === messageId && seen.src !== src) audioPlayer.rowSrcChanged(messageId, src)
   }, [messageId, src])
 
-  const play = useCallback(() => audioDock.open(item, live.current.src, following(), { play: true }), [item, following])
+  const play = useCallback(
+    () => audioPlayer.open(item, live.current.src, following(), { play: true }),
+    [item, following],
+  )
   useEffect(() => {
     order.players.set(messageId, { play })
     return () => void order.players.delete(messageId)
   }, [order, messageId, play])
   const seek = useCallback(
     (t: number) => {
-      if (mine) audioDock.seek(t)
-      else if (duration) audioDock.seekSaved(att.media_id, Math.max(0, Math.min(duration, t)))
+      if (mine) audioPlayer.seek(t)
+      else if (duration) audioPlayer.seekSaved(att.media_id, Math.max(0, Math.min(duration, t)))
     },
     [mine, duration, att.media_id],
   )
-  const cycle = () => audioDock.setSpeed(nextSpeed(speed))
+  const cycle = () => audioPlayer.setSpeed(nextSpeed(speed))
   const dur = att.duration_ms ?? (duration ? duration * 1000 : 0)
   const text = transcript?.text ?? ''
   return (
     <div className="flex max-w-full flex-col gap-1" data-testid={variant === 'voice_note' ? 'voice-note' : 'audio'}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-3 rounded-bubble border border-line bg-surface px-2.5 py-2">
         {/* Not the player: it only probes the file. A clip past the relay buffer errors here as the thread opens, which starts the
-            rehydrate from the Mac (D4) before anyone taps play. Playback is the dock's single element. */}
-        {/* biome-ignore lint/a11y/useMediaCaption: a hidden probe that is never played */}
-        <audio
-          src={src}
-          preload="metadata"
-          onError={onError}
-          onLoadedMetadata={(e) => {
-            const d = e.currentTarget.duration
-            if (Number.isFinite(d) && d > 0) setProbeS(d)
-          }}
-          hidden
-        />
+            rehydrate from the Mac (D4) before anyone taps play. Playback is the player's single element. */}
+        {/* The probe lives only until it has answered (metadata or an error) and then lets go of the file: a thread of voice
+            notes would otherwise hold one media element each, and iOS runs out of them. A new URL (the Mac sent the file)
+            probes again. */}
+        {probed !== src && (
+          // biome-ignore lint/a11y/useMediaCaption: a hidden probe that is never played
+          <audio
+            data-probe=""
+            src={src}
+            preload="metadata"
+            onError={(e) => {
+              releaseProbe(e.currentTarget)
+              setProbed(src)
+              onError()
+            }}
+            onLoadedMetadata={(e) => {
+              const d = e.currentTarget.duration
+              if (Number.isFinite(d) && d > 0) setProbeS(d)
+              releaseProbe(e.currentTarget)
+              setProbed(src)
+            }}
+            hidden
+          />
+        )}
         <button
           type="button"
           aria-label={playing ? 'Pause' : 'Play'}
-          onClick={() => (playing ? audioDock.pause() : play())}
+          onClick={() => (playing ? audioPlayer.pause() : play())}
           className="col-start-1 row-start-1 grid size-11 shrink-0 place-items-center rounded-pill bg-accent text-on-accent shadow-[inset_0_0_0_1.5px_var(--talos-black)]"
         >
           {playing ? <IconPause /> : <IconPlay />}
@@ -313,6 +342,7 @@ export function AudioPlayer({
           {String(speed)}×
         </button>
       </div>
+      <AudioLine line={line} className="px-1 text-sm text-text-2" />
       {mediaState !== 'ok' && (
         <div className="px-1 text-sm text-text-2">
           <MediaStatus
@@ -433,29 +463,29 @@ function HtmlFullscreen({ att, url, onClose }: { att: AttachmentRefT; url: strin
 }
 
 // ---- video ---------------------------------------------------------------------------------------------------------
-// The video that is playing now. A second one, or the audio dock, takes the sound: two sounds at once is never wanted.
+// The video that is playing now. A second one, or the audio player, takes the sound: two sounds at once is never wanted.
 let playingVideo: HTMLVideoElement | null = null
 
 /**
  * Inline video (audit L15). Loads like a file chip (the same probe, so a file that left the relay comes back from the Mac or
  * says so with Retry), plays inside the page (`playsInline`) and fetches only its header until he taps play. There is no
- * poster; `#t=0.001` makes iOS draw the first frame. Playing it pauses the audio dock: two sounds at once is never wanted.
+ * poster; `#t=0.001` makes iOS draw the first frame. Playing it pauses the audio player: two sounds at once is never wanted.
  */
 export function VideoAttachment({ att }: { att: AttachmentRefT }) {
   const { state, retry, load, url } = useMediaGate(att, mediaUrl(att.media_id))
   // 'net': the fetch failed (the Mac may be offline), Retry can help. 'codec': the file is there but this client cannot decode it.
   const [broken, setBroken] = useState<null | 'net' | 'codec'>(null)
   const video = useRef<HTMLVideoElement>(null)
-  const dockPlaying = useDock((d) => d.playing)
-  // The dock started (a row's Play, the lock screen's Play): the video gives way. Only a video whose own 'play' event has been
-  // heard (`playingVideo`) is older than the dock's start. `paused` flips the moment play() is called, but the events arrive
-  // in the order the calls were made, so a video told to play just after the dock still has its event to come: it is the
-  // newer one, and its onPlay pauses the dock. Pausing it here would leave both silent. The effect also runs a beat after the
-  // render that saw the dock playing, so it asks the dock element itself: if the video has already paused the dock, stand down.
+  const playerPlaying = useAudio((d) => d.playing)
+  // The player started (a row's Play, the lock screen's Play): the video gives way. Only a video whose own 'play' event has been
+  // heard (`playingVideo`) is older than the player's start. `paused` flips the moment play() is called, but the events arrive
+  // in the order the calls were made, so a video told to play just after the player still has its event to come: it is the
+  // newer one, and its onPlay pauses the player. Pausing it here would leave both silent. The effect also runs a beat after the
+  // render that saw the player playing, so it asks the player element itself: if the video has already paused the player, stand down.
   useEffect(() => {
     const v = video.current
-    if (dockPlaying && v && playingVideo === v && !v.paused && !audioDock.element().paused) v.pause()
-  }, [dockPlaying])
+    if (playerPlaying && v && playingVideo === v && !v.paused && !audioPlayer.element().paused) v.pause()
+  }, [playerPlaying])
   useEffect(
     () => () => {
       if (playingVideo === video.current) playingVideo = null
@@ -477,7 +507,7 @@ export function VideoAttachment({ att }: { att: AttachmentRefT }) {
           const me = e.currentTarget
           if (playingVideo && playingVideo !== me && !playingVideo.paused) playingVideo.pause()
           playingVideo = me
-          if (audioDock.state().playing) audioDock.pause()
+          if (audioPlayer.active()) audioPlayer.pause()
         }}
         onPause={(e) => {
           if (playingVideo === e.currentTarget) playingVideo = null
@@ -604,24 +634,9 @@ function AttachmentBody({
     case 'image':
       return <ImageAttachment att={att} onOpen={onOpenImage} />
     case 'voice_note':
-      return (
-        <AudioPlayer
-          att={att}
-          messageId={message.id}
-          variant="voice_note"
-          transcript={message.transcript}
-          threadId={message.thread_id}
-        />
-      )
+      return <AudioPlayer att={att} messageId={message.id} variant="voice_note" transcript={message.transcript} />
     case 'audio':
-      return (
-        <AudioPlayer
-          att={att}
-          messageId={`${message.id}:${att.media_id}`}
-          variant="audio"
-          threadId={message.thread_id}
-        />
-      )
+      return <AudioPlayer att={att} messageId={`${message.id}:${att.media_id}`} variant="audio" />
     case 'html':
       return <HtmlPageCard att={att} />
     case 'video':

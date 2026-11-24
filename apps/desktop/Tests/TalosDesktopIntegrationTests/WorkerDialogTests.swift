@@ -102,6 +102,7 @@ struct WorkerDialogTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    #expect(r.waitWakePointerSettled("trip"), "\(r.typedLines) \(r.allEvents)")
     #expect(r.wait(5) { r.mgr.needsYou().isEmpty }, "the flag clears once the screen has changed")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "trust this folder" })
@@ -155,7 +156,9 @@ struct WorkerDialogTests {
     #expect(r.mgr.requestResume("trip") == .asked)
     #expect(r.wait(10) { r.starts.count == 2 }, "\(r.why("trip"))")
     #expect(r.starts.last?.contains("--resume \(sid)") == true)
-    // a wake the hub wrote is never replaced by ours
+    // a wake the hub wrote is never replaced by ours. The loop is stopped first (`detach` waits for a tick in flight): a running loop
+    // takes any wake, one it cannot read too (`takeWakes`, right), so the file this reads back could be gone by then.
+    r.mgr.detach()
     let wake = r.talosHome + "/workers/trip/wake"
     try "hub-wrote-this".write(toFile: wake, atomically: true, encoding: .utf8)
     #expect(r.mgr.requestResume("trip") == .parkPending, "a wake that can't be read is not a start")
@@ -256,6 +259,7 @@ struct WorkerDialogTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") })
+    #expect(r.waitWakePointerSettled("trip"), "\(r.typedLines) \(r.allEvents)")
     FileManager.default.createFile(atPath: trigger, contents: nil)
     #expect(r.wait(10) { r.mgr.needsYou()["trip"] == "sign in" })
     #expect(r.wait(5) { log.all.count == 1 })
@@ -269,16 +273,32 @@ struct WorkerDialogTests {
       r.teardown()
       unlink(trigger)
     }
+    // The awake clock is the test's, and the manager looks only when the test says (`tickOnce`): the hold is proven on the clock, so a
+    // loaded machine can neither stretch the wait past the 3 s nor shorten it.
+    let clock = SkewClock()
+    r.makeManager(awake: clock.read)
     let log = NoticeLog()
     r.trackNotices(log)
-    r.mgr.tune { $0.dialogSettle = 3 }
+    r.mgr.tune {
+      $0.dialogSettle = 3
+      $0.tick = 3600
+    }
     r.mgr.startTicking()
     try r.wake("trip")
-    #expect(r.wait(10) { r.up("trip") })
+    #expect(r.wait(10) { r.mgr.tickOnce(); return r.up("trip") })
+    #expect(r.wait(10) { r.mgr.tickOnce(); return r.waitWakePointerSettledNoWait("trip") }, "\(r.typedLines) \(r.allEvents)")
+    #expect(r.enterCheckDone("trip"), "\(r.allEvents)")
     FileManager.default.createFile(atPath: trigger, contents: nil)
-    usleep(1_500_000)
+    let onPane = { r.tmuxCmd(["capture-pane", "-p", "-t", "=t-trip:"]).out.contains("trust") }
+    #expect(r.wait(10, onPane), "control: the dialog was drawn")
+    r.mgr.tickOnce()  // the first look at the dialog: its hold starts here
+    #expect(r.mgr.needsYou().isEmpty, "flagged on the first look")
+    clock.jump(2.5)  // settle minus half a second
+    r.mgr.tickOnce()
     #expect(r.mgr.needsYou().isEmpty, "flagged before the screen held still for 3 s")
-    #expect(r.wait(10) { r.mgr.needsYou()["trip"] != nil })
+    clock.jump(1)  // 3.5 s
+    r.mgr.tickOnce()
+    #expect(r.mgr.needsYou()["trip"] != nil, "not flagged once it held still for 3 s: \(r.why("trip"))")
   }
 
   /// R1-3: a dialog that comes and goes is announced once per kind in the debounce window, however often it comes back.
@@ -355,8 +375,8 @@ struct WorkerDialogTests {
   }
 
   /// R1-5, R2-3, R2-5: the owner's draft in the REAL input box (`❯` + U+00A0) holds the pointer with no client attached; after
-  /// the wait the thread is told once and the worker shows Needs you; clearing the box lets the pointer go.
-  @Test func aRealDraftHoldsThePointerTellsTheThreadOnceThenReleases() throws {
+  /// the wait the worker shows Needs you and the thread is told nothing; clearing the box lets the pointer go.
+  @Test func aRealDraftHoldsThePointerShowsNeedsYouAndSaysNothingThenReleases() throws {
     let clear = TestTemp.base + "clr-\(UUID().uuidString.prefix(6))"
     let r = try WorkerRig(
       scenario: "worker-real.sh",
@@ -375,8 +395,7 @@ struct WorkerDialogTests {
     usleep(2_000_000)
     #expect(r.typedLines.isEmpty, "typed onto a draft: \(r.typedLines)")
     #expect(r.tmuxCmd(["list-clients"]).out.isEmpty, "no client was attached")
-    #expect(log.all.count == 1, "\(log.all)")
-    #expect(log.all.first?.text == "This thread's session has unsent text in its input box; your message has probably gone to the main session. Open this thread in Terminals to finish or clear it.")
+    #expect(log.all.isEmpty, "a held draft says nothing in the thread (the hub's deadline is 10 minutes): \(log.all)")
     FileManager.default.createFile(atPath: clear, contents: nil)
     #expect(r.wait(10) { r.typedLines.count == 1 }, "the pointer goes once the box is clear")
     #expect(r.wait(5) { r.mgr.needsYou().isEmpty })

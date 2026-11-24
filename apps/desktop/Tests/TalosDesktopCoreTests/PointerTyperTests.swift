@@ -113,7 +113,7 @@ struct PointerTyperInputBoxTests {
   @Test func theNoBoxNoticeIsOneLineWithoutTheThreadName() {
     #expect(
       WorkerNotice.noBoxLine()
-        == "This thread's session isn't showing its input box yet. Open this thread in Terminals to see what it's waiting on.")
+        == "This thread's session isn't showing its input box yet. If it stays that way, restart this thread's session from this thread's settings (Its own agent, then Restart).")
   }
 }
 

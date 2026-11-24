@@ -3,8 +3,8 @@
 // the shell's TalosAudio plugin) and installState (a shell is never "add to Home Screen first").
 //
 // The page is served by the relay, so it cannot import @capacitor/*: the shell injects `window.Capacitor`, whose
-// `Plugins` proxy carries every native plugin. Every call is feature-detected, fire-and-forget and never throws; a
-// missing plugin (older shell build) is a no-op. The shell's bridge guard (I14) drops these calls from any frame that is
+// `Plugins` proxy carries every native plugin. Every call is feature-detected and never throws; a missing plugin (older
+// shell build) is a no-op. Calls are fire-and-forget, except that `audioSession.set` hands back the shell's answer as a promise. The shell's bridge guard (I14) drops these calls from any frame that is
 // not the relay's own top frame, so nothing here widens what an agent page can do.
 import { isNativeShell } from './native.ts'
 import {
@@ -30,16 +30,29 @@ function plugins(scope: unknown): PluginMap | null {
   }
 }
 
-function call(scope: unknown, plugin: string, method: string, options?: Record<string, unknown>): void {
+/**
+ * Fire-and-forget by default. Returns a promise only when the plugin handed one back: it settles when the native side has answered,
+ * and never rejects (an error is an answer too). Missing plugin, a throw or a plain value: nothing.
+ */
+function call(
+  scope: unknown,
+  plugin: string,
+  method: string,
+  options?: Record<string, unknown>,
+): Promise<void> | undefined {
   try {
     const fn = plugins(scope)?.[plugin]?.[method]
-    if (typeof fn !== 'function') return
+    if (typeof fn !== 'function') return undefined
     const result = fn.call(plugins(scope)?.[plugin], options)
-    if (result && typeof (result as Promise<unknown>).catch === 'function')
-      void (result as Promise<unknown>).catch(() => {})
+    if (result && typeof (result as Promise<unknown>).then === 'function')
+      return (result as Promise<unknown>).then(
+        () => {},
+        () => {},
+      )
   } catch {
     /* a native call must never break the page */
   }
+  return undefined
 }
 
 /** Haptics: @capacitor/haptics' styles and notification types. */
@@ -138,6 +151,14 @@ function createMediaSession(scope: unknown): Platform['mediaSession'] {
       webPlatform.mediaSession.position?.(state)
       call(scope, 'TalosAudio', 'updateNowPlaying', { ...state })
     },
+    controls() {
+      // The shell's plugin publishes Now Playing and takes the lock screen's commands; an older shell without it falls back to
+      // the page's own Media Session.
+      return (
+        typeof plugins(scope)?.TalosAudio?.setNowPlaying === 'function' ||
+        (webPlatform.mediaSession.controls?.() ?? false)
+      )
+    },
     clear() {
       handlers = {}
       last = null
@@ -160,7 +181,7 @@ export function createCapacitorPlatform(scope: unknown = globalThis): Platform {
     audioSession: {
       set(type) {
         webPlatform.audioSession.set(type)
-        call(scope, 'TalosAudio', 'setMode', { mode: audioMode(type) })
+        return call(scope, 'TalosAudio', 'setMode', { mode: audioMode(type) })
       },
     },
     mediaSession: createMediaSession(scope),

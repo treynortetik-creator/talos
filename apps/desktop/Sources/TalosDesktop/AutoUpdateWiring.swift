@@ -121,7 +121,7 @@ extension SupervisorController {
         }
         let main = sup.autoUpdateLook()
         why += main.notQuiet
-        // background work is told apart by whose pane it runs under: an Update now waits for Main's, and gives a thread's only 5 minutes
+        // background work is told apart by whose pane it runs under: an Update now waits for both (Main's and a thread's, up to the same 2 hours), and only Update now anyway skips a thread's
         if let p = main.pane, let bg = ProcTable.reason(panes: [p]) { why.append(bg) }
         if let bg = ProcTable.reason(panes: threadPanes) { why.append(AutoUpdate.threadBackgroundReason + bg.dropFirst("background work".count)) }
         return why

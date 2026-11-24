@@ -20,8 +20,8 @@ shown off. An explicit `enabled: false` stays off. The agent's settings row read
 - Workers load **no channels** and no development-channel flag. Main's live bridge stays the only relay socket. A worker's `talos-app` MCP server runs in **worker mode**: no relay socket, no pid takeover; it sends its frames through main's bridge over a local socket (`$TALOS_APP_HOME/hub.sock`).
 - Inbound: main's bridge (the hub) keeps the verified message, writes a wake file with message ids only, and the
   supervisor types one fixed line into the worker (`Talos: new message in this thread. Call read_inbound.`). The worker
-  fetches the message with `read_inbound`. A message nobody claims within 90 s (120 s after a cold resume) is answered
-  by main, with a system row saying so. Never both.
+  fetches the message with `read_inbound`. A message nobody claims within 10 minutes (3 minutes when the session had to be started for it; a
+  thread with no session at all goes to main at once) is answered by main, with a system row saying so. Never both.
 
 ## Data (WP-OC0, `packages/protocol/src/thread-sessions.ts`)
 
@@ -79,14 +79,14 @@ last `workers.status` for `ready.workers_status`, and each thread session's last
 
 ### Files shared by the bridge and the supervisor
 
-| File                                                | Writer                                                 | Schema                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$TALOS_APP_HOME/workers.json`                      | supervisor only (atomic, 0600, heartbeat every 5 s)    | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down; one entry's failure code that this build does not know reads as `unknown` for that entry and never costs the file. Optional per entry: `needs_you {kind, since}`, `stopped_why`, `turn_started_at` (below, "Main controls a thread's session"); a value that does not fit is none for that entry |
-| `$TALOS_APP_HOME/workers/<thread>/wake`             | hub                                                    | `WakeFile`: message ids only, never content                                                                                                                                                                                                                                                                                                                                                                |
-| `$TALOS_APP_HOME/workers/<thread>/nonce`            | supervisor, before each start (0600)                   | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                                                                                                                                                                                                                                                                                                  |
-| `$TALOS_APP_HOME/workers/<thread>/ready`            | hub, on a good `hello`                                 | `WorkerReady`; the supervisor's start is done when it appears                                                                                                                                                                                                                                                                                                                                              |
-| `~/.talos-inbox/<thread>/` (outside the Talos home) | hub (0600 files in 0700 folders, never through a link) | the owner's files for that thread, copied from `media/` as the message is routed; `read_inbound` returns these paths; removed after 7 days or past 1 GiB, and with the thread                                                                                                                                                                                                                              |
-| `hub.sock` lines                                    | both                                                   | `HubWorkerLine` (`hello`, `out`, `mod`, `rpc`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`, `rpc_result`); `mod` and `controls` are P1 (WP-OC5); `rpc` carries the four Schedules tools ("Thread schedules")                                                                                                                                                                                    |
+| File                                                | Writer                                                 | Schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$TALOS_APP_HOME/workers.json`                      | supervisor only (atomic, 0600, heartbeat every 5 s)    | `WorkersFile`; a torn or unknown-version file parses to `null` and the hub treats the supervisor as down; one entry's failure code that this build does not know reads as `unknown` for that entry and never costs the file. Optional per entry: `needs_you {kind, since}`, `stopped_why`, `turn_started_at` (below, "Main controls a thread's session"), `pointer_hold {reason, since}` (below, "Why a message waits"); a value that does not fit is none for that entry |
+| `$TALOS_APP_HOME/workers/<thread>/wake`             | hub                                                    | `WakeFile`: message ids only, never content                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `$TALOS_APP_HOME/workers/<thread>/nonce`            | supervisor, before each start (0600)                   | the same value goes in the worker's env as `TALOS_APP_WORKER_NONCE`; the hub refuses a `hello` without it                                                                                                                                                                                                                                                                                                                                                                 |
+| `$TALOS_APP_HOME/workers/<thread>/ready`            | hub, on a good `hello`                                 | `WorkerReady`; the supervisor's start is done when it appears                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `~/.talos-inbox/<thread>/` (outside the Talos home) | hub (0600 files in 0700 folders, never through a link) | the owner's files for that thread, copied from `media/` as the message is routed; `read_inbound` returns these paths; removed after 7 days or past 1 GiB, and with the thread                                                                                                                                                                                                                                                                                             |
+| `hub.sock` lines                                    | both                                                   | `HubWorkerLine` (`hello`, `out`, `mod`, `rpc`), `HubHubLine` (`welcome`, `ack`, `refused`, `controls`, `rpc_result`); `mod` and `controls` are P1 (WP-OC5); `rpc` carries the four Schedules tools ("Thread schedules")                                                                                                                                                                                                                                                   |
 
 Fixtures for all three: `packages/protocol/fixtures/option-c/`. Shared constants: `WORKER_POINTER_TEXT`,
 `WORKER_FORBIDDEN_ARGS` (`--channels`, `--dangerously-load-development-channels`, `-p`, `--bg`),
@@ -119,12 +119,12 @@ Rules the reviews added:
 
 Routing table (as built):
 
-| Notification         | Thread shared | Dedicated, reachable                                         | Dedicated, not reachable                    |
-| -------------------- | ------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| owner `text`, `file` | main          | worker (wake + `read_inbound`), main after 90 s / 120 s cold | main at once, `routed=fallback`, system row |
-| `card_action`        | main          | the worker that raised the card                              | main + system row                           |
-| `backlog`            | main          | main (not split yet; main can pass it on)                    | main                                        |
-| everything else      | main          | main                                                         | main                                        |
+| Notification         | Thread shared | Dedicated, reachable                                           | Dedicated, not reachable                    |
+| -------------------- | ------------- | -------------------------------------------------------------- | ------------------------------------------- |
+| owner `text`, `file` | main          | worker (wake + `read_inbound`), main after 10 min / 3 min cold | main at once, `routed=fallback`, system row |
+| `card_action`        | main          | the worker that raised the card                                | main + system row                           |
+| `backlog`            | main          | main (not split yet; main can pass it on)                      | main                                        |
+| everything else      | main          | main                                                           | main                                        |
 
 "Not reachable" = supervisor heartbeat stale or `workers.json` unreadable, `workers_supported` false, the worker
 `failed` or `stopping`, or the governor paused and the worker not live.
@@ -195,6 +195,29 @@ Rules as built:
   its deadline keeps quiet for `noticeDebounce` after the first, so scrolling in and out does not repeat it) ("This thread's session is scrolled
   back, so Talos can't type into it; …press q to return to the prompt.") and **Needs you** ("scrolled back") until the mode is left.
   A pointer the mode held back keeps its deadline from then on, like one read back after a relaunch: out of the mode and past it, the
+  **A screen Talos does not type into (the deaf-thread alarm, `WorkerDeaf.swift`, `DeafWatch`).** A thread's pane can show something
+  that is not Claude's input box (a row under the box that Claude Code never draws there, no box, a box not at column 0), and then the
+  key guard refuses every key: the thread's owner messages, scheduled runs and card taps reach main at the hub's deadline, with one
+  quiet fallback line each. The pane is therefore read every tick for each live worker, whether or not anything wants to type (a
+  thread that only gets scheduled runs is as deaf as one that gets messages). A pane that repaints (a sub-agent's row ticking) is still deaf, so a running turn does not stop the look (only a screen with no
+  box is let go while one runs); a refused pointer is a look too. Not counted: a dialog or prompt that has its own card and line,
+  the owner's own typing, a scrolled-back pane, the owner's draft in the box. Only time actually seen counts: looks further apart
+  than 10 s are not one stretch, so a sleep or a stalled tick never passes the waits, and a clear look followed by a gap ends the run. After 60 s (`deafAfter.notice`)
+  the thread gets ONE line: "The "<name>" thread has something on its screen Talos doesn't recognise, so Talos can't send it
+  messages right now. If it stays that way, your main agent answers your messages." (the name is the owner's config text, quoted,
+  never words of Talos's own; no place to go). After 10 min (`deafAfter.needsYou`) it is **Needs you** (`needs_you` in `workers.json`, `since` = when the refusals began, kind "something
+  Talos does not type into", the same kind as before, now in `WORKER_NEEDS_YOU_KINDS`, with a `needsYouStep`): the phone's
+  Needs-you item and the thread list read it from `workers.json` like any other. A screen that reads fine for under 10 s
+  (`deafAfter.recover`) does not end the run. A restart, park or relaunch ends the run with its recovery said (a relaunch finds the run again from the open notice record). A thread that flaps is told once in `noticeDebounce`: its notice record is closed, not forgotten, on recovery, and a run whose notice was held back says nothing about clearing. When it clears, the flag goes by itself and the thread gets one line: "Talos can
+  message the "<name>" thread again." and, from the bridge's tally `main-handled.json`, "Main handled 3 messages, 2 scheduled runs
+  and 1 card tap while this thread couldn't be reached." What happens to each kind while it is deaf: an owner message is typed if the
+  hold clears before its claim deadline (the pointer is owed), else the hub gives it to main (one atomic claim, never both); a
+  scheduled run does the same and main's run is marked "Ran in Main, not in <thread>" in the run history (`RunNote.ran_in_main_for`,
+  shown ahead of the run's summary); a card tap goes to main the same way. Nothing already handled by main is delivered again.
+  Counts: `deaf-threads.json` (the Mac writes it every 15 s while a thread is listed; `talos-app doctor` has a WARN row per thread
+  with its minutes and its refused keys in the last hour, Settings → Health has one amber row, `workers.status` carries `deaf`);
+  both files are `packages/protocol/src/deaf-thread.ts`. The Linux supervisor does not have this alarm yet; its
+  older pointer-refusal line and Needs you still work and use the same kind.
   line is dropped (or taken out of the box), never typed for a message main already has. A worker's screen is a conversation,
   so a dialog needs its shape (`DialogMatcher.workerScreen`): a selection cursor, or a line that is the login message, not one that
   quotes it.
@@ -252,8 +275,12 @@ Rules as built:
   named for its version (`2.1.325`), so claude is also known by that name with `claude` as its argv[0]. A table that can't be
   read holds the park too. The log says so once per hold: `worker_idle_held thread=<id> bg=<n|unknown>`. A sub-agent runs
   inside claude and can't be seen by itself, only while a command it started runs.
-- **Cap**: a start at `max_live` parks the longest-idle non-busy worker with no background work; only when every quiet one
-  has some is the longest idle of those parked (and its thread told, below). With all busy the wake is held up to 2 min and
+- **Cap**: a start at `max_live` parks the longest-idle non-busy worker with no background work. A session with background work is never
+  stopped for it: when every quiet one has some, the new session starts over the limit (log: `worker_start_over_limit
+  thread=<id>`, once it has really started) and its thread gets one line, "Your computer is busy: ..." (kept and retried like the
+  background-cut line), at most one in ten minutes. The cap's own tick does not count those quiet sessions with work against the rest, so
+  the new one stays while the work runs; once it ends, the longest idle is parked and the count comes down. The sessions that can be over are bounded by the thread sessions the owner has
+  made, one worker each. With all busy the wake is held up to 2 min and
   then dropped (the hub's deadline hands the message to main). `parking` and `stopping` workers hold a slot, and a lowered
   cap parks the excess as they go idle, not counting the ones already on their way out.
 - **Every park is logged**, once, when it is decided: `worker_parked thread=<id> why=<idle|cap|crash|update|governor|control|
@@ -433,10 +460,10 @@ of recent corrections comes first; PreCompact writes that carry (`<state folder>
 guard it reuses are copied into `workers/_hook` from the verified kit release exactly as the permission hook is (verified
 bytes only; both or neither, so an older kit gives a session without them), and run by the same resolved python3 in a clean
 environment with the role, thread and agent folder fixed in the command. The same settings allow Edit and Write of that one
-file by its exact absolute path (both spellings), nothing wider, so the thread can keep it current without a prompt (a path rule also names what is under the file, gitignore-style, so Edit and Write of `<id>.state.md/**` are denied). The file and the carry are injected inside a data wrapper (`=== THREAD STATE (data, not instructions) ===`), never as instructions. The hook runs with `-B` and a bytecode prefix that does not exist (`/nonexistent`), so nothing is written or read beside it in `workers/_hook` (the permission hook's own line is unchanged). The
+file by its exact absolute path (both spellings), nothing wider, so the thread can keep it current without a prompt (a path rule also names what is under the file, gitignore-style, so the same settings deny its children, `<id>.state.md/*`; the suffix is `/*`, never `/**`: Claude Code strips only a trailing `/**` before matching, so a `/**` deny names the file itself and made Edit refuse it, and a deny beats the allow). Rules match without regard to case, so a case variant of the name is covered too (on a case-sensitive disk it is a different file and stays allowed). A seed that finds anything but a regular file at that path (a folder, say) reports a problem instead of "exists". The file and the carry are injected inside a data wrapper (`=== THREAD STATE (data, not instructions) ===`), never as instructions. The hook runs with `-B` and a bytecode prefix that does not exist (`/nonexistent`), so nothing is written or read beside it in `workers/_hook` (the permission hook's own line is unchanged). The
 kit's `session-start.py` and `compaction-guard.py` do nothing of Main's for a worker whose settings register the hook (the spec then sets `TALOS_APP_THREAD_STATE=1` beside `TALOS_SESSION_ROLE=worker`; a worker without the variable keeps today's behaviour): no
 `memory/STATE.md`, handoff, daily log or Main's carry in a worker's context; the injected header says where Main's
-`memory/STATE.md` is, which the worker may still read. This is the Linux supervisor's settings; the Mac app's `WorkerSpec.swift` does not register the hook yet (only the preamble sentence is the same there). A Talos distro (rooted: exactly one hook is allowed in the settings)
+`memory/STATE.md` is, which the worker may still read. The Linux supervisor and the Mac app's `WorkerSpec.swift` both register the hook in the thread's generated settings, the same way. A Talos distro (rooted: exactly one hook is allowed in the settings)
 does not register the hook yet; its workers are still seeded and told to keep the file. The staged files' hashes are part
 of the launch spec, so an update that changes them restarts sessions. The default preamble's closing sentence names this file and tells the thread to read it first after a restart or compaction, since the hook may not be registered for it (the Swift copy of the text matches word for word); a thread's own `WORKER.md` replaces the preamble as before.
 
@@ -486,7 +513,7 @@ The `thread_session` tool (`apps/bridge/src/tools/sessions.ts`) lets the main se
   - Who writes the fields: both supervisors write all three (the Linux one in `supervisor/worker-status.ts`), and move `last_turn_at` when a turn ends (the pane goes quiet after a pointer, a park waiting for the turn included). The owner's stop always records `owner`, whatever reason was there before. `needs_you.kind` is always Talos's own words (a dialog's name from a fixed list, a prompt's title from the detector's fixed table), never screen text.
   - Known on both sides, not yet fixed: adoption records `interrupted` over a reason already recorded (a session the owner was stopping that exits while the supervisor restarts reads "off: interrupted"); an idle live session found gone after a supervisor restart gets no reason; a park because Main's own launch narrowed (`main_narrowed`) or a sub-thread's settings would now be refused (`sub_refused`) reads as the owner's, since the protocol's `stopped_why` has no words for them yet.
 - `wake` writes a `resume` wake; `restart` writes a `restart` wake (same conversation). Both go through the same check as the owner's button (`router/session-control.ts`): not dedicated, the Mac app not running, an unreadable saved session and the usage governor refuse alike (trust mode's pass-through and its warning included). The default thread is refused by name. A busy session restarts when its turn ends, or after 15 minutes if it does not (the owner's stop limit, `WORKER_TIMING.owner_stop_s`; the Mac's `stopLimit`), as the button's does.
-- Restart applies an instruction edit now: a session reads its thread's instruction files (and the release's preamble and settings) when it starts, so a change to them reaches a running session at its next restart. After an update, the supervisor does that itself (restart-on-update, `dedicated.restart_on_update`, on by default): right after it starts and whenever the release it runs changes, each running session whose launch spec differs from the one it launched with (`spec_hash`: a new release, its own instruction files changed, or the guards re-pinned by the refresh at Main's start after a bun upgrade, which the Mac counts as a release change) is restarted once for that spec, resuming its conversation, one at a time, only while it is quiet (no turn, no draft in its box, no key in an attached client lately, nothing waiting on the owner), and held while the usage governor is not ok. The owner gets one line in the default thread: "Updated or instructions changed: restarted A, B; C restarts when its turn ends; D failed; E was not restarted (it did not start again)." (Linux: `supervisor/update-restart.ts`; the line's shared cases: `apps/desktop/Tests/Fixtures/update-restart-line.json`.) A session started in the agent folder picks up an edit to that folder's instruction files at its next restart; restart it to apply the edit now. To see, without changing anything, what an update would restart: `talos-app update-check --dry` on Linux (`Talos --update-check` on the Mac) prints one line per running thread session, `<thread id>  <state>` (unchanged, spec changed, instructions changed, no record, busy (would wait), or unknown (dry plan refused)), then a count, and nothing else: no file text, path, hash, environment or display name. It writes, audits and locks nothing. "Instructions changed" means only the instructions a session outside the agent folder is handed changed; each start records their digest (`WorkerLaunched.instructions_hash`) beside its spec hash. The report plans with Main's environment as a restarted supervisor rebuilds it (from the login shell), so for a Main started with an environment since changed it can say more than the running supervisor would restart.
+- Restart applies an instruction edit now: a session reads its thread's instruction files (and the release's preamble and settings) when it starts, so a change to them reaches a running session at its next restart. After an update, the supervisor does that itself (restart-on-update, `dedicated.restart_on_update`, on by default): right after it starts and whenever the release it runs changes, each running session whose launch spec differs from the one it launched with (`spec_hash`: a new release, its own instruction files changed, or the guards re-pinned by the refresh at Main's start after a bun upgrade, which the Mac counts as a release change) is restarted once for that spec, resuming its conversation, one at a time, only while it is quiet (no turn, no draft in its box, no key in an attached client lately, nothing waiting on the owner, no background work under it), and held while the usage governor is not ok, off or unknown (no usage reading yet, which also lets a start through). The owner gets one line in the default thread: "Updated or instructions changed: restarted A, B; C restarts when its turn ends; D failed; E was not restarted (it did not start again)." (Linux: `supervisor/update-restart.ts`; the line's shared cases: `apps/desktop/Tests/Fixtures/update-restart-line.json`.) A session started in the agent folder picks up an edit to that folder's instruction files at its next restart; restart it to apply the edit now. To see, without changing anything, what an update would restart: `talos-app update-check --dry` on Linux (`Talos --update-check` on the Mac) prints one line per running thread session, `<thread id>  <state>` (unchanged, spec changed, instructions changed, no record, busy (would wait), or unknown (dry plan refused)), then a count, and nothing else: no file text, path, hash, environment or display name. It writes, audits and locks nothing. "Instructions changed" means only the instructions a session outside the agent folder is handed changed; each start records their digest (`WorkerLaunched.instructions_hash`) beside its spec hash. The report plans with Main's environment as a restarted supervisor rebuilds it (from the login shell), so for a Main started with an environment since changed it can say more than the running supervisor would restart.
 - What an update would restart, read-only: on the Mac, `Talos.app/Contents/MacOS/Talos --update-check` (Linux: `talos-app update-check --dry`) prints one line per running session, `<thread id>  <state>` (unchanged, spec changed, instructions changed, no record, busy (would wait), unknown (dry plan refused)), then a count. It runs the update check's own dry plan and prints nothing else: no file text, paths, hashes, environment or names. It starts nothing, writes nothing, takes no lock and runs no tmux; exit 0 whatever it finds. "instructions changed" means only the instruction files handed to a session outside the agent folder changed (`launched.instructions_hash`); a session started in the agent folder picks up an edit to that folder's instruction files at its next restart; restart it to apply the edit now.
 - `wake` looks at the published state first, because a resume wake does nothing to a running session: on a `starting`, `live` or `busy` session it is refused ("already running"), and on a `failed` one too (the Mac does not start a failed session on a resume; restart clears the failure). Both write no wake file and post nothing. On `parking` or `stopping` it is passed on: both supervisors start the session again once it has stopped, and the answer says so.
 - No `fresh` and no `park`: each is refused in a sentence. A fresh conversation stays the owner's button.
@@ -792,7 +819,7 @@ jobs fire in main exactly as before.
   thread). The router now treats `schedule_run` like an owner message: if the thread is `dedicated`, the notification is
   held in `worker_routes`, a wake file names the run id (the supervisor resumes a parked session, even at 3 am), and the
   session fetches it with `read_inbound`. Claimed in time, main is never told. Not claimed within the usual deadline
-  (90 s, 120 s after a cold start), or the supervisor is down, the session failed, or the governor refuses a start: main
+  (10 minutes, 3 minutes after a cold start), or the supervisor is down, the session failed, or the governor refuses a start: main
   gets the same notification (`routed=fallback`) and the thread gets "Thread session didn't pick this up (…). Main answered."
   Never both. **A heartbeat wake (`heartbeat` in its meta), a `schedule_held` notice, and a job in the default or a shared
   thread always go to main.** A session that took a run and stopped before reporting leaves "This thread's session stopped
@@ -918,23 +945,39 @@ Mac. The Mac supervisor dismisses it with Escape, which grants nothing, for Main
 The session sees its tool call fail and carries on (captured: the model said the permissions are not granted, and the turn ended).
 
 **Claude Code's usage-limit screen** ("You've hit your … limit", then options to stop and wait, to wait and go on by itself, and to
-go on with usage credits) gets NO key from Talos, ever: no Enter, no digit, no arrow, no Escape, because one of its options spends
-money (`UsageLimitScreen`, `DialogMatcher.takesNoKeys`). No real capture exists yet (how to take one safely, with no key pressed:
+go on with usage credits) is a card on the Mac (pane-prompts row 7): Talos presses NO row of it, ever (no digit, no arrow, no Enter on
+a row), because one of its options spends money (`UsageLimitScreen`, `DialogMatcher.takesNoKeys`). The card (`PaneSelect.Kind.usageLimit`,
+dialog kind `usage_limit`) says which limit and when it resets in plain words ("Fable limit reached. It resets 4pm (Europe/Paris)."; with no
+time on the screen, "The screen doesn't say when it resets.") and has only the buttons the screen really offers: **Stop and wait** (one
+Escape, the menu's own `Esc to cancel`; it ends the turn and nothing resumes it, so the answered card says "Stopped. Send a message after the limit resets to go on.") and, when the headline names a model, **Switch model** (Escape, then `/model` typed into the empty
+box on the idle prompt for the same limit, then Enter). Only the owner's own tap answers it: a signed answer from a paired device (the
+bridge's card) or a real click on the Mac popup. Each of the keys states its own intent (`KeyGuard.Intent.usageLimit`: escape,
+typeModel, enterModel, clearModel), and the guard allows it only on exactly that screen (the menu with the offered rows, model and reset for the Escape;
+for the rest the idle prompt of the menu-gone read made right after the Escape, `KeyGuard.idleSignature`, with the same limit's headline as a second
+check: box empty for the typing, box holding exactly `/model` for the Enter and for the Backspaces that clear it). The model list that
+`/model` opens is its own screen. No real capture of the menu exists yet (how to take one safely, with no key pressed:
 `docs/CAPTURE-USAGE-LIMIT.md`): the match is built from the CLI's own strings
 (`apps/desktop/Tests/Fixtures/synthetic/usage-limit*.txt`), loose on the words ("hit your" or "reached your", "limit", "usage
 credits") and strict on the shape (numbered options from 1 below the headline, one cursor on them, nothing under them but a footer).
+What `/model` draws under the box while it is typed (a list of slash commands) is not captured either: the Enter accepts a list of indented
+rows that all start with `/` whose highlighted row (the one Enter runs) is exactly `/model` (no mark: the first row must be), and a list drawn
+otherwise refuses the Enter (`key_refused ... why=row_under_box`, with the shape), the typed `/model` is taken out again by guarded Backspaces, and the
+card says how far it got (result outcome `partial`, reason `closed`, `typed` or `cleared`; never "nothing pressed", because Escape went).
 
-- every key sender checks it on the rows it is about to press into: the dev-warning auto-accept, the dev card and its popup, the tap
-  answerer and the popup, the pointer typer, and the computer-use Escape; it is never offered as a card;
+- every other key sender checks it on the rows it is about to press into: the dev-warning auto-accept, the dev card and its popup, the
+  pointer typer, and the computer-use Escape; the tap answerer's other kinds never reach it;
 - the session is `needs_you` with kind `usage limit` (workers.json, or Main's `needs_you` in `main-restart-check.json`) while it is up;
   `thread_session status` and `restart_main check` give the step (`needsYouStep`) instead of "answer it";
 - Terminals is not brought forward for it;
-- the thread (Main's: the default thread) gets one line per appearance, at most one an hour, naming the model (from a fixed list, or
-  "this session's model"), when it resets if the screen says (rebuilt from numbers and a time zone the system knows), and "press Esc in
-  the pane, then /model <another model>"; the log says `usage_limit_seen` with `line=yes` or `line=held_hourly`.
+- the offer goes out as the thread's `dialog` (or Main's `supervisor.main_dialog`), so the bridge makes the card and the Mac popup lists
+  the same two buttons. A thread's line is the fallback: one per appearance, at most one an hour, held while the offer settles and the card
+  is awaited (`cardAckWait`), and never sent when the bridge made a card. Main's line goes at once (the default thread, as the Mac's own row;
+  its card follows). A line names the model (from a fixed list, or "this
+  session's model"), when it resets if the screen says (rebuilt from numbers and a time zone the system knows), and that Talos pressed
+  nothing; no terminal, no pane, no command. The log says `usage_limit_seen` with `line=yes` or `line=held_hourly`.
 
-On Linux (the supervisor in `apps/bridge/src/supervisor/`, `usage-limit.ts`, ported from `UsageLimitScreen` with its tests) the same
-screen is its own kind for every reader (`liveDialog`, `classify`: `usage_limit`; the prompt detector and the tap reader see none):
+On Linux (the supervisor in `apps/bridge/src/supervisor/`, `usage-limit.ts`, ported from `UsageLimitScreen` with its tests; **no card yet**, FOLLOWUPS
+"usage-limit card on Linux") the same screen is its own kind for every reader (`liveDialog`, `classify`: `usage_limit`; the prompt detector and the tap reader see none):
 
 - every key Talos sends goes through `TmuxPtyHost`, which reads the coloured pane first and allows the key only for what the sender
   states it means to press (`key-guard.ts`, an allowlist): typing Talos's line into Claude's own input box when it is live,
@@ -994,7 +1037,7 @@ screen is its own kind for every reader (`liveDialog`, `classify`: `usage_limit`
    randomness made by the Mac** (22 or more characters of base64url, or 32 hex), so no one can name a dialog before it is on the pane.
 2. The live bridge reads `workers.json` on every poll (and the moment it changes: it watches the folder). A `dialog` whose `id` it
    has not seen, from a fresh supervisor, in a known thread, with the relay listing `needs-you/1`, becomes **one** `kind:'dialog'`
-   card (`card.create`, 15 minutes from the Mac's first sighting at most). The bridge then writes `dialog-card.json` for the Mac. The
+   card (`card.create`, a day from the Mac's first sighting at most: `DIALOG_TTL_S`; it is closed sooner, step 6, when the question leaves the screen). The bridge then writes `dialog-card.json` for the Mac. The
    record of the `id` is in history.sqlite, so a restart never makes a second card.
 3. The owner taps. `card.resolve` carries `choice` (the option's index; none for login). The bridge checks the dialog is not
    shown to be a different one by a fresh `workers.json` and the index is one of the card's, records the answer in the ledger (first
@@ -1016,9 +1059,27 @@ screen is its own kind for every reader (`liveDialog`, `classify`: `usage_limit`
 6. If the dialog goes away before anyone answers, the card is closed ("The session isn't waiting on this any more", state
    `superseded`) and nothing is pressed. If an answer was taken the card waits for the report instead: the dialog going away is
    the key press. A `workers.json` that cannot be read, or that is old, never closes a card.
-7. If nobody answers in 15 minutes the card expires and the bridge posts the thread line the Mac used to post
-   (`dialogFallbackLine`): **at most one per dialog** (the record is marked before the post, and a post that fails is logged, not
-   retried). The worker is never stopped. The bridge tells Claude nothing about any of this: the card is bridge-handled.
+7. If nobody answers in a day the card expires. A Mac that still shows the same question offers it again as a NEW sighting (new
+   `id`, so a new card; `WorkerReoffer` on the Mac, `offerRanOut` on the Linux supervisor): at most one new card a day per question,
+   and an answer is still only ever for the id on the pane now, so a tap on the expired card presses nothing. The bridge waits
+   `REOFFER_GRACE_MS` (30 s) after the expiry before it posts the thread line the Mac used to post (`dialogFallbackLine`), and posts
+   it only if that very dialog id is still on the pane (an older Mac never offers again): **at most one per dialog** (the record is
+   marked before the post, and a post that fails is logged, not retried). The worker is never stopped. The bridge tells Claude
+   nothing about any of this: the card is bridge-handled.
+   A card that ends WITHOUT an answer taking effect before its day is up does not leave the question with no card: after the owner's verified
+   tap pressed nothing the Mac (and the Linux supervisor) end that offer, so the next look at the same dialog on a settled screen makes a new id
+   and a new card (each needs a new real tap, so it cannot repeat on its own; a tap that does not prove itself never ends an offer); and when the
+   Mac gave no report within `DIALOG_RESULT_WAIT_MS`, the answer could not be handed over, or a tap waited too long for the Mac
+   (`mac_offline_too_long`), the bridge makes ONE replacement card for the same dialog id while that id is still on the pane in a fresh
+   `workers.json` with time left (never a third, none for a gone dialog, a stale file, or an offer in its last 30 s). One extra push comes with
+   a day-long card: the relay's "expires soon" reminder (`card_expiring`) applies to every card of 2 hours or more.
+   A card's life is not what keeps a tap safe (a day is long): the card closes when its question leaves the screen, a tap is taken
+   only for the exact dialog id on the pane now (a relaunch or a changed screen is a new id), the tap's own signed time is within
+   15 minutes of the Mac's clock (`DialogProof.maxAgeMs`, unchanged), and a Mac that is down answers nothing (the bridge withdraws
+   the answer file after `DIALOG_RESULT_WAIT_MS` and the card ends "not confirmed"). A starting worker that waits at a dialog is
+   still stopped after `dialogLimit` (900 s), which closes its card. The Mac's own safety and API-key popups never become cards and
+   keep 15 minutes. A bridge from before this change cuts its card at 15 minutes whatever the Mac's `expires_at` says, and a Mac
+   from before it never offers again: each pairing behaves as it always did.
 
 The card's text is `composeDialogCard` (`packages/protocol/src/dialog-card.ts`), and its heading and one-line explanation per kind are the
 shared table `DIALOG_WORDING`, which the Mac popup says too. Buttons are the dialog's options **as read from the
@@ -1047,7 +1108,7 @@ card's binding)**, strict fields, `control_id` of `[A-Za-z0-9_-]{1,64}` acted on
 | File (writer → reader)                                 | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workers.json` `supervisor.main_dialog` (Mac → bridge) | Main's own dialog, the development-channels warning, in the same shape as `dialog` below with `kind: dev_channels`, `subject` = the channels (comma separated) and, when the guard refused because Main's start command is not the confirmed one, `launch_changed`: a list of `folder\|program\|flags\|env` (names only; empty = not confirmed yet). The bridge makes the card on the default thread; the card and result files are in `workers/<default thread>/`; Main's answer is `main-dialog-answer.json` there, apart from a worker's `dialog-answer.json`. Not read from a worker's pane                                                                                                                                       |
-| `workers.json` `threads.<id>.dialog` (Mac → bridge)    | `{ id, kind: trust\|mcp_consent\|login, subject: string\|null, options: string[], cursor: int\|null, seen_at, expires_at }`. `expires_at` = `seen_at` + 900 s. `options`: 1 to 6 labels of at most 120 characters (none for login); `subject` at most 500. Anything that does not fit reads as "no dialog" and the rest of the file stays valid                                                                                                                                                                                                                                                                                                                                                                                       |
+| `workers.json` `threads.<id>.dialog` (Mac → bridge)    | `{ id, kind: trust\|mcp_consent\|login, subject: string\|null, options: string[], cursor: int\|null, seen_at, expires_at }`. `expires_at` = `seen_at` + 86 400 s (a day; an older Mac wrote 900 s, and a reader takes whatever the file says). `options`: 1 to 6 labels of at most 120 characters (none for login); `subject` at most 500. Anything that does not fit reads as "no dialog" and the rest of the file stays valid                                                                                                                                                                                                                                                                                                       |
 | `dialog-card.json` (bridge → Mac)                      | `{ v:1, dialog_id, card_id, thread_id, status: waiting\|answered\|closed\|expired, by?, label?, at }`. Written when the card is made and rewritten when it changes. **The Mac posts its old thread line only when no such file naming this dialog appears within 15 s of first seeing it** (`DIALOG_CARD_WAIT_MS`: one whole 10 s poll plus the write; the bridge normally makes the card within a second of `workers.json` changing). An old bridge, a relay without `needs-you/1` or a bridge that is down never writes it, so those get today's behaviour. While a file for the dialog exists the Mac posts no line for it; the bridge posts the expiry line. **Display only**: a forged one can only hide the Mac's fallback line |
 | `dialog-answer.json` (bridge → Mac)                    | `{ v:2, dialog_id, choice\|action:'open', label, by, at, control_id, proof }`, strict, at most 16 KiB. `choice`, `action`, `label` and `by` are for display and logging only. `proof = { signed, osig, device_id, binding }`: see "How the Mac verifies an answer". The Mac acts once per `dialog_id`, deletes the file, and always writes `dialog-result.json`                                                                                                                                                                                                                                                                                                                                                                       |
 | `dialog-result.json` (Mac → bridge)                    | strict: `{ v:1, dialog_id, control_id?, source: card\|mac, outcome: pressed\|nothing_pressed\|opened, choice?, label?, reason?, at }`. `source:'card'` answers one bridge answer (`control_id` required; `pressed` carries `choice` and the `label` the screen showed; `nothing_pressed` carries `reason`: `screen_changed`, `already_answered` or `unverified`). `source:'mac'` is a popup press (no `control_id`; `pressed` or `opened`). The bridge deletes the file once used                                                                                                                                                                                                                                                     |
@@ -1160,3 +1221,36 @@ opened, nothing pressed with each reason, and a popup press).
 | OC5 | the Talos mod in workers (P1)                                                                   | later |
 | OC6 | the agent's own hooks (private, outside this repo)                                              | later |
 | OC7 | docs and the smoke list                                                                         | later |
+
+## Why a message waits (and when Main answers)
+
+A message for a thread session that is alive waits for it up to 10 minutes (3 when the session is being started for it); a thread with
+no session goes to Main at once, and a session that fails or is being stopped during the wait hands the message to Main then (a supervisor
+heartbeat counts as gone only when the same stale one, more than 45 s old, was also seen at the poll before). A session that was live or busy
+for the message and then ends as `parked` or `off` without having read it (a crash, a cut turn) is woken ONCE more by the hub (its wake is
+written again, so the supervisor resumes it and types the pointer); the one re-wake is recorded in SQL (`route_rewake`), so a hub restart or a
+second hub adds none. A second death, or a session the owner stopped (`stopped_why` `owner`), goes to Main at once with the usual row; a
+thread that was only ever being started is not this case. The re-wake is the hub's, so it is the same for the Mac and the Linux supervisors. The thread shows one status line while it waits, picked again on every hub tick and
+taken down (`idle`) when the message is claimed or Main takes it. Only the owner's own messages and card taps show it, never a
+scheduled run or a session's own wake timer:
+
+| What the entry says                               | Line while it waits                                | Row when Main takes it at the deadline                               |
+| ------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
+| `needs_you` set                                   | none (the phone already says what it waits on)     | `<thread> was waiting for you, so the main agent answered.`          |
+| `pointer_hold` `typed_unseen`                     | `<thread> is waiting for you: not picked up`       | the same "was waiting for you" row                                   |
+| `pointer_hold` `draft`                            | `<thread> is waiting for you: unsent text`         | the same                                                             |
+| `pointer_hold` `scrolled`                         | `<thread> is waiting for you: scrolled back`       | the same                                                             |
+| `pointer_hold` `refused`                          | `<thread> can't take messages right now.`          | `<thread> couldn't take messages, so the main agent answered.`       |
+| `pointer_hold`, a reason this build does not know | `<thread> is waiting for you.`                     | the "was waiting for you" row                                        |
+| state `busy`, no hold                             | `<thread> is busy; it'll see this when it's free.` | `<thread> was busy, so the main agent answered.`                     |
+| anything else                                     | none                                               | the usual "Thread session didn't pick this up (...). Main answered." |
+
+A status label is at most 80 UTF-16 units (`ThreadStatus.label`), so a long thread name is cut on a whole character and ends in an
+ellipsis; the words after it are never cut.
+
+`pointer_hold` is `{reason: 'typed_unseen' | 'draft' | 'scrolled' | 'refused', since: ISO-8601}` on the workers.json entry. Both
+supervisors write it as soon as a hold starts; the exact rules are the doc comment on `WorkerPointerHold` in
+`packages/protocol/src/thread-sessions.ts` (precedence typed_unseen > draft > scrolled > refused; `since` fixed while the same hold
+goes on; written only while a pointer is owed and the session has a pane). The supervisor no longer posts its own "your message has
+probably gone to the main session" lines for these holds: the hub's line and row above replace them. A card tap held for a session
+that never claims it goes to Main at the deadline like any other message (the routing table above).

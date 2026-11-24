@@ -358,57 +358,33 @@ describe('ci-runner.sh alert: one message when main goes red, one when it is gre
     expect(m).not.toMatch(/\n\s*\n/) // no blank lines
   })
 
-  it('Swift Testing: the tests that failed on the last attempt; one that passed on ci-swift-retry’s rerun is left out', () => {
+  it('Swift Testing: every test that failed is named once, from its own "failed after" line (nothing is rerun)', () => {
     const s = setup()
     const c1 = s.commit('base')
     s.green(c1)
     s.alert(c1)
     const c2 = s.commit('breaks desktop')
     s.red(c2, ['desktop'])
-    // the relevant lines of a real desktop log (a26e55f): two tests fail, ci-swift-retry reruns them, one fails again
+    // the relevant lines of a real desktop log (a26e55f): two tests fail; the suite and whole-run lines are not tests
     const real = [
       '✘ Test aDraftHoldEndedByANoBoxTickStillRetypesTheLine() recorded an issue at PointerOwedEnterTests.swift:77:5: Expectation failed: r.wait(10) { r.up("trip") }',
       '✔ Test runningHoldsAndStopReleases(kind:) with 2 test cases passed after 8.791 seconds.',
       '✘ Test anOwnersParkSaysOwnerAndACrashSaysCrash() recorded an issue at WorkerStatusFieldsTests.swift:59:5: Expectation failed: r.wait(10) { r.state("trip") == "parked" }',
-      '✘ Test anOwnersParkSaysOwnerAndACrashSaysCrash() failed after 38.478 seconds with 1 issue.',
+      '\u001b[91m✘\u001b[0m Test anOwnersParkSaysOwnerAndACrashSaysCrash() failed after 38.478 seconds with 1 issue.',
       '✘ Suite "workers.json: needs_you, stopped_why, turn_started_at" failed after 99.304 seconds with 1 issue.',
       '✘ Test aDraftHoldEndedByANoBoxTickStillRetypesTheLine() failed after 96.896 seconds with 4 issues.',
       '✘ Suite "An owed Enter goes only onto our own line" failed after 156.827 seconds with 4 issues.',
       '✘ Test run with 864 tests in 132 suites failed after 250.490 seconds with 6 issues (including 1 known issue).',
-      'ci-swift-retry: 2 test(s) failed; running only them once more',
-      '◇ Test anOwnersParkSaysOwnerAndACrashSaysCrash() started.',
-      '✔ Test aDraftHoldEndedByANoBoxTickStillRetypesTheLine() passed after 3.798 seconds.',
-      '✘ Test anOwnersParkSaysOwnerAndACrashSaysCrash() recorded an issue at WorkerStatusFieldsTests.swift:59:5: Expectation failed: r.wait(10) { r.state("trip") == "parked" }',
-      '\u001b[91m✘\u001b[0m Test anOwnersParkSaysOwnerAndACrashSaysCrash() failed after 31.492 seconds with 1 issue.',
-      '✘ Suite "workers.json: needs_you, stopped_why, turn_started_at" failed after 31.492 seconds with 1 issue.',
-      '✘ Test run with 2 tests in 2 suites failed after 31.492 seconds with 1 issue.',
-      'ci-swift-retry: failed again on retry',
     ]
-    // then a second package whose failure is not rerun (a crash): its failed test is final as it is
-    const crash = [
-      '✘ Test aCrashingCase(kind:) with 2 test cases failed after 1.0 seconds with 1 issue.',
-      'ci-swift-retry: not rerun: the run crashed',
-    ]
-    // and a third whose rerun fails before any test runs (a build error): the first attempt's names stand
-    const noBuild = [
-      '\u2718 Test aBuildBreaker() failed after 1.0 seconds with 1 issue.',
-      'ci-swift-retry: 1 test(s) failed; running only them once more',
-      'error: compile failed',
-      'ci-swift-retry: failed again on retry',
-    ]
-    // and a last one whose log stops during the rerun (the job was killed): the first attempt's names stand
-    const cut = [
-      '\u2718 Test aKilledRerun() failed after 1.0 seconds with 1 issue.',
-      'ci-swift-retry: 1 test(s) failed; running only them once more',
-    ]
-    s.log(c2, 'desktop', [...real, ...crash, ...noBuild, ...cut].join('\n'))
+    // a second package whose test failed
+    const second = ['✘ Test aCrashingCase(kind:) with 2 test cases failed after 1.0 seconds with 1 issue.']
+    s.log(c2, 'desktop', [...real, ...second].join('\n'))
     s.alert(c2)
     const m = s.read(s.alerts()[0] as string)
     expect(m).toContain(
-      'failing tests:\n  anOwnersParkSaysOwnerAndACrashSaysCrash()\n  aCrashingCase(kind:)\n  aBuildBreaker()\n  aKilledRerun()\n',
+      'failing tests:\n  anOwnersParkSaysOwnerAndACrashSaysCrash()\n  aDraftHoldEndedByANoBoxTickStillRetypesTheLine()\n  aCrashingCase(kind:)\n',
     )
     expect(m.match(/anOwnersPark/g)).toHaveLength(1)
-    expect(m).not.toContain('aDraftHold') // passed on the rerun
     expect(m).not.toContain('none named')
     expect(m).not.toContain('Suite')
     expect(m).not.toContain('Test run')

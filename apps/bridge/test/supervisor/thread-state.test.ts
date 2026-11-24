@@ -141,27 +141,24 @@ describe('what the generated settings register', () => {
     expect((none.p as { launch: { env: Record<string, string> } }).launch.env.TALOS_APP_THREAD_STATE).toBeUndefined()
   })
   onCaseExactTmp(
-    'the allow rules are exactly the state file’s Edit( ), nothing wider; what is under it is denied',
+    'the allow rules are exactly the state file’s Edit( ); its children are denied as `<file>/*`, never `<file>/**`',
     () => {
       for (const own of [false, true]) {
         const w = start({ own })
         const perms = (w.settings as Settings).permissions
         expect(perms.allow).toEqual(stateRules(w.agentDir))
-        for (const r of stateRules(w.agentDir)) expect(perms.deny).toContain(r.replace(/\)$/, '/**)'))
+        for (const r of stateRules(w.agentDir)) expect(perms.deny).toContain(r.replace(/\)$/, '/*)'))
+        // a `/**` deny names the file itself too (Claude Code strips only a trailing `/**`): it made Edit refuse the file
+        expect(perms.deny.filter((r) => r.includes('state.md') && r.endsWith('/**)'))).toEqual([])
       }
     },
   )
   onCaseExactTmp('no deny rule of the generated settings covers the state file', () => {
     const w = start()
     const file = `${w.agentDir}/threads/trip.state.md`
-    for (const rule of (w.settings as Settings).permissions.deny) {
-      const m = /^(\w+)\(\/(.*)\)$/.exec(rule)
-      if (!m || !['Edit', 'Write'].includes(m[1] as string)) continue
-      const path = m[2] as string
-      // a literal path is the file itself or a folder above it; a /** is a prefix: either covers the file
-      const prefix = path.endsWith('/**') ? path.slice(0, -3) : path
-      expect(file === path || file.startsWith(`${prefix}/`), rule).toBe(false)
-    }
+    for (const rule of (w.settings as Settings).permissions.deny)
+      for (const tool of ['Edit', 'Write'])
+        if (rule.startsWith(`${ruleTool(tool)}(`)) expect(names(rulePath(rule), file), rule).toBe(false)
   })
   onCaseExactTmp('with the hook not staged (an older kit) there are no hook entries and no allow rules', () => {
     const w = start({ state: false })
@@ -178,15 +175,23 @@ describe('what the generated settings register', () => {
 })
 
 /**
- * A minimal gitignore-semantics check for the `//abs` path rules (the `ignore` package is not in the lockfile, and no dependency is
- * added for a test): a pattern names a path when the path is the pattern, or lies under it (a pattern that names a file names
- * everything below it, as gitignore does for a folder); `<p>/**` names what lies under p. The path is normalised first.
+ * A model of Claude Code's matching of a `//abs` path rule (2.1.330), for the rules these tests are given. The package it uses
+ * (`ignore`) is not in the lockfile and no dependency is added for a test. What it does, read from the CLI's bundle and the owner's
+ * report of Edit and `sed -i` on a state file: only a trailing `/**` is stripped from the rule; the rest is a gitignore pattern, which
+ * names a path when the path is the pattern or lies under it (a pattern that names a file names everything below it), without
+ * regard to case; the directory checks also try the path with a trailing slash. So a rule `<p>/**` names `<p>` itself (the file
+ * was refused: "File is in a directory that is denied by your permission settings"), allow and deny alike, while `<p>/*` names
+ * the children of `<p>` (deeper ones through the parent walk) and neither `<p>` nor `<p>/`. The path is normalised first.
  */
 const names = (pattern: string, path: string) => {
-  const p = pattern.replace(/^\/\//, '/')
-  const x = posix.normalize(path)
-  const base = p.endsWith('/**') ? p.slice(0, -3) : p
-  return p.endsWith('/**') ? x.startsWith(`${base}/`) : x === base || x.startsWith(`${base}/`)
+  const stripped = pattern.endsWith('/**') ? pattern.slice(0, -3) : pattern
+  const p = stripped.replace(/^\/\//, '/').toLowerCase()
+  const x = posix.normalize(path).toLowerCase()
+  if (p.endsWith('/*')) {
+    const dir = p.slice(0, -1) // children only: something after the slash
+    return x.startsWith(dir) && x.length > dir.length
+  }
+  return x === p || x.startsWith(`${p}/`)
 }
 const rulePath = (r: string) => r.slice(r.indexOf('(') + 1, -1)
 /** The rule name Claude Code matches a file tool's path with: Edit( ) for every writing tool, Read( ) for every reading one. */
@@ -201,14 +206,24 @@ const allowed = (allow: string[], deny: string[], tool: string, path: string) =>
   allow.some((r) => r.startsWith(`${ruleTool(tool)}(`) && names(rulePath(r), path)) &&
   !deny.some((r) => r.startsWith(`${ruleTool(tool)}(`) && names(rulePath(r), path))
 
-describe('the allow rules do not cover a sibling', () => {
-  const agent = '/home/user/agent'
-  const allow = stateFileAllowRules(agent, 'trip')
-  const deny = stateFileDenyRules(agent, 'trip')
-  // Edit( ) alone: Claude Code matches Write's path with Edit( ) rules too (path-rules-read-edit.test.ts)
-  it('exactly Edit of the one absolute path, as the deny rules spell absolute paths', () => {
-    expect(allow).toEqual(['Edit(//home/user/agent/threads/trip.state.md)'])
-    expect(deny).toEqual(['Edit(//home/user/agent/threads/trip.state.md/**)'])
+describe('the allow rule covers the state file; its children and every sibling stay refused', () => {
+  // the generated settings of a real start (allow and deny as a session gets them), not hand-written shapes
+  const w = () => {
+    const g = start()
+    const perms = (g.settings as Settings).permissions
+    return {
+      agent: g.agentDir,
+      file: `${g.agentDir}/threads/trip.state.md`,
+      allow: perms.allow ?? [],
+      deny: perms.deny,
+    }
+  }
+  onCaseExactTmp('the allow is exactly one absolute path, the deny is its children', () => {
+    const { agent, allow, deny } = w()
+    expect(allow).toEqual([`Edit(/${agent}/threads/trip.state.md)`])
+    expect(deny).toContain(`Edit(/${agent}/threads/trip.state.md/*)`)
+    expect(stateFileDenyRules('/home/user/agent', 'trip')).toEqual(['Edit(//home/user/agent/threads/trip.state.md/*)'])
+    expect(stateFileAllowRules('/home/user/agent', 'trip')).toEqual(['Edit(//home/user/agent/threads/trip.state.md)'])
   })
   it('both spellings, in allow and in deny, when the folder is reached through a link', () => {
     const root = tmp()
@@ -216,7 +231,7 @@ describe('the allow rules do not cover a sibling', () => {
     symlinkSync(join(root, 'real'), join(root, 'link'))
     for (const [rules, tail] of [
       [stateFileAllowRules(join(root, 'link'), 'trip'), ''],
-      [stateFileDenyRules(join(root, 'link'), 'trip'), '/**'],
+      [stateFileDenyRules(join(root, 'link'), 'trip'), '/*'],
     ] as const)
       expect(rules).toEqual([
         `Edit(/${join(root, 'link')}/threads/trip.state.md${tail})`,
@@ -224,40 +239,50 @@ describe('the allow rules do not cover a sibling', () => {
       ])
   })
   it('no glob in an allow rule: one literal path', () => {
-    for (const r of allow) {
+    for (const r of stateFileAllowRules('/home/user/agent', 'trip')) {
       expect(r).not.toMatch(/[*?[\]{}]/)
       expect(r).not.toContain('..')
     }
   })
-  const file = '/home/user/agent/threads/trip.state.md'
-  for (const tool of ['Edit', 'Write']) {
-    it(`${tool}: the file itself is allowed`, () => {
+  for (const tool of ['Edit', 'Write'])
+    onCaseExactTmp(`${tool}: the file itself is allowed; its children, a folder form and every sibling are not`, () => {
+      const { agent, file, allow, deny } = w()
       expect(allowed(allow, deny, tool, file)).toBe(true)
+      for (const path of [
+        `${file}/x`, // a child (Write would make the parent folder)
+        `${file}/a/b`,
+        `${file}/planted/CLAUDE.md`,
+        `${agent}/threads/TRIP.state.md/x`, // matching ignores case
+        `${agent}/threads/other.state.md`, // another thread's file
+        `${file}.bak`, // a backup beside it
+        `${file}/../x`, // normalised to threads/x
+        `${agent}/threads/trip/WORKER.md`,
+        `${agent}/threads/trip.md`,
+        `${agent}/threads/../memory/STATE.md`, // Main's state, by a `..` path
+        `${agent}/memory/STATE.md`,
+        `${agent}/CLAUDE.md`,
+        `${agent}/hooks/guard.py`,
+      ])
+        expect(allowed(allow, deny, tool, path), path).toBe(false)
     })
-    // the allow pattern alone names everything under the file (gitignore-style): it is the deny that closes that
-    for (const path of [`${file}/x`, `${file}/a/b`, `${file}/../x`]) {
-      it(`${tool}: ${path} is not allowed, and the allow rule alone would have named it only below the file`, () => {
-        expect(allowed(allow, deny, tool, path)).toBe(false)
-      })
-    }
-    for (const path of [
-      '/home/user/agent/threads/other.state.md', // another thread's file
-      `${file}.bak`, // a backup beside it
-      '/home/user/agent/threads/../memory/STATE.md', // Main's state, by a `..` path
-      '/home/user/agent/threads/trip/WORKER.md',
-      '/home/user/agent/threads/trip.md',
-      '/home/user/agent/memory/STATE.md',
-    ])
-      it(`${tool}: ${path} is not allowed`, () => {
-        expect(allowed(allow, deny, tool, path)).toBe(false)
-      })
-  }
-  it('the matcher itself: the allow pattern names what is under the file, the deny pattern names it too, the file alone only the allow', () => {
-    expect(names(rulePath(allow[0] as string), `${file}/x`)).toBe(true)
-    expect(names(rulePath(deny[0] as string), `${file}/x`)).toBe(true)
-    expect(names(rulePath(deny[0] as string), file)).toBe(false)
-    expect(names(rulePath(allow[0] as string), `${file}.bak`)).toBe(false)
-    expect(names(rulePath(deny[0] as string), `${file}/../x`)).toBe(false) // normalised to threads/x
+  it('the case variant of the file name is covered too (a different file only on a case-sensitive disk, and allowed)', () => {
+    const agent = '/home/user/agent'
+    const allow = stateFileAllowRules(agent, 'trip')
+    const deny = stateFileDenyRules(agent, 'trip')
+    expect(allowed(allow, deny, 'Edit', `${agent}/threads/TRIP.state.md`)).toBe(true)
+  })
+  it('red on the old rules: a `<file>/**` deny refuses the file, a bare `<file>` deny does too, `/*` does not', () => {
+    const agent = '/home/user/agent'
+    const allow = stateFileAllowRules(agent, 'trip')
+    const file = `${agent}/threads/trip.state.md`
+    const g = `Edit(/${file}`
+    expect(allowed(allow, [`${g}/**)`], 'Edit', file)).toBe(false)
+    expect(allowed(allow, [`${g})`], 'Edit', file)).toBe(false)
+    expect(allowed(allow, [`${g}/*)`], 'Edit', file)).toBe(true)
+    // and the folder form of the path is named by none of the three: only the children are
+    expect(names(`/${file}/*`, `${file}/`)).toBe(false)
+    expect(names(`/${file}/*`, file)).toBe(false)
+    expect(names(`/${file}/*`, `${file}/x`)).toBe(true)
   })
   it('a folder name with a rule metacharacter or a quote gets no rule (the session asks instead)', () => {
     for (const bad of [
@@ -275,8 +300,10 @@ describe('the allow rules do not cover a sibling', () => {
     }
   })
   it('a thread id that is not a thread id gets no rule', () => {
-    for (const bad of ['../x', 'A', '', 'all x', 'a/b', 'a'.repeat(33)])
-      expect(stateFileAllowRules(agent, bad)).toEqual([])
+    for (const bad of ['../x', 'A', '', 'all x', 'a/b', 'a'.repeat(33)]) {
+      expect(stateFileAllowRules('/home/user/agent', bad)).toEqual([])
+      expect(stateFileDenyRules('/home/user/agent', bad)).toEqual([])
+    }
   })
 })
 
@@ -291,6 +318,18 @@ describe('the seed', () => {
     writeFileSync(file, 'my notes\n')
     expect(seedThreadState(agent, 'trip', 'Trip')).toEqual({ ok: 'exists' })
     expect(readFileSync(file, 'utf8')).toBe('my notes\n')
+  })
+  it('a folder where the file belongs is a problem, not "exists", with and without dry', () => {
+    const agent = tmp()
+    mkdirSync(join(agent, 'threads'))
+    mkdirSync(threadStatePath(agent, 'trip'))
+    writeFileSync(join(threadStatePath(agent, 'trip'), 'planted.md'), 'x')
+    for (const dry of [false, true]) {
+      const r = seedThreadState(agent, 'trip', 'Trip', dry)
+      expect(r).toEqual({ problem: `${threadStatePath(agent, 'trip')} is not a regular file` })
+    }
+    // a regular file is still "exists", and nothing was changed
+    expect(readFileSync(join(threadStatePath(agent, 'trip'), 'planted.md'), 'utf8')).toBe('x')
   })
   it('the template is the agreed one, named by the display name, else the id', () => {
     expect(threadStateTemplate('trip', 'Trip')).toBe(`# Trip live state (thread trip)

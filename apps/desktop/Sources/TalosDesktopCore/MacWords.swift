@@ -51,8 +51,8 @@ public enum MacWords {
   public static let changeShortcut = "Change shortcut"
   public static let screenRowTitle = "See and use the screen"
   public static func appsItMayUse(_ n: Int) -> String { "Apps it may use (\(n))" }
-  public static let thisMacSignedIn = "This Mac's Talos window is signed in"
-  public static let thisMacSignedOut = "This Mac's Talos window is not signed in"
+  public static let thisMacSignedIn = "Signed in on this Mac"
+  public static let thisMacSignedOut = "Sign in on this Mac"
 
   // MARK: Advanced only (technical words allowed here)
 
@@ -75,7 +75,7 @@ public enum MacWords {
   // MARK: the guard
 
   /// Words an owner never reads outside Advanced. Whole words, any case ("sessionless" is not "session").
-  public static let forbidden = ["relay", "bridge", "tmux", "session", "sessions", "Terminal", "Terminals", "token", "MCP", "launch command"]
+  public static let forbidden = ["relay", "bridge", "tmux", "session", "sessions", "Terminal", "Terminals", "token", "MCP", "launch command", "config.json"]
 
   public static func forbiddenWords(in text: String) -> [String] {
     forbidden.filter { w in
@@ -86,13 +86,14 @@ public enum MacWords {
   /// Every fixed string the owner reads in the menu bar menu and the Mac settings outside Advanced, for the guard.
   public static var outsideAdvanced: [String] {
     [
-      MacSettingsText.windowTitle, tabAgent, tabPhone, tabAccess, tabGeneral, tabAdvanced,
+      MacSettingsText.windowTitle, MacSettingsText.companionName, MacSettingsText.companionHint, ThreadChoices.note(.unreadable), tabAgent, tabPhone, tabAccess, tabGeneral, tabAdvanced,
       startAgent, stopAgent, restartAgent, advancedMenu, signOutWindow, signOutTitle, signOutBody, signOutButton, thisMacSignedIn, thisMacSignedOut, needsServerAddress, shortcutNotSet, setShortcut, changeShortcut, screenRowTitle, appsItMayUse(3), agentScreenPath, finishSetup, SetupText.launchNeedsSetup, BlockedText.notSetUpLine, SupervisorNotice.noLogNotice(path: "/x/y"), anotherAgentRunning, quitKeepsAgent, quitStopsAgent, quitAndStop,
       threadAgentsTab, threadAgentsEmpty, quickMessage, quickMessageShortcut, privacyAndAccess, connectThisMac, disconnectThisMac,
       MacSettingsText.noRelayYet, MacSettingsText.autoUpdateTitle, MacSettingsText.autoUpdateHelp, MacSettingsText.loginPending,
       MacSettingsText.startOnOpenTitle, MacSettingsText.startOnOpenHelp, MacSettingsText.changesApply, MacSettingsText.restartNow,
       MacSettingsText.keepWorkingTitle, MacSettingsText.restartIfStopsTitle, MacSettingsText.problemsInTitle,
       SupervisorNotice.blocked, SupervisorNotice.restarted, SupervisorNotice.stoppedRestarting,
+      SupervisorNotice.startStalledLine(agentName: nil, waited: 120), SupervisorNotice.resumeFailedLine(agentName: nil), SupervisorNotice.couldNotStartLine(agentName: nil), OnboardingText.firstStartStalled,
       SupervisorNotice.bridgeNotLive(nil), SupervisorNotice.relayUnreachable(closeCode: nil), SupervisorNotice.relayUnreachable(closeCode: 1006),
       HelpPage.noRelay, OnboardingText.firstStartBlocked, DevicesPage.rowTitle, DevicesPage.rowButton, DevicesPage.needsServer,
       AutoUpdate.relayBehindLine(version: "0.1.9", relay: "abc", app: "def"),

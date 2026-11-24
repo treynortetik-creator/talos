@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { chmodSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildScanOptions, neverYielding, resolveClaude, sdkStatusSource } from '../../src/apps/sdk-source.ts'
 import { tmp } from './helpers.ts'
@@ -10,6 +10,23 @@ const input = (over: Record<string, unknown> = {}) => ({
   env: { PATH: '/usr/bin', TALOS_APP_BRIDGE: '1', KEEP: 'yes' } as Record<string, string | undefined>,
   excludePlugins: [] as string[],
   ...over,
+})
+
+// The release's source tarball leaves out the Agent SDK's bundled Claude binary (one per CPU, about 250 MB each), so one tarball
+// serves both Mac CPUs. That holds only while every SDK session is handed the installed claude: the SDK looks for its own binary
+// only when no path is given. So sdk-source.ts stays the one place that imports the SDK at runtime.
+describe('the Agent SDK is used in one place only, always with the installed claude', () => {
+  it('no other file in apps/bridge/src imports @anthropic-ai/claude-agent-sdk (types alone are fine)', () => {
+    const src = join(import.meta.dir, '..', '..', 'src')
+    const users: string[] = []
+    // any mention in a string: a static or dynamic import, a require, a re-export, a subpath, either quote
+    const named = /['"`]@anthropic-ai\/claude-agent-sdk(\/[^'"`]*)?['"`]/
+    for (const f of new Bun.Glob('**/*.{ts,tsx,js,mjs,cjs,mts}').scanSync(src)) {
+      const text = readFileSync(join(src, f), 'utf8')
+      for (const line of text.split('\n')) if (named.test(line) && !/^import type /.test(line.trim())) users.push(f)
+    }
+    expect([...new Set(users)]).toEqual(['apps/sdk-source.ts'])
+  })
 })
 
 describe('the options the scan hands the SDK (M5.1 step 2)', () => {

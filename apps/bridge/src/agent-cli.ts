@@ -84,7 +84,9 @@ function judge(
     name === 'peer rotate' ||
     name === 'devices revoke' ||
     name === 'relay update' ||
-    name === 'relay auto'
+    name === 'relay auto' ||
+    name === 'relay disconnect' ||
+    name === 'sandbox off'
   if (!gated) return undefined
   // history.sqlite is where the outside text, the hand-offs and the taint are kept: without it nothing can be checked (fails closed)
   if (!existsSync(p.historyDb))
@@ -104,7 +106,7 @@ function judge(
 }
 
 /** (B). Revoking the last approved device, or the one his latest message came from, is refused; so is anything with no record to check. */
-function revokeRefusal(
+export function revokeRefusal(
   devicesJson: string,
   id: string | undefined,
   store: HistoryStore | undefined,

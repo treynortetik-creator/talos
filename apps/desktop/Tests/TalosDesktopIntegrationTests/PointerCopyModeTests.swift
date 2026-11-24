@@ -215,7 +215,7 @@ struct PointerCopyModeTests {
     r.appGone("crash")
     r.scrollBack()
     let before = r.sent
-    _ = r.comeBack(ahead: 400, tmux: try r.copyModeShim())
+    _ = r.comeBack(ahead: 700, tmux: try r.copyModeShim())
     r.heldReads()
     #expect(r.sent == before, "keys were sent into copy mode: \(r.sent.dropFirst(before.count))")
     #expect(r.inMode)
@@ -268,7 +268,7 @@ struct PointerCopyModeTests {
     r.appGone("crash")
     try "empty".write(toFile: r.modeFault, atomically: true, encoding: .utf8)
     let before = r.sent
-    _ = r.comeBack(ahead: 400, tmux: try r.copyModeShim())
+    _ = r.comeBack(ahead: 700, tmux: try r.copyModeShim())
     r.heldReads()
     #expect(r.sent == before, "keys were sent with the mode unread: \(r.sent.dropFirst(before.count))")
     #expect(r.screen().contains(PointerTyper.text) && r.owed().until != nil, "\(r.owed())")
@@ -359,7 +359,7 @@ struct PointerCopyModeTests {
     #expect(r.wait(5) { !r.screen().contains("half a thought") })
     r.scrollBack()
     let before = r.sent
-    _ = r.comeBack(ahead: 400, tmux: try r.copyModeShim())
+    _ = r.comeBack(ahead: 700, tmux: try r.copyModeShim())
     r.heldReads()
     #expect(r.owed().until != nil, "settled with the pane in copy mode: \(r.owed())")
     #expect(r.sent == before, "\(r.sent.dropFirst(before.count))")
@@ -379,7 +379,7 @@ struct PointerCopyModeTests {
     r.appGone("crash")
     FileManager.default.createFile(atPath: r.scrollAfterLook, contents: nil)
     let before = r.sent
-    _ = r.comeBack(ahead: 400, tmux: try r.copyModeShim())
+    _ = r.comeBack(ahead: 700, tmux: try r.copyModeShim())
     #expect(r.wait(10) { r.inMode }, "control: the wrapper never put the pane in copy mode")
     r.heldReads()
     #expect(r.sent == before, "Backspaces were sent into copy mode: \(r.sent.dropFirst(before.count))")
@@ -436,7 +436,7 @@ struct PointerCopyModeTests {
     r.appGone("crash")
     FileManager.default.createFile(atPath: r.scrollBeforeSend, contents: nil)
     let before = r.sent
-    _ = r.comeBack(ahead: 400, tmux: try r.copyModeShim())
+    _ = r.comeBack(ahead: 700, tmux: try r.copyModeShim())
     #expect(r.wait(10) { r.inMode }, "control: the wrapper never put the pane in copy mode")
     r.heldReads()
     #expect(r.sent == before, "Backspaces were sent into copy mode: \(r.sent.dropFirst(before.count))")
@@ -447,13 +447,11 @@ struct PointerCopyModeTests {
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
   }
 
-  // MARK: a hold by copy mode is said, and the pointer keeps its deadline
+  // MARK: a hold by copy mode shows as Needs you, says nothing in the thread, and the pointer keeps its deadline
 
-  static let holdLine = "This thread's session is scrolled back, so Talos can't type into it; your message has probably gone to the main session. Open this thread in Terminals and press q to return to the prompt."
-
-  /// A pointer held back by copy mode was held in silence, for as long as the pane stayed scrolled back. Now the thread gets one line
-  /// for the hold and shows as Needs you until the mode is left; a later hold is a new one, with its own line.
-  @Test func aHoldByCopyModeTellsTheThreadOncePerHold() throws {
+  /// A pointer held back by copy mode shows as Needs you until the mode is left, and posts no line in the thread (the hub waits 10
+  /// minutes for the session before Main takes the message, and says so itself); a later hold is a new one, flagged again.
+  @Test func aHoldByCopyModeShowsNeedsYouOncePerHoldAndSaysNothing() throws {
     let r = try warm()
     defer { r.teardown() }
     let log = NoticeLog()
@@ -461,11 +459,9 @@ struct PointerCopyModeTests {
     r.mgr.tune { $0.draftNoticeAfter = 1 }
     r.scrollBack()
     try r.wake("trip", ids: second)
-    #expect(r.wait(15) { log.all.count == 1 }, "the hold was silent: \(log.all) \(r.owed())")
-    #expect(log.all.first?.thread == "trip" && log.all.first?.text == Self.holdLine, "\(log.all)")
-    #expect(r.wait(5) { r.mgr.needsYou()["trip"] == "scrolled back" }, "\(r.mgr.needsYou())")
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] == "scrolled back" }, "the hold was not flagged: \(r.mgr.needsYou()) \(r.owed())")
     r.heldReads(6)
-    #expect(log.all.count == 1, "told more than once for one hold: \(log.all)")
+    #expect(log.all.isEmpty, "a line was posted for the hold: \(log.all)")
     #expect(r.typedLines.count == 1 && r.owed().until != nil, "\(r.typedLines) \(r.owed())")
     // out of the mode inside the deadline: the line goes in, and the thread no longer waits on the owner
     r.leaveMode()
@@ -474,8 +470,50 @@ struct PointerCopyModeTests {
     // a second hold is its own
     r.scrollBack()
     try r.wake("trip", ids: ["m_01JBF3V7Q8K2M4N6P8R0S2T403"])
-    #expect(r.wait(15) { log.all.count == 2 }, "the second hold was silent: \(log.all)")
-    #expect(log.all.last?.text == Self.holdLine)
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] == "scrolled back" }, "the second hold was not flagged: \(r.mgr.needsYou())")
+    #expect(log.all.isEmpty, "a line was posted for the second hold: \(log.all)")
+  }
+
+  /// `pointer_hold`: a pointer held by the scroll is `scrolled` from the tick it starts (not after `draftNoticeAfter`), with a time that
+  /// stays while the mode lasts, and the key is gone once the mode is left and the line has gone in.
+  @Test func aHoldByCopyModeIsScrolledInWorkersJsonAndGoneWhenTheLineGoesIn() throws {
+    let r = try warm()
+    defer { r.teardown() }
+    r.scrollBack()
+    try r.wake("trip", ids: second)
+    #expect(r.wait(15) { r.fileOnDisk?.threads["trip"]?.pointer_hold?.reason == "scrolled" }, "\(r.owed())")
+    #expect(r.mgr.needsYou()["trip"] == nil, "the hold is written before any Needs you")
+    let first = try #require(r.fileOnDisk?.threads["trip"]?.pointer_hold?.since)
+    r.heldReads(6)
+    #expect(r.fileOnDisk?.threads["trip"]?.pointer_hold?.since == first, "the time moved while the mode lasted")
+    r.leaveMode()
+    #expect(r.wait(10) { r.typedLines.count == 2 }, "\(r.typedLines)")
+    #expect(r.wait(10) { r.fileOnDisk?.threads["trip"]?.pointer_hold == nil }, "left after delivery")
+  }
+
+  /// Under the scroll the rows are still read: the owner's draft there is `draft`, not `scrolled`.
+  @Test func aDraftUnderTheScrollIsADraftHold() throws {
+    let r = try warm()
+    defer { r.teardown() }
+    r.ownerTypes("half a thought")
+    #expect(r.wait(5) { r.screen().contains("half a thought") })
+    r.scrollBack()
+    try r.wake("trip", ids: second)
+    #expect(r.wait(15) { r.fileOnDisk?.threads["trip"]?.pointer_hold?.reason == "draft" }, "\(String(describing: r.fileOnDisk?.threads["trip"]?.pointer_hold))")
+  }
+
+  /// Past its deadline a pointer is settled, not held: the key goes even while the mode lasts.
+  @Test func aHoldIsGoneOncePastTheDeadlineInCopyMode() throws {
+    let clock = WallClock()
+    let r = try warm(clock: clock)
+    defer { r.teardown() }
+    r.scrollBack()
+    try r.wake("trip", ids: second)
+    #expect(r.wait(15) { r.fileOnDisk?.threads["trip"]?.pointer_hold?.reason == "scrolled" })
+    clock.jump(700)
+    r.leaveMode()
+    #expect(r.wait(10) { r.owed().until == nil }, "\(r.owed())")
+    #expect(r.wait(10) { r.fileOnDisk?.threads["trip"]?.pointer_hold == nil }, "a dropped pointer still has a hold")
   }
 
   /// No pointer waiting, no hold: a pane the owner scrolled back says nothing by itself.
@@ -491,23 +529,23 @@ struct PointerCopyModeTests {
   }
 
   /// A pointer of this copy of the app had no deadline: held back by copy mode for an hour, it was typed when the mode was left, for
-  /// a message the hub had given to main long before. It keeps its deadline now. Past it, the thread is told at once (the message has
-  /// gone to main), nothing is settled while the mode lasts, and out of the mode the pointer is dropped, never typed.
+  /// a message the hub had given to main long before. It keeps its deadline now. Past it, the thread shows as Needs you at once (and no
+  /// line is posted: Main's own line says it took the message), nothing is settled while the mode lasts, and out of the mode the
+  /// pointer is dropped, never typed.
   @Test func aPointerHeldByCopyModePastItsDeadlineIsDroppedNotTypedLate() throws {
     let clock = WallClock()
     let r = try warm(clock: clock)
     defer { r.teardown() }
     let log = NoticeLog()
-    r.trackNotices(log)  // draftNoticeAfter stays at 120 s: only the deadline can make the line due
+    r.trackNotices(log)  // draftNoticeAfter stays at 120 s: only the deadline can make the flag due
     r.scrollBack()
     let before = r.sent
     try r.wake("trip", ids: second)
     #expect(r.wait(5) { r.owed().until != nil }, "the pointer is not owed: \(r.owed())")
     r.heldReads()
-    #expect(log.all.isEmpty, "told before the deadline or the wait: \(log.all)")
-    clock.jump(400)  // past the claim deadline: the hub has given the message to main
-    #expect(r.wait(15) { log.all.count == 1 }, "not told at the deadline: \(log.all)")
-    #expect(log.all.first?.text == Self.holdLine)
+    #expect(r.mgr.needsYou()["trip"] == nil, "flagged before the deadline or the wait: \(r.mgr.needsYou())")
+    clock.jump(700)  // past the claim deadline: the hub has given the message to main
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] == "scrolled back" }, "not flagged at the deadline: \(r.mgr.needsYou())")
     r.heldReads()
     #expect(r.owed().until != nil, "settled with the pane in copy mode: \(r.owed())")
     r.leaveMode()
@@ -516,7 +554,7 @@ struct PointerCopyModeTests {
     #expect(r.typedLines.count == 1, "typed for a message main has: \(r.typedLines)")
     #expect(r.sent == before, "\(r.sent.dropFirst(before.count))")
     #expect(r.wait(5) { r.mgr.needsYou()["trip"] == nil }, "\(r.mgr.needsYou())")
-    #expect(log.all.count == 1, "\(log.all)")
+    #expect(log.all.isEmpty, "a line was posted by the Mac: \(log.all)")
   }
 
   /// The same with our line already in the box and only its Enter owed: past the deadline the Enter is never pressed. Out of the mode
@@ -528,7 +566,7 @@ struct PointerCopyModeTests {
     r.scrollBack()
     r.heldReads(2)
     unlink(r.enterFault)  // an Enter would go through now
-    clock.jump(400)
+    clock.jump(700)
     r.heldReads()
     #expect(r.typedLines.isEmpty && r.owed().enter == true, "\(r.typedLines) \(r.owed())")
     r.leaveMode()
@@ -548,16 +586,16 @@ struct PointerCopyModeTests {
     #expect(r.wait(5) { r.screen().contains("half a thought") })
     try r.wake("trip", ids: second)
     #expect(r.wait(5) { r.owed().until != nil }, "\(r.owed())")
-    clock.jump(400)
+    clock.jump(700)
     r.heldReads()
     r.ownerBackspaces("half a thought".count)
     #expect(r.wait(15) { r.typedLines.count == 2 }, "a pointer held by a draft was dropped: \(r.typedLines) \(r.owed())")
   }
 
   /// A line of ours past its deadline that stays in the box because a client is attached (it may be mixed with the owner's text, so it
-  /// is not cleared) leaves the pointer owed. Each scroll back is then a new hold on a pointer that is already late, and was told at
-  /// once: ten scrolls, ten lines. A hold on a late pointer keeps its record, so the kind stays quiet for the debounce window.
-  @Test func aLateLineKeptBesideAClientIsNotToldAgainOnEveryScroll() throws {
+  /// is not cleared) leaves the pointer owed. Each scroll back is then a new hold on a pointer that is already late, which was told at
+  /// once (ten scrolls, ten lines) until the hold's line was taken out. Now no scroll posts a line, and each one still shows as Needs you.
+  @Test func aLateLineKeptBesideAClientPostsNoLineOnAnyScroll() throws {
     let clock = WallClock()
     let r = try enterOwed(clock: clock)
     defer { r.teardown() }
@@ -568,18 +606,20 @@ struct PointerCopyModeTests {
       if client.isRunning { client.terminate() }
       client.waitUntilExit()
     }
-    func told() -> Int { log.all.filter { $0.text == Self.holdLine }.count }
     r.scrollBack()
-    clock.jump(400)
-    #expect(r.wait(15) { told() == 1 }, "not told at the deadline: \(log.all)")
+    clock.jump(700)
+    #expect(r.wait(15) { r.mgr.needsYou()["trip"] == "scrolled back" }, "not flagged at the deadline: \(r.mgr.needsYou())")
     for _ in 0..<3 {
       r.leaveMode()
       r.heldReads(3)  // ticks out of the mode: the line is kept (a client is attached), the pointer stays owed
       #expect(r.screen().contains(PointerTyper.text) && r.owed().until != nil, "control: our line is still in the box, still owed: \(r.owed())")
       r.scrollBack()
       r.heldReads(4)
+      #expect(r.mgr.needsYou()["trip"] == "scrolled back", "a later scroll back is not flagged: \(r.mgr.needsYou())")
+      // past its deadline, and with our line left in the box: no hold reason (the hub has given the message to Main; the left-over line has its own words)
+      #expect(r.fileOnDisk?.threads["trip"]?.pointer_hold == nil, "\(String(describing: r.fileOnDisk?.threads["trip"]?.pointer_hold))")
     }
-    #expect(told() == 1, "told again on each scroll: \(log.all.map(\.text))")
+    #expect(log.all.isEmpty, "a line was posted for a scroll back: \(log.all.map(\.text))")
     #expect(r.typedLines.isEmpty, "\(r.typedLines)")
   }
 

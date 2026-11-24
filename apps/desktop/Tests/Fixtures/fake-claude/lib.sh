@@ -64,6 +64,10 @@ log_typed_lines() {
   done
 }
 
+# Whether this fake session may go on: every polling loop ends after FAKE_MAX_LIFETIME seconds (the rig sets 120), so a run that was killed
+# before its teardown leaves nothing that spins for ever. (bash's SECONDS, counted from the start of the script; a subshell inherits it.)
+fake_alive() { [ "$SECONDS" -lt "${FAKE_MAX_LIFETIME:-600}" ]; }
+
 idle() { sleep "${FAKE_MAX_LIFETIME:-600}"; exit 0; }
 
 unregister() { [ -n "${FAKE_AGENTS_DIR:-}" ] && rm -f "$FAKE_AGENTS_DIR/$$.json"; }

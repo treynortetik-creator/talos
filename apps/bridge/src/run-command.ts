@@ -2,16 +2,20 @@ import { spawn, spawnSync } from 'node:child_process'
 import { CHILD_GRACE_MS, stillRunning, waitChild } from './child-wait.ts'
 
 export type RunResult = { code: number; out: string }
-export type Run = (cmd: string[], cwd: string) => RunResult
+/** What a caller may ask of one run: a time limit, and a whole environment for the command (none: it inherits this process's). */
+export type RunOpts = { timeoutMs?: number; env?: Record<string, string | undefined> }
+export type Run = (cmd: string[], cwd: string, opts?: RunOpts) => RunResult
 
-/** Runs a command with an argument vector (never a shell). stdout and stderr come back together, trimmed. 127 when it can't start. */
-export function runCommand(cmd: string[], cwd: string, timeoutMs?: number): RunResult {
+/** Runs a command with an argument vector (never a shell). stdout and stderr come back together, trimmed. 127 when it can't start. A number is a time limit in ms. */
+export function runCommand(cmd: string[], cwd: string, opts?: number | RunOpts): RunResult {
+  const o: RunOpts = typeof opts === 'number' ? { timeoutMs: opts } : (opts ?? {})
   try {
     const r = spawnSync(cmd[0] as string, cmd.slice(1), {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      ...(o.timeoutMs ? { timeout: o.timeoutMs } : {}),
+      ...(o.env ? { env: o.env } : {}),
     })
     if (r.error) return { code: 127, out: r.error.message }
     return { code: r.status ?? 1, out: `${r.stdout}${r.stderr}`.trim() }

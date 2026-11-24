@@ -13,7 +13,18 @@ export TALOS_INSTALL_OS=Darwin # the launchctl shim stands in for launchd, so th
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$KIT/scripts/_test-env.sh"
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIPS=0
+# An installed agent folder (scripts/ is a link into the plugin release) and the release itself are not a kit: they lack the zone or the data
+# the other half of a kit holds, so there is nothing for install.sh to install FROM, and every check below would only test that. Said, not hidden.
+if [ -L "$KIT/scripts" ] || [ -f "$KIT/.claude-plugin/plugin.json" ]; then
+  echo "  skip   [shipped kit] every check: this is an installed agent folder or a plugin release, not a kit to install from (run it from a kit copy or the repository)"
+  echo "  install: PASS 0 FAIL 0 SKIP 1"; exit 0
+fi
+# Where this runs. In the repository the kit is <clone>/kit, with the clone's install.sh and apps/ beside it, and every check runs (a clone with no
+# apps/chronos FAILS them). Anywhere else (an installed agent folder, a kit 1.x folder, the plugin release the folder's scripts/ link leads to)
+# the repository is not there: a check that truly needs it prints a `skip` line with its reason, and the shipped-form checks run instead.
+if [ "$KIT" = "$(cd "$KIT/.." && pwd)/kit" ] && [ -f "$KIT/../install.sh" ] && [ -d "$KIT/../apps" ]; then SHIPPED=0; else SHIPPED=1; fi
+skip(){ SKIPS=$((SKIPS+1)); printf '  skip   [shipped kit] %s\n' "$1"; }
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
@@ -31,6 +42,13 @@ fresh_home(){ # $1 = name; sets up an empty fake HOME and a launchctl tripwire
 }
 ORIGPATH="$PATH"
 STUB="$KIT/scripts/fixtures/fake-chronos"
+# an installed folder carries no test doubles (scripts/fixtures is not shipped): the same four small files are made here, and in the repo a check
+# keeps the two from drifting apart
+if [ "$SHIPPED" = 1 ] || [ ! -d "$STUB" ]; then STUB="$SB/fake-chronos"; talos_fake_chronos "$STUB"
+else
+  talos_fake_chronos "$SB/fake-chronos-made"
+  diff -r "$STUB" "$SB/fake-chronos-made" >/dev/null && ok "the stub Chronos that shipped folders make for themselves is the fixture" || no "talos_fake_chronos (kit/scripts/_test-env.sh) differs from scripts/fixtures/fake-chronos"
+fi
 
 # ---- 1. --dry-run changes nothing
 fresh_home h1
@@ -46,7 +64,7 @@ out="$(bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load 
 { [ "$rc" = 0 ] && [ "$(cat "$XDG_CONFIG_HOME/talos/talos-app-bin" 2>/dev/null)" = "$HOME/bin/talos-app" ]; } \
   && ok "--notify talos records the absolute path of talos-app" || no "talos-app path not recorded (rc=$rc)" "$(cat "$XDG_CONFIG_HOME/talos/talos-app-bin" 2>&1)"
 fresh_home h1c; A="$HOME/agent"
-out="$(PATH="/usr/bin:/bin:$HOME/bin" bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --notify talos 2>&1)"; rc=$?
+out="$(PATH="$HOME/bin:/usr/bin:/bin" bash "$KIT/install.sh" --agent-dir "$A" --chronos-path "$STUB" --no-load --notify talos 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && <<<"$out" grep -q 'warning: --notify talos: the talos-app command was not found' && [ ! -e "$XDG_CONFIG_HOME/talos/talos-app-bin" ]; } \
   && ok "--notify talos warns, and records nothing, when talos-app is missing" || no "no warning for a missing talos-app (rc=$rc)" "$(printf '%s' "$out" | grep -i talos-app)"
 
@@ -87,6 +105,13 @@ grep -q 'quiet=1' "$HOME/.chronos/fake-install.log" && ok "install.sh passed --q
 vi="$(cd "$A" && bash scripts/verify-install.sh 2>&1)"; <<<"$vi" grep -q 'hook parsed' && ok "verify-install.sh parses the installed hook registration" || no "verify-install does not see the hook"
 <<<"$vi" grep -q 'enforcement hooks registered' && ! <<<"$vi" grep -q 'registered but the file is missing' \
   && ok "verify-install reports the enforcement hooks as registered, and does not mistake Chronos's own hook for a missing one" || no "verify-install hook note wrong" "$(printf '%s' "$vi" | grep -i hooks)"
+# the pre-tool guard also covers the file tools (the Mac app's folders): a fresh install does, an agent set up with the old Bash-only matcher is told
+<<<"$vi" grep -q 'registered for Bash only' && no "a fresh install is told its pre-tool guard covers Bash only" || ok "a fresh install's pre-tool guard covers the file tools too (no note)"
+cp "$A/.claude/settings.json" "$A/.claude/settings.json.keep"
+sed -i.bak 's/"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit"/"matcher": "Bash"/' "$A/.claude/settings.json"; rm -f "$A/.claude/settings.json.bak"
+vi2="$(cd "$A" && bash scripts/verify-install.sh 2>&1)"
+mv "$A/.claude/settings.json.keep" "$A/.claude/settings.json"
+<<<"$vi2" grep -q 'registered for Bash only' && ok "verify-install notes a pre-tool guard registered for Bash only (it does not cover the file tools)" || no "verify-install does not note a Bash-only pre-tool guard"
 # K5b: a fresh install is a working agent. The default is rendered, the floor rules are in it, and the closing message does not make the interview a prerequisite.
 if ! grep -q 'talos:placeholder' "$A/CLAUDE.md"; then ok "a fresh install renders CLAUDE.md (no placeholder marker left)"; else no "fresh install left the placeholder CLAUDE.md"; fi
 _fl=""; for ph in 'do not retry or route around' 'never send, post, delete, spend or share' 'carries the substance' 'only one process may hold a channel' 'never infer authority' 'Never do these' '## 8. Guardrails'; do
@@ -219,6 +244,69 @@ fresh_home h3j
 out="$(bash "$KIT/uninstall.sh" --agent-dir --yes 2>&1)"; rc=$?
 { [ "$rc" = 2 ] && <<<"$out" grep -q 'needs a value'; } && ok "uninstall.sh refuses a flag as the value of --agent-dir" || no "uninstall took --yes as a folder (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
 
+# ---- 3e. the owner's own Chronos is left alone by a DIRECT kit call too (no root installer in front of it)
+for CASE in handmade otherpath; do
+  fresh_home "h3e$CASE"; A="$HOME/agent"
+  bash "$KIT/install.sh" --agent-dir "$A" --no-chronos >/dev/null 2>&1 || no "(setup) 3e $CASE agent install failed"
+  mkdir -p "$HOME/.config/chronos" "$HOME/.config/talos"
+  printf '{"workspace": "/somewhere/else", "notify": ""}\n' > "$CHRONOS_CONFIG"
+  printf '[{"id": "mine", "enabled": true}]\n' > "$HOME/.config/chronos/jobs.json"
+  if [ "$CASE" = otherpath ]; then mkdir -p "$HOME/mychronos"; printf '%s\n' "$HOME/mychronos" > "$HOME/.config/talos/chronos-dir"; fi
+  b_cfg="$(cat "$CHRONOS_CONFIG")"; b_jobs="$(cat "$HOME/.config/chronos/jobs.json")"; b_rec="$(cat "$HOME/.config/talos/chronos-dir" 2>/dev/null || echo none)"
+  out="$(bash "$KIT/install.sh" --agent-dir "$A" --add-to-existing 2>&1)"; rc=$?
+  a_rec="$(cat "$HOME/.config/talos/chronos-dir" 2>/dev/null || echo none)"
+  { [ "$rc" = 0 ] && [ "$(cat "$CHRONOS_CONFIG")" = "$b_cfg" ] && [ "$(cat "$HOME/.config/chronos/jobs.json")" = "$b_jobs" ] && [ "$a_rec" = "$b_rec" ] \
+    && ! grep -q 'chronos-session-start' "$A/.claude/settings.json" && [ ! -e "$SB/launchctl.calls" ]; } \
+    && ok "a direct kit call over a Chronos of the owner's ($CASE): no jobs, no hook, no move, config and record as they were" || no "a direct kit call changed the owner's Chronos ($CASE, rc=$rc)" "$(printf '%s' "$out" | tail -4)"
+  { <<<"$out" grep -q 'left alone' && <<<"$out" grep -q -- '--reinstall-chronos'; } && ok "...and says it left it alone and how to opt in ($CASE)" || no "no 'left alone' / --reinstall-chronos hint ($CASE)" "$(printf '%s' "$out" | tail -4)"
+  out="$(bash "$KIT/install.sh" --agent-dir "$A" --add-to-existing --set-chronos-workspace 2>&1)"; rc=$?
+  { [ "$rc" = 2 ] && <<<"$out" grep -q -- '--reinstall-chronos' && [ "$(cat "$CHRONOS_CONFIG")" = "$b_cfg" ]; } \
+    && ok "a Chronos-only flag over it exits 2 with the same hint ($CASE)" || no "--set-chronos-workspace over the owner's Chronos was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+done
+# the root installer and the kit decide whose Chronos it is with ONE function (kit/scripts/install-chronos-scope.sh); pin its cases
+. "$KIT/scripts/install-chronos-scope.sh"
+fresh_home h3f; mkdir -p "$HOME/talos-a/kit" "$HOME/talos-a/apps/chronos" "$HOME/own"; : > "$HOME/talos-a/kit/install.sh"
+B="$HOME/talos-b/apps/chronos"; V="$HOME/.local/share/talos/chronos"
+r=""; for rec in "" "$B" "$V" "$HOME/talos-a/apps/chronos" "$HOME/gone/apps/chronos" "$HOME/own" "$HOME/own/apps/chronos"; do
+  if chronos_record_is_ours "$rec" "$B" "$V"; then r="$r Y"; else r="$r N"; fi
+done
+[ "$r" = " N Y Y Y N N N" ] && ok "chronos_record_is_ours: empty no; bundled, old clone and another Talos checkout (its kit there) yes; a gone folder and any other folder no" || no "chronos_record_is_ours gave '$r'"
+if [ "$SHIPPED" = 1 ]; then
+  grep -q 'install-chronos-scope.sh' "$KIT/install.sh" && ok "kit/install.sh uses kit/scripts/install-chronos-scope.sh" || no "kit/install.sh does not use the shared rule"
+  skip "the root install.sh uses the shared rule too (there is no root install.sh beside a shipped kit)"
+else
+  grep -q 'install-chronos-scope.sh' "$KIT/install.sh" && grep -q 'install-chronos-scope.sh' "$KIT/../install.sh" \
+    && ok "install.sh and kit/install.sh both use kit/scripts/install-chronos-scope.sh" || no "one of the installers does not use the shared rule"
+fi
+
+# ---- 3g. the guard fails closed: a kit without the shared rule next to it leaves an existing Chronos alone
+fresh_home h3g; A="$HOME/agent"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos >/dev/null 2>&1 || no "(setup) 3g agent install failed"
+# (a shipped kit's scripts/ is a link into the release, and the rule file removed below must be the copy's own: talos_copy_kit makes
+# that one link a real folder and copies every other link as a link, so a link out of the folder is never followed)
+mkdir -p "$SB/repo2"; talos_copy_kit "$KIT" "$SB/repo2/kit"
+[ "$SHIPPED" = 1 ] || { mkdir -p "$SB/repo2/apps"; cp -R "$KIT/../apps/chronos" "$SB/repo2/apps/chronos"; }   # a shipped kit has no apps/chronos beside it
+rm -f "$SB/repo2/kit/scripts/install-chronos-scope.sh"   # no kit/scripts/install-chronos-scope.sh there
+mkdir -p "$HOME/.config/chronos"; printf '{"workspace": "/somewhere/else", "notify": ""}\n' > "$CHRONOS_CONFIG"
+printf '[{"id": "mine", "enabled": true}]\n' > "$HOME/.config/chronos/jobs.json"; b_jobs="$(cat "$HOME/.config/chronos/jobs.json")"
+out="$(bash "$SB/repo2/kit/install.sh" --agent-dir "$A" --add-to-existing 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && [ "$(cat "$HOME/.config/chronos/jobs.json")" = "$b_jobs" ] && ! grep -q 'chronos-session-start' "$A/.claude/settings.json" && <<<"$out" grep -q 'left alone'; } \
+  && ok "without the shared rule beside it the kit fails closed: an existing Chronos is left alone" || no "the kit touched a Chronos with no scope rule to ask (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+
+# ---- 3h. a move from a checkout under Desktop repoints the hook that points at the runtime COPY launchd ran
+if [ "$SHIPPED" = 1 ]; then skip "a move from a Desktop checkout to this clone's apps/chronos (a shipped kit has no apps/chronos to move to)"
+else
+fresh_home h3h; A="$HOME/agent"
+bash "$KIT/install.sh" --agent-dir "$A" --no-chronos >/dev/null 2>&1 || no "(setup) 3h agent install failed"
+RT="$HOME/.local/share/chronos"; mkdir -p "$RT/hooks" "$HOME/Desktop/old-talos/kit" "$HOME/Desktop/old-talos/apps/chronos" "$HOME/.config/chronos" "$HOME/.config/talos"
+printf 'print("{}")\n' > "$RT/hooks/chronos-session-start.py"; : > "$HOME/Desktop/old-talos/kit/install.sh"
+printf '{"workspace": "%s", "notify": ""}\n' "$A" > "$CHRONOS_CONFIG"; printf '%s\n' "$HOME/Desktop/old-talos/apps/chronos" > "$HOME/.config/talos/chronos-dir"
+python3 "$KIT/scripts/talos-jobs.py" hook-add --agent-dir "$A" --chronos-dir "$RT" >/dev/null 2>&1
+out="$(bash "$KIT/install.sh" --agent-dir "$A" --add-to-existing --no-load 2>&1)"; rc=$?
+{ [ "$rc" = 0 ] && grep -q "$(cd "$KIT/.." && pwd)/apps/chronos/hooks" "$A/.claude/settings.json" && ! grep -q "$RT/hooks" "$A/.claude/settings.json"; } \
+  && ok "a hook that points at the runtime copy of a Desktop checkout is repointed on the move" || no "the hook at the old runtime copy was not repointed (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+fi
+
 # ---- 4. other refusals
 fresh_home h3
 mkdir -p "$HOME/full"; echo x > "$HOME/full/mine.txt"
@@ -249,18 +337,47 @@ bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-chronos >/dev/null 2>&1; r
   && [ -e "$TALOS_VENDOR_DIR/kit/current/talos-kit/.claude-plugin/plugin.json" ]; } \
   && ok "--no-chronos: agent installed with its plugin release, no Chronos config, no jobs, no clone" || no "--no-chronos left Chronos traces, lacks the release, or failed (rc=$rc)"
 
-# ---- 6. the clone path: pinned commit from a local repo, no network
+# ---- 6. Chronos comes from this repository (apps/chronos): nothing is cloned, and the old clone flags are gone
 fresh_home h5
-R="$SB/chronos-origin"; rm -rf "$R"; mkdir -p "$R"; cp -R "$STUB/." "$R/"
-( cd "$R" && git init -q . && git add -A && git -c user.email=t@t.t -c user.name=t commit -qm one && echo more > more.txt && git add more.txt && git -c user.email=t@t.t -c user.name=t commit -qm two ) >/dev/null 2>&1
-FIRST="$(git -C "$R" rev-list --max-parents=0 HEAD)"
-out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$R" --chronos-ref "$FIRST" --no-load 2>&1)"; rc=$?
-head="$(git -C "$TALOS_VENDOR_DIR/chronos" rev-parse HEAD 2>/dev/null)"
-{ [ "$rc" = 0 ] && [ "$head" = "$FIRST" ] && [ ! -e "$TALOS_VENDOR_DIR/chronos/more.txt" ]; } && ok "clone path pins the requested commit (HEAD is the first commit, not the tip)" || no "pin failed (rc=$rc head=$head want=$FIRST)" "$(printf '%s' "$out" | tail -3)"
-fresh_home h6
-bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$R" --chronos-ref 0000000000000000000000000000000000000000 --no-load >/dev/null 2>&1 && no "installed with a commit that does not exist" || ok "a pinned commit that does not exist aborts the install"
+if [ "$SHIPPED" = 1 ]; then
+  skip "with no --chronos-path the kit uses this repository's apps/chronos (a shipped kit has none beside it; the shipped-form cases follow)"
+else
+out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-load 2>&1)"; rc=$?
+rec="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-dir" 2>/dev/null)"
+{ [ "$rc" = 0 ] && [ "$rec" = "$(cd "$KIT/.." && pwd)/apps/chronos" ] && [ ! -e "$TALOS_VENDOR_DIR/chronos" ] && ! <<<"$out" grep -qiE 'cloning|git clone'; } \
+  && ok "with no --chronos-path the kit uses this repository's apps/chronos and clones nothing" || no "the bundled Chronos was not used (rc=$rc record=$rec)" "$(printf '%s' "$out" | tail -4)"
+fi
+if [ "$SHIPPED" = 1 ]; then
+  # the shipped form: whose Chronos it is is decided first; then Talos's own complete folder is used in place; otherwise one plain message, before anything is written
+  fresh_home h5c
+  out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --no-load 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && <<<"$out" grep -q 'no Chronos beside it' && <<<"$out" grep -q -- '--no-chronos' && <<<"$out" grep -q 'Nothing was changed' \
+    && [ ! -e "$HOME/agent" ] && [ ! -e "$HOME/.config" ] && [ ! -e "$TALOS_VENDOR_DIR" ]; } \
+    && ok "a shipped kit with no Chronos to use stops with one plain message and writes and copies nothing" || no "no-Chronos shipped kit did not stop cleanly (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+  fresh_home h5g; A="$HOME/agent"
+  mkdir -p "$HOME/gone-clone/kit" "$HOME/.config/chronos" "$HOME/.config/talos"; : > "$HOME/gone-clone/kit/install.sh"
+  printf '{"workspace": "%s", "notify": ""}\n' "$A" > "$CHRONOS_CONFIG"; printf '%s\n' "$HOME/gone-clone/apps/chronos" > "$HOME/.config/talos/chronos-dir"
+  b_cfg="$(cat "$CHRONOS_CONFIG")"
+  out="$(bash "$KIT/install.sh" --agent-dir "$A" --no-load 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && <<<"$out" grep -q 'no Chronos beside it' && [ ! -e "$A" ] && [ "$(cat "$CHRONOS_CONFIG")" = "$b_cfg" ] && [ ! -e "$SB/launchctl.calls" ]; } \
+    && ok "...so does Talos's own Chronos whose recorded folder is gone: never a move to a folder that is not there" || no "a gone recorded folder was not refused cleanly (rc=$rc)" "$(printf '%s' "$out" | tail -3)"
+  fresh_home h5b; A="$HOME/agent"
+  bash "$KIT/install.sh" --agent-dir "$A" --no-chronos >/dev/null 2>&1 || no "(setup) h5b agent install failed"
+  mkdir -p "$HOME/clone-x/kit" "$HOME/clone-x/apps" "$HOME/.config/chronos" "$HOME/.config/talos"; : > "$HOME/clone-x/kit/install.sh"; talos_fake_chronos "$HOME/clone-x/apps/chronos"
+  printf '{"workspace": "%s", "notify": ""}\n' "$A" > "$CHRONOS_CONFIG"; printf '%s\n' "$HOME/clone-x/apps/chronos" > "$HOME/.config/talos/chronos-dir"
+  out="$(bash "$KIT/install.sh" --agent-dir "$A" --add-to-existing 2>&1)"; rc=$?
+  b_jobs="$(cat "$HOME/.config/chronos/jobs.json" 2>/dev/null)"; b_set="$(cat "$A/.claude/settings.json")"
+  out2="$(bash "$KIT/install.sh" --agent-dir "$A" --add-to-existing 2>&1)"; rc2=$?
+  { [ "$rc" = 0 ] && [ "$rc2" = 0 ] && [ "$(cat "$HOME/.config/talos/chronos-dir")" = "$HOME/clone-x/apps/chronos" ] && [ ! -e "$HOME/.chronos/fake-install.log" ] \
+    && <<<"$b_jobs" grep -q 'talos-' && [ "$(cat "$HOME/.config/chronos/jobs.json")" = "$b_jobs" ] && [ "$(cat "$A/.claude/settings.json")" = "$b_set" ] \
+    && [ "$(grep -c 'chronos-session-start' "$A/.claude/settings.json")" = 1 ] && [ ! -e "$SB/launchctl.calls" ]; } \
+    && ok "Talos's own Chronos with its folder complete is used where it is: no move, jobs and hook added once and the same on a rerun" || no "own complete Chronos not used in place (rc=$rc/$rc2)" "$(printf '%s' "$out" | tail -4)"
+fi
 fresh_home h7
-cl="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$SB/does-not-exist" --no-load 2>&1)"; <<<"$cl" grep -q 'Could not clone' && ok "a failed clone says what to do (check the network, --chronos-path, --no-chronos)" || no "failed clone gave no guidance"
+for gone in --chronos-repo --chronos-ref; do
+  bash "$KIT/install.sh" --agent-dir "$HOME/agent" "$gone" x --no-load --dry-run >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && ok "$gone is gone (Chronos is no longer cloned): refused as an unknown option" || no "$gone was accepted (rc=$rc)"
+done
 
 # ---- 4b. a nonexistent parent folder is a hard error, never the filesystem root (A3)
 fresh_home h3b
@@ -599,27 +716,6 @@ yes purge-app | bash "$A/unguarded-uninstall.sh" --purge-app --yes --agent-dir "
 rm -f "$A/unguarded-uninstall.sh"
 [ ! -e "$XDG_CONFIG_HOME/talos/app" ] && ok "[mutation] with the guard line removed the piped word purges the app, so the test above really proves the guard" || no "[mutation] the guard test cannot fail: piped input did not purge even without the guard"
 
-# ---- 7c. the Chronos pin is a full 40-hex commit, and the verify refuses anything shorter (R1-7, R1-8)
-PINV="$(sed -n 's/^CHRONOS_PINNED_REF="\([0-9a-f]*\)".*/\1/p' "$KIT/install.sh")"
-[[ "$PINV" =~ ^[0-9a-f]{40}$ ]] && ok "install.sh pins Chronos to a full 40-hex commit" || no "pin is not 40 hex characters: '$PINV'"
-if [ "${TALOS_TEST_NETWORK:-}" = 1 ]; then
-  CREPO="$(sed -n 's/^CHRONOS_DEFAULT_REPO="\(.*\)"/\1/p' "$KIT/install.sh")"
-  NR="$(git ls-remote "$CREPO" 2>/dev/null | head -1)"
-  CD="$(mktemp -d "$SB/pin.XXXXXX")"
-  if git clone --quiet "$CREPO" "$CD/c" 2>/dev/null && git -C "$CD/c" cat-file -e "$PINV^{commit}" 2>/dev/null && git -C "$CD/c" merge-base --is-ancestor "$PINV" origin/main 2>/dev/null; then
-    ok "[network] the pinned commit exists in Chronos and is on its main branch"
-  else no "[network] the pinned commit is not reachable from Chronos main (offline or wrong pin)" "$NR"; fi
-else printf '  skip [network] pin exists upstream (set TALOS_TEST_NETWORK=1)\n'; fi
-fresh_home h8g
-for bad in 3cf20fc main HEAD 3cf20fc191d39f8247d4a740d6c663dc25136c2 3CF20FC191D39F8247D4A740D6C663DC25136C2A; do
-  out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$KIT" --chronos-ref "$bad" --no-load --dry-run 2>&1)"; rc=$?
-  { [ "$rc" = 2 ] && <<<"$out" grep -q '40-character'; } && ok "--chronos-ref '${bad:0:12}' is refused (needs the full 40-char sha)" || no "--chronos-ref '$bad' was not refused (rc=$rc)" "$(printf '%s' "$out" | tail -2)"
-done
-[ ! -e "$HOME/agent" ] && ok "a refused ref creates nothing" || no "a refused ref left an agent folder"
-# a full sha that is not in the clone: the checkout/verify fails and nothing is installed
-FAKE40="$(printf 'a%.0s' $(seq 40))"
-bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$KIT" --chronos-ref "$FAKE40" --no-load >/dev/null 2>&1 && no "an absent full sha was accepted" || ok "a well-formed but unknown 40-char sha fails the install"
-
 # ---- 8. the REAL Chronos, if you point at one (still a fake HOME; --no-load; launchctl tripwire)
 if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -f "$TALOS_TEST_CHRONOS/install.sh" ]; then
   fresh_home h9; A="$HOME/agent"
@@ -635,17 +731,9 @@ if [ -n "${TALOS_TEST_CHRONOS:-}" ] && [ -f "$TALOS_TEST_CHRONOS/install.sh" ]; 
   c="$(python3 "$TALOS_TEST_CHRONOS/bin/chronos" list 2>&1)"
   <<<"$c" grep -q 'talos-morning-brief' && ok "[real Chronos] 'chronos list' shows the Talos jobs" || no "[real Chronos] list does not show Talos jobs" "$c"
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["workspace"]==sys.argv[2] else 1)' "$CHRONOS_CONFIG" "$A" && ok "[real Chronos] workspace in its config is the agent folder" || no "[real Chronos] workspace not set to the agent folder"
-  # the shipped pin must be a real commit of that Chronos, and a clone at it must install (no network: file://)
-  fresh_home h10
-  PIN="$(sed -n 's/^CHRONOS_PINNED_REF="\([0-9a-f]*\)".*/\1/p' "$KIT/install.sh")"
-  out="$(bash "$KIT/install.sh" --agent-dir "$HOME/agent" --chronos-repo "file://$TALOS_TEST_CHRONOS" --no-load 2>&1)"; rc=$?
-  head="$(git -C "$TALOS_VENDOR_DIR/chronos" rev-parse HEAD 2>/dev/null)"
-  { [ "$rc" = 0 ] && [ "$head" = "$PIN" ]; } && ok "[real Chronos] the pinned commit ${PIN:0:7} exists, clones and installs (default ref, no flags)" \
-    || no "[real Chronos] pinned clone failed (rc=$rc head=$head pin=$PIN)" "$(printf '%s' "$out" | tail -3)"
-  [ ! -e "$SB/launchctl.calls" ] && ok "[real Chronos] launchctl was never called by the pinned-clone install" || no "launchctl WAS called" "$(cat "$SB/launchctl.calls")"
 else
   echo "  skip real-Chronos install (set TALOS_TEST_CHRONOS=/path/to/chronos to run it)"
 fi
 export HOME="$REALHOME"
-echo "  install: PASS $PASS FAIL $FAIL"
+echo "  install: PASS $PASS FAIL $FAIL SKIP $SKIPS"
 [ "$FAIL" -eq 0 ]

@@ -1,7 +1,7 @@
 // Settings > Developer: one switch per guard, drawn from DEV_ROWS (packages/protocol/src/dev.ts), plus "Developer mode", which sets
 // every row to its open value at once (the owner's ruling 2026-11-15). Each tap is one owner-signed config.patch with no card;
 // the switch follows the saved config, so a refused change leaves it where it was.
-import { DEV_ROWS, type DevRow } from '@talos-app/protocol'
+import { DEV_ROWS, type DevRow, OS_SANDBOX_LEAD, OS_SANDBOX_LIMITS, OS_SANDBOX_TITLE } from '@talos-app/protocol'
 import { useId, useRef, useState } from 'react'
 import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { placeWords, useHost } from '../../lib/hostWords.ts'
@@ -66,6 +66,27 @@ export function DeveloperSection(_p: SectionProps) {
     }
   }
 
+  // the experimental lock is a top-level setting (`os_sandbox`), not one under `dev`: one owner-signed patch, like the rows above
+  const writeTop = async (patch: { os_sandbox: boolean }) => {
+    if (busy || saving.current) return
+    setErr(null)
+    saving.current = true
+    setBusy(true)
+    try {
+      await client.patchConfig(patch)
+    } catch (e) {
+      setErr(
+        connectionRefusal(e) ??
+          (e instanceof TalosClientError && e.code === 'config_field_forbidden'
+            ? placeWords(DEVELOPER_TEXT.update, host)
+            : friendlyPatchError(e)),
+      )
+    } finally {
+      saving.current = false
+      setBusy(false)
+    }
+  }
+
   return (
     <section aria-labelledby="developer" className="flex flex-col gap-4" data-testid="developer">
       <h2 id="developer" className="m-0 text-base font-semibold">
@@ -102,6 +123,12 @@ export function DeveloperSection(_p: SectionProps) {
           onSet={(v) => void write({ [row.key]: v })}
         />
       ))}
+      <SandboxRow
+        on={config.os_sandbox === true}
+        busy={busy}
+        disabled={block !== null}
+        onSet={(v) => void writeTop({ os_sandbox: v })}
+      />
       {block === 'mac' && (
         <p className="m-0 text-text-2">{placeWords('Your Mac has to be online to change this.', host)}</p>
       )}
@@ -136,6 +163,43 @@ function DevRowSwitch(p: { row: DevRow; on: boolean; busy: boolean; disabled: bo
       <p id={descId} className="m-0 text-text-2">
         {placeWords(p.on ? p.row.on : p.row.off, host)} Takes effect {p.row.when}.
       </p>
+    </div>
+  )
+}
+
+/** "Extra lock on protected files (experimental)": off by default; what it does not stop is said right under it, in short plain lines. */
+function SandboxRow(p: { on: boolean; busy: boolean; disabled: boolean; onSet: (v: boolean) => void }) {
+  const id = useId()
+  const descId = useId()
+  return (
+    <div className="flex flex-col gap-1" data-testid="dev-row-os_sandbox">
+      <div className="flex min-h-11 items-center justify-between gap-3">
+        <label htmlFor={id} className="text-base font-medium">
+          {OS_SANDBOX_TITLE}
+        </label>
+        <Switch
+          id={id}
+          checked={p.on}
+          disabled={p.disabled}
+          aria-busy={p.busy}
+          aria-describedby={descId}
+          onCheckedChange={p.onSet}
+        />
+      </div>
+      <div id={descId} className="flex flex-col gap-1 text-text-2">
+        <p className="m-0">
+          {p.on
+            ? "On: your agent and its threads start inside an OS sandbox that tries to keep them from changing Talos's own settings files."
+            : 'Off: a start has no OS sandbox.'}{' '}
+          Takes effect at the next start of your agent and of each thread.
+        </p>
+        <p className="m-0">{OS_SANDBOX_LEAD}</p>
+        <ul className="m-0 list-disc pl-5">
+          {OS_SANDBOX_LIMITS.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
     </div>
   )
 }

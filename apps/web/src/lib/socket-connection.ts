@@ -3,6 +3,7 @@
 import { newId, newUlid, parseFrame, WIDE_FEATURES_FEATURE, WS_CLOSE } from '@talos-app/protocol'
 import { NoAnswerError, TalosClientError } from './client.ts'
 import { endReasonOf, HttpError } from './http.ts'
+import { releaseAllAcks } from './reloadHold.ts'
 import { MAX_CLOCK_OFFSET_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import { unknownOfFrame, unknownOfOpenCards, unknownOfParsed, unknownOfReady } from './unknownFrames.ts'
@@ -132,6 +133,7 @@ export function createSocketConnection(c: SocketCtx) {
       if (c.ws !== sock) return
       const wasReady = c.ready
       c.ws = null
+      releaseAllAcks() // what was written to it will be written again on the next socket, which takes its own holds
       socketGone(sock)
       if (c.closed) return
       setMeta({ lastCloseCode: ev.code })

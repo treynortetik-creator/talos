@@ -84,6 +84,9 @@ public struct CloneProvisioner: Sendable {
     /// The environment the tools run in (the login shell's PATH and proxy settings). Git gets only the parts it needs.
     public var env: [String: String]
     public var gitTimeout: Double = 300
+    /// `auto-update-apply.sh` (the app's own copy): its `--preflight` runs before the first git call in a folder that was already
+    /// there. nil: such a folder cannot be checked, so it is never reused.
+    public var preflightScript: String? = Bundle.main.path(forResource: "auto-update-apply", ofType: "sh")
     public var installTimeout: Double = 1800
 
     public init(
@@ -363,12 +366,31 @@ public struct CloneProvisioner: Sendable {
   /// otherwise it is the owner's to move.
   private func existingProblem(_ dest: String, git: String?, want: String, tag: String) -> String? {
     var head = (try? String(contentsOfFile: dest + "/" + Self.commitMarker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if head == nil, let git {
-      let r = ProcessRunner.run([git, "-C", dest, "rev-parse", "HEAD"], env: gitEnv(), timeout: 30)
+    // a folder that was already there is read by git only after the apply script's --preflight (its config, hooks and refs are the
+    // owner's or an agent's to write)
+    if head == nil, let git, preflightPasses(dest, git: git) {
+      let r = ProcessRunner.run(HardenedGit.argv(git: git, checkout: dest, args: ["rev-parse", "HEAD"]), env: hardenedEnv(), timeout: 30)
       if r.ok { head = r.out.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
     if head == want, AgentFolderSetup.cloneProblem(dest) == nil { return nil }
     return "\(dest) already exists, but it is not a whole copy of \(tag). Talos does not delete folders it did not make: move it aside (for example to \(dest).old), then press Retry."
+  }
+
+  /// The environment of a git call in a checkout (`HardenedGit.env`: built from nothing but the login PATH, HOME and proxies).
+  func hardenedEnv() -> [String: String] { HardenedGit.env(from: config.env) }
+
+  /// `auto-update-apply.sh --preflight` on `dir`: a plain clone with nothing of its own changed. False when it refuses, cannot run, or
+  /// there is no script to run. The result file is in a folder made here for it, which is all that is removed.
+  func preflightPasses(_ dir: String, git: String) -> Bool {
+    guard let script = config.preflightScript, FileManager.default.isReadableFile(atPath: script) else { return false }
+    var template = Array((NSTemporaryDirectory() + "talos-preflight.XXXXXX").utf8CString)
+    guard mkdtemp(&template) != nil else { return false }
+    let tmp = String(cString: template)
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+    let r = ProcessRunner.run(
+      ["/bin/bash", script, "--preflight", "--checkout", dir, "--result", tmp + "/result.json", "--git", git],
+      env: HardenedGit.scriptEnv(from: config.env, git: git, deps: false), timeout: 120)
+    return r.ok
   }
 
   // MARK: with git (the Command Line Tools are installed)
@@ -398,7 +420,7 @@ public struct CloneProvisioner: Sendable {
       let why = cl.timedOut ? "The download took too long and was stopped." : "The download failed.\n\(Self.said(cl))"
       return "\(why) Nothing was kept. Check the network connection, then press Retry."
     }
-    let head = ProcessRunner.run([git, "-C", staging, "rev-parse", "HEAD"], env: gitEnv(), timeout: 30)
+    let head = ProcessRunner.run(HardenedGit.argv(git: git, checkout: staging, args: ["rev-parse", "HEAD"]), env: hardenedEnv(), timeout: 30)
     guard head.ok, head.out.trimmingCharacters(in: .whitespacesAndNewlines) == want else {
       return "The download is not the commit \(tag) names (it changed while Talos was downloading). Nothing was kept. Press Retry."
     }
@@ -420,13 +442,26 @@ public struct CloneProvisioner: Sendable {
   /// nil: `dir` is now a git checkout at `commit` whose files are exactly that commit's tree. (A repository of its own, so `git -C` never
   /// climbs to one above it.)
   private func makeCheckout(at dir: String, commit: String, git: String) -> String? {
-    func g(_ args: [String], _ timeout: Double = 120) -> RunResult { ProcessRunner.run([git, "-C", dir] + gitArgs(args), env: gitEnv(), timeout: timeout) }
-    let steps: [[String]] = [["init", "--quiet"], ["remote", "add", "origin", config.repoURL]]
-    for a in steps {
-      let r = g(a)
-      if !r.ok { return "Talos couldn't set up the download as a git checkout.\n\(Self.said(r))\nNothing was kept." }
+    func g(_ args: [String], _ timeout: Double = 120) -> RunResult {
+      ProcessRunner.run(HardenedGit.argv(git: git, checkout: dir, args: args), env: hardenedEnv(), timeout: timeout)
     }
-    let f = g(["fetch", "--quiet", "--depth", "1", "origin", commit], config.gitTimeout)
+    // a `.git` that came out of the tarball would be the repository `git init` reuses, with its own config: none is accepted
+    if FileManager.default.fileExists(atPath: dir + "/.git") || (try? FileManager.default.destinationOfSymbolicLink(atPath: dir + "/.git")) != nil {
+      return "The download holds a git folder of its own, so Talos did not use it. Nothing was kept."
+    }
+    // `init` is the one call without --git-dir/--work-tree: with them it would record core.worktree in the new config
+    let made = ProcessRunner.run([git] + HardenedGit.hardening + ["init", "--quiet", dir], env: hardenedEnv(), timeout: 120)
+    if !made.ok { return "Talos couldn't set up the download as a git checkout.\n\(Self.said(made))\nNothing was kept." }
+    let added = g(["remote", "add", "origin", config.repoURL])
+    if !added.ok { return "Talos couldn't set up the download as a git checkout.\n\(Self.said(added))\nNothing was kept." }
+    // from the repository's address itself, over the allowed protocols only, with no helper or ssh command. Whole history, not
+    // --depth 1: a shallow checkout is one the apply script's --preflight refuses (a `.git/shallow` file steers git), so the update
+    // could never use it, and a second run of this setup would not reuse it either.
+    let f = ProcessRunner.run(
+      HardenedGit.fetchArgv(
+        git: git, checkout: dir, url: config.repoURL, schemes: config.allowedSchemes.sorted(), options: ["--quiet"],
+        refspecs: [commit]),
+      env: hardenedEnv(), timeout: config.gitTimeout)
     guard f.ok else { return "Talos couldn't fetch the release's commit to check the download against it.\n\(Self.said(f))\nNothing was kept. Check the network connection, then press Retry." }
     // HEAD and the index to the commit, the files untouched
     let r = g(["reset", "--quiet", commit])

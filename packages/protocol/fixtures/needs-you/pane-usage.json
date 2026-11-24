@@ -1,0 +1,10 @@
+{
+  "thread": "trip",
+  "dialog_id": "Ul7Zq3LmWt5RcXvNa2KdBe",
+  "dialog_kind": "usage_limit",
+  "subject": "Fable limit reached. It resets Aug 8, 4pm (UTC).",
+  "options": [
+    "Stop and wait",
+    "Switch model"
+  ]
+}

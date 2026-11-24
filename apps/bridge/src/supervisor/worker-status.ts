@@ -2,8 +2,14 @@
 // 25d5b557): `needs_you` (what the pane waits on the owner for, since when), `stopped_why` (why the session is parked or on its
 // way out, recorded at every park and stop) and `turn_started_at` (the turn now running; `last_turn_at` is when the last one
 // ENDED). A start clears all three: none of them describes the new session.
-import type { WorkerEntryT, WorkerNeedsYouT, WorkerStateT, WorkerStoppedWhyT } from '@talos-app/protocol'
-import { persisted } from './owed-pointer.ts'
+import type {
+  PointerHoldReasonT,
+  WorkerEntryT,
+  WorkerNeedsYouT,
+  WorkerStateT,
+  WorkerStoppedWhyT,
+} from '@talos-app/protocol'
+import { holdReasonOf, persisted } from './owed-pointer.ts'
 import { savedActivity } from './worker-idle.ts'
 import type { NoticeRuntime } from './worker-notices.ts'
 import type { WorkerRuntime } from './worker-types.ts'
@@ -131,6 +137,53 @@ export function withNeedsYou(e: WorkerEntryT, n: NoticeRuntime): WorkerEntryT {
   return needs ? { ...(rest as WorkerEntryT), needs_you: needs } : (rest as WorkerEntryT)
 }
 
+/**
+ * The hold to keep after a look at the pane: undefined when nothing changed; a new one (its `since` the wall clock now) when the
+ * reason changed; null when the hold is over or the pointer is no longer owed. The same reason keeps its `since`.
+ */
+export function nextHold(
+  prev: { reason: PointerHoldReasonT; since: string } | null | undefined,
+  r: {
+    looked: boolean
+    state: { pending: boolean }
+    hold?: PointerHoldReasonT | null
+    held: Parameters<typeof holdReasonOf>[0]
+  },
+  wallIso: string,
+): { reason: PointerHoldReasonT; since: string } | null | undefined {
+  if (!r.looked) return undefined
+  const reason = r.state.pending ? (r.hold ?? holdReasonOf(r.held)) : null
+  if (reason === (prev?.reason ?? null)) return undefined
+  return reason ? { reason, since: wallIso } : null
+}
+
+/** `nextHold` applied to the worker's `hold`; `publish` runs when it changed, so the file says so at once. */
+export function applyHold(
+  w: { hold?: { reason: PointerHoldReasonT; since: string } | null },
+  r: Parameters<typeof nextHold>[1],
+  wallIso: string,
+  publish: () => void,
+): void {
+  const hold = nextHold(w.hold, r, wallIso)
+  if (hold === undefined) return
+  w.hold = hold
+  publish()
+}
+
+/**
+ * `pointer_hold` as workers.json carries it: only while a pointer is owed AND the session has a pane, never a value read back
+ * from an earlier file (protocol WorkerPointerHold has the rules the Mac keeps too).
+ */
+export function withPointerHold(
+  e: WorkerEntryT,
+  w: { owed: { pending: boolean }; hold?: { reason: string; since: string } | null },
+): WorkerEntryT {
+  const { pointer_hold: _old, ...rest } = e
+  return w.hold && w.owed.pending && PANE_STATES.includes(e.state)
+    ? { ...(rest as WorkerEntryT), pointer_hold: { reason: w.hold.reason, since: w.hold.since } }
+    : (rest as WorkerEntryT)
+}
+
 /** What changes `needs_you` across all workers: published at the tick it changes, not at the next heartbeat. */
 export const needsYouSignature = (ws: Iterable<{ id: string; entry: WorkerEntryT; notes: NoticeRuntime }>): string =>
   JSON.stringify([...ws].map((w) => [w.id, needsYouField(w.entry.state, w.notes) ?? null]))
@@ -148,7 +201,7 @@ export function publishedThreads(
   for (const w of ws) {
     const { last_active_at: _old, ...entry } = w.entry
     const last = savedActivity(w.entry.state, w.idle.lastActiveMs)
-    const withNeeds = withNeedsYou(entry as WorkerEntryT, w.notes)
+    const withNeeds = withPointerHold(withNeedsYou(entry as WorkerEntryT, w.notes), w)
     threads[w.id] = last ? { ...withNeeds, last_active_at: last } : withNeeds
     const mine = ownFields({
       owed: persisted(w.owed),

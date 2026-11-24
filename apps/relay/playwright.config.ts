@@ -13,8 +13,8 @@ export default defineConfig({
   testDir: 'test',
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
-  // In CI (scripts/ci-local.sh sets CI_FLAKE_FILE) a failed test runs once more; a pass then is green but logged as a flake.
-  retries: process.env.CI_FLAKE_FILE ? 1 : 0,
+  // No retries, in CI or by hand: a failed test fails (the owner's rule; scripts/ci-no-retries.test.ts).
+  retries: 0,
   reporter: [['list'], ...(process.env.CI_FLAKE_FILE ? [['../../scripts/ci-flake-playwright.ts'] as const] : [])],
   projects: [
     {

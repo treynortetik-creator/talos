@@ -17,7 +17,7 @@ extension WorkerManager {
     }
     if let since = r.noBox.since, awake() - since >= options.readyTimeout { return WorkerNotice.noBoxKind }
     if r.copyHold.due { return WorkerNotice.copyModeKind }
-    if let since = r.refusedHold.since, awake() - since >= options.draftNoticeAfter { return WorkerNotice.refusedKind }
+    if r.deaf.watch.needsYou { return WorkerNotice.refusedKind }
     if let since = r.unseenHold.since, awake() - since >= options.draftNoticeAfter { return WorkerNotice.unseenKind }
     if r.pendingPointer, r.owed.enterUncertain { return WorkerNotice.enterUncertainKind }
     return nil
@@ -200,8 +200,10 @@ extension WorkerManager {
 
   func closeNoticeRecord(_ id: String) {
     var m = readNotices(id)
-    guard m.values.contains(where: \.open) else { return }
-    for k in m.keys { m[k]?.open = false }
+    // the deaf-thread run's record is its own (a relaunch finds the run by it): only `recoverDeaf` closes it
+    let keys = m.keys.filter { $0 != WorkerNotice.refusedKind }
+    guard keys.contains(where: { m[$0]?.open == true }) else { return }
+    for k in keys { m[k]?.open = false }
     writeNotices(id, m)
   }
 
@@ -285,23 +287,33 @@ extension WorkerManager {
   /// Why the typing guard holds the pointer, as far as the notices go (`noteHeldPointer`).
   enum PointerHold { case none, draft, noBox, refused, unseen, enterUncertain }
 
-  /// A pointer held back is not silent. By a draft in Claude's input box: after `draftNoticeAfter` the thread gets one line, and the
-  /// Terminals window shows the thread as Needs you until the box is clear. By no input box on the pane (a blank pane, a banner, a
-  /// dialog half drawn): the same, after `readyTimeout`, with its own kind. A dialog or prompt that is flagged has its own notice, so
-  /// it is not also counted as a missing box.
+  /// A pointer held back is not silent in the Terminals window. By a draft in Claude's input box, or a line typed and never seen:
+  /// after `draftNoticeAfter` the thread shows as Needs you until the hold ends (no line in the thread: the hub waits 10 minutes for the
+  /// session before Main takes the message, and says so itself when it does). By no input box on the pane (a blank pane, a banner, a
+  /// dialog half drawn): the Needs you and one line in the thread, after `readyTimeout`, with its own kind. A dialog or prompt that is
+  /// flagged has its own notice, so it is not also counted as a missing box.
   func noteHeldPointer(_ id: String, _ hold: PointerHold) {
     guard rt[id] != nil else { return }
-    let hold = hold == .noBox && rt[id]?.needsYouPrompt != nil ? PointerHold.none : hold
+    // the hold as the hub reads it: typed_unseen > draft > refused (scrolled is the copy-mode branch's). A pane the deaf-thread alarm has
+    // a run on, with a box (a pane with none, and an Enter that may have answered a prompt, say it in their own lines), is a refusal
+    let deafRun = rt[id]?.deaf.watch.sinceWall != nil
+    notePointerHold(
+      id,
+      WorkersFile.PointerHold.pick(
+        unseen: hold == .unseen, draft: hold == .draft, scrolled: false, refused: hold == .refused || (hold == .none && deafRun)))
+    // (the deaf-thread alarm already says a pane with no input box, once it has held for its wait: not said twice)
+    let hold = hold == .noBox && (rt[id]?.needsYouPrompt != nil || rt[id]?.deaf.watch.noticed == true) ? PointerHold.none : hold
     noteDraftHold(id, held: hold == .draft)
     noteNoBoxHold(id, held: hold == .noBox)
-    noteTimedHold(id, \.refusedHold, kind: WorkerNotice.refusedKind, line: WorkerNotice.refusedLine(), held: hold == .refused)
-    noteTimedHold(id, \.unseenHold, kind: WorkerNotice.unseenKind, line: WorkerNotice.unseenLine(), held: hold == .unseen)
+    noteTimedHold(id, \.unseenHold, kind: WorkerNotice.unseenKind, held: hold == .unseen)
+    if hold == .refused { noteRefusedPointer(id) }  // a refused pointer is a look at the deaf-thread alarm (WorkerDeaf.swift)
     noteCopyModeHold(id, held: false)  // every caller has read the pane as in no mode, or has no pointer left to hold
   }
 
   /// A pointer held back by copy mode (the owner scrolled the pane back): nothing can be typed, and the hub gives the message to main
-  /// at the pointer's deadline. Once that has passed (`late`), or after `draftNoticeAfter`, the thread gets one line for this hold and
-  /// shows as Needs you until the mode is left. The draft and no-box holds are left as they are meanwhile: the pane was not read for them.
+  /// at the pointer's deadline. Once that has passed (`late`), or after `draftNoticeAfter`, the thread shows as Needs you until the
+  /// mode is left; it gets no line (Main says it took the message, the hub says the thread was busy). The draft and no-box holds are
+  /// left as they are meanwhile: the pane was not read for them.
   func noteCopyModeHold(_ id: String, held: Bool, late: Bool = false) {
     guard held else {
       if rt[id]?.copyHold.since != nil {
@@ -321,16 +333,23 @@ extension WorkerManager {
     guard let since = rt[id]?.copyHold.since, late || awake() - since >= options.draftNoticeAfter else { return }
     rt[id]?.copyHold.due = true
     if late { rt[id]?.copyHold.late = true }
-    sendNotice(id, \.copyHold.notice, kind: WorkerNotice.copyModeKind, text: WorkerNotice.copyModeLine())
   }
 
   /// Both holds forgotten: the worker's pane is gone (its notice state and the clocks start over with the next one).
   func resetHolds(_ id: String) {
     rt[id]?.held.reset()
+    if rt[id]?.owed.holdReason != nil {  // no pane, no hold on it: a new pane's hold is a new hold
+      rt[id]?.owed.holdReason = nil
+      rt[id]?.owed.holdSince = nil
+      dirty = true
+    }
     rt[id]?.draftSince = nil
     rt[id]?.noBox.since = nil
     rt[id]?.noBox.notice.reset()
-    rt[id]?.refusedHold = NoBoxHold()
+    endDeafRun(id)  // a run told about ends with its recovery said, not dropped
+    let backSince = rt[id]?.deaf.backSince
+    rt[id]?.deaf = DeafState()
+    rt[id]?.deaf.backSince = backSince
     rt[id]?.unseenHold = NoBoxHold()
     rt[id]?.enterHold = NoticeState()
     noteCopyModeHold(id, held: false)
@@ -349,10 +368,10 @@ extension WorkerManager {
     }
     if rt[id]?.draftSince == nil { rt[id]?.draftSince = awake() }
     guard let since = rt[id]?.draftSince, awake() - since >= options.draftNoticeAfter else { return }
-    let left = rt[id]?.owed.leftover == true  // a line of ours that may be mixed with the owner's text, past its deadline
-    sendNotice(
-      id, \.held, kind: left ? WorkerNotice.leftoverKind : WorkerNotice.draftKind,
-      text: left ? WorkerNotice.leftoverLine() : WorkerNotice.draftLine())
+    // Only a line of ours that may be mixed with the owner's text, past its deadline, gets a line in the thread. A plain draft shows as
+    // Needs you (`waitingOn`) and says nothing: the message waits for the session until the hub's deadline.
+    guard rt[id]?.owed.leftover == true else { return }
+    sendNotice(id, \.held, kind: WorkerNotice.leftoverKind, text: WorkerNotice.leftoverLine())
   }
 
   private func noteNoBoxHold(_ id: String, held: Bool) {
@@ -371,10 +390,10 @@ extension WorkerManager {
 }
 
 extension WorkerManager {
-  /// A pointer refused by the key guard, or typed and never seen in the input box, is not silent (the Linux supervisor's timedHold): the
-  /// same wait as a draft's, so a frame caught mid-redraw passes, then one line with its own kind, and the thread shows as Needs you until
-  /// the hold ends (its record is forgotten then, so a later hold is said again).
-  func noteTimedHold(_ id: String, _ slot: WritableKeyPath<Runtime, NoBoxHold>, kind: String, line: String, held: Bool) {
+  /// A pointer typed and never seen in the input box is not silent (the Linux supervisor's timedHold): the same wait as a draft's, so a
+  /// frame caught mid-redraw passes, then the thread shows as Needs you until the hold ends. No line in the thread. (A refused pointer is
+  /// the deaf-thread alarm's: WorkerDeaf.swift.)
+  func noteTimedHold(_ id: String, _ slot: WritableKeyPath<Runtime, NoBoxHold>, kind: String, held: Bool) {
     if !held {
       if rt[id]?[keyPath: slot].since != nil {
         rt[id]?[keyPath: slot] = NoBoxHold()
@@ -383,8 +402,6 @@ extension WorkerManager {
       return
     }
     if rt[id]?[keyPath: slot].since == nil { rt[id]?[keyPath: slot].since = awake() }
-    guard let since = rt[id]?[keyPath: slot].since, awake() - since >= options.draftNoticeAfter else { return }
-    sendNotice(id, slot.appending(path: \.notice), kind: kind, text: line)
   }
 }
 

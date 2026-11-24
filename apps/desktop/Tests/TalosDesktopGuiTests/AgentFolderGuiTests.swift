@@ -32,7 +32,7 @@ private func tree(_ dir: String) -> [String: String] {
   return out
 }
 
-private func write(_ path: String, _ text: String) {
+func write(_ path: String, _ text: String) {
   try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
   FileManager.default.createFile(atPath: path, contents: Data(text.utf8))
 }
@@ -42,8 +42,15 @@ private func write(_ path: String, _ text: String) {
 private let stubInstall = """
   #!/bin/bash
   echo "$@" > "$(dirname "$0")/args.log"
+  echo "run" >> "$(dirname "$0")/runs.log"
   dir=""; while [ $# -gt 0 ]; do [ "$1" = --agent-dir ] && dir="$2"; shift; done
+  marker="${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-not-added.json"
   case "${STUB_MODE:-ok}" in
+    cleared) rm -f "$marker"; mkdir -p "$dir/memory"; echo "2.0.0" > "$dir/.talos-version"; echo "# default" > "$dir/CLAUDE.md"
+        echo '{"mcpServers":{"talos-app":{"command":"bun","args":["run","--cwd","/x","--silent","start"]}}}' > "$dir/.mcp.json"; exit 0 ;;
+    rerun) echo "The scheduler step failed (the scheduler's installer stopped; exit 12). Its output is above. Nothing else was changed in the agent folder." >&2
+           printf '\\nFAILED at "4/7 The agent (kit, default CLAUDE.md, first commit)": kit/install.sh --add-to-existing failed (its output is above). It does not copy or overwrite anything in the agent folder; fix the problem and run ./install.sh again with the same flags.\\n' >&2; exit 1 ;;
+    rerun12) echo "The scheduler step failed (exit 12)." >&2; exit 12 ;;
     ok) mkdir -p "$dir/memory"; echo "2.0.0" > "$dir/.talos-version"; echo "# default" > "$dir/CLAUDE.md"
         echo '{"mcpServers":{"talos-app":{"command":"bun","args":["run","--cwd","/x","--silent","start"]}}}' > "$dir/.mcp.json"; exit 0 ;;
     notempty) echo "FAILED at \\"2/7 Agent folder\\": $dir exists, is not empty and is not a Talos agent. Nothing was touched." >&2; exit 1 ;;
@@ -56,22 +63,28 @@ private let stubInstall = """
   """
 
 @MainActor
-private final class World {
+final class World {
   let model: SupervisorController
   let flow: AgentFolderFlow
-  let started = Counter()
+  fileprivate let started = Counter()
   let home: String
   let appHome: String
   let clone: String
 
   /// `realClone`: Adopt runs the real bridge CLI from this repo; otherwise a scratch clone with the stub installer.
-  init(store: SettingsStore = MemoryStore(), realClone: Bool = false, mode: String = "ok") throws {
+  /// What the installer child's HOME is (a scratch folder, so no marker of the real Mac is ever looked at) and XDG_CONFIG_HOME (none
+  /// unless `xdg` says); the app reads the marker from the same environment.
+  let cfgHome: String
+
+  init(store: SettingsStore = MemoryStore(), realClone: Bool = false, mode: String = "ok", xdg: String? = nil) throws {
     cannotTakeTheKeyboard()
     home = TmuxWorld.root
     TmuxWorld.hookBundle()
     try #require(SupervisorController.configPath.hasPrefix(TmuxWorld.root), "refusing to build a controller on the real config")
     try? FileManager.default.removeItem(atPath: SupervisorController.configPath)
     appHome = TestTemp.base + "k7-apphome-" + UUID().uuidString
+    cfgHome = TestTemp.base + "talos-onerun-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: cfgHome, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(atPath: appHome, withIntermediateDirectories: true)
     if realClone {
       clone = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -86,7 +99,7 @@ private final class World {
     model = SupervisorController(store: store)
     let started = self.started
     model.beginSession = { _ in started.bump(); return true }
-    let (clone, appHome, modeBox) = (self.clone, self.appHome, mode)
+    let (clone, appHome, modeBox, cfg, real) = (self.clone, self.appHome, mode, cfgHome, realClone)
     flow = AgentFolderFlow(
       model: model,
       deps: .init(
@@ -95,6 +108,10 @@ private final class World {
           var e = ProcessInfo.processInfo.environment
           e["TALOS_APP_HOME"] = appHome
           e["STUB_MODE"] = modeBox
+          if !real {  // the real bridge CLI (Adopt) keeps the machine's own HOME
+            e["HOME"] = cfg
+            e["XDG_CONFIG_HOME"] = xdg
+          }
           return e
         }))
     flow.signedIn = true
@@ -105,6 +122,8 @@ private final class World {
     chmod(dir, 0o700)
     try? FileManager.default.removeItem(atPath: SupervisorController.configPath)
     try? FileManager.default.removeItem(atPath: appHome)
+    chmod(cfgHome + "/.config/talos", 0o700)
+    try? FileManager.default.removeItem(atPath: cfgHome)
     if clone.hasPrefix(TestTemp.base) { try? FileManager.default.removeItem(atPath: clone) }
     try? FileManager.default.removeItem(atPath: home + "/agents")
   }

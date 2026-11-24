@@ -24,6 +24,54 @@ describe('root install.sh', () => {
     expect(calls(sb)).toEqual([])
   })
 
+  // A stub pnpm that, like the real one, fetches the pinned pnpm into HOME when asked anything inside this clone while pnpm's
+  // version switch is on; with the switch off it only reports its own version.
+  const dryRunWithPnpm = (version: string) => {
+    const sb = sandbox()
+    const stub = join(sb.bin, 'pnpm')
+    rmSync(stub, { force: true })
+    writeFileSync(
+      stub,
+      `#!/bin/sh
+if [ "$npm_config_manage_package_manager_versions" != false ]; then
+  mkdir -p "$HOME/.local/share/pnpm" && echo fetched > "$HOME/.local/share/pnpm/pinned-pnpm"
+fi
+case " $* " in *" install "*) echo "pnpm $*" >> "${sb.log}"; exit 0 ;; esac
+echo ${version}
+`,
+    )
+    chmodSync(stub, 0o755)
+    const before = snapshot(sb.home)
+    const r = run(sb, ['--dry-run', '--no-app'])
+    return { sb, stub, r, unchanged: () => expect(snapshot(sb.home)).toEqual(before) }
+  }
+
+  it('a dry run writes nothing when the pnpm on the PATH is newer than the pinned one', () => {
+    const { sb, stub, r, unchanged } = dryRunWithPnpm('12.0.0')
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`found pnpm 12.0.0: ${stub}`)
+    expect(r.out).not.toContain('PROBLEM')
+    unchanged()
+    expect(calls(sb)).toEqual([])
+  })
+
+  it('a dry run accepts an older pnpm 10 (it switches to the pinned one itself) and writes nothing', () => {
+    const { sb, stub, r, unchanged } = dryRunWithPnpm('10.20.0')
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toMatch(/found pnpm 10\.20\.0 \(installs with the pinned \d+\.\d+\.\d+\): /)
+    expect(r.out).toContain(stub)
+    expect(r.out).not.toContain('PROBLEM')
+    unchanged()
+    expect(calls(sb)).toEqual([])
+  })
+
+  it('a dry run still refuses a pnpm 9 older than the pinned version, and writes nothing', () => {
+    const { r, unchanged } = dryRunWithPnpm('9.15.0')
+    expect(r.code).not.toBe(0)
+    expect(r.out).toMatch(/PROBLEM pnpm \d+\.\d+\.\d+ or newer: found 9\.15\.0/)
+    unchanged()
+  })
+
   it('a real run builds the agent, registers the MCP server and the mod launch, and passes verify-install', () => {
     const sb = sandbox()
     const r = run(sb, ['--no-app', '--yes'])

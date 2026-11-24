@@ -51,28 +51,35 @@ MAC_ONLY_TAG=@mac-only
 E2E_HERE=(--filter @talos-app/web) E2E_THERE=(--filter '!@talos-app/web' --filter '!{.}')
 browser_e2e_fold() { # browser_e2e_fold <log>: the part's answer (its state from the main shell), or its packages taken back here
   # Marks that the main shell may start reading the part (until then it does not spend the rate limit on it, e2e-part-asked).
-  local log="$1" m="$CI_BROWSER_E2E_PART" deadline=0 first st why
+  local log="$1" m="$CI_BROWSER_E2E_PART" deadline=0 first st why now prev
   : > "$RESULTS/e2e-part-asked"
+  ci_fold_wait "$RESULTS" browser # waiting for the part on another machine: no heavy step of this job until it is taken back (turn.sh)
   # The wait counts from the main shell's first reading of the part (up to 60 s, or two of its polls if longer, for that), so a
   # short wait still sees an answer that is already there.
   local poll="${CI_PART_POLL:-30}"
   poll="${poll%.*}"
   first=$(($(date +%s) + (2 * ${poll:-0} > 60 ? 2 * ${poll:-0} : 60)))
+  prev=$(date +%s)
   while :; do
     st="$(cat "$RESULTS/e2e-part-state" 2>/dev/null)"
+    now=$(date +%s)
+    case "$st" in queued*) [ "$deadline" = 0 ] || deadline=$((deadline + now - prev)) ;; esac # queued for a lock on its machine: not counted
+    prev=$now
     if [ "$deadline" = 0 ] && { [ -n "$st" ] || [ "$(date +%s)" -ge "$first" ]; }; then
       deadline=$(($(date +%s) + 10#$CI_BROWSER_E2E_WAIT))
     fi
     case "$st" in
-      pass) echo "e2e packages on $m" > "$RESULTS/browser.where"; echo "the e2e packages passed on $m (ci-part/browser-e2e)" >> "$log"; return 0 ;;
-      fail) echo "the browser-e2e part failed on $m; see its run" > "$RESULTS/browser.e2e-why"; return 1 ;;
+      pass) ci_fold_end "$RESULTS" browser; echo "e2e packages on $m" > "$RESULTS/browser.where"; echo "the e2e packages passed on $m (ci-part/browser-e2e)" >> "$log"; return 0 ;;
+      fail) ci_fold_end "$RESULTS" browser; echo "the browser-e2e part failed on $m; see its run" > "$RESULTS/browser.e2e-why"; return 1 ;;
       gone) why="its job ended without an answer, or it refused"; break ;; # no point waiting
+      stuck*) why="$(part_stuck_why "$st" "$m")"; break ;; # waits for a lock on its machine past CI_PART_LOCK_WAIT_MAX (jobs-check.sh)
     esac
-    [ "$deadline" = 0 ] || [ "$(date +%s)" -lt "$deadline" ] || { why="no answer within ${CI_BROWSER_E2E_WAIT}s${st:+ ($st)}"; break; }
+    [ "$deadline" = 0 ] || [ "$now" -lt "$deadline" ] || { why="no answer within ${CI_BROWSER_E2E_WAIT}s${st:+ ($st)}"; break; }
     sleep 1
   done
   # Taken back: the packages run here, and this run's result is browser's. A green the part posts later does not undo a red here
   # (a red here is a test that failed on this machine); a red it posts before browser is posted still fails browser (report).
+  ci_fold_resume "$RESULTS" browser "$LOCKS" # heavy work again: the turn first (waits while a gate holds the machine)
   echo "ci-local: taking the e2e packages back from $m: $why" >> "$log"
   echo "e2e packages here: $m did not answer" > "$RESULTS/browser.where"
   run "$log" pnpm -r --workspace-concurrency=1 --no-bail --if-present "${E2E_THERE[@]}" test:e2e
@@ -92,8 +99,9 @@ job_browser() {
   # CPU. That costs the most time of anything in this script, and every overlap tried failed on some run (docs/CI-LOCAL.md).
   setup_ok "$log" &&
   job_tmp browser &&
-  # (with check on Titan, CI_CHECK_PART, no check suites run here: browser starts with desktop)
-  { [ -n "${CI_CHECK_PART:-}" ] || wait_for_job check; } &&
+  # (with check on Titan, CI_CHECK_PART, only the macOS-only subset runs here: browser goes when it ends, as desktop does, and
+  # does not wait for the part's answer)
+  { if [ -n "${CI_CHECK_PART:-}" ]; then wait_for_job check quiet-done; else wait_for_job check; fi; } &&
   browser_ready "$log" &&
   {
     # One failing part never hides the next: the protocol browser suite, then every e2e package (--no-bail, so a web

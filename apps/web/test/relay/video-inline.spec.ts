@@ -6,7 +6,7 @@ import { expect, test } from '../helpers/fixtures.ts'
 import { agentReply, openSignedIn } from '../helpers/util.ts'
 
 // Audit L15: a video the agent sends plays inline in the thread, loads like the other attachments (the same probe, the same
-// failed / Retry states) and stops the audio dock when it starts. The relay answers byte ranges (apps/relay core/media.test.ts
+// failed / Retry states) and stops the audio player when it starts. The relay answers byte ranges (apps/relay core/media.test.ts
 // proves 206 and the sandbox CSP on the real relay); the route below answers them the same way so the browser's own
 // range requests are what is under test. A 64x64, 1 s, blue clip: H.264 for WebKit, VP8 for Chromium (which has no H.264).
 const MP4 = Buffer.from(
@@ -118,7 +118,7 @@ test('an agent video plays inline: playsinline, metadata only, no poster, range 
   expect(box.width).toBeLessThanOrEqual((page.viewportSize() as { width: number }).width)
 })
 
-test('playing a video pauses the audio dock', async ({ page, context, harness, browserName }) => {
+test('playing a video pauses the audio player', async ({ page, context, harness, browserName }) => {
   const webkit = browserName === 'webkit'
   const bytes = webkit ? MP4 : WEBM
   const video = ref('video', 'demo.' + (webkit ? 'mp4' : 'webm'), webkit ? 'video/mp4' : 'video/webm', bytes)
@@ -136,20 +136,20 @@ test('playing a video pauses the audio dock', async ({ page, context, harness, b
   harness.relay.sendToApps(agentReply({ text: 'Both.', attachments: [audio, video] }))
   await expect(page.getByTestId('inline-video')).toBeVisible()
   await page.getByRole('button', { name: /^Play/ }).first().click()
-  const dock = () => page.evaluate(() => (document.getElementById('talos-audio-dock') as HTMLAudioElement).paused)
-  await expect.poll(dock).toBe(false)
+  const playerPaused = () => page.evaluate(() => (document.getElementById('talos-audio') as HTMLAudioElement).paused)
+  await expect.poll(playerPaused).toBe(false)
   await page.getByTestId('inline-video').evaluate((v: HTMLVideoElement) => {
     v.muted = true
     return v.play()
   })
-  await expect.poll(dock).toBe(true)
+  await expect.poll(playerPaused).toBe(true)
   expect(await page.getByTestId('inline-video').evaluate((v: HTMLVideoElement) => v.paused)).toBe(false)
 })
 
 // The race behind a flaky run of the test above: play() flips `paused` at once, but the element's 'play' event (what the app
 // listens to) arrives later, in the order the play() calls were made. A Play tap and a video tap close together (a slow
-// machine, a double tap) leave the dock's event in front of the video's. The video, started last, must be the one left playing.
-test('a video started right after the dock still wins: the dock steps aside, the video keeps playing', async ({
+// machine, a double tap) leave the player's event in front of the video's. The video, started last, must be the one left playing.
+test('a video started right after the player still wins: the player steps aside, the video keeps playing', async ({
   page,
   context,
   harness,
@@ -173,7 +173,7 @@ test('a video started right after the dock still wins: the dock steps aside, the
   await expect(page.getByTestId('inline-video')).toBeVisible()
   const playBtn = page.getByRole('button', { name: /^Play/ }).first()
   await expect(playBtn).toBeVisible()
-  // one task: the Play row starts the dock, then the video is told to play, before either 'play' event has been delivered
+  // one task: the Play row starts the player, then the video is told to play, before either 'play' event has been delivered
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll('button')].find((b) =>
       /^Play/.test(b.getAttribute('aria-label') ?? b.textContent ?? ''),
@@ -183,12 +183,12 @@ test('a video started right after the dock still wins: the dock steps aside, the
     btn?.click()
     void v.play()
   })
-  const dock = () => page.evaluate(() => (document.getElementById('talos-audio-dock') as HTMLAudioElement).paused)
-  await expect.poll(dock).toBe(true)
+  const playerPaused = () => page.evaluate(() => (document.getElementById('talos-audio') as HTMLAudioElement).paused)
+  await expect.poll(playerPaused).toBe(true)
   // give a late effect or event time to pause the video wrongly, then look
   await page.waitForTimeout(500)
   expect(await page.getByTestId('inline-video').evaluate((v: HTMLVideoElement) => v.paused)).toBe(false)
-  expect(await dock()).toBe(true)
+  expect(await playerPaused()).toBe(true)
 })
 
 test('a video that left the relay shows the loading line, then failed with a thumb-sized Retry, then plays', async ({
@@ -246,8 +246,8 @@ test('a file the browser cannot decode says so and still hands over the file', a
   expect(((await link.boundingBox()) as { height: number }).height).toBeGreaterThanOrEqual(43)
 })
 
-// @mac-only (playwright.config.ts): Linux WebKit's media stack does not reliably pause the first video for the dock.
-test('starting the audio dock pauses a playing video, and a second video takes over from the first', {
+// @mac-only (playwright.config.ts): Linux WebKit's media stack does not reliably pause the first video for the player.
+test('starting the audio player pauses a playing video, and a second video takes over from the first', {
   tag: '@mac-only',
 }, async ({ page, context, harness, browserName }) => {
   const webkit = browserName === 'webkit'
@@ -283,9 +283,9 @@ test('starting the audio dock pauses a playing video, and a second video takes o
   await play(1)
   await expect.poll(() => paused(0)).toBe(true)
   expect(await paused(1)).toBe(false)
-  // the dock (a row's Play, or the lock screen's) takes the sound from the video
+  // the player (a row's Play, or the lock screen's) takes the sound from the video
   await page.getByRole('button', { name: /^Play/ }).first().click()
-  const dock = () => page.evaluate(() => (document.getElementById('talos-audio-dock') as HTMLAudioElement).paused)
-  await expect.poll(dock).toBe(false)
+  const playerPaused = () => page.evaluate(() => (document.getElementById('talos-audio') as HTMLAudioElement).paused)
+  await expect.poll(playerPaused).toBe(false)
   await expect.poll(() => paused(1)).toBe(true)
 })

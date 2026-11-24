@@ -275,6 +275,13 @@ public struct TmuxCommands: Equatable, Sendable {
       || (stderr.contains("error connecting to") && stderr.contains("(No such file or directory)"))
   }
 
+  /// `saysGone` from the SOCKET ("no server running on <path>" when it refuses, "error connecting to <path> (No such file or directory)"),
+  /// not from a tmux that answered ("can't find session"). A server that is only refusing connections under load prints the first, while
+  /// the agent in its pane lives on: this wording alone is never proof, it needs the agent's own process group to be gone as well.
+  public static func saysSocketGone(status: Int32, stderr: String, timedOut: Bool) -> Bool {
+    saysGone(status: status, stderr: stderr, timedOut: timedOut) && !stderr.contains("can't find session")
+  }
+
   /// tmux's own answer when the command reached a server that was shutting down: the last session had just been killed
   /// and the server was on its way out, so nothing ran. Reproduced with plain tmux (kill the only session, then at once
   /// `new-session` on the same socket: about 1 in 600 fails this way, more under load). A command that fails like this

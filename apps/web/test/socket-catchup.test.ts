@@ -210,3 +210,30 @@ describe('stored owner frames in a catch-up batch', () => {
     expect(texts).toEqual(['after the broken one'])
   })
 })
+
+describe('a replayed frame says so to listeners', () => {
+  it('a catch-up reply reaches onFrame listeners marked catchup, a live one does not, and unread counts the live one once', async () => {
+    await online()
+    const seen: Array<{ text: string | undefined; catchup: boolean | undefined }> = []
+    client.onFrame('reply', (f, meta) => seen.push({ text: f.message.text, catchup: meta?.catchup }))
+    const live = agentReply(5, 'live one')
+    relay.sendToApps(live)
+    await waitFor(() => seen.length === 1, 2000, 'live reply seen')
+    expect(client.store.getState().unread.general).toBe(1)
+    // the relay replays the same reply (and an older one) in a catch-up batch
+    relay.sendToApps(
+      mkFrame('catchup.batch', {
+        from_seq: 1,
+        to_seq: 6,
+        frames: [agentReply(4, 'old one'), live],
+        more: false,
+      }),
+    )
+    await waitFor(() => seen.length === 3, 2000, 'replays seen')
+    expect(seen[0]).toEqual({ text: 'live one', catchup: undefined })
+    expect(seen.slice(1).map((x) => x.catchup)).toEqual([true, true])
+    // the stores still got the rows, and the unread count was not bumped a second time
+    expect((client.store.getState().messages.general ?? []).map((m) => m.text)).toContain('old one')
+    expect(client.store.getState().unread.general).toBe(1)
+  })
+})

@@ -218,6 +218,35 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
     expect(tree(dir)).toEqual(before)
   })
 
+  it('writes the form that turns off .env and bunfig.toml loading, and rewrites this clone’s older entry without asking', async () => {
+    const h = tmp('adopt-home-')
+    const old = {
+      command: process.execPath,
+      args: ['run', '--cwd', BRIDGE_DIR, '--silent', 'start'],
+      env: { TALOS_APP_HOME: h },
+    }
+    const dir = ownerFolder({ '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': old } }) })
+    const r = await run(['adopt', '--agent-dir', dir, '--yes'], { home: h })
+    expect(r.code).toBe(0)
+    expect(mcpOf(dir).mcpServers['talos-app'].args).toEqual([
+      '--no-env-file',
+      `--config=${BRIDGE_DIR}/bunfig.toml`,
+      `${BRIDGE_DIR}/src/server.ts`,
+    ])
+  })
+
+  it('an entry in the new form that names another clone is foreign too', async () => {
+    const entry = {
+      command: 'bun',
+      args: ['--no-env-file', `--config=${otherClone()}/bunfig.toml`, `${otherClone()}/src/server.ts`],
+    }
+    const dir = ownerFolder({ '.mcp.json': JSON.stringify({ mcpServers: { 'talos-app': entry } }) })
+    const before = tree(dir)
+    const r = await run(['adopt', '--agent-dir', dir, '--yes'])
+    expect(r.code).toBe(3)
+    expect(tree(dir)).toEqual(before)
+  })
+
   it('--repoint is the owner saying yes: the entry moves to this clone and the other servers stay', async () => {
     const foreign = { command: 'bun', args: ['run', '--cwd', otherClone(), '--silent', 'start'] }
     const other = { command: 'npx', args: ['x'] }
@@ -226,7 +255,7 @@ describe('talos-app adopt: a folder that has an .mcp.json', () => {
     const r = await run(['adopt', '--agent-dir', dir, '--yes', '--repoint'])
     expect(r.code).toBe(0)
     expect(changed(before, tree(dir))).toEqual(['.mcp.json'])
-    expect(mcpOf(dir).mcpServers['talos-app'].args).toContain(BRIDGE_DIR)
+    expect(mcpOf(dir).mcpServers['talos-app'].args).toContain(`--config=${BRIDGE_DIR}/bunfig.toml`)
     expect(mcpOf(dir).mcpServers.other).toEqual(other)
   })
 

@@ -18,6 +18,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentRequestFile, MAIN_RESTART_CHECK_FILE, MAIN_RESTART_REASONS, newUlid } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { agentRequestWhy } from '../src/agent-recover.ts'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
@@ -42,7 +43,7 @@ import {
   YES_CHECKED_SENTENCE,
 } from '../src/restart-main.ts'
 import { MainRestartLedger } from '../src/worker/main-restarts.ts'
-import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { HARNESS_START_MS, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
 const NONCE = 'test-nonce-0123456789abcdef'
 const harnesses: Harness[] = []
@@ -105,15 +106,21 @@ async function lead(home: string, relayUrl: string): Promise<Bridge> {
 }
 
 /** Main's live bridge with its hub, and the Trip thread's lead connected to it. */
-async function desk(home?: string) {
-  const hub = await startHarness({ config: withThreads, ...(home ? { home } : {}) })
+async function desk(home?: string, stage: (name: string) => void = () => {}) {
+  const hub = await startHarness({ config: withThreads, stage, ...(home ? { home } : {}) })
   harnesses.push(hub)
+  stage('Main bridge up')
   await waitFor(() => existsSync(join(hub.home, 'run', 'hub.sock')))
-  writeWorkers(hub.home, pgidOf(process.pid) as number)
+  stage('hub socket')
+  const group = pgidOf(process.pid)
+  // `ps` answers undefined when it is slow (3 s cap): never write that as a pane group, the hub would refuse the lead for good
+  if (group === undefined) throw new Error('could not read this process group (ps timed out or failed)')
+  writeWorkers(hub.home, group)
   mkdirSync(join(hub.home, 'workers', 'trip'), { recursive: true })
   writeFileSync(join(hub.home, 'workers', 'trip', 'nonce'), NONCE)
   const trip = await lead(hub.home, hub.relay.httpUrl)
   expect(await trip.startWorker()).toBe(true)
+  stage('lead welcomed')
   return { hub, trip }
 }
 
@@ -758,27 +765,64 @@ describe("one ledger with thread_session's restarts", () => {
     const { MAIN_RESTARTS_PER_HOUR } = await import('../src/worker/main-restarts.ts')
     expect(AGENT_RESTARTS_PER_HOUR).toBe(MAIN_RESTARTS_PER_HOUR)
   })
-  test("both tools share history.sqlite in either order, and neither uses up the other one's hour", async () => {
-    for (const order of ['thread first', 'main first'] as const) {
-      const { hub } = await desk()
-      writeCheck(hub.home)
-      const threads = new MainRestartLedger(hub.bridge.ctx.store.db)
-      const now = hub.bridge.ctx.clock.now()
-      const threadRestart = () => threads.attempt('trip', now, 'stuck', () => ({ ok: true }))
-      if (order === 'thread first') expect(threadRestart().ok, order).toBe(true)
-      expect((await call(hub.bridge, { action: 'go', why: 'stuck' })).isError, order).toBeUndefined()
-      if (order === 'main first') expect(threadRestart().ok, order).toBe(true)
-      // two more of each still fit: three an hour each, counted apart
-      expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(true)
-      expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(true)
-      expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(false)
-      aged(hub, 121_000)
-      rmSync(reqPath(hub.home))
-      expect((await call(hub.bridge, { action: 'go', why: 'again' })).isError, order).toBeUndefined()
-      for (const h of harnesses.splice(0)) await h.stop()
-      for (const b of bridges.splice(0)) await b.stop()
-    }
+  // One test per order, not one test that loops: each order starts its own relay, app, Main's bridge, hub and the lead's bridge
+  // (a whole harness lifecycle that waits on real events, and takes as long as the machine makes it), and two of them in a single
+  // test shared one flat budget. The loop that ran both orders back to back timed out on a loaded CI machine, though nothing in it
+  // waits on a clock. Each test now carries its own start budget (helpers.ts HARNESS_START_MS) and afterEach stops what it made.
+  // Per-stage timings, printed only when a test here fails or times out (passing runs print nothing): a slow CI start has to
+  // name its slow stage. A timeout ends the test while its body is still running, so the dump is in afterEach, which sees what
+  // was recorded up to then, not in a catch.
+  let stages: Array<[string, number]> = []
+  let passed = true
+  let t0 = 0
+  const stage = (name: string) => {
+    stages.push([name, Date.now() - t0])
+  }
+  afterEach(() => {
+    if (passed) return
+    const lines = stages.map(
+      ([n, ms], i) => `  ${String(ms).padStart(7)} ms  (+${ms - (stages[i - 1]?.[1] ?? 0)})  ${n}`,
+    )
+    console.error(
+      `stage timings of the failed test (ms since it began; the last line is where it stopped):\n${lines.join('\n')}`,
+    )
   })
+  test.each(['thread first', 'main first'] as const)(
+    "both tools share history.sqlite, %s, and neither uses up the other one's hour",
+    async (order) => {
+      stages = []
+      passed = false
+      t0 = Date.now()
+      try {
+        const { hub } = await desk(undefined, stage)
+        writeCheck(hub.home)
+        const threads = new MainRestartLedger(hub.bridge.ctx.store.db)
+        const now = hub.bridge.ctx.clock.now()
+        const threadRestart = () => threads.attempt('trip', now, 'stuck', () => ({ ok: true }))
+        if (order === 'thread first') expect(threadRestart().ok, order).toBe(true)
+        stage('thread restart (first)')
+        expect((await call(hub.bridge, { action: 'go', why: 'stuck' })).isError, order).toBeUndefined()
+        stage('restart_main go')
+        if (order === 'main first') expect(threadRestart().ok, order).toBe(true)
+        // two more of each still fit: three an hour each, counted apart
+        expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(true)
+        expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(true)
+        expect(threads.attempt('trip', now, 'x', () => ({ ok: true })).ok, order).toBe(false)
+        stage('three an hour counted')
+        aged(hub, 121_000)
+        rmSync(reqPath(hub.home))
+        expect((await call(hub.bridge, { action: 'go', why: 'again' })).isError, order).toBeUndefined()
+        stage('restart_main go again')
+        passed = true
+      } finally {
+        for (const h of harnesses.splice(0)) await h.stop().catch(() => {})
+        stage('Main harness stopped')
+        for (const b of bridges.splice(0)) await b.stop().catch(() => {})
+        stage('lead stopped')
+      }
+    },
+    HARNESS_START_MS + t(15_000),
+  )
 })
 
 describe('the words, by platform (one source, both forms)', () => {

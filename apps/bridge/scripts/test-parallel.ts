@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // `bun test`, one process per test file, a few at a time:
-//   bun run apps/bridge/scripts/test-parallel.ts [--jobs N] [--file-timeout SECONDS] [--retry-failed] [--only PREFIX | --skip PREFIX]
+//   bun run apps/bridge/scripts/test-parallel.ts [--jobs N] [--file-timeout SECONDS] [--only PREFIX | --skip PREFIX]
 //     [--shard K/N [--pile-tools T1|T2|... [--needs]]] [--files LIST] [dir]
 // Bun 1.3 runs every file in one process, one after another. The bridge suite spends nearly all of its time waiting on
 // real child processes and timers, so files side by side finish in a fraction of the time (docs/CI-LOCAL.md has the numbers).
@@ -33,31 +33,16 @@
 // file that no pile can take is dealt as any other: the machine that gets it refuses its pile (--needs says what a pile
 // needs, runs nothing) and Lemnos runs that pile instead. Without --pile-tools the piles are exactly what they were.
 //
-// --retry-failed (CI): a file that failed is run once more, after the others. A pass then counts green, and the tests that failed
-// the first time are appended to CI_FLAKE_FILE (when set) as "<test>\t<file>", so CI can say "passed on retry" and keep a flake log.
-// A file that fails twice stays red. A file killed at the file limit is not run again: a hang is not a flake, and a second run
-// would cost the limit twice.
+// There is no retry: a file that fails fails (the owner's rule; scripts/ci-no-retries.test.ts). The old --retry-failed is read as the folder to test and refused.
 //
 // TALOS_TEST_JUNIT_DIR (CI's check, scripts/ci-test-results.ts): each file's per-test report, bun's junit, as <name>.xml there
-// (<name> is the file's path with / made _). A retried file's first report is kept as <name>.first.xml, so its tests that failed
-// then are known; a file that ended without a report (a crash, the file limit) leaves <name>.crashed holding its path.
+// (<name> is the file's path with / made _). a file that ended without a report (a crash, the file limit) leaves <name>.crashed holding its path.
 
 // A test's default timeout goes from 5 to 20 seconds here. That timeout only catches a hang: several real-process tests take
 // 2 to 4 seconds alone and more with files beside them, and it fired on tests that passed every assertion. A test that sets
 // its own timeout, every assertion and every wait inside a test stay exactly as written.
 import { spawnSync } from 'node:child_process'
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 
@@ -259,7 +244,7 @@ async function runFile(root: string, file: string, tmp: string, limitSeconds: nu
   // Output goes to files, not pipes: a child a test left behind holds a pipe open, and waiting for its end stalled the whole run.
   const name = file.replaceAll('/', '_')
   const [outPath, errPath] = [join(tmp, `${name}.out`), join(tmp, `${name}.err`)]
-  // Bun.file() as a child's output does not truncate: a rerun (--retry-failed) would read the first run's report after its own.
+  // Bun.file() as a child's output does not truncate: a file run again in one folder would read the first run's report after its own.
   for (const p of [outPath, errPath]) rmSync(p, { force: true })
   // The file's own temp folder, made before its bun starts so everything it spawns inherits it (test/run-tmp.ts adopts it).
   // Removed below once the file is over, killed or not (#161).
@@ -268,7 +253,6 @@ async function runFile(root: string, file: string, tmp: string, limitSeconds: nu
   const junit = junitDir ? join(junitDir, `${name}.xml`) : undefined
   if (junitDir && junit) {
     mkdirSync(junitDir, { recursive: true })
-    if (existsSync(junit)) renameSync(junit, join(junitDir, `${name}.first.xml`))
   }
   const report = junit ? ['--reporter=junit', `--reporter-outfile=${junit}`] : []
   const p = Bun.spawn(['bun', 'test', `--timeout=${HANG_MS}`, ...report, `./${file}`], {
@@ -323,9 +307,8 @@ async function main(argv: string[]): Promise<number> {
   const pt = flag(sh.rest, '--pile-tools')
   const list = flag(pt.rest, '--files')
   const fileTimeout = flag(list.rest, '--file-timeout')
-  const retry = fileTimeout.rest.includes('--retry-failed')
   const needsOnly = fileTimeout.rest.includes('--needs')
-  const rest = fileTimeout.rest.filter((a) => a !== '--retry-failed' && a !== '--needs')
+  const rest = fileTimeout.rest.filter((a) => a !== '--needs')
   const jobs = Number(j.value ?? process.env.BUN_TEST_JOBS ?? 4)
   if (!Number.isInteger(jobs) || jobs < 1) {
     console.error('test-parallel: --jobs must be a whole number >= 1')
@@ -427,7 +410,7 @@ async function main(argv: string[]): Promise<number> {
   // Biggest file first: a big file is a long one, and a long file started last is the whole run's tail (docs/CI-LOCAL.md).
   const size = (f: string) => statSync(join(root, f)).size
   const queue = [...files].sort((a, b) => size(b) - size(a) || (a < b ? -1 : 1))
-  let results: Result[] = []
+  const results: Result[] = []
   const pool = async (list: string[], each: (file: string) => Promise<void>) => {
     const q = [...list]
     await Promise.all(
@@ -443,29 +426,6 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`\n${r.file}: exit ${r.code}\n${r.output}`)
   })
   const failed = (r: Result) => r.timedOut || r.code !== 0 || !r.ran
-  const flaky: Array<{ file: string; why: string[] }> = [] // failed, then passed on retry: what the first run said
-  if (retry) {
-    const again = results.filter((r) => failed(r) && !r.timedOut)
-    await pool(
-      again.map((r) => r.file),
-      async (file) => {
-        const first = results.find((r) => r.file === file) as Result
-        const r = await runFile(root, file, tmp, limit)
-        const ok = !failed(r)
-        process.stdout.write(
-          `\n${file}: ${ok ? 'failed, then passed on retry' : 'failed again on retry'}: exit ${r.code}\n${r.output}`,
-        )
-        if (!ok) return
-        flaky.push({ file, why: failureSummary(first.output) })
-        results = results.map((x) => (x === first ? r : x))
-        const names = failedTests(first.output)
-        const log = process.env.CI_FLAKE_FILE
-        const one = (n: string) => n.replace(/[\t\r\n]/g, ' ') // one row per test in a tab-separated log
-        if (log)
-          appendFileSync(log, (names.length > 0 ? names : ['(the file)']).map((n) => `${one(n)}\t${file}\n`).join(''))
-      },
-    )
-  }
   rmSync(tmp, { recursive: true, force: true })
   const bad = results
     .filter(failed)
@@ -480,8 +440,6 @@ async function main(argv: string[]): Promise<number> {
   const secs = ((performance.now() - start) / 1000).toFixed(2)
   console.log(`\n ${sum((r) => r.pass)} pass\n ${sum((r) => r.fail)} fail`)
   console.log(`Ran ${sum((r) => r.ran ?? 0)} tests across ${results.length} files. [${secs}s]`)
-  for (const f of flaky)
-    console.error(`test-parallel: ${f.file} failed, then passed on retry:\n${f.why.map((l) => `  ${l}`).join('\n')}`)
   if (bad.length > 0) {
     console.error(`test-parallel: FAILED (${bad.length} of ${files.length}):\n- ${bad.join('\n- ')}`)
     // what failed, and how, where a caller that keeps only the end of the log still sees it

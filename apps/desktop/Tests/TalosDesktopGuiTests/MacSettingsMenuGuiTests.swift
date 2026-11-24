@@ -198,7 +198,7 @@ struct TopMenuGuiTests {
     _ = NSApplication.shared
     let rec = Rec()
     let am = menu(rec)
-    let item = try #require(allItems(am.build()).first { $0.title == "Show Companion" })
+    let item = try #require(allItems(am.build()).first { $0.title == "Show Talos character" })
     rec.on = true
     _ = am.validateMenuItem(item)
     #expect(item.state == .on)

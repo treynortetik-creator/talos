@@ -6,13 +6,13 @@
 // probes that pass today and pin behaviour a fix must not break.
 import { createServer, type Server } from 'node:http'
 import type { HealthBeatT } from '@talos-app/protocol'
-import { type FakeBridge, type FakeClock, fakeClock, sleep, waitFor } from '@talos-app/testkit'
+import { type FakeBridge, type FakeClock, fakeClock, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_CONFIG } from '../../src/core/default-config.ts'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { advance, advanceHeard, asleep, kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 120_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // the tests whose waits sum higher say so themselves
 
 /** The relays started on each fake clock, so stepping one clock waits only on the bridges of that clock's relays. */
 const onClock = new Map<TestRelay, FakeClock>()
@@ -80,6 +80,12 @@ const gone = async (r: TestRelay, b: FakeBridge) => {
   await b.close()
   await waitFor(() => !r.relay.services.bus.bridgeOnline(), 3000, 'relay sees the bridge gone')
 }
+/** Everything the bridge sent before this has been handled when it returns: the relay answers one socket's frames in order. */
+const handled = async (b: FakeBridge) => {
+  const nonce = `after-${Math.random().toString(36).slice(2, 10)}`
+  b.send({ type: 'ping', nonce })
+  await b.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'in' })
+}
 const bodies = (r: TestRelay) => r.transport.sent.map((s) => s.payload.notification.body)
 const count = (r: TestRelay, re: RegExp) => bodies(r).filter((b) => re.test(b)).length
 const STOPPED = /Mac session stopped/
@@ -101,105 +107,123 @@ const beat = (mod: HealthBeatT['mod']): HealthBeatT => ({
 })
 
 describe('FAILS on PR #47', () => {
-  it('F1 relay redeploy with a long-connected bridge: no "session stopped" while the bridge reconnects', async () => {
-    // A routine Railway redeploy. The bridge has been connected since morning; the relay restarts; the bridge's backoff
-    // (1, 2, 5, 10, 30 s) brings it back ~20-50 s later. `bridge_last_seen` was last written at the morning hello (a
-    // stopping hub skips the close write), so the new HealthWatch thinks the bridge has been gone for hours and fires at
-    // its first 15 s poll, followed by a "Mac is back". Two false pushes per redeploy.
-    const c = fakeClock(utc5('08:00'))
-    const a = await relayOn(c)
-    const b = await bridgeFor(a)
-    await advanceLive(c, 3 * 3600_000) // connected all morning
-    expect(a.relay.services.bus.bridgeOnline()).toBe(true)
-    const dir = a.dir
-    const key = a.bridgeKey
-    await a.stopKeepData()
-    await b.close().catch(() => undefined)
-    relays.splice(relays.indexOf(a), 1)
-    const c2 = fakeClock(new Date(c.now()).toISOString())
-    const r2 = await relayOn(c2, { dir, bridgeKey: key })
-    await advance(c2, 30_000, 5_000) // the bridge is still in its reconnect backoff
-    await bridgeFor(r2)
-    await advance(c2, 60_000, 5_000)
-    await sleep(150)
-    expect(bodies(r2)).toEqual([])
-  })
+  it(
+    'F1 relay redeploy with a long-connected bridge: no "session stopped" while the bridge reconnects',
+    async () => {
+      // A routine Railway redeploy. The bridge has been connected since morning; the relay restarts; the bridge's backoff
+      // (1, 2, 5, 10, 30 s) brings it back ~20-50 s later. `bridge_last_seen` was last written at the morning hello (a
+      // stopping hub skips the close write), so the new HealthWatch thinks the bridge has been gone for hours and fires at
+      // its first 15 s poll, followed by a "Mac is back". Two false pushes per redeploy.
+      const c = fakeClock(utc5('08:00'))
+      const a = await relayOn(c)
+      const b = await bridgeFor(a)
+      await advanceLive(c, 3 * 3600_000) // connected all morning
+      expect(a.relay.services.bus.bridgeOnline()).toBe(true)
+      const dir = a.dir
+      const key = a.bridgeKey
+      await a.stopKeepData()
+      await b.close().catch(() => undefined)
+      relays.splice(relays.indexOf(a), 1)
+      const c2 = fakeClock(new Date(c.now()).toISOString())
+      const r2 = await relayOn(c2, { dir, bridgeKey: key })
+      await advance(c2, 30_000, 5_000) // the bridge is still in its reconnect backoff
+      await bridgeFor(r2)
+      await advance(c2, 60_000, 5_000)
+      await sleep(t(150)) // timing-ok: negative window: a redeploy with a reconnecting bridge pushes nothing
+      expect(bodies(r2)).toEqual([])
+    },
+    t(30_000), // advance loops can't be summed: 2.6 s measured under cpu-burn, x3 = 8 s, below the sum of the other waits
+  )
 
-  it('F2 an outage suppressed by the min gap is never alerted, however long it lasts (silent gap)', async () => {
-    // 10:00 dies -> 10:05 "stopped"; 10:10 back -> "back"; 10:40 dies for good. The gap (120 min) marks the outage
-    // handled and nothing ever re-looks at it: 24 h later the last thing on his phone is "Mac is back".
-    const c = fakeClock(utc5('10:00'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    await gone(r, b)
-    await advance(c, 6 * 60_000)
-    await waitFor(() => count(r, STOPPED) === 1, 3000, 'first stopped')
-    b = await bridgeFor(r)
-    await advance(c, 30_000, 15_000)
-    await waitFor(() => count(r, BACK) === 1, 3000, 'back')
-    await advance(c, 30 * 60_000)
-    await gone(r, b)
-    // Dead all day (no quiet window configured here). With no bridge there is nothing to ping, so the clock jumps 23 h as a
-    // relay that was asleep (each timer fires once, past the 120 min gap), then the last hour goes in ordinary steps: one push
-    // for the still-ongoing outage, and nothing more. Stepping the whole day took ~5 s.
-    c.set(c.now() + 23 * 3600_000)
-    c.advance(0)
-    await advance(c, 3600_000, 5 * 60_000)
-    await sleep(150)
-    await vi.waitFor(() => expect(count(r, STOPPED)).toBe(2), { timeout: 10_000 }) // once the gap has run out, the still-ongoing outage gets its one push
-  })
+  it(
+    'F2 an outage suppressed by the min gap is never alerted, however long it lasts (silent gap)',
+    async () => {
+      // 10:00 dies -> 10:05 "stopped"; 10:10 back -> "back"; 10:40 dies for good. The gap (120 min) marks the outage
+      // handled and nothing ever re-looks at it: 24 h later the last thing on his phone is "Mac is back".
+      const c = fakeClock(utc5('10:00'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      await gone(r, b)
+      await advance(c, 6 * 60_000)
+      await waitFor(() => count(r, STOPPED) === 1, 3000, 'first stopped')
+      b = await bridgeFor(r)
+      await advance(c, 30_000, 15_000)
+      await waitFor(() => count(r, BACK) === 1, 3000, 'back')
+      await advance(c, 30 * 60_000)
+      await gone(r, b)
+      // Dead all day (no quiet window configured here). With no bridge there is nothing to ping, so the clock jumps 23 h as a
+      // relay that was asleep (each timer fires once, past the 120 min gap), then the last hour goes in ordinary steps: one push
+      // for the still-ongoing outage, and nothing more. Stepping the whole day took ~5 s.
+      c.set(c.now() + 23 * 3600_000)
+      c.advance(0)
+      await advance(c, 3600_000, 5 * 60_000)
+      await vi.waitFor(() => expect(count(r, STOPPED)).toBeGreaterThanOrEqual(2), { timeout: t(10_000) })
+      await sleep(t(150)) // timing-ok: negative window: no extra push after the second
+      expect(count(r, STOPPED)).toBe(2) // once the gap has run out, the still-ongoing outage gets its one push
+    },
+    t(70_000), // advance loops can't be summed: 2.4 s measured under cpu-burn, x3 = 7 s, below the sum of the other waits
+  )
 
-  it('F3 "stopped" at 19:00, back at 23:00 inside the quiet window: the "back" is dropped, not held to 06:00', async () => {
-    // V2.3 rule 5: a Mac-side alert inside the window is held and re-evaluated at its end, sent if the condition holds.
-    // The Mac is back at 06:00, so "Mac is back" is owed. Today `tick` clears down_pushed in the window and never sends:
-    // the last push he saw says the Mac is dead.
-    const c = fakeClock(utc5('18:50'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    fixedUtcMinus5Config(b)
-    await configStored(r)
-    await gone(r, b)
-    await advance(c, 10 * 60_000)
-    await waitFor(() => count(r, STOPPED) === 1, 3000, 'stopped at 18:56')
-    // to 23:00 UTC-5 with the Mac gone, inside the quiet window from 22:00: nothing to ping, so the clock jumps to a few minutes
-    // before (each timer fires once) and the last minutes go in ordinary steps
-    c.set(c.now() + 4 * 3600_000 - 10 * 60_000)
-    c.advance(0)
-    await advance(c, 10 * 60_000, 5 * 60_000) // 23:00 UTC-5
-    b = await bridgeFor(r)
-    await advanceLive(c, 7 * 3600_000 + 10 * 60_000) // past 06:00
-    expect(r.relay.services.bus.bridgeOnline()).toBe(true)
-    await sleep(150)
-    await vi.waitFor(() => expect(count(r, BACK)).toBe(1), { timeout: 10_000 })
-  })
+  it(
+    'F3 "stopped" at 19:00, back at 23:00 inside the quiet window: the "back" is dropped, not held to 06:00',
+    async () => {
+      // V2.3 rule 5: a Mac-side alert inside the window is held and re-evaluated at its end, sent if the condition holds.
+      // The Mac is back at 06:00, so "Mac is back" is owed. Today `tick` clears down_pushed in the window and never sends:
+      // the last push he saw says the Mac is dead.
+      const c = fakeClock(utc5('18:50'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      fixedUtcMinus5Config(b)
+      await configStored(r)
+      await gone(r, b)
+      await advance(c, 10 * 60_000)
+      await waitFor(() => count(r, STOPPED) === 1, 3000, 'stopped at 18:56')
+      // to 23:00 UTC-5 with the Mac gone, inside the quiet window from 22:00: nothing to ping, so the clock jumps to a few minutes
+      // before (each timer fires once) and the last minutes go in ordinary steps
+      c.set(c.now() + 4 * 3600_000 - 10 * 60_000)
+      c.advance(0)
+      await advance(c, 10 * 60_000, 5 * 60_000) // 23:00 UTC-5
+      b = await bridgeFor(r)
+      await advanceLive(c, 7 * 3600_000 + 10 * 60_000) // past 06:00
+      expect(r.relay.services.bus.bridgeOnline()).toBe(true)
+      await vi.waitFor(() => expect(count(r, BACK)).toBeGreaterThanOrEqual(1), { timeout: t(10_000) })
+      await sleep(t(150)) // timing-ok: negative window: no extra push after the first
+      expect(count(r, BACK)).toBe(1)
+    },
+    t(60_000), // advance loops can't be summed: 5.6 s measured under cpu-burn, x3 = 17 s, below the sum of the other waits
+  )
 
-  it('F4 mod_quiet false positive: the mod quiet spell is counted across the time the Mac was asleep', async () => {
-    // Mac asleep 8 h (bridge offline). On wake the bridge reconnects first and its onReady beat says mod `quiet`,
-    // last_seen = before sleep, because the mod has not re-synced yet (its hello backs off 1-16 s while the MCP server
-    // comes up). The next 15 s relay poll sees "quiet for 8 h" and pushes "mod stopped reporting"; the alive beat lands
-    // seconds later. Same after any Claude Code restart that took > MOD_QUIET_MIN.
-    const c = fakeClock(utc5('06:00'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    b.send({ type: 'health.beat', beat: beat({ state: 'alive', last_seen: utc5('06:00'), expected: true }) })
-    await sleep(100)
-    await gone(r, b)
-    await asleep(c, 8 * 3600_000, 3600_000, 10 * 60_000)
-    const before = c.now() - 8 * 3600_000
-    b = await bridgeFor(r)
-    b.send({
-      type: 'health.beat',
-      beat: beat({ state: 'quiet', last_seen: new Date(before).toISOString(), expected: true }),
-    })
-    await advance(c, 16_000, 2_000) // one relay poll
-    b.send({
-      type: 'health.beat',
-      beat: beat({ state: 'alive', last_seen: new Date(c.now()).toISOString(), expected: true }),
-    })
-    await advance(c, 60_000, 5_000)
-    await sleep(150)
-    expect(count(r, MOD)).toBe(0)
-  })
+  it(
+    'F4 mod_quiet false positive: the mod quiet spell is counted across the time the Mac was asleep',
+    async () => {
+      // Mac asleep 8 h (bridge offline). On wake the bridge reconnects first and its onReady beat says mod `quiet`,
+      // last_seen = before sleep, because the mod has not re-synced yet (its hello backs off 1-16 s while the MCP server
+      // comes up). The next 15 s relay poll sees "quiet for 8 h" and pushes "mod stopped reporting"; the alive beat lands
+      // seconds later. Same after any Claude Code restart that took > MOD_QUIET_MIN.
+      const c = fakeClock(utc5('06:00'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      b.send({ type: 'health.beat', beat: beat({ state: 'alive', last_seen: utc5('06:00'), expected: true }) })
+      await handled(b) // the relay has taken the beat (or refused it): one socket's frames are handled in order
+      await gone(r, b)
+      await asleep(c, 8 * 3600_000, 3600_000, 10 * 60_000)
+      const before = c.now() - 8 * 3600_000
+      b = await bridgeFor(r)
+      b.send({
+        type: 'health.beat',
+        beat: beat({ state: 'quiet', last_seen: new Date(before).toISOString(), expected: true }),
+      })
+      await advance(c, 16_000, 2_000) // one relay poll
+      b.send({
+        type: 'health.beat',
+        beat: beat({ state: 'alive', last_seen: new Date(c.now()).toISOString(), expected: true }),
+      })
+      await advance(c, 60_000, 5_000)
+      await sleep(t(150)) // timing-ok: negative window: no mod-stopped push after the alive beat
+      expect(count(r, MOD)).toBe(0)
+    },
+    t(40_000),
+  )
 
   it('F5 POST /api/health/test with nobody to alert answers 204, and the screen says "sent"', async () => {
     // 0 subscriptions and ntfy off (`no_alert_path`): the test button is the owner's one way to prove the path works,
@@ -212,99 +236,127 @@ describe('FAILS on PR #47', () => {
     expect(res.status).not.toBe(204)
   })
 
-  it('F6 two relay instances on one store each fire the same outage (flags are cached in memory)', async () => {
-    // LOW: Railway does not overlap deploys of a service with a volume, so this needs two replicas or a manual run
-    // against prod data. `tick` reads `this.st`, loaded once at construction, never the store.
-    const c = fakeClock(utc5('10:00'))
-    const a = await relayOn(c)
-    const b = await bridgeFor(a)
-    const second = await relayOn(c, { dir: a.dir, bridgeKey: a.bridgeKey })
-    await gone(a, b)
-    await advance(c, 7 * 60_000, 10_000)
-    await sleep(200)
-    await vi.waitFor(() => expect(count(a, STOPPED) + count(second, STOPPED)).toBe(1), { timeout: 10_000 })
-  })
+  it(
+    'F6 two relay instances on one store each fire the same outage (flags are cached in memory)',
+    async () => {
+      // LOW: Railway does not overlap deploys of a service with a volume, so this needs two replicas or a manual run
+      // against prod data. `tick` reads `this.st`, loaded once at construction, never the store.
+      const c = fakeClock(utc5('10:00'))
+      const a = await relayOn(c)
+      const b = await bridgeFor(a)
+      const second = await relayOn(c, { dir: a.dir, bridgeKey: a.bridgeKey })
+      await gone(a, b)
+      await advance(c, 7 * 60_000, 10_000)
+      await vi.waitFor(() => expect(count(a, STOPPED) + count(second, STOPPED)).toBeGreaterThanOrEqual(1), {
+        timeout: t(10_000),
+      })
+      await sleep(t(200)) // timing-ok: negative window: no duplicate push from the second relay
+      expect(count(a, STOPPED) + count(second, STOPPED)).toBe(1)
+    },
+    t(35_000),
+  )
 })
 
 describe('holds on PR #47 (probes that pass; a fix must keep them)', () => {
-  it('H1 UTC-5 22:00-06:00 (UTC math): outage from 21:57 is held, one push at 06:00, nothing before', async () => {
-    const c = fakeClock(utc5('21:30'))
-    const r = await relayOn(c)
-    const b = await bridgeFor(r)
-    fixedUtcMinus5Config(b)
-    await configStored(r)
-    await advanceLive(c, 27 * 60_000) // 21:57
-    await gone(r, b)
-    await asleep(c, 8 * 3600_000 + 2 * 60_000) // 05:59
-    await sleep(100)
-    expect(bodies(r)).toEqual([])
-    await advance(c, 60_000, 15_000) // 06:00:xx
-    await waitFor(() => count(r, STOPPED) === 1, 3000, 'held push at 06:00')
-    await advance(c, 3600_000, 5 * 60_000)
-    expect(bodies(r)).toHaveLength(1)
-  })
-
-  it('H2 held alarm whose outage ended at 05:50 sends nothing at 06:00, even after a 2-min blip at 05:58', async () => {
-    const c = fakeClock(utc5('23:00'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    fixedUtcMinus5Config(b)
-    await configStored(r)
-    await gone(r, b)
-    await asleep(c, 6 * 3600_000 + 50 * 60_000) // 05:50
-    b = await bridgeFor(r)
-    await advance(c, 8 * 60_000, 15_000) // 05:58
-    await gone(r, b)
-    await advance(c, 3 * 60_000, 15_000) // 06:01: the blip is 3 min old
-    b = await bridgeFor(r)
-    await advanceLive(c, 30 * 60_000)
-    await sleep(100)
-    expect(bodies(r)).toEqual([])
-  })
-
-  it('H3 flapping bridge (up 10 s, down 60 s, x20) inside 5 min windows raises nothing', async () => {
-    const c = fakeClock(utc5('12:00'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    for (let i = 0; i < 20; i++) {
+  it(
+    'H1 UTC-5 22:00-06:00 (UTC math): outage from 21:57 is held, one push at 06:00, nothing before',
+    async () => {
+      const c = fakeClock(utc5('21:30'))
+      const r = await relayOn(c)
+      const b = await bridgeFor(r)
+      fixedUtcMinus5Config(b)
+      await configStored(r)
+      await advanceLive(c, 27 * 60_000) // 21:57
       await gone(r, b)
-      await advance(c, 60_000, 15_000)
+      await asleep(c, 8 * 3600_000 + 2 * 60_000) // 05:59
+      await sleep(t(150)) // timing-ok: negative window: the held push is not sent before 06:00
+      expect(bodies(r)).toEqual([])
+      await advance(c, 60_000, 15_000) // 06:00:xx
+      await waitFor(() => count(r, STOPPED) === 1, 3000, 'held push at 06:00')
+      await advance(c, 3600_000, 5 * 60_000)
+      expect(bodies(r)).toHaveLength(1)
+    },
+    t(40_000), // advance loops can't be summed: 1.1 s measured under cpu-burn, x3 = 3 s, below the sum of the other waits
+  )
+
+  it(
+    'H2 held alarm whose outage ended at 05:50 sends nothing at 06:00, even after a 2-min blip at 05:58',
+    async () => {
+      const c = fakeClock(utc5('23:00'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      fixedUtcMinus5Config(b)
+      await configStored(r)
+      await gone(r, b)
+      await asleep(c, 6 * 3600_000 + 50 * 60_000) // 05:50
       b = await bridgeFor(r)
-      await advance(c, 10_000, 5_000)
-    }
-    await sleep(100)
-    expect(bodies(r)).toEqual([])
-  })
+      await advance(c, 8 * 60_000, 15_000) // 05:58
+      await gone(r, b)
+      await advance(c, 3 * 60_000, 15_000) // 06:01: the blip is 3 min old
+      b = await bridgeFor(r)
+      await advanceLive(c, 30 * 60_000)
+      await sleep(t(150)) // timing-ok: negative window: the blip's held alarm sends nothing at 06:00
+      expect(bodies(r)).toEqual([])
+    },
+    t(60_000), // advance loops can't be summed: 1.6 s measured under cpu-burn, x3 = 5 s, below the sum of the other waits
+  )
 
-  it('H4 an outage after the min gap has run out is alerted (the guarantee the outbox.test edit dropped)', async () => {
-    const c = fakeClock(utc5('09:00'))
-    const r = await relayOn(c)
-    let b = await bridgeFor(r)
-    await gone(r, b)
-    await advance(c, 6 * 60_000)
-    b = await bridgeFor(r)
-    await advanceLive(c, 3 * 3600_000)
-    expect(r.relay.services.bus.bridgeOnline()).toBe(true)
-    await gone(r, b)
-    await advance(c, 6 * 60_000)
-    await waitFor(() => count(r, STOPPED) === 2, 3000, 'second outage, gap expired')
-  })
+  it(
+    'H3 flapping bridge (up 10 s, down 60 s, x20) inside 5 min windows raises nothing',
+    async () => {
+      const c = fakeClock(utc5('12:00'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      for (let i = 0; i < 20; i++) {
+        await gone(r, b)
+        await advance(c, 60_000, 15_000)
+        b = await bridgeFor(r)
+        await advance(c, 10_000, 5_000)
+      }
+      await sleep(t(150)) // timing-ok: negative window: a flapping bridge raises nothing
+      expect(bodies(r)).toEqual([])
+    },
+    t(375_000),
+  )
 
-  it('H5 ntfy plus web push: one ntfy hit and one web push per alarm, no hub duplicate', async () => {
-    sink = await ntfySink()
-    const s = sink
-    const c = fakeClock(utc5('12:00'))
-    const r = await relayOn(c, {
-      env: { ALERT_NTFY_URL: 'https://ntfy.example.com/topic' },
-      ntfyFetch: (_u, init) => fetch(s.url, init),
-    })
-    const b = await bridgeFor(r)
-    await gone(r, b)
-    await advance(c, 20 * 60_000, 15_000) // the hub's own 5-min timer also fires in here
-    await sleep(200)
-    await vi.waitFor(() => expect(s.hits).toHaveLength(1), { timeout: 10_000 })
-    expect(count(r, STOPPED)).toBe(1)
-  })
+  it(
+    'H4 an outage after the min gap has run out is alerted (the guarantee the outbox.test edit dropped)',
+    async () => {
+      const c = fakeClock(utc5('09:00'))
+      const r = await relayOn(c)
+      let b = await bridgeFor(r)
+      await gone(r, b)
+      await advance(c, 6 * 60_000)
+      b = await bridgeFor(r)
+      await advanceLive(c, 3 * 3600_000)
+      expect(r.relay.services.bus.bridgeOnline()).toBe(true)
+      await gone(r, b)
+      await advance(c, 6 * 60_000)
+      await waitFor(() => count(r, STOPPED) === 2, 3000, 'second outage, gap expired')
+    },
+    t(50_000), // advance loops can't be summed: 2.7 s measured under cpu-burn, x3 = 8 s, below the sum of the other waits
+  )
+
+  it(
+    'H5 ntfy plus web push: one ntfy hit and one web push per alarm, no hub duplicate',
+    async () => {
+      sink = await ntfySink()
+      const s = sink
+      const c = fakeClock(utc5('12:00'))
+      const r = await relayOn(c, {
+        env: { ALERT_NTFY_URL: 'https://ntfy.example.com/topic' },
+        ntfyFetch: (_u, init) => fetch(s.url, init),
+      })
+      const b = await bridgeFor(r)
+      await gone(r, b)
+      await advance(c, 20 * 60_000, 15_000) // the hub's own 5-min timer also fires in here
+      await vi.waitFor(() => expect(s.hits.length).toBeGreaterThanOrEqual(1), { timeout: t(10_000) })
+      await sleep(t(200)) // timing-ok: negative window: no duplicate ntfy hit
+      expect(s.hits).toHaveLength(1)
+      expect(count(r, STOPPED)).toBe(1)
+    },
+    t(35_000),
+  )
 
   it('H6 a beat with extra keys (a path) never reaches the store or /api/status', async () => {
     const c = fakeClock(utc5('12:00'))
@@ -314,7 +366,7 @@ describe('holds on PR #47 (probes that pass; a fix must keep them)', () => {
       type: 'health.beat',
       beat: { ...beat({ state: 'alive', last_seen: utc5('12:00'), expected: true }), path: '/home/example/secret.md' },
     })
-    await sleep(200)
+    await handled(b) // the relay has handled the frame, kept or refused: one socket's frames are handled in order
     const res = await fetch(`${r.httpBase}/api/status`, { headers: r.appHeaders })
     const text = await res.text()
     expect(text).not.toContain('/home/example')

@@ -1,7 +1,17 @@
-// "Always allow" on a card (always-allow.ts, owner ruling 2026-11-14): a live card of a send kind, from a bridge that says
-// ALWAYS_ALLOW_FEATURE, has a third button that approves this card and allows its kind from now on. The tap is one signed
-// card.resolve with action 'primary' and always: true. Any other kind, or an older bridge, gets the card as before.
-import { ALWAYS_ALLOW_FEATURE, bindingFrom, payloadHash, SEND_KINDS, verifyOwnerFrame } from '@talos-app/protocol'
+// "Always allow" on a card (always-allow.ts, owner rulings 2026-11-14 and 2026-11-21): a live ACTION card (a send kind, generic,
+// schedule, undo, or a settings card that touches only ordinary settings), from a bridge that says ALWAYS_ALLOW_FEATURE, has a
+// button that approves this card and allows its kind from now on. The tap is one signed card.resolve with action 'primary' and
+// always: true. A question card, a permission card, a card a notification cannot approve, a trust-key or high settings card, or
+// an older bridge, gets the card as before.
+import {
+  ALWAYS_ALLOW_2_FEATURE,
+  ALWAYS_ALLOW_FEATURE,
+  ALWAYS_KINDS,
+  bindingFrom,
+  CLI_FIELD_KEY,
+  payloadHash,
+  verifyOwnerFrame,
+} from '@talos-app/protocol'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
@@ -10,25 +20,48 @@ import { TalosClientError } from '../../src/lib/client.ts'
 import { HttpError } from '../../src/lib/http.ts'
 import { LiveCard, makeCard, renderWith, setup } from './helpers.tsx'
 
-const withFeature = (client: ReturnType<typeof setup>, on: boolean) =>
+// `on`: the bridge reads always-allow/1 and /2 (this build); `v1Only`: an older bridge that says /1 alone
+const withFeature = (client: ReturnType<typeof setup>, on: boolean, v1Only = false) =>
   client.store.setState((s) => {
-    const rest = (s.presence.features ?? []).filter((f) => f !== ALWAYS_ALLOW_FEATURE)
-    return { ...s, presence: { ...s.presence, features: on ? [...rest, ALWAYS_ALLOW_FEATURE] : rest } }
+    const rest = (s.presence.features ?? []).filter((f) => f !== ALWAYS_ALLOW_FEATURE && f !== ALWAYS_ALLOW_2_FEATURE)
+    const add = !on ? [] : v1Only ? [ALWAYS_ALLOW_FEATURE] : [ALWAYS_ALLOW_FEATURE, ALWAYS_ALLOW_2_FEATURE]
+    return { ...s, presence: { ...s.presence, features: [...rest, ...add] } }
   })
 const resolves = (c: ReturnType<typeof setup>) => c.sent.filter((f) => f.type === 'card.resolve')
 
-const KIND_CARDS: Record<(typeof SEND_KINDS)[number], { primary_label: string; kill_label: string }> = {
+const KIND_CARDS: Record<(typeof ALWAYS_KINDS)[number], { primary_label: string; kill_label: string }> = {
   email: { primary_label: 'Send', kill_label: 'Kill draft' },
   message: { primary_label: 'Send', kill_label: 'Deny' },
   deploy: { primary_label: 'Deploy', kill_label: 'Deny' },
   push: { primary_label: 'Push', kill_label: 'Deny' },
   publish: { primary_label: 'Publish', kill_label: 'Deny' },
   purchase: { primary_label: 'Buy', kill_label: 'Deny' },
+  generic: { primary_label: 'Approve', kill_label: 'Deny' },
+  schedule: { primary_label: 'Save schedule', kill_label: 'Deny' },
+  undo: { primary_label: 'Undo files', kill_label: 'Keep files' },
+  config: { primary_label: 'Apply', kill_label: 'Keep settings' },
 }
 
+// what a config card binds: the changes it shows (an ordinary setting here)
+const configPayload = (path: string, o: unknown, n: unknown) => ({
+  v: 1,
+  base_rev: 1,
+  reason: 'because',
+  changes: [{ path, old: o, new: n }],
+})
+// a card of each kind as the bridge makes it, so the table below needs no special case
+const cardOf = (kind: (typeof ALWAYS_KINDS)[number], over: Record<string, unknown> = {}) =>
+  makeCard({
+    kind,
+    ...KIND_CARDS[kind],
+    ...(kind === 'config' ? { payload: configPayload('agent.name', 'Talos', 'Hal') } : {}),
+    ...(kind === 'schedule' ? { payload: { own_risk: 'low' } } : {}),
+    ...over,
+  })
+
 describe('Always allow on a card', () => {
-  it('reads right for every send kind (a table, not a plural rule)', () => {
-    expect(Object.keys(ALWAYS_ALLOW_LABEL).sort()).toEqual([...SEND_KINDS].sort())
+  it('reads right for every action kind (a table, not a plural rule)', () => {
+    expect(Object.keys(ALWAYS_ALLOW_LABEL).sort()).toEqual([...ALWAYS_KINDS].sort())
     expect(ALWAYS_ALLOW_LABEL).toEqual({
       email: 'Always allow emails',
       message: 'Always allow messages',
@@ -36,11 +69,15 @@ describe('Always allow on a card', () => {
       publish: 'Always allow publishing',
       purchase: 'Always allow purchases',
       push: 'Always allow pushing code',
+      generic: 'Always allow approvals',
+      schedule: 'Always allow schedule changes',
+      undo: 'Always allow undos',
+      config: 'Always allow settings changes',
     })
   })
 
-  it.each(SEND_KINDS)('a %s card with the feature shows its verb, Always allow and the kill button', (kind) => {
-    const card = makeCard({ kind, ...KIND_CARDS[kind] })
+  it.each(ALWAYS_KINDS)('a %s card with the feature shows its verb, Always allow and the kill button', (kind) => {
+    const card = cardOf(kind)
     const client = setup({ cards: [card] })
     withFeature(client, true)
     renderWith(<LiveCard id={card.id} />, client)
@@ -58,13 +95,92 @@ describe('Always allow on a card', () => {
     expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
   })
 
-  it.each(['config', 'generic', 'schedule'])('a %s card never offers it, even with the feature', (kind) => {
-    const card = makeCard({ kind, primary_label: 'Approve' })
+  it.each(ALWAYS_KINDS)(
+    'a bridge that says only always-allow/1: the send kinds still offer it, the newer kinds do not (%s)',
+    (kind) => {
+      const card = cardOf(kind)
+      const client = setup({ cards: [card] })
+      withFeature(client, true, true)
+      renderWith(<LiveCard id={card.id} />, client)
+      expect(screen.getByRole('button', { name: KIND_CARDS[kind].primary_label })).toBeTruthy()
+      const sendKind = ['email', 'message', 'deploy', 'publish', 'purchase', 'push'].includes(kind)
+      expect(screen.queryByRole('button', { name: ALWAYS_ALLOW_LABEL[kind] }) !== null).toBe(sendKind)
+    },
+  )
+
+  it('a high-risk schedule card never offers it (it holds full permissions, headless runs, more tools or memory)', () => {
+    const client = setup({ cards: [cardOf('schedule', { risk: 'high' })] })
+    withFeature(client, true)
+    renderWith(<LiveCard id={client.store.getState().cards[0]?.id as string} />, client)
+    expect(screen.getByRole('button', { name: 'Save schedule' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
+  })
+
+  it('a schedule card minted low by trust mode but high by its own measure never offers it', () => {
+    const client = setup({ cards: [cardOf('schedule', { risk: 'low', payload: { own_risk: 'high' } })] })
+    withFeature(client, true)
+    renderWith(<LiveCard id={client.store.getState().cards[0]?.id as string} />, client)
+    expect(screen.getByRole('button', { name: 'Save schedule' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
+  })
+
+  it.each([
+    ['memory turned on', 'memory_browser', false, true],
+    ['the notes lookup turned on', 'dev.note_lookup', false, true],
+    ['attachments kept for fewer days', 'media_keep_days', 60, 30],
+    ['quiet hours set (a row the value makes high)', 'quiet_window', null, { start: '22:00', end: '07:00' }],
+  ])('a settings card for %s never offers it', (_n, path, o, n) => {
+    absent(cardOf('config', { payload: configPayload(path, o, n) }), 'Apply')
+  })
+
+  const absent = (card: ReturnType<typeof makeCard>, verb: string) => {
     const client = setup({ cards: [card] })
     withFeature(client, true)
     renderWith(<LiveCard id={card.id} />, client)
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: verb })).toBeTruthy() // still one tap to approve
     expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
+  }
+
+  it('a decision card never offers it, even with the feature (it keeps its content on the card)', () => {
+    absent(makeCard({ kind: 'decision', primary_label: 'Approve' }), 'Approve')
+  })
+
+  it('a card that carries talos-app commands never offers it (the bridge refuses it from a notification)', () => {
+    absent(
+      cardOf('generic', {
+        fields: [{ key: CLI_FIELD_KEY, label: 'Commands', value: 'talos-app trust off', editable: false }],
+        allow_edit: false,
+      }),
+      'Approve',
+    )
+  })
+
+  it.each([
+    ['always_allow itself', 'always_allow', [], ['email']],
+    ['the settings lock', 'settings_lock', false, true],
+    ['the thread fence', 'dev.thread_fence', true, false],
+    ['a thread field (its own session)', 'threads.trip.session', 'shared', 'dedicated'],
+    ['a thread field (its folder)', 'threads.trip.session_opts.cwd', null, '/work/a'],
+    ['a row the table marks high', 'default_thread', 'inbox', 'general'],
+    ['a path nothing knows', 'permission_relay', false, true],
+  ])('a settings card for %s never offers it', (_n, path, o, n) => {
+    absent(cardOf('config', { payload: configPayload(path, o, n) }), 'Apply')
+  })
+
+  it('a settings card whose changes cannot be read never offers it', () => {
+    absent(cardOf('config', { payload: { v: 1, changes: 'not a list' } }), 'Apply')
+  })
+  it('a settings card with no payload at all never offers it', () => {
+    absent(makeCard({ kind: 'config', primary_label: 'Apply' }), 'Apply')
+  })
+  it('a high-risk settings card never offers it, whatever it changes', () => {
+    absent(cardOf('config', { risk: 'high' }), 'Apply')
+  })
+
+  it('a settings card with one ordinary and one trust change never offers it', () => {
+    const p = configPayload('agent.name', 'Talos', 'Hal')
+    p.changes.push({ path: 'settings_lock', old: false, new: true })
+    absent(cardOf('config', { payload: p }), 'Apply')
   })
 
   it('the tap sends one signed card.resolve: primary, always: true, the rendered hash', async () => {
@@ -116,6 +232,23 @@ describe('Always allow on a card', () => {
     renderWith(<LiveCard id={card.id} />, client)
     expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
     expect(resolves(client)).toHaveLength(0)
+  })
+})
+
+describe('an action card with a long body', () => {
+  it('shows its title and Deny / Always allow / Approve without opening anything', () => {
+    const card = makeCard({
+      kind: 'generic',
+      ...KIND_CARDS.generic,
+      title: 'Run the nightly cleanup',
+      body: Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'),
+    })
+    const client = setup({ cards: [card] })
+    withFeature(client, true)
+    renderWith(<LiveCard id={card.id} />, client)
+    expect(screen.getByText('Run the nightly cleanup')).toBeTruthy()
+    for (const name of ['Deny', 'Always allow approvals', 'Approve'])
+      expect(screen.getByRole('button', { name })).toBeTruthy()
   })
 })
 

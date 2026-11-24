@@ -1268,11 +1268,11 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
       .filter((l) => l.includes('test-parallel.ts'))
     expect(lines).toHaveLength(2)
     for (const l of lines) expect(l).toMatch(/fuzz=60000$/)
-    // this commit's runner does not know --retry-failed, so it is not given it (it would read it as the folder to test)
+    // no retry flag, whatever the commit's runner knows
     for (const l of lines) expect(l).not.toContain('--retry-failed')
   })
 
-  it("the bridge's bun runner is told to rerun failed files once, when the commit's runner knows the flag", () => {
+  it("the bridge's bun runner is never told to rerun failed files, though the commit's runner knows the flag", () => {
     const r = run()
     r.status(r.g0, greenRows)
     r.land({ 'apps/bridge/scripts/test-parallel.ts': '// knows --retry-failed\n' }, 'change')
@@ -1288,7 +1288,7 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
       .split('\n')
       .filter((l) => l.includes('test-parallel.ts'))
     expect(lines).toHaveLength(2)
-    for (const l of lines) expect(l).toContain(' --retry-failed')
+    for (const l of lines) expect(l).not.toContain('--retry-failed')
   })
 
   it("report-ci/fast runs the unit tests the change since check's last pass can reach; without that pass, typecheck and lint only", () => {
@@ -1306,8 +1306,8 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     const withBase = fastArgs(true)
     expect(withBase.vitest).toHaveLength(1)
     expect(withBase.vitest[0]).toContain(`--changed ${withBase.g0}`)
-    // one retry per failed test and the flake reporter, as in check's own Vitest
-    expect(withBase.vitest[0]).toMatch(/--retry=1 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts/)
+    // no retry, and the flake reporter, as in check's own Vitest
+    expect(withBase.vitest[0]).toMatch(/--retry=0 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts/)
     // check's own base, when the jobs' bases differ: check passed at c1, browser was only skipped there (its base is g0)
     {
       const r = run()
@@ -1365,9 +1365,9 @@ describe('ci-local.sh: it runs the jobs the change can affect and answers honest
     const EXCLUDE = '--exclude **/root-install*.test.ts --exclude **/kit-tests.test.ts'
     const skipped = vitestArgs(web())
     expect(skipped.args).toEqual([expect.stringContaining(EXCLUDE)])
-    // one retry per failed test, and the reporter that logs a test that passed only on it
+    // no retry, and the reporter that would log a test that passed only on one
     expect(skipped.args).toEqual([
-      expect.stringMatching(/ --retry=1 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts( |$)/),
+      expect.stringMatching(/ --retry=0 --reporter=default --reporter=\S+\/scripts\/ci-flake-vitest\.ts( |$)/),
     ])
     expect(skipped.out).toContain('install and kit tests skipped')
     expect(vitestArgs({ 'kit/install.sh': 'changed' }).args).toEqual([expect.not.stringContaining('--exclude')])

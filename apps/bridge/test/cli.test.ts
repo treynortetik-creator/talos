@@ -245,7 +245,11 @@ describe('.mcp.json merge and install.sh', () => {
     expect(mergeMcpConfig(undefined, entry).config).toEqual({ mcpServers: { 'talos-app': entry } })
     expect(entry).toEqual({
       command: '/opt/bun/bin/bun',
-      args: ['run', '--cwd', '/opt/talos-app/apps/bridge', '--silent', 'src/server.ts'],
+      args: [
+        '--no-env-file',
+        '--config=/opt/talos-app/apps/bridge/bunfig.toml',
+        '/opt/talos-app/apps/bridge/src/server.ts',
+      ],
       env: { TALOS_APP_HOME: '/home/user/.config/talos/app' },
     })
   })
@@ -382,7 +386,11 @@ describe('.mcp.json merge and install.sh', () => {
     const parsed = JSON.parse(mcp1)
     expect(parsed.mcpServers.keep).toEqual({ command: 'keep-me', args: ['1'] })
     expect(isAbsolute(parsed.mcpServers['talos-app'].command)).toBe(true)
-    expect(parsed.mcpServers['talos-app'].args.slice(0, 3)).toEqual(['run', '--cwd', resolve(import.meta.dir, '..')])
+    expect(parsed.mcpServers['talos-app'].args).toEqual([
+      '--no-env-file',
+      `--config=${resolve(import.meta.dir, '..')}/bunfig.toml`,
+      `${resolve(import.meta.dir, '..')}/src/server.ts`,
+    ])
     expect(parsed.mcpServers['talos-app'].env).toEqual({
       TALOS_APP_HOME: home,
       TALOS_AGENT_DIR: resolve(agent),

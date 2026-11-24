@@ -10,3 +10,9 @@ MEASURED (what these captures and the probe showed, for `PaneSelect`):
   `Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel`. (What the row shows once words are typed is not captured.)
 - `after-esc-working.txt`, `after-question-answered.txt`: the screens after a prompt went (a working turn; the idle box). Not prompts.
 - Once, the first Enter after a prompt appeared did not register.
+
+`agents-panel-finished.txt` (added 2026-11-22): the rows under an empty box in a long-running thread session on 2.1.329, as the owner's pane showed
+them (agent names only; the rows were copied as text, so the spacing between a task and its time is as copied, not a byte capture; the reply
+line and the box above them are built to frame them). It shows the agents panel with FINISHED agents: `waiting on N shells · <task> · since
+<Day> h:mm AM/PM`, a `stopped · 1d 16h 25m · ↓ 407.9k tokens` time, and the closing `↓ N more`. Before BoxFrame knew them the row under the box was
+refused (`row_under_box`) every second for about 11 hours and the thread's messages went to the main agent.

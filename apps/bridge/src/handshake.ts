@@ -1,6 +1,7 @@
 // Bridge side of the WebSocket handshake (spec 3.4, 5.4): challenge -> hello (Ed25519 over the challenge string).
 import {
   AGENTS_MD_FEATURE,
+  ALWAYS_ALLOW_2_FEATURE,
   ALWAYS_ALLOW_FEATURE,
   ATTEST_FEATURE,
   DRIVING_FEATURE,
@@ -118,6 +119,8 @@ export function bridgeFeatures(svc: {
     ...(svc.peers ? [PEER_FEATURE] : []),
     // the config takes every stock theme id (iris, harbor): always on, last, where an older page goes without it
     THEMES_V2_FEATURE,
+    // reads the newer Always allow kinds (generic, schedule, undo, config); before attest/1, which a test pins last
+    ALWAYS_ALLOW_2_FEATURE,
     // answers a phone's attest.request (BYOR phase 4): last, where an older page goes without it
     ATTEST_FEATURE,
     // last: an older page goes without it. Only while the Mac app's run channel is connected

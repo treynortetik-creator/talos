@@ -4,12 +4,20 @@ import Foundation
 /// Pure so the wording and the clearing rules are tested without the app.
 public enum SupervisorNotice {
   public static let needsYou = "Talos needs you at the Mac"
+  /// Told to the phone, and shown, only after the agent's terminal has not answered for a while (`Supervisor.unreachableReads`): Talos
+  /// neither stops nor starts the agent on a guess. `name` is the agent's name when it has one.
+  public static func agentUnreachable(name: String?) -> String {
+    "Talos can't check on \(name ?? "your agent") right now. It's leaving it as it is and will keep trying."
+  }
+  public static func agentReachable(name: String?) -> String { "Talos can check on \(name ?? "your agent") again." }
   public static let restarted = "Your agent stopped and was restarted. It carried on."
   public static let stoppedRestarting = "Your agent keeps stopping, so Talos paused it. Open Talos to look."
   public static let resumeFailed = "The last conversation can't be resumed"
   public static let confirmFailed = "The restart wasn't confirmed in time; your agent is stopped"
   public static let blocked = MacWords.anotherAgentRunning
   public static let couldNotStart = "Talos couldn't start"
+  /// The reason a start is refused when another copy of Talos holds the session lock: told in the menu, never to the phone (a second copy opening is not news).
+  public static let anotherInstanceDetail = "another Talos instance supervises this session"
   /// desktop.json's saved conversation id is not a valid id (a UUID): nothing is started with it. The owner's way on is the menu's
   /// Start a new conversation (or fixing the file). The value is never shown or logged: it is from a file an agent may write.
   public static let sessionIdInvalid =
@@ -31,6 +39,25 @@ public enum SupervisorNotice {
   public static let ignoredOwnerStopped = "Ignored a restart request: you stopped the agent at the Mac."
   public static let ignoredTooSoon =
     "Ignored a restart request: one was acted on less than \(Int(AgentRecovery.requestMinGap / 60)) minutes ago."
+
+  /// Row 12: the lines Main's start puts in the default thread when it stalls, cannot resume or cannot be made. Main's own bridge is the
+  /// thing that is not up in all three, so no button can ride on them (the phone's restart, `restart_main` and a card tap all go through
+  /// that bridge): each says what happened and names the Mac's menu item that does the one safe thing. Nothing here holds screen text,
+  /// a path or the reason from `desktop.json`; those stay in the Mac's menu. `who` is the agent's name (nil: "Your agent").
+  public static func startStalledLine(agentName: String?, waited: Double) -> String {
+    let min = max(1, Int((waited / 60).rounded()))
+    return "\(agentName ?? "Your agent") hasn't finished starting after \(min) minute\(min == 1 ? "" : "s"). Talos left it as it is. "
+      + "To try again, choose \(MacWords.restartAgent) in the Talos menu bar item on your Mac."
+  }
+
+  public static func resumeFailedLine(agentName: String?) -> String {
+    "\(agentName ?? "Your agent")'s last conversation can't be resumed, so Talos stopped it and changed nothing. "
+      + "To begin a new conversation, choose Start a new conversation in the Talos menu bar item on your Mac."
+  }
+
+  public static func couldNotStartLine(agentName: String?) -> String {
+    "\(couldNotStart) \(agentName ?? "your agent"). The reason is in the Talos menu bar item on your Mac."
+  }
 
   /// The line for Main running without its bridge.
   public static func bridgeNotLive(_ reason: String?) -> String {
@@ -66,7 +93,7 @@ public enum SupervisorNotice {
     f.dateStyle = .none
     f.timeZone = timeZone
     return "Main got your message at \(f.string(from: since)) and has shown no progress for \(Int(MainRestartContract.stallS / 60)) min: its model "
-      + "request may be stuck (a long think can look the same). Press Esc in its pane to cancel, then send again"
+      + "request may be stuck (a long think can look the same). To cancel it, choose Restart agent in Settings, under Agent, on your phone, or choose \(MacWords.restartAgent) in the Talos menu bar item; then send again"
   }
 
   /// Main's turn ended on an empty thinking block with no answer (nothing pressed): the owner's message was delivered again, or could not be.
@@ -252,6 +279,10 @@ public struct ThreadNotices: Equatable, Sendable {
   public static func waitingLine(name: String, prompt: String) -> String {
     if answeredOnCard.contains(prompt) {
       return "\(SupervisorNotice.needsYou): the \(name) agent is waiting on a '\(prompt)' prompt. Answer it on its card or in the Talos popup."
+    }
+    // the deaf-thread alarm (WorkerDeaf.swift): not a prompt, a screen Talos cannot type into
+    if prompt == WorkerNotice.refusedKind {
+      return "\(SupervisorNotice.needsYou): the \(name) agent has something on its screen Talos doesn't recognise, so Talos can't send it messages. If it stays that way, your main agent answers your messages. Choose \(MacWords.agentScreenName)."
     }
     let what = prompt.isEmpty ? "a prompt" : "a '\(prompt)' prompt"
     if answeredOnPaneCard.contains(prompt) { return "\(SupervisorNotice.needsYou): the \(name) agent is waiting on \(what). Answer it on its card, or at the Mac." }

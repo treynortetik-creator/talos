@@ -185,13 +185,118 @@
     "expect": []
   },
   {
-    "label": "made-up near miss",
+    "label": "made-up near miss: one letter off with the first name is a loose hit, two letters off is not",
     "text": "Ada Quillan and Dev Marshall",
-    "expect": []
+    "expect": ["wiki/people/ada-quillen.md"]
   },
   {
     "label": "empty text",
     "text": "",
     "expect": []
+  },
+  {
+    "label": "loose: initial + surname",
+    "text": "Did A. Quillen reply?",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "loose: an initial settles a surname two people share",
+    "text": "B. Okafor sent it",
+    "expect": ["wiki/people/ben-okafor.md"]
+  },
+  {
+    "label": "loose: an initial that fits nobody",
+    "text": "Z. Okafor sent it",
+    "expect": []
+  },
+  {
+    "label": "loose: reversed settles a shared surname",
+    "text": "Okafor, Carla called",
+    "expect": ["wiki/people/carla-okafor.md"]
+  },
+  {
+    "label": "loose: reversed that is nobody's full name",
+    "text": "Okafor, Dora called",
+    "expect": []
+  },
+  {
+    "label": "loose: one-letter surname typo with the first name",
+    "text": "Carla Okafur called",
+    "expect": ["wiki/people/carla-okafor.md"]
+  },
+  {
+    "label": "loose: surname typo, a deletion",
+    "text": "Ada Quilen replied",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "loose: two letters off",
+    "text": "Ada Quilmin replied",
+    "expect": []
+  },
+  {
+    "label": "loose: typo with the wrong first name",
+    "text": "Zed Quillin said so",
+    "expect": []
+  },
+  {
+    "label": "loose: typo with no first name",
+    "text": "Quillin said so",
+    "expect": []
+  },
+  {
+    "label": "loose: the owner's own name by initial is ignored",
+    "text": "R. Quinn needs it",
+    "expect": []
+  },
+  {
+    "label": "loose: strict and loose for one person give one pointer",
+    "text": "Ada Quillen and A. Quillen",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "loose: ranked last, after a strict hit",
+    "text": "Did A. Quillen and Grace Lindqvist reply?",
+    "expect": ["wiki/people/grace-lindqvist.md", "wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "loose: an initial inside a path is blanked",
+    "text": "see wiki/people/A. Quillen.md",
+    "expect": []
+  },
+  {
+    "label": "loose: a typo two surnames are one edit from is dropped",
+    "text": "Mara Quall called",
+    "expect": []
+  },
+  {
+    "label": "loose: a middle initial before a real surname is the strict hit",
+    "text": "Ada R. Quillen called",
+    "expect": ["wiki/people/ada-quillen.md"]
+  },
+  {
+    "label": "loose: the owner's name reversed is ignored",
+    "text": "Quinn, Riley needs it",
+    "expect": []
+  },
+  {
+    "label": "loose: an ignored name by initial",
+    "text": "V. Brightwell called",
+    "expect": []
+  },
+  {
+    "label": "loose: an ignored name reversed",
+    "text": "Brightwell, Vera called",
+    "expect": []
+  },
+  {
+    "label": "loose: an ignored name by a typo",
+    "text": "Vera Brightwel called",
+    "expect": []
+  },
+  {
+    "label": "loose: a non-ASCII word before an initial form",
+    "text": "é A. Quillen called",
+    "expect": ["wiki/people/ada-quillen.md"]
   }
 ]

@@ -39,7 +39,7 @@ struct DevCard {
 }
 
 extension Supervisor {
-  static let devCardLifetime: Double = 900  // DIALOG_TTL_S in the protocol
+  public static let devCardLifetime: Double = 86400  // a day: DIALOG_TTL_S in the protocol
 
   /// The exact options of the real screen (CLI 2.1.312): "1. I am using this for local development" and "2. Exit".
   static let devCardOptions = [DialogMatcher.Strings.devConfirm, DialogMatcher.Strings.devExit]
@@ -68,7 +68,7 @@ extension Supervisor {
     let offered = Self.devCardOffered(subject: subject)
     let cursor: Int? = d.highlighted.flatMap { offered.firstIndex(of: $0) }
     let seen = options.wallClock() / 1000
-    // the same sighting, still there: its card stands. One past its time (15 minutes) with the warning still on screen is offered again, new id.
+    // the same sighting, still there: its card stands. One past its time (a day) with the warning still on screen is offered again, new id.
     if let o = l.devCard.offer, ExactText.equal(o.subject, subject), let expires = ISOTime.parse(o.expires_at), seen < expires { return }
     let o = DialogOffer(
       id: DialogOffer.newId(), kind: .devChannels, subject: subject, options: offered, cursor: cursor,
@@ -118,7 +118,14 @@ extension Supervisor {
     let resultPath = dir + "/" + DialogResult.fileName
     if l.devCard.controlsSeen.contains(a.controlId) || DialogResult.controlId(path: resultPath) == a.controlId { return }
     l.devCard.controlsSeen = Array((l.devCard.controlsSeen + [a.controlId]).suffix(64))
-    let o = takeDev(offer, a, thread: thread, usedPath: dir + "/" + DialogProofsUsed.mainFileName, launch: &l)
+    let (o, verified) = takeDev(offer, a, thread: thread, usedPath: dir + "/" + DialogProofsUsed.mainFileName, launch: &l)
+    // The owner's own tap that pressed nothing ends this offer: the next look at the warning makes a new id and a new card (a card that has already
+    // failed must not stand for a day). A tap that did not prove itself never ends it, and each new card needs a new real tap.
+    if verified, o.outcome == .nothingPressed {
+      l.devCard.offer = nil
+      l.devCard.pressedFor = nil
+      l.devCard.misses = 0
+    }
     let data = DialogResult.encode(
       dialogId: a.dialogId, controlId: a.controlId, outcome: o.outcome, choice: o.choice, label: o.label, reason: o.reason,
       at: options.wallClock() / 1000)
@@ -127,14 +134,14 @@ extension Supervisor {
 
   private func takeDev(
     _ offer: DialogOffer, _ a: DialogAnswerRequest, thread: String, usedPath: String, launch l: inout Launch
-  ) -> WorkerManager.AnswerOutcome {
+  ) -> (WorkerManager.AnswerOutcome, verified: Bool) {
     let nowMs = options.wallClock()
-    guard !a.isStale(nowMs: nowMs) else { return .nothing(.unverified) }
-    guard ExactText.equal(a.dialogId, offer.id) else { return .nothing(.unverified) }
-    guard let expires = ISOTime.parse(offer.expires_at), nowMs / 1000 < expires else { return .nothing() }
+    guard !a.isStale(nowMs: nowMs) else { return (.nothing(.unverified), false) }
+    guard ExactText.equal(a.dialogId, offer.id) else { return (.nothing(.unverified), false) }
+    guard let expires = ISOTime.parse(offer.expires_at), nowMs / 1000 < expires else { return (.nothing(), false) }
     // known by what was signed, not by how the signature is spelled; on disk too (DialogProofsUsed)
     let used = DialogProofsUsed.key(dialogId: a.dialogId, proof: a.proof)
-    guard !DialogProofsUsed.contains(used, memory: l.devCard.proofsUsed, path: usedPath) else { return .nothing(.alreadyAnswered) }
+    guard !DialogProofsUsed.contains(used, memory: l.devCard.proofsUsed, path: usedPath) else { return (.nothing(.alreadyAnswered), false) }
     let pane = DialogProofCheck.Pane(
       thread: thread, dialogId: offer.id, kind: .devChannels, subject: offer.subject, options: offer.options, launchChanged: offer.launch_changed)
     // a key already sent for this sighting, by a tap or by the guard's own Enter, is the one key
@@ -145,7 +152,7 @@ extension Supervisor {
       env: .init(
         pinnedKey: { DeviceKeys.pinnedKey($0, devicesPath: devices) }, nowMs: nowMs, pane: pane, alreadyPressed: sent))
     switch verdict {
-    case .no(let why, _): return .nothing(why)
+    case .no(let why, _): return (.nothing(why), false)
     case .ok(let choice, let label, _):
       // on disk before the key: a tap that could not be recorded as used presses nothing
       let home = talosAppHome
@@ -153,9 +160,9 @@ extension Supervisor {
         SafePath.isRealFolder(home + "/workers") && SafePath.isRealFolder(home + "/workers/" + thread)
       }
       l.devCard.proofsUsed = rec.memory
-      guard rec.written else { return .nothing(nil) }
-      guard let choice, let label else { return .nothing(.unverified) }  // the open action belongs to the login card
-      return pressDevChoice(choice, label, offer, via: "card", seals: false, launch: &l)
+      guard rec.written else { return (.nothing(nil), true) }
+      guard let choice, let label else { return (.nothing(.unverified), true) }  // the open action belongs to the login card
+      return (pressDevChoice(choice, label, offer, via: "card", seals: false, launch: &l), true)
     }
   }
 

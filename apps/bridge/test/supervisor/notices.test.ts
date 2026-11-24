@@ -26,7 +26,9 @@ describe('the notices', () => {
     const clean = noticeFor({ kind: 'stopped', reason: 'clean_exit_loop' }, null, '14:05', VIEW)
     expect(clean?.phone).toBe('Your agent keeps exiting cleanly, so Talos stopped it at 14:05')
     expect(noticeFor({ kind: 'stopped', reason: 'user' }, 'Ada', '14:05', VIEW)).toBeNull()
-    expect(noticeFor({ kind: 'stopped', reason: 'resume_missing' }, 'Ada', '14:05', VIEW)?.phone).toBeNull()
+    expect(noticeFor({ kind: 'stopped', reason: 'resume_missing' }, 'Ada', '14:05', VIEW)?.phone).toBe(
+      "Ada's last conversation can't be resumed, so Talos stopped it and changed nothing. Start a new conversation on the computer it runs on (14:05)",
+    )
   })
   it('needs-you says what and where; after an unattended restart the phone hears it too', () => {
     const n = must(noticeFor({ kind: 'needs_you', needs: { kind: 'dialog', dialog: 'trust' } }, 'Ada', '9:00', VIEW))
@@ -89,7 +91,24 @@ describe('the notices', () => {
   it('a restart that gave up tells the phone; a plain failed start does not', () => {
     const gave = noticeFor({ kind: 'stopped', reason: 'start_failed', gaveUp: true }, 'Ada', '14:05', VIEW)
     expect(gave?.phone).toBe('Ada stopped and could not be restarted, so Talos gave up at 14:05')
-    expect(noticeFor({ kind: 'stopped', reason: 'start_failed' }, 'Ada', '14:05', VIEW)?.phone).toBeNull()
+    expect(noticeFor({ kind: 'stopped', reason: 'start_failed' }, 'Ada', '14:05', VIEW)?.phone).toBe(
+      "Talos couldn't start Ada (14:05). The reason is on the computer it runs on",
+    )
+  })
+  it('a start that stalls is a line in the thread, with no attach command and no terminal', () => {
+    const n = must(noticeFor({ kind: 'needs_you', needs: { kind: 'start_stalled' } }, 'Ada', '14:05', VIEW))
+    expect(n.phone).toBe(
+      "Ada hasn't finished starting after 2 minutes. Talos left it as it is, so it needs a restart on the computer it runs on (14:05)",
+    )
+    for (const e of [
+      { kind: 'needs_you', needs: { kind: 'start_stalled' } },
+      { kind: 'stopped', reason: 'resume_missing' },
+      { kind: 'stopped', reason: 'start_failed' },
+    ] as const) {
+      const phone = must(noticeFor(e, 'Ada', '14:05', VIEW)).phone ?? ''
+      expect(phone).not.toMatch(/tmux|attach|terminal|pane|ssh/i)
+      expect(phone).not.toContain(VIEW)
+    }
   })
   it('a blocked crash restart tells the phone; a blocked owner start does not', () => {
     const b = [{ resource: 'channels' as const, holderPid: 9, sessionPid: 9, folder: '/x' }]

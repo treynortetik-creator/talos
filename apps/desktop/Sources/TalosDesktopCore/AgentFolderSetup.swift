@@ -17,12 +17,63 @@ public enum AgentFolderSetup {
     ["\(repo)/install.sh", "--agent-dir", dir, "--no-app", "--yes"]
   }
 
-  /// Adds Chronos (the scheduler) to the agent folder Create just made: the clone's own `install.sh` in its add-to-an-existing-agent
-  /// mode, `--with-chronos`. Chronos is fetched at the commit the kit pins (`CHRONOS_PINNED_REF` in kit/install.sh, checked out
-  /// detached and verified) and the kit registers its jobs DISABLED until the agent has finished its own setup. It is a separate run so
-  /// a Chronos that cannot be fetched (no internet, no git) never undoes the agent that was made.
-  public static func chronosArguments(repo: String, dir: String) -> [String] {
-    ["\(repo)/install.sh", "--agent-dir", dir, "--no-app", "--yes", "--with-chronos"]
+  /// The scheduler (Chronos) is added by that same installer run, never by a second one. A scheduler that could not be added never fails
+  /// the run: the installer exits 0 and leaves a marker (docs/SETUP.md, "When the scheduler could not be added"). The app only reads it.
+  /// Where it is: the installer's own rule, `${XDG_CONFIG_HOME:-$HOME/.config}/talos/chronos-not-added.json`, worked out from the very
+  /// environment the installer child gets (an empty XDG_CONFIG_HOME counts as unset; HOME falls back to the app's own).
+  public static func chronosMarkerPath(env: [String: String], fallbackHome: String) -> String {
+    if let xdg = env["XDG_CONFIG_HOME"], !xdg.isEmpty { return xdg + "/talos/chronos-not-added.json" }
+    let home = env["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? fallbackHome
+    return home + "/.config/talos/chronos-not-added.json"
+  }
+
+  /// Whether anything is at the marker path: a file, an empty or damaged or unreadable one, a folder, a link, a dangling link. Asked
+  /// with lstat and never by reading or parsing. Only "nothing there" (ENOENT, ENOTDIR) is absent; any other answer (a folder that
+  /// cannot be searched) is not known to be absent, and the owner is told the scheduler is not confirmed rather than nothing.
+  public static func chronosMarkerPresent(at path: String) -> Bool {
+    var st = stat()
+    if lstat(path, &st) == 0 { return true }
+    return errno != ENOENT && errno != ENOTDIR
+  }
+
+  /// Whether the agent folder was a finished Talos agent before this run: `.talos-version` and `CLAUDE.md` are real files and
+  /// CLAUDE.md is not still the kit's placeholder (the installer's own test for an install that did not finish). Only then may a
+  /// nonzero exit be the scheduler alone.
+  public static func agentExisted(dir: String, repo: String) -> Bool {
+    func regular(_ p: String) -> Bool {
+      var st = stat()
+      return lstat(p, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+    }
+    guard regular(dir + "/.talos-version"), regular(dir + "/CLAUDE.md") else { return false }
+    guard let mine = FileManager.default.contents(atPath: dir + "/CLAUDE.md") else { return false }
+    return FileManager.default.contents(atPath: repo + "/kit/CLAUDE.md") != mine
+  }
+
+  /// What one installer run means for the folder and for the scheduler.
+  public struct InstallResult: Equatable, Sendable {
+    public var outcome: Outcome
+    /// The folder is fine and the scheduler is not added: say `chronosLater`, once.
+    public var schedulerLater: Bool
+  }
+
+  /// The root installer's own words when the kit's add-only run (the rerun on a finished agent) fails; pinned by a test against the
+  /// repository's install.sh. A nonzero exit without them is some other failure.
+  public static let kitAddFailedPhrase = "kit/install.sh --add-to-existing failed"
+
+  /// Exit 0: the folder is made; a marker at the path says the scheduler is not added. A nonzero exit on a folder that was NOT there is
+  /// the folder failing, as ever. A rerun on a finished agent whose scheduler is still broken is loud: the root installer exits 1 and
+  /// says `kitAddFailedPhrase`. Only that, with ALL of these, is "the agent is fine, only the scheduler is not": status 1, the phrase,
+  /// the agent was finished before the run (`agentExisted`), the marker is present, and the folder is wired to Talos (`connected`:
+  /// its .mcp.json has the talos-app server; a half-made folder has none). Anything else stays the failure it is.
+  public static func installResult(status: Int32?, stderr: String, agentExisted: Bool, markerPresent: Bool, connected: Bool)
+    -> InstallResult
+  {
+    let outcome = createOutcome(status: status, stderr: stderr)
+    if outcome == .done { return InstallResult(outcome: .done, schedulerLater: markerPresent) }
+    if status == 1, stderr.contains(kitAddFailedPhrase), agentExisted, markerPresent, connected {
+      return InstallResult(outcome: .done, schedulerLater: true)
+    }
+    return InstallResult(outcome: outcome, schedulerLater: false)
   }
 
   /// What the owner is told when the scheduler could not be added (the agent itself is fine).
@@ -41,7 +92,7 @@ public enum AgentFolderSetup {
   }
 
   /// Whether the folder's `.mcp.json` has a `talos-app` server, which is what the channel flag in `launchArgs` needs.
-  static func connectedToTalos(_ dir: String) -> Bool {
+  public static func connectedToTalos(_ dir: String) -> Bool {
     guard let d = FileManager.default.contents(atPath: dir + "/.mcp.json"),
       let root = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
       let servers = root["mcpServers"] as? [String: Any]

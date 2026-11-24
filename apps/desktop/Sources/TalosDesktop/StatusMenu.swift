@@ -53,10 +53,10 @@ struct StatusMenuContent: View {
     }
     Button(MacWords.quickMessage) { QuickCompose.shared.show(anchor: QuickCompose.shared.anchorProvider?()) }
       .keyboardShortcut("n")
-    Toggle("Show Companion", isOn: $companionOn)
+    Toggle("Show Talos character", isOn: $companionOn)
     if companionOn {
       // The keyboard path to everything in the tray (spec 4.2). The menu redraws when `trayRevision` bumps.
-      Menu("Companion: status") {
+      Menu("Talos character: status") {
         let tray = companion.trayContent()
         if let h = tray.headline { Text(h) }
         ForEach(Array(tray.rows.enumerated()), id: \.offset) { _, r in

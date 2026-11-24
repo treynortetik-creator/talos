@@ -1,11 +1,19 @@
 // Replay, dedup, fan-out, error forwarding, history and config storage (spec 9 WP1 acceptance).
 import { type JwkP256T, newUlid, verifyOwnerFrame } from '@talos-app/protocol'
-import { mkFrame, sleep, waitFor } from '@talos-app/testkit'
+import { type FakeApp, type FakeBridge, mkFrame, sleep, t, waitFor } from '@talos-app/testkit'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startTestRelay, type TestRelay } from './harness.ts'
 import { kit } from './helpers.ts'
 
-vi.setConfig({ testTimeout: 20_000 })
+vi.setConfig({ testTimeout: t(30_000) }) // a test whose waits add up higher (the relay and sockets it starts, each testkit wait at x3) says so itself
+
+/** Everything this socket sent before this has been handled by the relay (and what the relay sent to it before the answer has arrived): the relay answers one socket's frames in order. */
+const handled = async (s: FakeApp | FakeBridge) => {
+  const nonce = `after-${Math.random().toString(36).slice(2, 10)}`
+  if ('device' in s) s.send(mkFrame('ping', { nonce }))
+  else s.send({ type: 'ping', nonce })
+  await s.expectFrame('pong', (f) => f.nonce === nonce, { direction: 'in' })
+}
 
 describe('core messaging', () => {
   let relay: TestRelay
@@ -107,7 +115,10 @@ describe('core messaging', () => {
       await other.expectFrame('message.stored', (f) => f.message.author === 'system')
       bridge.send(error as never)
       bridge.send(mkFrame('error', { ref: sent.id, code: 'bad_frame', message: 'unknown thread general' }) as never)
-      await sleep(200)
+      // one row seen; the window starts once the relay has handled both repeats (relay side) and the app's socket is caught up
+      await handled(bridge)
+      await handled(other)
+      await sleep(t(150))
       const systemRows = inFrames(other).filter(
         (f) => f.type === 'message.stored' && (f.message as { author?: string }).author === 'system',
       )
@@ -146,7 +157,8 @@ describe('core messaging', () => {
     expect(first.notified.filter((f) => f.id === sent.id)).toHaveLength(1)
     await first.close()
     const second = await k.bridge({ pinnedDevices: pin, autoReply: false }).connect()
-    await sleep(200)
+    await handled(second) // relay-side: the relay has handled the hello and answered in order; a resend would come before the pong
+    await sleep(t(150))
     // consumed the first time, so it is not sent again
     expect(second.rec.of('message', 'in')).toHaveLength(0)
   })
@@ -169,11 +181,14 @@ describe('core messaging', () => {
     const clientMsgId = first.client_msg_id
     const second = await a.sendMessage('general', 'only once', { client_msg_id: clientMsgId })
     await a.expectFrame('ack', (f) => f.ref === second.id)
-    await sleep(150)
     await vi.waitFor(
       () => expect(bridge.rec.of('message', 'in').filter((f) => f.client_msg_id === clientMsgId)).toHaveLength(1),
-      { timeout: 10_000 },
+      { timeout: t(10_000) },
     )
+    // one seen; the relay has handled both sends (relay side) and what it forwarded to the Mac has arrived, then a quiet window
+    await handled(a)
+    await handled(bridge)
+    await sleep(t(150))
     const rows = relay.runtime.store.db.prepare("select count(*) n from core_events where type = 'message'").get() as {
       n: number
     }
@@ -190,7 +205,8 @@ describe('core messaging', () => {
     const sent = await a.sendMessage('general', 'from an unpinned device')
     const err = await a.expectFrame('error', (f) => f.ref === sent.id)
     expect(err.code).toBe('device_not_pinned')
-    await sleep(100)
+    await handled(other) // relay-side: the error went to the sender; anything it sent the other app came before this pong
+    await sleep(t(150))
     expect(other.rec.of('error', 'in')).toHaveLength(0)
     expect(bridge.connected).toBe(true)
   })
@@ -318,17 +334,21 @@ describe('core messaging', () => {
     expect((await a.expectFrame('error')).code).toBe('bad_frame')
   })
 
-  it('paces a burst of frames instead of dropping them, and closes 4429 on a flood', async () => {
-    const k = kit(relay)
-    const a = await k.connectedApp()
-    for (let i = 0; i < 80; i++) a.send({ type: 'ping', nonce: `n${i}` })
-    await waitFor(() => a.rec.of('pong', 'in').length === 80, 10_000, '80 pongs')
-    const flood = await k.connectedApp()
-    const closed = new Promise<number>((r) => flood.ws?.once('close', (c) => r(c)))
-    for (let i = 0; i < 700; i++)
-      flood.sendRaw(JSON.stringify({ v: 1, type: 'ping', id: newUlid(), ts: new Date().toISOString(), nonce: 'f' }))
-    expect(await closed).toBe(4429)
-  })
+  it(
+    'paces a burst of frames instead of dropping them, and closes 4429 on a flood',
+    async () => {
+      const k = kit(relay)
+      const a = await k.connectedApp()
+      for (let i = 0; i < 80; i++) a.send({ type: 'ping', nonce: `n${i}` })
+      await waitFor(() => a.rec.of('pong', 'in').length === 80, 10_000, '80 pongs')
+      const flood = await k.connectedApp()
+      const closed = new Promise<number>((r) => flood.ws?.once('close', (c) => r(c)))
+      for (let i = 0; i < 700; i++)
+        flood.sendRaw(JSON.stringify({ v: 1, type: 'ping', id: newUlid(), ts: new Date().toISOString(), nonce: 'f' }))
+      expect(await closed).toBe(4429)
+    },
+    t(45_000),
+  )
 
   it('a thread.read goes to the other devices, not the sender, and lowers unread in the next ready', async () => {
     const k = kit(relay)
@@ -344,7 +364,8 @@ describe('core messaging', () => {
     expect(c1.rec.of('ready', 'in')[0]?.read_upto).toEqual({})
     a.send({ type: 'thread.read', thread_id: 'general', up_to_seq: seq })
     await b.expectFrame('thread.read', (f) => f.up_to_seq === seq)
-    await sleep(50)
+    await handled(a) // relay-side: b has the frame, and the sender's ping is answered in order after anything sent to it
+    await sleep(t(150))
     expect(a.rec.of('thread.read', 'in')).toHaveLength(0)
     const c2 = await k.connectedApp()
     expect(c2.rec.of('ready', 'in')[0]?.unread).toEqual({})

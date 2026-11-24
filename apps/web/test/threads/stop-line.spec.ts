@@ -42,6 +42,10 @@ async function open(page: Page, rows = 0) {
     })
     await expect(page.locator('[data-msg-id="m_line_29"]')).toHaveCount(1)
   }
+  // The web fonts land after the first paint and change the rows' heights; the browser then moves scrollTop to keep the reader
+  // on the same words (follow-new-text.spec, scroll-end.spec). Every check here compares positions with a reading taken earlier,
+  // so the layout must have stopped changing first.
+  await page.evaluate(() => document.fonts.ready)
 }
 const setWorking = (page: Page) =>
   fake(page, (t) => {
@@ -58,6 +62,70 @@ const setIdle = (page: Page) =>
   })
 const gap = (page: Page) =>
   page.getByTestId('timeline').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+/**
+ * A message row fully inside the timeline's view, and where it sits: its top edge's distance from the timeline's top. That
+ * distance is what the owner sees. scrollTop alone is not: when content above the view changes height (late web fonts, say),
+ * the browser moves scrollTop to keep the same words in place (scroll anchoring) and nothing on screen moves.
+ */
+const pinRow = (page: Page) =>
+  page.getByTestId('timeline').evaluate((el) => {
+    const box = el.getBoundingClientRect()
+    const row = [...el.querySelectorAll<HTMLElement>('[data-msg-id]')].find((n) => {
+      const r = n.getBoundingClientRect()
+      return r.top >= box.top + 40 && r.bottom <= box.bottom - 40
+    })
+    if (!row) throw new Error('no message row fully in view')
+    return row.dataset.msgId as string
+  })
+const rowY = (page: Page, id: string) =>
+  page
+    .getByTestId('timeline')
+    .evaluate(
+      (el, msgId) =>
+        (el.querySelector(`[data-msg-id="${msgId}"]`) as HTMLElement).getBoundingClientRect().top -
+        el.getBoundingClientRect().top,
+      id,
+    )
+/**
+ * STOPLINE_DIAG=1 (test-only, temporary: FOLLOWUPS, remove by 2026-11-28): log every scroll, resize and DOM change in the
+ * timeline from now on, printed when the check after it fails, so a failure on a loaded CI machine explains itself.
+ */
+const diagStart = async (page: Page) => {
+  if (!process.env.STOPLINE_DIAG) return
+  await page.getByTestId('timeline').evaluate((el) => {
+    const w = window as unknown as { __diag: string[] }
+    const log: string[] = []
+    w.__diag = log
+    const t0 = performance.now()
+    const at = () => `${Math.round(performance.now() - t0)}ms`
+    let last = el.scrollTop
+    log.push(`${at()} start top=${el.scrollTop} h=${el.scrollHeight} ch=${el.clientHeight}`)
+    el.addEventListener('scroll', () => {
+      log.push(`${at()} scroll ${last}->${el.scrollTop} h=${el.scrollHeight} ch=${el.clientHeight}`)
+      last = el.scrollTop
+    })
+    new ResizeObserver(() => log.push(`${at()} resize ch=${el.clientHeight} top=${el.scrollTop}`)).observe(el)
+    new MutationObserver((ms) => {
+      for (const m of ms) {
+        const t = m.target as HTMLElement
+        const d = (n: Node) => (n as HTMLElement).outerHTML?.slice(0, 90) ?? n.textContent?.slice(0, 40)
+        log.push(
+          `${at()} ${m.type} ${t.getAttribute?.('data-testid') ?? t.tagName} +[${[...m.addedNodes].map(d).join('|')}] -[${[...m.removedNodes].map(d).join('|')}] top=${el.scrollTop} h=${el.scrollHeight}`,
+        )
+      }
+    }).observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
+    })
+  })
+}
+const diagLog = async (page: Page) =>
+  process.env.STOPLINE_DIAG
+    ? `\n${await page.evaluate(() => (window as unknown as { __diag?: string[] }).__diag?.join('\n') ?? '')}`
+    : ''
 const box = async (loc: ReturnType<Page['locator']>) => {
   const b = await loc.boundingBox()
   if (!b) throw new Error('no box')
@@ -238,6 +306,19 @@ test('scrolled up, the line appearing and going does not move the view', async (
   await expect(page.getByTestId('jump-to-latest')).toBeVisible()
   const top = await tl.evaluate((el) => el.scrollTop)
   expect(top).toBeGreaterThan(0)
+  // What must not move is what the owner sees: a row in view stays at the same place on screen (1 px). scrollTop is printed
+  // with a failure, not checked: the browser may change it to keep the view still (CI under a load of ~50, 22 px, 2026-11-21).
+  const pin = await pinRow(page)
+  const y0 = await rowY(page, pin)
+  const still = async (when: string) => {
+    const y = await rowY(page, pin)
+    const dTop = (await tl.evaluate((el) => el.scrollTop)) - top
+    expect(
+      Math.abs(y - y0),
+      `${when}: row ${pin} moved from ${y0} to ${y} px on screen (scrollTop ${dTop >= 0 ? '+' : ''}${dTop})${await diagLog(page)}`,
+    ).toBeLessThanOrEqual(1)
+  }
+  await diagStart(page)
   await setWorking(page)
   await expect(line(page)).toHaveCount(1)
   // The line and the live region after it are never the browser's scroll anchor: under load on macOS 26 WebKit the line's
@@ -249,9 +330,9 @@ test('scrolled up, the line appearing and going does not move the view', async (
   )
   expect(anchors).toEqual(['none', 'none'])
   await page.waitForTimeout(400)
-  expect(Math.abs((await tl.evaluate((el) => el.scrollTop)) - top)).toBeLessThanOrEqual(1)
+  await still('after the line came')
   await setIdle(page)
   await expect(line(page)).toHaveCount(0)
   await page.waitForTimeout(400)
-  expect(Math.abs((await tl.evaluate((el) => el.scrollTop)) - top)).toBeLessThanOrEqual(1)
+  await still('after the line went')
 })

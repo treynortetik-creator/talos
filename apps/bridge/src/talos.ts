@@ -74,6 +74,12 @@ export const AGENT_UNLESS_LOCKED = [
   'devices revoke',
   'relay update',
   'relay auto',
+  // forgets the stored relay token: held to the same lock and outside-text gate as the other relay commands
+  'relay disconnect',
+  // the opt-in OS sandbox switch (sandbox-cli.ts): `off` weakens a lock, so it is also held to the outside-text check (agent-cli.ts)
+  'sandbox on',
+  'sandbox off',
+  'sandbox status',
 ] as const
 export function agentUnlessLocked(argv: readonly string[]): (typeof AGENT_UNLESS_LOCKED)[number] | undefined {
   const [a, b] = argv
@@ -81,6 +87,56 @@ export function agentUnlessLocked(argv: readonly string[]): (typeof AGENT_UNLESS
   return (AGENT_UNLESS_LOCKED as readonly string[]).includes(name)
     ? (name as (typeof AGENT_UNLESS_LOCKED)[number])
     : undefined
+}
+
+/** What people type for a subcommand that is really another one, by group. */
+const SUBCOMMAND_ALIASES: Record<string, Record<string, string>> = {
+  peer: {
+    unlink: 'remove',
+    delete: 'remove',
+    rm: 'remove',
+    disconnect: 'remove',
+    connect: 'link',
+    pair: 'link',
+    join: 'accept',
+    new: 'create',
+    ls: 'list',
+    show: 'list',
+    forget: 'secret-forget',
+  },
+  devices: { remove: 'revoke', delete: 'revoke', rm: 'revoke', unlink: 'revoke', ls: 'list', show: 'list' },
+}
+
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++)
+      cur[j] = Math.min((prev[j] ?? 0) + 1, (cur[j - 1] ?? 0) + 1, (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1))
+    prev = cur
+  }
+  return prev[b.length] ?? 0
+}
+
+/**
+ * For `peer <word>` or `devices <word>` where the word is not one of the group's commands: a sentence that says so and names the
+ * nearest real one. Undefined for any other argv (a real command, another group, `devices` alone). These are the groups whose
+ * subcommands the agent may run, so a typo there must not read as "this only runs in a terminal".
+ */
+export function unknownSubcommand(argv: readonly string[]): string | undefined {
+  const [group, word] = argv
+  if ((group !== 'peer' && group !== 'devices') || word === undefined || agentUnlessLocked(argv)) return undefined
+  const known = AGENT_UNLESS_LOCKED.filter((n) => n.startsWith(`${group} `)).map((n) => n.slice(group.length + 1))
+  const alias = Object.hasOwn(SUBCOMMAND_ALIASES[group] ?? {}, word) ? SUBCOMMAND_ALIASES[group]?.[word] : undefined
+  let best = alias
+  if (!best) {
+    const scored = known.map((k) => ({ k, d: editDistance(word, k) })).sort((x, y) => x.d - y.d)
+    if (scored[0] && scored[0].d <= Math.max(1, Math.floor(word.length / 3))) best = scored[0].k
+  }
+  const head = `\`${group} ${word.slice(0, 40)}\` isn't a talos-app command.`
+  return best
+    ? `${head} Did you mean \`${group} ${best}\`?`
+    : `${head} The ${group} commands are: ${known.map((k) => `${group} ${k}`).join(', ')}.`
 }
 
 /**
@@ -117,6 +173,13 @@ export const COMMANDS: readonly CommandInfo[] = [
     name: 'status',
     args: '[--json]',
     summary: 'Show relay reachability, bridge liveness, key id and queue depth',
+  },
+  {
+    name: 'facts',
+    args: '[--json]',
+    summary: 'Print what is true right now: versions, relay, cards, links and update settings (reads only)',
+    effects: ['read'],
+    risk: 'low',
   },
   {
     name: 'doctor',
@@ -250,6 +313,11 @@ export const COMMANDS: readonly CommandInfo[] = [
     'link <name> | accept <code> --name <name> | create <name> | add <name> --url <https url> [--secret-file <file>] | list | remove <name> | rotate <name> | secret-forget <name>',
   ),
   ownerTerminal(
+    'sandbox',
+    'Turn the extra lock on protected files (OS sandbox) on or off, or show it (your agent may, unless settings are locked)',
+    'on | off | status',
+  ),
+  ownerTerminal(
     'relay connect',
     'Let this computer update your online relay: paste a Railway token once (asked for, not shown)',
   ),
@@ -257,7 +325,7 @@ export const COMMANDS: readonly CommandInfo[] = [
     name: 'relay',
     args: 'status | update | auto on|off | disconnect',
     summary:
-      'Your online relay on Railway: update it to the newest release (your agent may, unless settings are locked), turn auto-update on or off, forget the token',
+      'Your online relay on Railway: update it to the newest release, turn auto-update on, or forget the token (your agent may, unless settings are locked); auto-update off is always allowed',
   },
   {
     name: 'start',

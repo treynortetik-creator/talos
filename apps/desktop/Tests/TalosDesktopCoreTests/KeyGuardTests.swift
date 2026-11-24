@@ -243,14 +243,14 @@ struct KeyGuardTests {
     for k in KeyGuard.DialogKind.allCases { #expect(!KeyGuard.allows(base + ["  Sonnet 5.5 | 7d: 38%"], intent: .dialog(k)), "\(k)") }
   }
 
-  /// Claude Code's own status rows pass at any count: the agents panel draws one row per subagent.
+  /// Claude Code's own status rows pass: the footer and the agents panel's block (the main row, up to five agent rows).
   @Test func anyNumberOfClaudeCodesOwnStatusRowsPasses() throws {
     let base = ["⏺ Done."] + Self.box
     let mode = "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents · ↓ to manage"
-    let agents = (1...7).map { "  ◯ talos-builder-\($0)  Verify the push                                \($0 * 3)s · ↓ \($0 * 12) tokens" }
+    let agents = (1...5).map { "  ◯ talos-builder-\($0)  Verify the push                                \($0 * 3)s · ↓ \($0 * 12) tokens" }
     let panel = [mode, "  ⏺ main"] + agents
-    #expect(panel.allSatisfy(BoxFrame.statusRow), "control: each is a status row")
-    #expect(KeyGuard.allows(base + panel, intent: .box(.empty)), "nine status rows")
+    #expect(BoxFrame.statusRow(mode) && panel.dropFirst().allSatisfy { BoxFrame.panelRow($0) != nil }, "control: the footer and each panel row")
+    #expect(KeyGuard.allows(base + panel, intent: .box(.empty)), "the footer, the main row and five agents")
     // one row of a user's own status line among them: refused (strict)
     #expect(KeyGuard.refusal(base + panel + ["  Sonnet 5.5 | 20%"], intent: .box(.empty))?.why == "row_under_box")
     // Talos's own thread status line among them: still typed into
@@ -318,12 +318,56 @@ struct KeyGuardTests {
     }
   }
 
+  /// Claude Code 2.1.330 draws `⧉ <artifact name>` after the mode head once an Artifact canvas is open (real-2.1.330-canvas, copied from a live pane): the
+  /// empty box takes keys with it, but the same row quoted in the box, the part on a row of its own, a dialog's row that holds the anchor and an
+  /// answer after the symbol all refuse. Before this the row refused whole (`status_part_refused shape=8:asu`) and messages went to the main agent.
+  @Test func theCanvasFooterOf2_1_330TakesTheEmptyBoxAndNothingLooseDoes() throws {
+    let row = try Self.capture("real-2.1.330-canvas/footer-row.ansi.txt").filter { !$0.isEmpty }
+    #expect(row.count == 1)
+    let base = ["⏺ Done."] + Self.box
+    #expect(KeyGuard.allows(base + row, intent: .box(.empty)))
+    // the same row quoted in the box (a pasted message), or as the box's own text: the box is not empty
+    let quoted = ["⏺ Done.", Self.rule, "❯ " + row[0].trimmingCharacters(in: .whitespaces), Self.rule] + row
+    #expect(KeyGuard.refusal(quoted, intent: .box(.empty))?.why != nil)
+    for bad in ["  ⧉ canvas", "  Run this? ⏵⏵ bypass permissions on · ⧉ canvas", "  ⏸ manual mode on · ⚠ low yes"] {
+      #expect(KeyGuard.refusal(base + [bad], intent: .box(.empty))?.why == "row_under_box", "\(bad)")
+    }
+    #expect(BoxFrame.refusedShapes(base + ["  ⏸ manual mode on · ⚠ yes"], bottomRule: 3) == ["5:asu"])
+  }
+
+  /// The agents panel is read by its BLOCK (real-2.1.329/agents-panel-finished): an exact `⏺ main`, then up to five agent rows of any text, then
+  /// "↓ N more" last. The same rows alone, out of order, with a pointer on one (a focused panel), as a viewed agent's `◯ main`, a sixth agent,
+  /// or a row inside the block that is no agent row all refuse. Before this the real rows refused the key every second for 11 hours.
+  @Test func theAgentsPanelIsOneBlockAndNothingLooseIsAPanelRow() throws {
+    let rows = try Self.capture("real-2.1.329/agents-panel-finished.txt")
+    #expect(KeyGuard.allows(rows, intent: .box(.empty)))
+    let base = ["⏺ Done."] + Self.box
+    let main = "  ⏺ main", agent = "  ◯ talos-builder  Waiting for fam.out test results   4h 12m 9s · ↓ 360.1k tokens"
+    let six = [main] + (1...6).map { "  ◯ agent-\($0)  task" }
+    for bad in [[agent], ["  ↓ 2 more"], [main, "  ↓ 2 more"], [main, "  ↓ 1 more", agent], [main, main, agent], [main, "  ❯ " + agent.dropFirst(2)],
+                [main, "  ◯ a ❯ b"], [main, "  ◯ 1. Yes"], [main, agent, "  ❯ 1. Yes"], ["  ◯ main", agent], six, ["  ◯ Allow once", "  ↓ 2 more"],
+                [main, agent, "  ⏺ main"], ["  ◯ ", main], [main, "  ◯ "]] {
+      #expect(KeyGuard.refusal(base + bad, intent: .box(.empty))?.why == "row_under_box", "\(bad)")
+    }
+    #expect(KeyGuard.allows(base + [main, "  ◯ Yes"], intent: .box(.empty)), "inside a real block a row is an agent row, whatever its words")
+  }
+
+  /// A refused panel row says so in the audit (`panel <shape>`, never the text), in the block or starting like one: the 32 hours a real panel
+  /// row refused the key (and only `row_under_box` was logged) are why.
+  @Test func aRefusedPanelRowIsAuditedByItsShape() {
+    let base = ["⏺ Done."] + Self.box
+    #expect(BoxFrame.refusedShapes(base + ["  ⏺ main", "  ◯ 1. Yes"], bottomRule: 3) == ["panel 8:aANspu"])
+    #expect(BoxFrame.refusedShapes(base + ["  ◯ Yes"], bottomRule: 3) == ["panel 5:aAsu"])
+    #expect(BoxFrame.refusedShapes(base + ["  ⏺ main", "  something odd"], bottomRule: 3) == ["panel 13:as"])
+    #expect(BoxFrame.refusedShapes(base + ["  ⏸ manual mode on"], bottomRule: 3).isEmpty)
+  }
+
   /// Status parts Talos does not know, from the shared table (`status_row_vectors`): after Claude's mode part (or Talos's row), at most two
   /// short unknown parts with no dialog marks, option numbers, footer or choice words, `$` or `?`, on one row only; a row with a control
   /// or format character refused whole. Every vector both ways, and each refused one also refused for the Enter (`box-ours`).
   @Test func unknownStatusPartsAreAllowedOnlyAsTheSharedTableSays() throws {
     let v = try Self.vectors().status_row_vectors.vectors
-    #expect(v.count == 53)
+    #expect(v.count == 110)
     for t in v {
       let rows = ["⏺ Done.", Self.rule, "❯ ", Self.rule] + t.rows
       #expect(KeyGuard.allows(rows, intent: .box(.empty)) == t.box_empty, "\(t.name)")

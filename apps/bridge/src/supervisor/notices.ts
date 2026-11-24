@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  MAIN_START,
   type MainNeedsYou,
   type MainStopReason,
   SUPERVISOR_NOTICES,
@@ -30,6 +31,8 @@ export type MainEvent =
   | { kind: 'stopped'; reason: MainStopReason; gaveUp?: boolean }
   /** Another session holds Telegram, the bridge or the channel: nothing was started. */
   | { kind: 'blocked'; blockers: Blocker[]; afterCrash?: boolean }
+  /** One plain line for the owner that changes nothing (the extra lock stays on though config.json could not be read). */
+  | { kind: 'lock_note'; text: string }
 
 export type Notice = { notice: SupervisorNoticeT; title: string; body: string; phone: string | null }
 
@@ -63,6 +66,7 @@ const DIALOG_NAMES: Record<string, string> = {
  */
 export function noticeFor(e: MainEvent, agent: string | null, clock: string, view: string): Notice | null {
   const who = cleanAgentName(agent)
+  if (e.kind === 'lock_note') return { notice: 'restored', title: 'Talos', body: e.text, phone: null }
   if (e.kind === 'restarted_after_crash')
     return {
       notice: 'restarted_after_crash',
@@ -97,7 +101,8 @@ export function noticeFor(e: MainEvent, agent: string | null, clock: string, vie
           notice: 'needs_you',
           title,
           body: `${who} has not finished starting. See its screen: ${view}`,
-          phone: null,
+          // row 12: a line in the thread, with no attach command. Main's bridge is what is not up, so no button can ride on it
+          phone: `${who} hasn't finished starting after ${Math.max(1, Math.round(MAIN_START.stall_s / 60))} minutes. Talos left it as it is, so it needs a restart on the computer it runs on (${clock})`,
         }
       case 'stuck':
         return {
@@ -158,7 +163,7 @@ export function noticeFor(e: MainEvent, agent: string | null, clock: string, vie
           notice: 'resume_failed',
           title: "The last conversation can't be resumed",
           body: `${who}'s conversation could not be resumed; Talos stopped and changed nothing`,
-          phone: null,
+          phone: `${who}'s last conversation can't be resumed, so Talos stopped it and changed nothing. Start a new conversation on the computer it runs on (${clock})`,
         }
       case 'start_failed':
         if (e.gaveUp)
@@ -172,7 +177,7 @@ export function noticeFor(e: MainEvent, agent: string | null, clock: string, vie
           notice: 'could_not_start',
           title: "Talos couldn't start",
           body: 'See: talos-app supervise status',
-          phone: null,
+          phone: `Talos couldn't start ${who} (${clock}). The reason is on the computer it runs on`,
         }
       case 'crashed_no_auto_restart':
         return {

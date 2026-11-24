@@ -32,7 +32,6 @@ async function piped(args: string[], stdin = 'y\n') {
 const GATED: [string, string[]][] = [
   ['enroll', ['enroll', '--no-qr']],
   ['enroll --confirm', ['enroll', '--confirm']],
-  ['devices bogus', ['devices', 'bogus']],
   ['rotate', ['rotate']],
   ['trust on', ['trust', 'on']],
 ]
@@ -46,6 +45,13 @@ describe('human-only commands refuse when stdio is not a terminal', () => {
       expect(r.code).toBe(1)
       expect(r.err).toMatch(/config\.json/)
     }
+  })
+
+  test('a devices or peer word that is not a command is answered as that, not as "only runs in a terminal"', async () => {
+    const r = await piped(['devices', 'bogus'])
+    expect(r.code).toBe(1)
+    expect(r.err).toContain("`devices bogus` isn't a talos-app command")
+    expect(r.err).not.toMatch(TERMINAL_ONLY)
   })
 
   test('printf y | talos-app enroll --confirm refuses', async () => {
@@ -110,6 +116,7 @@ describe('one table drives the gate and agent_may_run', () => {
       'peer',
       'relay connect',
       'rotate',
+      'sandbox',
       'trust on',
     ])
     for (const c of gated) expect(c.who).toBeUndefined()
@@ -127,7 +134,7 @@ describe('one table drives the gate and agent_may_run', () => {
       now: () => Date.now(),
     })
     const env = { TALOS_APP_HOME: home }
-    expect(await runCli(['devices', 'bogus'], io(false), env)).toBe(1)
+    expect(await runCli(['rotate'], io(false), env)).toBe(1)
     expect(err.join('\n')).toMatch(TERMINAL_ONLY)
     expect(await runCli(['devices'], io(true), env)).toBe(0)
   })

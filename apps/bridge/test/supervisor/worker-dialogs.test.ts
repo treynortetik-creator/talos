@@ -209,6 +209,78 @@ describe('the offer', () => {
     expect(x.offer().id).toBe(o.id)
     expect(x.offer().cursor).toBe(1)
   })
+  // L14. Old code: the same dialog on a fresh read kept its offer for ever, whatever its time, so no new card could be made.
+  it('the same dialog still on the screen when its offer ran out is offered again under a new id, with a new time', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    x.advance(WORKER_TIMING.card_lifetime_s - 1)
+    await x.sync()
+    expect(x.offer().id).toBe(first.id) // time left: the same offer
+    x.advance(2)
+    await x.sync()
+    const again = x.offer()
+    expect(again.id).not.toBe(first.id)
+    expect(again).toMatchObject({ kind: first.kind, subject: first.subject, options: first.options })
+    expect(Date.parse(again.expires_at)).toBeGreaterThan(NOW + WORKER_TIMING.card_lifetime_s * 1000)
+  })
+  it('a tap signed for the old offer presses nothing once the new one stands, and the new one still answers', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    x.advance(WORKER_TIMING.card_lifetime_s + 1)
+    await x.sync()
+    const again = x.offer()
+    expect(again.id).not.toBe(first.id)
+    const later = new Date(NOW + (WORKER_TIMING.card_lifetime_s + 1) * 1000).toISOString()
+    await answerFor(x, { dialog: first, ts: later, at: later })
+    await x.d.answer(x.target, x.pane)
+    expect(x.pane.keys).toEqual([])
+    // refused for its NUMBER: the answer is fresh and the new offer has time left, so it is the id check that says no
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'unverified' })
+    expect(x.offer().id).toBe(again.id)
+    // the new card answers
+    await answerFor(x, { dialog: again, ts: later, at: later, control: 'dc_new' })
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ control_id: 'dc_new', outcome: 'pressed', choice: 1 })
+    expect(x.pane.keys).toEqual(['Down', 'Enter'])
+  })
+  it('a dialog that is gone when its time runs out is not offered again', async () => {
+    const x = await setup()
+    await x.sync()
+    x.advance(WORKER_TIMING.card_lifetime_s + 1)
+    await x.d.sync(x.target, x.pane, SCREENS.idle.plain, { kind: 'none' }, true)
+    expect(x.target.dialog()).toBeUndefined()
+    await x.d.sync(x.target, x.pane, SCREENS.idle.plain, { kind: 'none' }, true)
+    expect(x.target.dialog()).toBeUndefined()
+  })
+  // L14: a verified tap of the owner's that pressed nothing ends the offer (the card has failed), so the next look at the same dialog on a settled
+  // screen makes a new id and a new card. Old code left the same id standing for the rest of its time.
+  it('a verified tap that pressed nothing ends the offer: the next look makes a new id', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    x.pane.clients = null // the clients cannot be read: nothing is pressed
+    await answerFor(x)
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed' })
+    expect(x.pane.keys).toEqual([])
+    x.pane.clients = []
+    await x.sync()
+    expect(x.offer().id).not.toBe(first.id)
+    expect(x.offer()).toMatchObject({ kind: first.kind, subject: first.subject, options: first.options })
+  })
+  it('a tap that does not prove itself never ends the offer', async () => {
+    const x = await setup()
+    await x.sync()
+    const first = x.offer()
+    const other = await createExtractableDeviceKeyForTests()
+    await answerFor(x, { key: other.privateKey }) // signed by a key that is not the paired device's
+    await x.d.answer(x.target, x.pane)
+    expect(x.result()).toMatchObject({ outcome: 'nothing_pressed', reason: 'unverified' })
+    await x.sync()
+    expect(x.offer().id).toBe(first.id)
+  })
   it('a dialog whose subject cannot be read is never offered: a card could be answered onto a lookalike', async () => {
     const d = readDialog(SCREENS.nopath.plain, SCREENS.nopath.coloured)
     expect(d?.kind).toBe('trust')
@@ -484,7 +556,7 @@ describe('the answer', () => {
     x.advance(WORKER_TIMING.card_lifetime_s + 1)
     writeFileSync(
       join(x.dir, 'dialog-answer.json'),
-      JSON.stringify({ ...a, at: new Date(NOW + 901_000).toISOString() }),
+      JSON.stringify({ ...a, at: new Date(NOW + (WORKER_TIMING.card_lifetime_s + 1) * 1000).toISOString() }),
     )
     await x.d.answer(x.target, x.pane)
     expect(x.pane.keys).toEqual([])

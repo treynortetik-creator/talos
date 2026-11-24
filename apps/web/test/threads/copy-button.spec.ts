@@ -12,8 +12,9 @@ const shotPath = (project: string, name: string) =>
 
 // eight lines and one accented word: beyond plain ASCII, so Run asks twice (a plain script is one tap at any length)
 const LONG = [...Array.from({ length: 8 }, (_, i) => `echo "step ${i}"`), 'echo "café"'].join('\n')
+const MSG_ID = 'm_01JBF3V7Q8K2M4N6P8R0S1T' // every test message's id is this plus its own letters (A1, C2, ...)
 const agent = (id: string, text: string) => ({
-  id: `m_01JBF3V7Q8K2M4N6P8R0S1T${id}`,
+  id: `${MSG_ID}${id}`,
   thread_id: 'general',
   author: 'agent',
   kind: 'text',
@@ -27,7 +28,9 @@ const MSGS = [
   agent('C1', 'Plain words first.\n\n[link to the docs](https://example.com/docs)'),
   agent('C2', `Run this:\n\n\`\`\`sh\n${LONG}\n\`\`\``),
 ]
-const row = (page: Page, n: number) => page.locator(`[data-msg-id$="C${n}"]`)
+// the whole id, never a suffix: a message the app makes (a queued send, a reply) has a random id that can end in the
+// same letters (a suffix match on "A1" matched two rows about 1 run in 1000: a strict-mode violation)
+const row = (page: Page, n: number) => page.locator(`[data-msg-id="${MSG_ID}C${n}"]`)
 async function seed(page: Page) {
   await page.evaluate((msgs) => {
     type Store = { getState(): { messages: Record<string, unknown[]> }; setState(s: unknown): void }

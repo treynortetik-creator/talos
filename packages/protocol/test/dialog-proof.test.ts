@@ -19,7 +19,7 @@ import {
   verifyOwnerSignedString,
 } from '../src/index.ts'
 import { loadTestKey } from './helpers.ts'
-import { buildAnswerFixtures, LOGIN, QUESTION, TOOL, TRIP, TRIP_ID } from './support/needs-you-fixtures.ts'
+import { buildAnswerFixtures, LOGIN, QUESTION, TOOL, TRIP, TRIP_ID, USAGE } from './support/needs-you-fixtures.ts'
 
 const DIR = join(import.meta.dirname, '..', 'fixtures', 'needs-you')
 const read = (name: string): unknown => JSON.parse(readFileSync(join(DIR, name), 'utf8'))
@@ -47,6 +47,7 @@ if (process.env.UPDATE_NEEDS_YOU_FIXTURES) {
     })
     writeFileSync(join(DIR, 'pane-question.json'), `${JSON.stringify(pane('trip', QUESTION), null, 2)}\n`)
     writeFileSync(join(DIR, 'pane-tool.json'), `${JSON.stringify(pane('trip', TOOL), null, 2)}\n`)
+    writeFileSync(join(DIR, 'pane-usage.json'), `${JSON.stringify(pane('trip', USAGE), null, 2)}\n`)
     writeFileSync(join(DIR, 'pane-trip.json'), `${JSON.stringify(pane('trip', TRIP), null, 2)}\n`)
     writeFileSync(join(DIR, 'pane-login.json'), `${JSON.stringify(pane('inbox2', LOGIN), null, 2)}\n`)
   })()
@@ -56,7 +57,7 @@ const pinned = read('pinned-devices.json') as Record<string, JwkP256T>
 type Pane = {
   thread: string
   dialog_id: string
-  dialog_kind: 'trust' | 'mcp_consent' | 'login' | 'agent_question' | 'tool_permission'
+  dialog_kind: 'trust' | 'mcp_consent' | 'login' | 'agent_question' | 'tool_permission' | 'usage_limit'
   subject: string | null
   options: string[]
   free_text?: number
@@ -65,6 +66,7 @@ const tripPane = read('pane-trip.json') as Pane
 const loginPane = read('pane-login.json') as Pane
 const questionPane = read('pane-question.json') as Pane
 const toolPane = read('pane-tool.json') as Pane
+const usagePane = read('pane-usage.json') as Pane
 const env = (pane: Pane, over: Partial<DialogVerifyEnv> = {}): DialogVerifyEnv => ({
   pinnedKey: (id) => pinned[id],
   nowMs: NOW,
@@ -121,6 +123,34 @@ describe('a good answer', () => {
         reason: 'already_answered',
       },
     )
+  })
+})
+
+describe('the usage-limit card answer (pane-prompts row 7)', () => {
+  it('a signed tap on Stop and wait or Switch model verifies and carries no text', async () => {
+    expect(await verifyDialogAnswer(read('dialog-answer-usage-wait.json'), env(usagePane))).toMatchObject({
+      ok: true,
+      choice: 0,
+      label: 'Stop and wait',
+      text: null,
+    })
+    expect(await verifyDialogAnswer(read('dialog-answer-usage-switch.json'), env(usagePane))).toMatchObject({
+      ok: true,
+      choice: 1,
+      label: 'Switch model',
+      text: null,
+    })
+  })
+  it('is refused on any other dialog, and when the screen showed another reset time', async () => {
+    expect(await verifyDialogAnswer(read('dialog-answer-usage-switch.json'), env(toolPane))).toMatchObject({
+      ok: false,
+    })
+    expect(
+      await verifyDialogAnswer(
+        read('dialog-answer-usage-switch.json'),
+        env({ ...usagePane, subject: 'Fable limit reached. It resets Aug 9, 4pm (UTC).' }),
+      ),
+    ).toMatchObject({ ok: false, step: 4 })
   })
 })
 

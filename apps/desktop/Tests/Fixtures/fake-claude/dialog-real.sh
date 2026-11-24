@@ -24,6 +24,8 @@
 #                              shows when that file appears and removes the file. EVERY key is logged and does nothing (on the real one, Enter on
 #                              its third option spends usage credits). FAKE_DLG_UL_END=<file>: when that file appears the screen goes (the idle box,
 #                              ../synthetic/usage-limit-after-esc.txt), as if the owner had pressed Esc at the Mac.
+#                              FAKE_DLG_UL_ESC_ENDS=1: a lone Escape on it does what the menu's own `Esc to cancel` does: the screen goes to the idle box
+#                              (after-esc), where typed characters are logged (CHAR:<c>) and drawn in the box, and Enter is logged (ENTER) and clears the box.
 # Enter on trust "Yes, I trust this folder" or on any MCP row: the input box (worker-real.sh's `empty` screen, with its ready file and
 # typed-line log). Enter on trust "No, exit": Claude exits.
 # The captures are pane-sized (40 rows), joined by CR LF with no final newline, like worker-real.sh draws its screens.
@@ -72,6 +74,18 @@ else
   draw "${files[$cur]}"
   [ "$kind" != login ] || ready
 fi
+# the idle box after Escape with what is typed in it; FAKE_DLG_UL_LIST=memory|model draws Claude's slash list under the box (cursor on /memory, or on /model)
+redraw_idle() {
+  local f="$here/../synthetic/usage-limit-after-esc.txt" last
+  last=$(grep -n '^────' "$f" | tail -1 | cut -d: -f1)
+  printf '\033[2J\033[H'
+  {
+    awk -v t="$typed" 'NR>1{printf "\r\n"} { if ($0 == "\342\235\257\302\240") printf "%s", $0 t; else printf "%s", $0 }' <(head -n "$last" "$f")
+    if [ -n "${FAKE_DLG_UL_LIST:-}" ] && [ -n "$typed" ]; then
+      if [ "$FAKE_DLG_UL_LIST" = memory ]; then printf '\r\n  \342\235\257 /memory       Edit memory files\r\n    /model        Set the AI model'; else printf '\r\n  \342\235\257 /model        Set the AI model\r\n    /memory       Edit memory files'; fi
+    fi
+  } | head -c 100000
+}
 swapped=
 n=${#files[@]}
 while true; do
@@ -89,7 +103,11 @@ while true; do
     case "$ch" in
       $'\033')
         IFS= read -rsn2 -t 1 seq
-        if [ "$kind" = ul ]; then keylog "ESC${seq:+:$seq}"; continue; fi  # the usage-limit screen: logged, nothing happens
+        if [ "$kind" = ul ]; then  # the usage-limit screen: logged; with FAKE_DLG_UL_ESC_ENDS a lone Escape cancels it
+          keylog "ESC${seq:+:$seq}"
+          if [ -z "$seq" ] && [ -n "${FAKE_DLG_UL_ESC_ENDS:-}" ] && [ -z "$pre" ]; then kind=ulidle; typed=; draw "$here/../synthetic/usage-limit-after-esc.txt"; fi
+          continue
+        fi
         if [ "$kind" = cu ] && [ -z "$seq" ]; then  # a lone Escape
           keylog ESC
           [ -n "$pre" ] || [ -n "${FAKE_DLG_STICKY:-}" ] || { draw "$here/../real-2.1.322/computer-use-permissions-after-esc.txt"; [ -z "${FAKE_DLG_LATE:-}" ] || pre=1; }
@@ -102,6 +120,7 @@ while true; do
         esac ;;
       "")  # Enter
         keylog ENTER
+        if [ "$kind" = ulidle ]; then typed=; draw "$here/../synthetic/usage-limit-after-esc.txt"; continue; fi
         { [ -n "$pre" ] || [ "$kind" = login ] || [ "$kind" = cu ] || [ "$kind" = ul ] || [ -n "${FAKE_DLG_STICKY:-}" ]; } && continue
         if [ "$kind" = trust ] && [ "$cur" = 0 ]; then exit 0; fi   # "No, exit"
         if [ "$kind" = bypass ] && [ "$cur" = 0 ]; then exit 0; fi  # "No, exit"
@@ -114,7 +133,10 @@ while true; do
         fi
         # answered: the input box, ready, and the typed-line log of a normal session
         FAKE_REAL_START=empty exec /bin/bash "$here/worker-real.sh" ;;
-      *) keylog "CHAR:$ch" ;;  # a digit or a letter: the real Select does nothing with it
+      $'\177') keylog BSPACE  # Backspace: with the idle box after Escape, it deletes the last typed character
+         if [ "$kind" = ulidle ]; then typed="${typed%?}"; redraw_idle; fi ;;
+      *) keylog "CHAR:$ch"  # a digit or a letter: the real Select does nothing with it
+         if [ "$kind" = ulidle ]; then typed="$typed$ch"; redraw_idle; fi ;;
     esac
   fi
 done

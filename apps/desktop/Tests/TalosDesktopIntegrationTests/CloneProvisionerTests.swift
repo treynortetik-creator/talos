@@ -102,7 +102,7 @@ struct CloneProvisionerTests {
   @Test func anUnreachableRepositoryFailsClearlyAndKeepsNothing() throws {
     let w = try AutoCloneWorld()
     defer { w.cleanUp() }
-    guard case .failed(.lookup, let why) = w.provisioner({ $0.repoURL = "file://" + w.home + "/no-such-repo" }).run() else { Issue.record("expected a lookup failure"); return }
+    guard case .failed(.lookup, let why) = w.provisioner({ $0.repoURL = TestTemp.fileURL(w.home + "/no-such-repo") }).run() else { Issue.record("expected a lookup failure"); return }
     #expect(why.contains("couldn't reach") && why.contains("Nothing was changed"), "\(why)")
     #expect(!FileManager.default.fileExists(atPath: w.dest) && w.leftovers().isEmpty)
   }
@@ -278,7 +278,7 @@ struct CloneProvisionerTests {
       try FileManager.default.moveItem(atPath: w.home + "/altered.tar.gz", toPath: w.home + "/altered/mac-v0.1.4/talos-source-mac-v0.1.4.tar.gz")
       let sum = ProcessRunner.run(["/usr/bin/shasum", "-a", "256", w.home + "/altered/mac-v0.1.4/talos-source-mac-v0.1.4.tar.gz"], timeout: 30)
       let altered = sum.out.split(separator: " ").first.map(String.init) ?? ""
-      let result = w.provisioner({ c in w.viaArchive(&c); c.expectedSourceSHA256 = altered; c.sourceBase = "file://" + w.home + "/altered" }).run()
+      let result = w.provisioner({ c in w.viaArchive(&c); c.expectedSourceSHA256 = altered; c.sourceBase = TestTemp.fileURL(w.home + "/altered") }).run()
       guard case .failed(.clone, let why) = result else { Issue.record("\(label): expected a clone failure, got \(result)"); continue }
       #expect(why.contains("not exactly the release's commit") && why.contains("Nothing was kept"), "\(label): \(why)")
       #expect(!FileManager.default.fileExists(atPath: w.dest) && w.leftovers().isEmpty, "\(label): nothing kept")
@@ -304,7 +304,7 @@ struct CloneProvisionerTests {
   @Test func aMissingTarballFailsClearlyAndTheArchiveRouteIsHttpsOnlyInProduction() throws {
     let w = try AutoCloneWorld()
     defer { w.cleanUp() }
-    guard case .failed(.clone, let why) = w.provisioner({ w.viaArchive(&$0); $0.sourceBase = "file://" + w.home + "/nowhere" }).run() else {
+    guard case .failed(.clone, let why) = w.provisioner({ w.viaArchive(&$0); $0.sourceBase = TestTemp.fileURL(w.home + "/nowhere") }).run() else {
       Issue.record("expected a clone failure"); return
     }
     #expect(why.contains("download of Talos's code failed") && why.contains("Nothing was kept"), "\(why)")
@@ -580,13 +580,13 @@ struct AutoCloneWorld {
     self.clt = clt
     hasPnpm = pnpm
     let base = try TestTemp.real(TestTemp.base)
-    home = base + "talos-autoclone-" + UUID().uuidString
+    home = base + "/talos-autoclone-" + UUID().uuidString
     try FileManager.default.createDirectory(atPath: home + "/bin", withIntermediateDirectories: true)
     self.version = version
     self.schemes = schemes
     extraEnv = env
     remote = home + "/remote.git"
-    self.url = url ?? "file://" + remote
+    self.url = url ?? TestTemp.fileURL(remote)
     dest = AutoSetup.cloneFolder(home: home)
     let real = Self.git!
     // the wrapper: log, then run the real git; `clone` fails while the marker file exists
@@ -694,9 +694,14 @@ struct AutoCloneWorld {
     c.allowedSchemes = schemes
     c.gitTimeout = 60
     c.installTimeout = 60
+    c.preflightScript = Self.applyScript
     tweak(&c)
     return c.asProvisioner
   }
+
+  /// The real apply script, whose --preflight runs before git reads a folder that was already there.
+  static let applyScript = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("scripts/auto-update-apply.sh").path
 
   func git(_ args: [String]) throws -> String {
     let r = ProcessRunner.run([Self.git!] + args, env: ["PATH": "/usr/bin:/bin", "HOME": home, "GIT_CONFIG_GLOBAL": "/dev/null"], timeout: 30)
@@ -717,7 +722,7 @@ struct AutoCloneWorld {
   /// The primary route: the release's own tarball over (test) file://, checked against the stamped sha256.
   func viaArchive(_ c: inout CloneProvisioner.Config) {
     c.expectedSourceSHA256 = sourceSha
-    c.sourceBase = "file://" + home + "/release"
+    c.sourceBase = TestTemp.fileURL(home + "/release")
   }
 
   /// Staging or temp leftovers beside the clone and the record.

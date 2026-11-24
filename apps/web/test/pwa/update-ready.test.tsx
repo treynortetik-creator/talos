@@ -23,6 +23,8 @@ import {
   VERSION_CHECK_EVERY_MS,
   watchServiceWorker,
 } from '../../src/lib/appUpdate.ts'
+import { createMetaStore, MetaProvider } from '../../src/lib/connectionMeta.ts'
+import { HOLD_CAP_MS, holdReload, reloadHolds, resetReloadHolds } from '../../src/lib/reloadHold.ts'
 
 type Listener = () => void
 /** A service worker container: `controller` set means a worker already serves this page. */
@@ -48,6 +50,7 @@ const safe = { busy: false, path: '/t/general' }
 
 beforeEach(() => {
   resetAppUpdate()
+  resetReloadHolds()
   setWorkerUpdater(null)
 })
 afterEach(() => {
@@ -285,6 +288,123 @@ describe('UpdateReady', () => {
 function resetAppUpdateKeepingClaim() {
   useAppUpdate.setState({ ready: false, handedOver: false, target: null })
 }
+
+// The service worker's hand-over reloads a freshly started page at once. A Run or send made just before it (the owner's first
+// tap, or the old-client spec's click 70 ms ahead of the claim) is in flight then: a reload would take the page's own record of
+// it (the Run's "Sent" line) while the message may already be with the agent. Anything in flight gives up that fast reload for
+// good: it must not fire the moment the ack lands (when the line says "Sent") either, so it waits for the owner to be still.
+describe('a hand-over while a send is in flight', () => {
+  const show = (reload: () => void, meta = createMetaStore()) =>
+    render(
+      <MemoryRouter initialEntries={['/t/general']}>
+        <MetaProvider store={meta}>
+          <UpdateReady reload={reload} running="a446f3e" />
+        </MetaProvider>
+      </MemoryRouter>,
+    )
+  const healthzSame = () =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, version: 'b81c0de' }) }) as unknown as Response),
+    )
+
+  it('a send in flight at the hand-over: no reload then, none when the ack lands, one once the owner has been still', async () => {
+    vi.useFakeTimers()
+    try {
+      healthzSame()
+      const w = fakeWorker(true)
+      const reload = vi.fn()
+      show(reload)
+      act(() => noteServerVersion('b81c0de', 'a446f3e'))
+      const release = holdReload() // the tap on Run, in the cold window
+      act(() => w.handOver())
+      expect(reload).not.toHaveBeenCalled()
+      act(() => release()) // the ack: the Run's line now says Sent
+      expect(reload, 'not the moment the ack lands: the line would be wiped a round trip later').not.toHaveBeenCalled()
+      vi.advanceTimersByTime(VERSION_CHECK_EVERY_MS - 1_000)
+      noteActivity() // the owner touches the screen just before the minute's look
+      await act(async () => {
+        vi.advanceTimersByTime(1_001)
+      })
+      expect(reload, 'the owner was active a moment ago').not.toHaveBeenCalled()
+      await act(async () => {
+        vi.advanceTimersByTime(VERSION_CHECK_EVERY_MS) // still for a minute now
+      })
+      expect(reload).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
+  it('a hand-over that waited for the composer is not retried on the next hold being released, minutes later', () => {
+    const w = fakeWorker(true)
+    const reload = vi.fn()
+    show(reload)
+    act(() => noteServerVersion('b81c0de', 'a446f3e'))
+    act(() => useComposerStore.setState({ prefill: { general: 'half a message' } as never }))
+    act(() => w.handOver())
+    expect(reload).not.toHaveBeenCalled() // something typed
+    act(() => useComposerStore.setState({ prefill: {} }))
+    let release = () => {}
+    act(() => {
+      release = holdReload() // a later send
+    })
+    act(() => release())
+    expect(reload, 'only the real hand-over moment is tried at once').not.toHaveBeenCalled()
+  })
+
+  it('rows only sitting in the device queue (unacked ids, failed sends) do not block the update', () => {
+    const w = fakeWorker(true)
+    const reload = vi.fn()
+    const meta = createMetaStore()
+    show(reload, meta)
+    act(() => noteServerVersion('b81c0de', 'a446f3e'))
+    act(() => meta.setState({ queuedIds: ['m_held'], failed: { m_final: 'final', m_retry: 'retry' } }))
+    act(() => w.handOver())
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('a hold lets go by itself after 30 s, so a hung device store cannot block the reload that would cure it', () => {
+    vi.useFakeTimers()
+    try {
+      holdReload()
+      expect(reloadHolds.getState().holds).toBe(1)
+      vi.advanceTimersByTime(HOLD_CAP_MS - 1)
+      expect(reloadHolds.getState().holds).toBe(1)
+      vi.advanceTimersByTime(2)
+      expect(reloadHolds.getState().holds).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a tap on Reload while a send is in flight waits for it, says so in plain words, then reloads once', () => {
+    const w = fakeWorker(true)
+    const reload = vi.fn()
+    show(reload)
+    const release = holdReload()
+    act(() => noteServerVersion('b81c0de', 'a446f3e'))
+    act(() => w.handOver())
+    act(() => screen.getByTestId('update-reload').click())
+    expect(reload).not.toHaveBeenCalled()
+    expect(screen.getByText('Updating after your message is sent')).toBeTruthy()
+    act(() => release())
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds are counted one per call and released once', () => {
+    const a = holdReload()
+    const b = holdReload()
+    expect(reloadHolds.getState().holds).toBe(2)
+    a()
+    a()
+    expect(reloadHolds.getState().holds).toBe(1)
+    b()
+    expect(reloadHolds.getState().holds).toBe(0)
+    expect(safeToReload({ busy: true, path: '/t/general' })).toBe(false)
+  })
+})
 
 describe('a page kept open, and a slow install', () => {
   const show = (reload: () => void) =>

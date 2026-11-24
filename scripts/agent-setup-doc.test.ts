@@ -93,7 +93,8 @@ describe('SETUP.md is one ordered guide with the markers an agent needs', () => 
   })
 
   it('says Chronos is public, and the old "may still be private" line is gone everywhere in the setup docs', () => {
-    expect(setup).toMatch(/Chronos is public/)
+    // Chronos lives in this repository now (apps/chronos): nothing is fetched, public or not
+    expect(setup).toMatch(/Chronos lives in this repository/)
     for (const f of ['kit/START-HERE.md', 'kit/install.sh', 'kit/README.md', 'SETUP.md', 'docs/SETUP.md']) {
       expect(read(f), f).not.toMatch(/may still be private/)
     }
@@ -158,7 +159,7 @@ describe('every ./install.sh in SETUP.md runs: --dry-run exits 0 under a tempora
   it('finds the installer commands the guide names', () => {
     expect(lines.length).toBeGreaterThanOrEqual(5)
     expect(lines).toContain('./install.sh --dry-run')
-    expect(lines.some((l) => l.includes('--with-chronos') && l.includes('--notify talos'))).toBe(true)
+    expect(lines.some((l) => l.startsWith('./install.sh') && l.includes('--notify talos'))).toBe(true)
     expect(lines.some((l) => l.includes('--with-parakeet'))).toBe(true)
   })
 

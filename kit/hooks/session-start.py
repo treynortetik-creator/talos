@@ -242,6 +242,8 @@ DAILY_LOG_TAIL_LINES = 45              # how much of today's log to inject
 MAX_LOG_CHARS = 4000                   # the line cap alone lets 45 long lines inject the whole file
 MAX_HANDOFF_CHARS = 2000               # cap per block
 MAX_STATE_CHARS = 3000
+HOOK_CAP = 9500   # ONE output cap in UTF-16 units (_talos_common.fit_blocks); Claude Code swaps a hook output over 10,000 characters for a file path
+# blocks are (rank, text), rank 0 kept first: reply owed, state, carry, handoff, state warning, nudges, log, wiki upkeep
 LOOK_BACK_DAYS = 3                     # if today's log is missing, walk back
 
 # --- wiki maintenance -------------------------------------------------------
@@ -742,7 +744,7 @@ def as_data(text):
     wrapper. Measured 2026-09-02: a HANDOFF line carrying a forged `=== end continuity ===` reached
     the model byte for byte; the model caught it, but the hook did nothing. Rewriting `===` makes the
     terminator unforgeable from inside a file."""
-    return text.replace("===", "=\u200b=\u200b=")
+    return re.sub(r"(?:=[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]*){3,}", lambda m: "\u200b".join(re.findall(r"=[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]*", m.group(0))), text)
 
 
 # Chronos sets CHRONOS_RUN=1 inside a headless scheduled run. Nobody is there to answer a nudge, and
@@ -751,7 +753,7 @@ def as_data(text):
 HEADLESS = os.environ.get("CHRONOS_RUN") == "1" or os.environ.get("TALOS_UNATTENDED") == "1"
 
 
-def build_context(source="", session_id=""):
+def collect_blocks(source="", session_id=""):
     blocks = []
     # A worker whose own state hook is registered (TALOS_APP_THREAD_STATE=1) gets its state and carry from thread-state.py instead of
     # Main's daily log, handoff, STATE.md and carry (it can still read them).
@@ -760,41 +762,37 @@ def build_context(source="", session_id=""):
     if not worker:
         label, log_tail = latest_daily_log()
         if log_tail:
-            blocks.append(f"--- DAILY LOG ({label}) ---\n{as_data(log_tail)}")
+            blocks.append((6, f"--- DAILY LOG ({label}) ---\n{as_data(log_tail)}"))
 
         name, handoff = first_handoff()
         handoff = strip_teaching(handoff) if handoff else handoff
         if handoff:
-            blocks.append(f"--- HANDOFF ({name}) ---\n{as_data(handoff)}")
+            blocks.append((3, f"--- HANDOFF ({name}) ---\n{as_data(handoff)}"))
 
         state = read_state(STATE_FILE, MAX_STATE_CHARS)
         if state:
-            blocks.append(f"--- LIVE STATE (memory/STATE.md) ---\n{as_data(state)}")
+            blocks.append((1, f"--- LIVE STATE (memory/STATE.md) ---\n{as_data(state)}"))
         big = state_size_warning()
-        if big:
-            blocks.append(big)
+        if big: blocks.append((4, big))
 
     if source == "compact" and not HEADLESS:
         owed = channel_debt_note(session_id)
-        if owed:
-            blocks.append(owed)
+        if owed: blocks.append((0, owed))
         carried = None if worker else compaction_carry_note()
-        if carried:
-            blocks.append(carried)
+        if carried: blocks.append((2, carried))
 
     if not HEADLESS:
         upkeep = wiki_maintenance()
-        if upkeep:
-            blocks.append(upkeep)
-
+        if upkeep: blocks.append((7, upkeep))
         nudge = ledger_nudge()
-        if nudge:
-            blocks.append(nudge)
-
+        if nudge: blocks.append((5, nudge))
         overdue = commit_nudge()
-        if overdue:
-            blocks.append(overdue)
+        if overdue: blocks.append((5, overdue))
+    return blocks
 
+
+def wrap_blocks(blocks):
+    worker = os.environ.get("TALOS_SESSION_ROLE") == "worker" and os.environ.get("TALOS_APP_THREAD_STATE") == "1"
     if not blocks and worker: return ""   # no "fresh install" claim about Main
     if not blocks:
         # A brand-new install. Say so plainly and tell the agent what to do,
@@ -969,19 +967,21 @@ def main():
         refresh_index_in_background()
         refresh_gazetteer_in_background()
         _p = hook_payload()
-        context = build_context(str(_p.get("source") or ""), str(_p.get("session_id") or ""))
-        ident = identity_block()
-        if ident:
-            context = ident + "\n\n" + context
-        notice = trusted_keys_notice()
-        if notice:
-            context = notice + "\n\n" + context
-        integrity = release_integrity_block()
-        if integrity:
-            context = integrity + "\n\n" + context
-        setup = onboarding_block(str(_p.get("source") or ""))
-        if setup:
-            context = context + "\n\n" + setup
+        source = str(_p.get("source") or "")
+        ident, notice, integrity, setup = identity_block(), trusted_keys_notice(), release_integrity_block(), onboarding_block(source)
+
+        def compose(texts):
+            return "\n\n".join([x for x in (integrity, notice, ident, wrap_blocks(texts)) if x] + ([setup] if setup else []))
+
+        blocks = collect_blocks(source, str(_p.get("session_id") or ""))
+        context, n16 = compose([t for _, t in blocks]), lambda x: len(x.encode("utf-16-le", "surrogatepass")) // 2   # UTF-16 units, as Claude Code counts
+        if n16(context) > HOOK_CAP:
+            try:
+                context = compose(_common().fit_blocks(blocks, HOOK_CAP - n16(compose(["x"])) + 1))
+            except Exception:                          # installed alone, without the shared helper: the last resort below
+                pass
+        if n16(context) > HOOK_CAP:                    # the fixed parts alone are over: last resort, never over the cap
+            context = context.encode("utf-16-le", "surrogatepass")[:2 * (HOOK_CAP - 60)].decode("utf-16-le", "ignore") + "\n(cut here: more characters left out)"
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",

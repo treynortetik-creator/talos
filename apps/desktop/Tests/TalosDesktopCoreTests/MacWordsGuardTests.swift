@@ -42,6 +42,8 @@ struct MacWordsGuardTests {
     "This thread's session is", "approve a project MCP server", "bypass permissions", "development channels",
     // the engineer's own wording inside a Terminal window or a log line, never a menu or settings line
     "The saved conversation id", "Talos couldn't start: its settings file",
+    // the menu's reason for a start refused by a second copy of Talos: Advanced-level words, never sent to the phone
+    "another Talos instance supervises this session",
   ]
 
   /// The only screens where the engineer's words are allowed.
@@ -52,7 +54,7 @@ struct MacWordsGuardTests {
   @Test func theGuardCatchesEachForbiddenWord() {
     for w in [
       "Open Terminal and run", "the bridge is up", "Relay address", "tmux attach", "launch command", "Start session", "your sessions",
-      "a token", "an MCP server", "Terminals\u{2026}",
+      "a token", "an MCP server", "the Talos config.json is missing", "Terminals\u{2026}",
     ] {
       #expect(!MacWords.forbiddenWords(in: w).isEmpty, Comment(rawValue: w))
     }
@@ -150,6 +152,55 @@ struct MacWordsGuardTests {
       ThreadNotices.failedLine(name: "Sales", code: "other"), SupervisorNotice.notSetUp, SupervisorNotice.confirmFailed,
       SupervisorNotice.sessionIdInvalid,
     ] { #expect(MacWords.forbiddenWords(in: line).isEmpty, Comment(rawValue: line)) }
+  }
+
+  /// Pane-prompts row 7: the usage-limit card's words (the sentence about the limit, the two buttons, the popup's heading and sentence, and every line the
+  /// owner can get for the screen) use no engineer word. "session" is the one word the thread lines and the popup have always used for a thread's agent
+  /// (the phone card's table says it too), so it is the only one allowed there; the card's own sentence and buttons use none at all.
+  @Test func theUsageLimitCardAndItsLinesAreInPlainWords() throws {
+    let infos: [UsageLimitScreen.Info] = [.init(model: "Fable", resets: "4pm (Europe/Paris)"), .init(model: nil, resets: "Aug 8, 3:10pm"), .init()]
+    for i in infos {
+      #expect(MacWords.forbiddenWords(in: UsageLimitScreen.subject(i)).isEmpty, Comment(rawValue: UsageLimitScreen.subject(i)))
+      for line in [UsageLimitScreen.threadLine(i), UsageLimitScreen.mainLine(i)] {
+        #expect(MacWords.forbiddenWords(in: line).filter { $0 != "session" }.isEmpty, Comment(rawValue: line))
+      }
+    }
+    for w in [UsageLimitScreen.waitLabel, UsageLimitScreen.switchLabel] { #expect(MacWords.forbiddenWords(in: w).isEmpty, Comment(rawValue: w)) }
+    for line in [UsageLimitScreen.menuLine, UsageLimitScreen.stallLine] { #expect(MacWords.forbiddenWords(in: line).isEmpty, Comment(rawValue: line)) }
+    let offer = DialogOffer(
+      id: DialogOffer.newId(), kind: .usageLimit, subject: UsageLimitScreen.subject(infos[0]), options: [UsageLimitScreen.waitLabel, UsageLimitScreen.switchLabel],
+      cursor: nil, seen_at: "2026-11-21T10:00:00Z", expires_at: "2026-11-21T10:15:00Z")
+    let c = NeedsYouPopupContent.make(NeedsYouPopupItem(thread: "t", threadName: "Sales", dialog: offer, phoneTold: true, first: true))
+    for text in [c.title, c.sentence, c.footer] + c.buttons.map(\.text) {
+      #expect(MacWords.forbiddenWords(in: text).filter { $0 != "session" }.isEmpty, Comment(rawValue: text))
+    }
+    // the guard bites: the old line is what it was written to stop
+    #expect(!MacWords.forbiddenWords(in: "press Esc in this thread's pane in Terminals").isEmpty)
+  }
+
+  /// Row 12: a start that stalls, a resume that fails and a start that cannot be made are lines in the thread, and none of them (nor the
+  /// first-start screen's stalled line, the menu's, or a thread's held-message lines) sends the owner to Terminals, a pane or a key.
+  @Test func theStartLinesNameTheMenuItemsAndNeverATerminalOrAPane() {
+    let lines = [
+      SupervisorNotice.startStalledLine(agentName: "Ada", waited: 120), SupervisorNotice.startStalledLine(agentName: nil, waited: 60),
+      SupervisorNotice.resumeFailedLine(agentName: "Ada"), SupervisorNotice.couldNotStartLine(agentName: nil),
+      OnboardingText.firstStartStalled, SupervisorNotice.mainStalled(since: Date(timeIntervalSince1970: 0)),
+      WorkerNotice.leftoverLine(), WorkerNotice.noBoxLine(), WorkerNotice.deafLine(name: "Sales", id: "sales"), WorkerNotice.deafBackLine(name: "Sales", id: "sales", handled: .init(messages: 2, runs: 1)),
+    ]
+    for l in lines {
+      #expect(!l.contains("Terminal") && !l.lowercased().contains("pane") && !l.contains("Esc") && !l.contains("tmux"), Comment(rawValue: l))
+    }
+    #expect(SupervisorNotice.startStalledLine(agentName: "Ada", waited: 120).contains("choose \(MacWords.restartAgent)"))
+    #expect(SupervisorNotice.startStalledLine(agentName: nil, waited: 60).contains("after 1 minute."), "never \"1 minutes\"")
+    // R1-3: a stalled request is a bridge-up case, so the phone's own action is named too (Settings > Agent > Restart agent in the web app)
+    let stalled = SupervisorNotice.mainStalled(since: Date(timeIntervalSince1970: 0))
+    #expect(stalled.contains("choose Restart agent in Settings, under Agent, on your phone"), Comment(rawValue: stalled))
+    #expect(stalled.contains("or choose \(MacWords.restartAgent) in the Talos menu bar item"), Comment(rawValue: stalled))
+    // the words the menu really has: a rename of either item cannot leave the line pointing at nothing
+    #expect(SupervisorNotice.resumeFailedLine(agentName: nil).contains("Start a new conversation"))
+    #expect(MacWords.startAgent == "Start your agent" && MacWords.restartAgent == "Restart your agent")
+    // a name from config.json goes in as a name, and a fixed line holds nothing else the agent chose
+    #expect(SupervisorNotice.couldNotStartLine(agentName: nil) == "Talos couldn't start your agent. The reason is in the Talos menu bar item on your Mac.")
   }
 
   @Test func theWhereToLookPointersNameRealControls() {
@@ -267,7 +318,7 @@ struct MacWordsGuardTests {
     let src = try String(contentsOf: Self.sources.appendingPathComponent("SettingsPhoneTab.swift"), encoding: .utf8)
     #expect(src.contains("status.summary.macConnection"))
     #expect(!src.contains("\"Connected\"") && !src.contains("\"Not connected\""), "the sign-in state is not called Connected")
-    #expect(MacWords.thisMacSignedIn == "This Mac's Talos window is signed in")
+    #expect(MacWords.thisMacSignedIn == "Signed in on this Mac" && MacWords.thisMacSignedOut == "Sign in on this Mac")
     #expect(!MacWords.signOutBody.contains("phone keeps") && MacWords.signOutBody.contains("does not change your agent, your phone or your Claude account"))
   }
 

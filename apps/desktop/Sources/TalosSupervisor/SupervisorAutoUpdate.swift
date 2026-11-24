@@ -9,7 +9,12 @@ extension Supervisor {
   /// window), nothing asking the owner, nothing typed in its box, and no key in an attached client for `keysQuiet`. Anything that cannot
   /// be read is not quiet. Not running at all (stopped, or never started) is quiet: nothing there can be cut.
   public func autoUpdateLook(keysQuiet: Double = AutoUpdate.keysQuiet, busyWindow: Double = 15) -> (notQuiet: [String], pane: Int32?) {
-    q.sync {
+    q.sync { quietLookLocked(keysQuiet: keysQuiet, busyWindow: busyWindow) }
+  }
+
+  /// `autoUpdateLook` for a caller already on the queue (the permission change that waits for Main to finish).
+  func quietLookLocked(keysQuiet: Double = AutoUpdate.keysQuiet, busyWindow: Double = 15) -> (notQuiet: [String], pane: Int32?) {
+    do {
       switch phase {
       case .idle, .blocked, .stopped: return ([], nil)
       case .starting, .cleaningUp, .waitingToRestart, .stopping: return (["main \(Self.phaseWord(phase))"], status.childPid)

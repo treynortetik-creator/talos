@@ -40,6 +40,16 @@ extension WorkerRig {
   /// prompt that comes later must draw it after. The fake `claude` logging the line only says the key arrived, not that the check is done.
   /// The check's reads are timers on the manager's own serial queue, so two hops queued there, each due after any read the one before
   /// it could have been waiting on (and so behind it), run only once every read has run. No product state is touched.
+  /// A test that draws a dialog on a LIVE worker waits for this first: the wake's pointer (one typed line and its Enter) and the Enter's
+  /// reads are done, or the dialog may come up right after that Enter and be flagged "enter may have answered", which the app rightly
+  /// does (2026-11-22: aDialogThatHasNotHeldStillIsNotFlaggedYet failed 1 in 100 with exactly that flag).
+  /// One look at the same condition, for a caller that polls (the manager is stepped by the test).
+  func waitWakePointerSettledNoWait(_ id: String) -> Bool { typedLines.count == 1 }
+
+  func waitWakePointerSettled(_ id: String) -> Bool {
+    wait(10) { typedLines.count == 1 } && enterCheckDone(id)
+  }
+
   func enterCheckDone(_ id: String, timeout: Double = 10) -> Bool {
     guard wait(timeout, { allEvents.contains(.pointer(thread: id)) }) else { return false }  // the tick that sent the Enter has run
     let q = mgr.queue

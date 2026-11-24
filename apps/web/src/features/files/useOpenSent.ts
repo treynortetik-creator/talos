@@ -1,5 +1,5 @@
 // Opening a file from the Files sheet. A row is a plain link (a page opens its own sandboxed /page, anything else the file),
-// so the browser opens it on the tap itself, as the timeline's file links do; audio plays in the audio dock. Every URL carries
+// so the browser opens it on the tap itself, as the timeline's file links do; audio plays in the message player. Every URL carries
 // the media cache-buster (media.ts), as the timeline's do. The relay keeps a file's bytes for a while only: rows older than
 // that are checked once (HEAD, a few at a time). One the relay no longer has is asked back from the Mac (media.fetch, then
 // media.ready), at once when it is small, as the timeline does, so it opens on one tap like any other; a big one waits for
@@ -8,7 +8,7 @@ import { type SentFileT, sentFileType } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTalosClient } from '../../lib/client.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
-import { open as openInDock } from '../threads/audioDock.ts'
+import { open as openInPlayer } from '../threads/audioPlayer.ts'
 import { AUTO_REHYDRATE_MAX_BYTES, fetchTimeoutFor, mediaHref, mediaPageUrl, mediaUrl } from '../threads/media.ts'
 import { rowKey } from './sentLogic.ts'
 
@@ -116,18 +116,19 @@ export function useOpenSent(files: SentFileT[]) {
     for (let k = 0; k < PROBES_AT_ONCE; k++) void next()
   }, [files, setState, getBack, ac])
 
-  /** Audio plays in the dock (a file the relay lost is asked back first). */
+  /** Audio plays in the message player (a file the relay lost is asked back first). */
   const play = useCallback(
     async (f: SentFileT) => {
       if (f.removed) return
       const st = states[rowKey(f)]
       if ((st === 'gone' || st === 'failed') && !(await getBack(f))) return
-      openInDock(
+      openInPlayer(
         {
           key: `${f.message_id}:${f.file.media_id}`,
           mediaId: f.file.media_id,
           title: f.file.name,
-          threadId: f.thread_id,
+          mime: f.file.mime,
+          size: f.file.size,
           ...(f.file.duration_ms ? { durationMs: f.file.duration_ms } : {}),
         },
         urlFor(f),

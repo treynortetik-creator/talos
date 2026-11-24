@@ -32,7 +32,7 @@ export type FrameContext = {
   clearFailed: (clientMsgId: string) => void
   markFailed: (clientMsgId: string, kind: 'retry' | 'final') => void
   addSystemRow: (text: string, id: string, threadId?: string) => void
-  emit: (type: string, frame: Record<string, unknown>) => void
+  emit: (type: string, frame: Record<string, unknown>, meta?: { catchup?: boolean }) => void
   settleConfig: (id: string, err?: TalosClientError) => boolean
   configWaiters: Map<
     string,

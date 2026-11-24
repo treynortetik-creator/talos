@@ -163,6 +163,13 @@ struct WorkerUnknownGone {
   /// out says nothing, so it is never read as gone. Under load that is longer than a few seconds, and parking sooner would be the bug.
   private func goneLimit(_ r: WorkerRig) -> Double { 2 * (r.mgr.options.callTimeout + 6) + 1 }
 
+  /// The wake's pointer is typed and its Enter sent before anything here kills a worker. A message still owed when a worker dies is
+  /// the next run's (`aCrashWithAPointerWaitingResumes`), so the manager starts it again at once and it is never seen parked: on a
+  /// loaded machine the pointer is slower than the kill, and these tests waited for a state that was never reached.
+  private func pointerSent(_ r: WorkerRig, sourceLocation: SourceLocation = #_sourceLocation) {
+    #expect(r.wait(10, { r.allEvents.contains(.pointer(thread: "trip")) }), "the pointer was never sent: \(r.why("trip"))", sourceLocation: sourceLocation)
+  }
+
   /// Real tmux output, not a shim: the wording `saysGone` depends on.
   @Test func aKilledSessionIsGone() throws {
     let r = try WorkerRig(scenario: scenario)
@@ -171,6 +178,7 @@ struct WorkerUnknownGone {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
+    pointerSent(r)
     let pid = try #require(r.entry("trip")?.pane_pid)
     #expect(r.tmuxCmd(["kill-session", "-t", "=t-trip"]).ok)
     #expect(r.wait(goneLimit(r)) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
@@ -185,6 +193,7 @@ struct WorkerUnknownGone {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
+    pointerSent(r)
     #expect(r.tmuxCmd(["kill-server"]).ok)
     #expect(r.wait(goneLimit(r)) { r.state("trip") == "parked" }, "\(String(describing: r.state("trip")))")
   }
@@ -198,6 +207,7 @@ struct WorkerUnknownGone {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
+    pointerSent(r)
     let pid = try #require(r.entry("trip")?.pane_pid)
     try r.fault("has-session", "hold")
     try r.fault("display-message", "hold")

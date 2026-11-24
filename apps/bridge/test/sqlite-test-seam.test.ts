@@ -140,6 +140,7 @@ describe('every SQLite open under src/ that can write uses the product value', (
     walk(src)
     expect(opens.sort()).toEqual([
       'doctor-checks.ts in-memory',
+      'facts-parts.ts read-only',
       'history-recover.ts durable',
       'history-recover.ts durable',
       'history-recover.ts read-only',

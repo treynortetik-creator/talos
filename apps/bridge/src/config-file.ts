@@ -25,6 +25,7 @@ import {
 } from '@talos-app/protocol'
 import { saveConfigVersion } from './config-history.ts'
 import { mtimeMs, readJsonFile, writeJsonAtomic } from './fsutil.ts'
+import { rememberSwitch } from './guards/os-sandbox-record.ts'
 import {
   clearedPaths,
   isCleared,
@@ -129,6 +130,18 @@ export class ConfigFile {
     return this.roots
   }
 
+  /**
+   * A reading (or a write) of config.json that worked is the lock's last good state (guards/os-sandbox-record.ts), so switching the extra
+   * lock on and then damaging the file before the next start keeps it on. An `on` that cannot be written down is said in the log.
+   */
+  private keepSwitch(c: AgentConfigT): void {
+    const on = c.os_sandbox === true
+    if (rememberSwitch(dirname(this.path), on) === 'failed' && on)
+      this.log?.warn(
+        'the extra lock is on but could not be written down as the last good state: a damaged config.json would read as off',
+      )
+  }
+
   /** Loads (throws a readable error when missing or invalid). */
   load(): AgentConfigT {
     const raw = readJsonFile(this.path)
@@ -137,6 +150,7 @@ export class ConfigFile {
     if (!r.ok) throw new Error(r.message)
     // no switch written, no thread on its own session (it never ran): written so on the next write (thread-sessions.ts)
     this.current = clearUnswitchedSessions(r.config)
+    this.keepSwitch(this.current)
     this.seenMtime = mtimeMs(this.path)
     return this.current
   }
@@ -172,6 +186,7 @@ export class ConfigFile {
         { threads: r.config.threads.filter((t) => t.session === 'dedicated').map((t) => t.id) },
       )
     this.current = clearArchivedSessions(unswitched)
+    this.keepSwitch(this.current)
     if (this.current.rev <= prevRev || this.current !== r.config)
       this.write({ ...this.current, rev: Math.max(this.current.rev, prevRev + 1) })
     return true
@@ -387,6 +402,7 @@ export class ConfigFile {
     saveConfigVersion({ configPath: this.path, dir: join(dirname(this.path), 'config-history'), log: this.log })
     recordedWrite(this.path, 'config', () => writeJsonAtomic(this.path, onDisk, 0o600))
     this.current = c
+    this.keepSwitch(c)
     this.seenMtime = mtimeMs(this.path)
   }
 }

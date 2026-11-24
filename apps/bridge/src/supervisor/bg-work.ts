@@ -100,6 +100,10 @@ export function found(table: Proc[], pane: number, argv: (pid: number) => string
 export const cutLine = (f: BgFound): string =>
   `Parked while ${f.count} background task(s) were running${f.first ? `: ${f.first}` : ''}.`
 
+/** The thread's one line when it starts over the limit because every quiet session has background work (the Mac's `BackgroundWork.busyLine`). */
+export const busyLine =
+  'Your computer is busy: other threads still have work running in the background, so this one started anyway and nothing was stopped.'
+
 /** One process's argv from /proc; null when it cannot be read. */
 export function procArgv(pid: number, root = '/proc'): string[] | null {
   try {

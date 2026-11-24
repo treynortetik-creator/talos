@@ -148,7 +148,7 @@ struct AdvancedSetupView: View {
       SignInPanel(model: model)
       Divider()
       // The character is easy to miss: a switch right here, on the first screen the owner sees.
-      Toggle("Show Companion", isOn: $companionOn)
+      Toggle("Show Talos character", isOn: $companionOn)
       Text("A small character that shows what your agent is doing. You can turn it off any time here, in the Window menu, or in \(MacSettingsText.companionPath).")
         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       Divider()

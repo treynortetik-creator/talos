@@ -1,13 +1,14 @@
 // Read aloud (the play button on an agent message). One tap asks the Mac to read that message with its own voice command and
-// plays the audio in the app-level dock (audioDock.ts), so it keeps going when he leaves the thread and shares the pill with
-// voice notes. This module owns the part the dock does not: the asking (a first request, then follow-ups while the Mac makes
+// plays the audio in the shared message player (audioPlayer.ts), the same one the voice notes use. This module owns the part
+// the player does not: the asking (a first request, then follow-ups while the Mac makes
 // the audio), the plain-words failures and the "only the first N characters" note. It lives outside React, so a tap survives
-// leaving the thread. Nothing here plays out loud by itself: audio starts only after a tap that asked for it.
+// leaving the thread. If he has left by the time the audio is ready, it plays only where system controls (lock screen, Control
+// Center, media keys) can stop it; otherwise it waits for the next Listen. Nothing here plays out loud without a tap that asked for it.
 import { SPEAK_FEATURE, SPEAK_POLL_MS } from '@talos-app/protocol'
 import { useSyncExternalStore } from 'react'
 import { type TalosClient, TalosClientError } from '../../lib/client.ts'
 import type { SocketClient } from '../../lib/socketClient.ts'
-import { audioDock, subscribeDock } from './audioDock.ts'
+import { audioPlayer, mediaControlsAvailable, screenOf, subscribeAudio } from './audioPlayer.ts'
 import { mediaUrl } from './media.ts'
 
 export type SpeakView = {
@@ -27,12 +28,12 @@ const SLACK_MS = 20_000
 /** When the Mac does not say how long it may take (an older answer shape). */
 const DEFAULT_WAIT_S = 150
 /** A file the relay no longer holds is asked back from the Mac; this long without an answer is a failure. */
-const REHYDRATE_MS = 20_000
+export const REHYDRATE_MS = 20_000
 const IDLE: SpeakView = { status: 'idle' }
 /** The words when the audio is made but nothing was started, because the owner moved on to something that needs the speaker. */
 export const READY_HINT = 'The audio is ready. Tap Listen to hear it.'
 export const REFUSED_HINT = 'Your browser blocked the sound. Tap Resume to hear it.'
-/** The lock screen and pill title. Fixed on purpose: message text (code, tokens, untrusted content) never goes there. */
+/** The lock screen title. Fixed on purpose: message text (code, tokens, untrusted content) never goes there. */
 export const NOW_PLAYING_TITLE = 'Message from Talos'
 
 const views = new Map<string, SpeakView>()
@@ -92,14 +93,20 @@ export function cancelSpeak(id: string): void {
 
 /**
  * True when the speaker belongs to someone else by the time the audio is ready: Drive
- * asked the dock to step aside since the tap, or another clip is playing right now. The tap is not a licence to talk over any of
- * that, minutes later and from another screen.
+ * asked the player to step aside since the tap, another clip is playing right now, or he has left the screen he tapped on and the
+ * device has no system controls to stop it from (with them it plays on, as a clip does when he leaves the thread). The tap is not a licence to talk over any of that, minutes later and from
+ * another screen.
  */
-function speakerTaken(pausesAtTap: number, key: string): boolean {
-  if (audioDock.pauseRequestCount() !== pausesAtTap) return true
-  const s = audioDock.state()
-  return Boolean(s.item && s.item.key !== key && s.playing)
+function speakerTaken(pausesAtTap: number, key: string, screenAtTap: string): boolean {
+  if (audioPlayer.pauseRequestCount() !== pausesAtTap) return true
+  // With system controls he can stop it from anywhere; without them a clip on a screen he left could not be stopped.
+  if (currentScreen() !== screenAtTap && !mediaControlsAvailable()) return true
+  const s = audioPlayer.state()
+  return Boolean(s.item && s.item.key !== key && audioPlayer.active()) // a start still being tried counts as playing
 }
+
+/** The screen on show (a thread and its sub-pages count as one). No window (a unit test of the store) reads as one fixed screen. */
+const currentScreen = (): string => (typeof location === 'undefined' ? '' : screenOf(location.pathname))
 
 /** Sign-out: stop every ask in flight and forget every note. */
 export function resetSpeak(): void {
@@ -111,15 +118,15 @@ export function resetSpeak(): void {
   for (const l of [...listeners]) l()
 }
 
-// A dock item for this message that fails to load gets one ask to the Mac for the file (the relay keeps media about a week).
+// A player item for this message that fails to load gets one ask to the Mac for the file (the relay keeps media about a week).
 const registered = new Map<string, () => void>()
 let watching = false
-function watchDock() {
+function watchPlayer() {
   if (watching) return
   watching = true
-  // A row handle for a message that is no longer in the dock is dropped, so handles never pile up.
-  subscribeDock(() => {
-    const st = audioDock.state()
+  // A row handle for a message that is no longer loaded is dropped, so handles never pile up.
+  subscribeAudio(() => {
+    const st = audioPlayer.state()
     const cur = st.item?.key
     // Playing now: a "blocked" or "ready" hint for this message is out of date.
     if (st.playing && cur?.startsWith('speak:')) {
@@ -141,26 +148,30 @@ function watchDock() {
 }
 
 function keepFileReachable(client: TalosClient, key: string, mediaId: string, onFailed: (msg: string) => void): void {
-  watchDock()
+  watchPlayer()
   registered.get(key)?.()
   let src = `${mediaUrl(mediaId)}?c=2`
   let asked = false
+  /** The Mac sent the file back: an error after that is real. Before it, a repeat of the first error (a Play tap on the failed clip) is not. */
+  let back = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const offReady = client.onFrame('media.ready', (f) => {
     if (f.media_id !== mediaId || !asked) return
     clearTimeout(timer)
+    back = true
     src = `${mediaUrl(mediaId)}?c=2&r=1`
-    audioDock.rowSrcChanged(key, src)
+    audioPlayer.rowSrcChanged(key, src)
   })
   // Once the owner has been told it failed, a file that turns up later must not start playing by itself.
   const gaveUp = () => {
     offReady()
     onFailed("The audio couldn't be loaded. Tap to make it again.")
   }
-  const unregister = audioDock.registerRow(key, () => ({
+  const unregister = audioPlayer.registerRow(key, () => ({
     src,
     onError: () => {
       if (asked) {
+        if (!back) return // the wait for the Mac goes on
         clearTimeout(timer)
         gaveUp()
         return
@@ -178,12 +189,13 @@ function keepFileReachable(client: TalosClient, key: string, mediaId: string, on
 }
 
 /**
- * The tap. Asks the Mac, follows its answers until 'ready' or 'failed', then hands the audio to the dock. A second tap while
+ * The tap. Asks the Mac, follows its answers until 'ready' or 'failed', then hands the audio to the player. A second tap while
  * asking is `cancelSpeak`'s business, not this function's. No message text is sent anywhere or kept here (not even for the lock-screen title): the Mac reads its own copy.
  */
 export function startSpeak(client: TalosClient, m: { id: string; thread_id: string }): void {
   if (runs.has(m.id)) return
-  const pausesAtTap = audioDock.pauseRequestCount()
+  const pausesAtTap = audioPlayer.pauseRequestCount()
+  const screenAtTap = currentScreen()
   const why = refusal(client)
   if (why) {
     setView(m.id, { status: 'failed', message: why })
@@ -214,15 +226,15 @@ export function startSpeak(client: TalosClient, m: { id: string; thread_id: stri
           const key = speakKey(m.id)
           const note = countNote(a.chars, a.totalChars, a.truncated)
           const base: SpeakView = { status: 'idle', ...(note ? { note } : {}) }
-          if (speakerTaken(pausesAtTap, key)) {
+          if (speakerTaken(pausesAtTap, key, screenAtTap)) {
             // Nothing is loaded and nothing plays: the Mac keeps the audio, so the next Listen is instant.
             setView(m.id, { ...base, hint: READY_HINT })
             return
           }
           keepFileReachable(client, key, a.media.media_id, (msg) => setView(m.id, { status: 'failed', message: msg }))
           setView(m.id, base)
-          audioDock.open(
-            { key, mediaId: a.media.media_id, title: NOW_PLAYING_TITLE, threadId: m.thread_id },
+          audioPlayer.open(
+            { key, mediaId: a.media.media_id, title: NOW_PLAYING_TITLE, mime: a.media.mime, size: a.media.size },
             `${mediaUrl(a.media.media_id)}?c=2`,
             [],
             { play: true, onRefused: () => setView(m.id, { ...speakView(m.id), hint: REFUSED_HINT }) },

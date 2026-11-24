@@ -248,8 +248,8 @@ test('blocks the process', () => {
   }, 60_000)
 })
 
-describe('test-parallel --retry-failed: a failed file is run once more, and a pass then is green but logged as a flake', () => {
-  // Fails on its first run in a folder and passes on the next: each run appends a line to the marker file.
+describe('test-parallel never runs a file twice: a failed file runs once, and --retry-failed is gone', () => {
+  // Fails on its first run in a folder and would pass on the next: each run appends a line to the marker file.
   const flips = (mark: string) => `import { appendFileSync, existsSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 test('steady', () => {})
@@ -259,71 +259,28 @@ test('flips once', () => {
   expect(first).toBe(false)
 })
 `
+  const lines = (f: string) => (existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').filter(Boolean) : [])
   const setup = () => {
     const t = mkdtempSync(join(tmpdir(), 'tp-retry-'))
     dirs.push(t)
     return { mark: join(t, 'mark'), flakes: join(t, 'flakes') }
   }
-  const lines = (f: string) => (existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').filter(Boolean) : [])
 
-  it('a file that fails once and then passes is green, says so, and its failed test is written to CI_FLAKE_FILE', () => {
-    const { mark, flakes } = setup()
-    const r = runEnv(
-      { CI_FLAKE_FILE: flakes },
-      suite({ 'a.test.ts': PASS, 'f.test.ts': flips(mark) }),
-      '--retry-failed',
-    )
-    expect(r.code, r.out).toBe(0)
-    expect(r.out).toContain('f.test.ts: failed, then passed on retry')
-    expect(lines(mark)).toHaveLength(2)
-    expect(lines(flakes)).toEqual(['flips once\tf.test.ts'])
-  })
-
-  it('a file that fails twice stays red, and nothing is logged as a flake', () => {
-    const { flakes } = setup()
-    const fails = `import { expect, test } from 'bun:test'\ntest('no', () => expect(1).toBe(2))\n`
-    const r = runEnv({ CI_FLAKE_FILE: flakes }, suite({ 'a.test.ts': PASS, 'b.test.ts': fails }), '--retry-failed')
-    expect(r.code).toBe(1)
-    expect(r.out).toContain('FAILED (1 of 2)')
-    expect(r.out).toContain('b.test.ts: failed again on retry')
-    expect(lines(flakes)).toEqual([])
-  })
-
-  it("a rerun that exits 0 without reporting its tests is red: the first run's output is not read again", () => {
-    const { mark, flakes } = setup()
-    // fails with a full report the first time; the second time it quits before bun says anything
-    const quitsOnRerun = `import { appendFileSync, existsSync } from 'node:fs'
-import { expect, test } from 'bun:test'
-if (existsSync(${JSON.stringify(mark)})) process.exit(0)
-appendFileSync(${JSON.stringify(mark)}, 'run\\n')
-test('no', () => expect(1).toBe(2))
-`
-    const r = runEnv({ CI_FLAKE_FILE: flakes }, suite({ 'q.test.ts': quitsOnRerun }), '--retry-failed')
-    expect(r.code, r.out).toBe(1)
-    expect(lines(flakes)).toEqual([])
-  })
-
-  it('without the flag a failed file is not run again', () => {
+  it('a failed file is not run again, with or without CI_FLAKE_FILE: it is red, and nothing is logged as a flake', () => {
     const { mark, flakes } = setup()
     const r = runEnv({ CI_FLAKE_FILE: flakes }, suite({ 'f.test.ts': flips(mark) }))
     expect(r.code).toBe(1)
     expect(lines(mark)).toHaveLength(1)
+    expect(lines(flakes)).toEqual([])
+    expect(r.out).not.toContain('on retry')
   })
 
-  it('a file killed at the file limit is not run again: a hang is not a flake, and a second one would cost the limit twice', () => {
-    const { mark, flakes } = setup()
-    const hangs = `import { appendFileSync } from 'node:fs'
-import { test } from 'bun:test'
-test('blocks', () => {
-  appendFileSync(${JSON.stringify(mark)}, 'run\\n')
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20_000)
-})
-`
-    const r = runEnv({ CI_FLAKE_FILE: flakes }, suite({ 'h.test.ts': hangs }), '--retry-failed', '--file-timeout', '2')
-    expect(r.code).toBe(1)
-    expect(lines(mark)).toHaveLength(1)
-    expect(lines(flakes)).toEqual([])
-  }, 60_000)
+  it('--retry-failed is not an option any more: it is read as a folder, the run is refused and no file runs', () => {
+    const { mark } = setup()
+    const r = runEnv({}, suite({ 'f.test.ts': flips(mark) }), '--retry-failed')
+    expect(r.code).not.toBe(0)
+    expect(lines(mark)).toEqual([])
+  })
 })
 
 describe('--shard K/N: the same files dealt into N piles, biggest first, each to the lightest pile so far', () => {

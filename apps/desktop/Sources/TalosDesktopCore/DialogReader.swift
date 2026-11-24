@@ -22,6 +22,9 @@ public enum DialogReader {
     /// below: a card for either needs the exact screen the offer is tied to, so each key is checked against it, `KeyGuard.Intent.pane`).
     case toolPermission = "tool_permission"
     case agentQuestion = "agent_question"
+    /// Claude Code's usage-limit menu (`PaneSelect`, row 7): `subject` says which limit and when it resets, the options are `Stop and wait`
+    /// (Escape) and, when the headline names a model, `Switch model` (Escape, then `/model`). Never a row that spends usage credits.
+    case usageLimit = "usage_limit"
   }
 
   public struct Dialog: Equatable, Sendable {
@@ -159,7 +162,7 @@ public enum DialogReader {
       } else {
         return nil
       }
-    case .login, .devChannels, .apiKey, .toolPermission, .agentQuestion: return nil  // login has no select; the channel question and the two pane Selects have their own readers
+    case .login, .devChannels, .apiKey, .toolPermission, .agentQuestion, .usageLimit: return nil  // login has no select; the channel question and the two pane Selects have their own readers
     }
     if let escaped, !intensityOK(escaped, top: top, options: first...last, cursor: c) { return nil }
     return Dialog(kind: kind, subject: subject, options: options, cursor: c - first)

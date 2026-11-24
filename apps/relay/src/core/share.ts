@@ -14,6 +14,7 @@ import {
   newId,
   newUlid,
   SHARE_FEATURE,
+  SHARE_IDEMPOTENCY_KEY_RE,
   SHARE_LIMITS,
   SHARE_SECRET_RE,
   SHARE_THREAD,
@@ -30,7 +31,15 @@ import { z } from 'zod'
 import { getSession, preflightBridgeHttp, requireCsrf, requireSession, verifyBridgeHttp } from '../auth/contract.ts'
 import { RateLimiter } from '../auth/limits.ts'
 import type { AppEnv, RelayServices } from '../services.ts'
-import { idleBodyTimeout, lateRequest, limitBody, originalRequest } from './body-guard.ts'
+import {
+  BODY_TOO_LARGE,
+  type BodyRead,
+  idleBodyTimeout,
+  lateRequest,
+  limitBody,
+  originalRequest,
+  readBodyWithDeadline,
+} from './body-guard.ts'
 import { registerRelayFeature } from './features.ts'
 import { runtimeOf } from './runtime.ts'
 import { clientIp, DAY_MS } from './util.ts'
@@ -79,6 +88,8 @@ export function shareBytesSince(db: RelayServices['db'], since: number): number 
   ).s
 }
 const SHARE_DAILY_BYTES = 200 * MIB
+/** A share's `Idempotency-Key` is answered again for at least a day; two days, so a slow retry is never cut off. */
+const KEY_KEPT_MS = 2 * DAY_MS
 
 const hashSecret = (secret: string): string => createHash('sha256').update(secret).digest('hex')
 
@@ -172,6 +183,24 @@ export class ShareStore {
     return Boolean(this.db.prepare(`select 1 from core_share_tokens t where t.id = ? and ${LIVE}`).get(id))
   }
 
+  /** The share_id a stored share with this key was answered with, if one is kept. */
+  keyed(tokenId: string, key: string): string | undefined {
+    return (
+      this.db
+        .prepare('select share_id from core_share_keys where token_id = ? and idem_key = ? and created_at >= ?')
+        .get(tokenId, key, this.services.clock.now() - KEY_KEPT_MS) as { share_id: string } | undefined
+    )?.share_id
+  }
+
+  /** Written inside the Mac queue transaction. Old records go first, so a key kept past its time can be used again. */
+  rememberKey(tokenId: string, key: string, shareId: string): void {
+    const now = this.services.clock.now()
+    this.db.prepare('delete from core_share_keys where created_at < ?').run(now - KEY_KEPT_MS)
+    this.db
+      .prepare('insert into core_share_keys (token_id, idem_key, share_id, created_at) values (?, ?, ?, ?)')
+      .run(tokenId, key, shareId, now)
+  }
+
   touch(id: string, net: string | null): void {
     this.db
       .prepare('update core_share_tokens set last_used_at = ?, last_used_net = ? where id = ?')
@@ -180,6 +209,11 @@ export class ShareStore {
 }
 
 const stores = new WeakMap<RelayServices, ShareStore>()
+/** Keys being processed right now (token id + key), so two copies arriving together make one share. */
+const inFlight = new WeakMap<RelayServices, Map<string, Promise<void>>>()
+const keys = new WeakMap<Request, string>()
+/** The request body, read once by `shareOnce` (with the deadline), for the handler to parse. */
+const bodies = new WeakMap<Request, Uint8Array>()
 const limiters = new WeakMap<RelayServices, RateLimiter>()
 const storeOf = (s: RelayServices): ShareStore => {
   const have = stores.get(s)
@@ -373,14 +407,16 @@ function cleanFields(raw: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-async function parseShare(c: Context<AppEnv>): Promise<Parsed> {
+async function parseShare(c: Context<AppEnv>, bytes: Uint8Array): Promise<Parsed> {
   const type = (c.req.header('content-type') ?? '').toLowerCase()
   let fields: Record<string, unknown>
   let files: File[] = []
   if (type.startsWith('multipart/form-data')) {
     let form: FormData
     try {
-      form = await c.req.formData()
+      form = await new Response(bytes as BodyInit, {
+        headers: { 'content-type': c.req.header('content-type') ?? '' },
+      }).formData()
     } catch {
       return { error: 'bad_request', status: 400 }
     }
@@ -392,7 +428,7 @@ async function parseShare(c: Context<AppEnv>): Promise<Parsed> {
       } else return { error: 'bad_request', status: 400 }
     }
   } else if (type.startsWith('application/json')) {
-    const j = await c.req.json().catch(() => null)
+    const j = await new Response(bytes as BodyInit).json().catch(() => null)
     if (!j || typeof j !== 'object' || Array.isArray(j)) return { error: 'bad_request', status: 400 }
     fields = j as Record<string, unknown>
   } else return { error: 'bad_request', status: 400 }
@@ -404,15 +440,84 @@ async function parseShare(c: Context<AppEnv>): Promise<Parsed> {
   return { body: body.data, files }
 }
 
+/**
+ * A retry of a share (`Idempotency-Key`, per token) gets the first answer and nothing else happens: no media, no push,
+ * no token touch, no daily-bytes charge. Only a share that was really stored is remembered, so a refused or failed one
+ * can be sent again. The auth limits already took their hit for the request (it is still a request). A copy that
+ * arrives while the first is processed waits for it, then answers from the record, or goes first if the first failed.
+ * Same key with other content: still the first share.
+ *
+ * The body is read here, with the request's deadline (`readBodyWithDeadline`), so a stalled or dropped upload gives its
+ * key back at once instead of leaving it held; a repeat's body is read and dropped before the 202, because the server
+ * closes a connection whose body is still unread shortly after it answered.
+ */
+async function shareOnce(c: Context<AppEnv>, next: () => Promise<void>) {
+  const key = c.req.header('idempotency-key')
+  if (key !== undefined && !SHARE_IDEMPOTENCY_KEY_RE.test(key)) return c.json({ error: 'bad_request' }, 400)
+  const services = c.get('services')
+  const root = originalRequest(c)
+  const token = authed.get(root) as ShareTokenT
+  const shares = storeOf(services)
+  const cap = token.scopes.includes('files') ? FILES_BODY_CAP : TEXT_BODY_CAP
+  // A chunked body that outgrows the cap fails the read: that is a 413, not a relay problem.
+  const readBody = async (): Promise<BodyRead> => {
+    try {
+      return await readBodyWithDeadline(c, cap)
+    } catch (e) {
+      if (e instanceof Error && e.message === BODY_TOO_LARGE) return { ok: false, why: 'too_large' }
+      throw e
+    }
+  }
+  const unread = (read: { ok: false; why: 'timeout' | 'too_large' }) =>
+    read.why === 'timeout' ? c.json({ error: 'request_timeout' }, 408) : c.json({ error: 'too_large' }, 413)
+  const flights = inFlight.get(services) ?? new Map<string, Promise<void>>()
+  inFlight.set(services, flights)
+  const slot = `${token.id}:${key}`
+  let release = () => {}
+  if (key !== undefined) {
+    for (;;) {
+      const busy = flights.get(slot)
+      if (!busy) break
+      await busy
+    }
+    // A copy that timed out while it waited must not take the slot or act: its client was told 408.
+    if (lateRequest(c)) return c.json({ error: 'request_timeout' }, 408)
+    if (!shares.stillValid(token.id))
+      return c.json({ error: 'share_token_invalid', message: 'That share link is not valid.' }, 401)
+    const done = shares.keyed(token.id, key)
+    if (done) {
+      const read = await readBody()
+      return read.ok ? c.json({ share_id: done }, 202) : unread(read)
+    }
+    flights.set(
+      slot,
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    keys.set(root, key)
+  }
+  try {
+    const read = await readBody()
+    if (!read.ok) return unread(read)
+    bodies.set(root, read.body)
+    await next()
+  } finally {
+    if (key !== undefined) flights.delete(slot)
+    release()
+  }
+}
+
 shareRoutes.post(
   '/api/share',
   shareAuth,
   limitBody((c) => (authed.get(originalRequest(c))?.scopes.includes('files') ? FILES_BODY_CAP : TEXT_BODY_CAP)),
   idleBodyTimeout(60_000),
+  shareOnce,
   async (c) => {
     const services = c.get('services')
     const token = authed.get(originalRequest(c)) as ShareTokenT
-    const parsed = await parseShare(c)
+    const parsed = await parseShare(c, bodies.get(originalRequest(c)) ?? new Uint8Array(0))
     if ('error' in parsed) return c.json({ error: parsed.error }, parsed.status)
     if (lateRequest(c)) return c.json({ error: 'request_timeout' }, 408)
     const { body, files } = parsed
@@ -483,6 +588,7 @@ shareRoutes.post(
     const storedId = newUlid()
     await rt.hub.toApps({ type: 'message.stored', id: storedId, client_msg_id: msgId, message }, { durable: true })
     const seq = rt.store.getEventByFrameId(storedId)?.relay.seq
+    const key = keys.get(originalRequest(c))
     await rt.hub.toBridge(
       {
         type: 'share.item',
@@ -491,7 +597,8 @@ shareRoutes.post(
         token_label: token.label,
         message: { ...message, ...(seq !== undefined ? { seq } : {}) },
       },
-      { durable: true },
+      // The key is recorded in the same transaction as the Mac's queue entry: both land or neither does.
+      { durable: true, ...(key ? { alsoWrite: () => shares.rememberKey(token.id, key, shareId) } : {}) },
     )
     storeOf(services).touch(token.id, networkOf(ipOf(c)))
     return c.json({ share_id: shareId }, 202)

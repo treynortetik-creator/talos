@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CLAIM_DEADLINE_MS, DedicatedConfig, newUlid, WAKE_NOTICE, WakeFile, wakeLimitText } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { cardUpdateFrame } from '../src/frames-out.ts'
@@ -14,7 +14,7 @@ import { pgidOf } from '../src/hub/server.ts'
 import { nullLogger } from '../src/log.ts'
 import { readStatusFile } from '../src/status-file.ts'
 import { WORKER_BRIDGE_TOOLS } from '../src/tools/table.ts'
-import { advanceSteps, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
+import { advanceSteps, type Harness, pastClaimDeadline, sleep, startHarness, waitFor } from './helpers.ts'
 
 const NONCE = 'test-nonce-0123456789abcdef'
 let h: Harness | undefined
@@ -405,29 +405,33 @@ describe('OC1: routing and read_inbound', () => {
     expect(hh.notes[0]?.meta.routed).toBe('fallback')
   })
 
-  test('not claimed by the deadline: main is told once, and a late read_inbound gets "already handled by main"', async () => {
-    const clock = fakeClock(new Date().toISOString())
-    const hh = await hub({ clock })
-    writeWorkers(hh.home, clock.now(), { trip: { state: 'live', pane_pid: myPgid() } })
-    writeNonce(hh.home, 'trip')
-    const sent = await hh.app.sendMessage('trip', 'Book it')
-    await waitTicking(clock, () => existsSync(join(hh.home, 'workers', 'trip', 'wake')))
-    expect(hh.notes).toHaveLength(0)
-    // the worker's to read: main's status.json does not count it as unseen by main
-    const status = () => readStatusFile(join(hh.home, 'status.json'))
-    expect(status()?.unseen_oldest_at).toBeNull()
-    await advanceSteps(clock, CLAIM_DEADLINE_MS + 1_000, 10_000)
-    await hh.waitNotes(1)
-    expect(hh.notes[0]?.meta).toMatchObject({ routed: 'fallback', message_id: sent.client_msg_id })
-    // ...until it falls back: then it is main's, and a main that never reads it is told apart
-    await waitFor(() => status()?.unseen_oldest_at != null, 3000, 'unseen after the fallback')
-    const w = await startWorker(hh.home, hh.relay.httpUrl, false)
-    const r = JSON.parse((await w.callTool('read_inbound', {})).content[0]?.text ?? '{}')
-    expect(r.messages).toHaveLength(0)
-    expect(r.already_handled_by_main).toEqual([sent.client_msg_id])
-    await advanceSteps(clock, CLAIM_DEADLINE_MS, 10_000)
-    expect(hh.notes).toHaveLength(1) // never twice
-  })
+  test(
+    'not claimed by the deadline: main is told once, and a late read_inbound gets "already handled by main"',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      const hh = await hub({ clock })
+      writeWorkers(hh.home, clock.now(), { trip: { state: 'live', pane_pid: myPgid() } })
+      writeNonce(hh.home, 'trip')
+      const sent = await hh.app.sendMessage('trip', 'Book it')
+      await waitTicking(clock, () => existsSync(join(hh.home, 'workers', 'trip', 'wake')))
+      expect(hh.notes).toHaveLength(0)
+      // the worker's to read: main's status.json does not count it as unseen by main
+      const status = () => readStatusFile(join(hh.home, 'status.json'))
+      expect(status()?.unseen_oldest_at).toBeNull()
+      await pastClaimDeadline(clock, CLAIM_DEADLINE_MS + 1_000)
+      await hh.waitNotes(1)
+      expect(hh.notes[0]?.meta).toMatchObject({ routed: 'fallback', message_id: sent.client_msg_id })
+      // ...until it falls back: then it is main's, and a main that never reads it is told apart
+      await waitFor(() => status()?.unseen_oldest_at != null, 3000, 'unseen after the fallback')
+      const w = await startWorker(hh.home, hh.relay.httpUrl, false)
+      const r = JSON.parse((await w.callTool('read_inbound', {})).content[0]?.text ?? '{}')
+      expect(r.messages).toHaveLength(0)
+      expect(r.already_handled_by_main).toEqual([sent.client_msg_id])
+      await pastClaimDeadline(clock, CLAIM_DEADLINE_MS)
+      expect(hh.notes).toHaveLength(1) // never twice
+    },
+    t(60_000),
+  )
 
   test('claimed in time: main is never told', async () => {
     const clock = fakeClock(new Date().toISOString())
@@ -438,7 +442,7 @@ describe('OC1: routing and read_inbound', () => {
     const w = await startWorker(hh.home, hh.relay.httpUrl, false)
     const r = JSON.parse((await w.callTool('read_inbound', {})).content[0]?.text ?? '{}')
     expect(r.messages).toHaveLength(1)
-    await advanceSteps(clock, CLAIM_DEADLINE_MS + 1_000, 10_000)
+    await pastClaimDeadline(clock, CLAIM_DEADLINE_MS + 1_000)
     await sleep(100)
     expect(hh.notes).toHaveLength(0)
   })
@@ -586,36 +590,44 @@ describe('OC1: routing and read_inbound', () => {
     return { hh, id, sentToMain, channel, notices, failedUpdates }
   }
 
-  test('a worker never claims the approval and main cannot be told at the deadline: the card ends failed, the owner is told, nothing is sent later', async () => {
-    const clock = fakeClock(new Date().toISOString())
-    const t = await heldTap('primary', clock)
-    await advanceSteps(clock, CLAIM_DEADLINE_MS + 1_000, 10_000)
-    const upd = await t.hh.relay.expectFrame('card.update', (f) => f.card_id === t.id && f.state === 'failed', {
-      direction: 'from_bridge',
-    })
-    expect(upd.result).toMatchObject({ ok: false, ran: false })
-    await waitFor(() => t.notices().some((x) => x.includes('Book the hotel')), 5000, 'the owner notice')
-    expect(t.hh.bridge.ctx.ledger.get(t.id)?.state).toBe('failed')
-    t.channel.open = true // the channel mends: the decision must not be sent now
-    await advanceSteps(clock, CLAIM_DEADLINE_MS, 10_000)
-    expect(t.sentToMain).toHaveLength(0)
-  })
+  test(
+    'a worker never claims the approval and main cannot be told at the deadline: the card ends failed, the owner is told, nothing is sent later',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      const t = await heldTap('primary', clock)
+      await pastClaimDeadline(clock, CLAIM_DEADLINE_MS + 1_000)
+      const upd = await t.hh.relay.expectFrame('card.update', (f) => f.card_id === t.id && f.state === 'failed', {
+        direction: 'from_bridge',
+      })
+      expect(upd.result).toMatchObject({ ok: false, ran: false })
+      await waitFor(() => t.notices().some((x) => x.includes('Book the hotel')), 5000, 'the owner notice')
+      expect(t.hh.bridge.ctx.ledger.get(t.id)?.state).toBe('failed')
+      t.channel.open = true // the channel mends: the decision must not be sent now
+      await pastClaimDeadline(clock, CLAIM_DEADLINE_MS)
+      expect(t.sentToMain).toHaveLength(0)
+    },
+    t(60_000),
+  )
 
   for (const [action, said] of [
     ['kill', "Your Kill didn't reach your agent. Nothing was running."],
     ['revise', "Your request for changes didn't reach your agent. Nothing was running."],
   ] as const)
-    test(`a ${action} held for a worker that main cannot be told about at the deadline: the owner is told, and it is not sent later`, async () => {
-      const clock = fakeClock(new Date().toISOString())
-      const t = await heldTap(action, clock)
-      await advanceSteps(clock, CLAIM_DEADLINE_MS + 1_000, 10_000)
-      await waitFor(() => t.notices().includes(said), 5000, `the owner notice (${t.notices().join(' | ')})`)
-      expect(t.hh.bridge.ctx.ledger.get(t.id)?.state).toBe('done') // nothing was running: not a failure
-      expect(t.failedUpdates()).toHaveLength(0)
-      t.channel.open = true
-      await advanceSteps(clock, CLAIM_DEADLINE_MS, 10_000)
-      expect(t.sentToMain).toHaveLength(0)
-    })
+    test(
+      `a ${action} held for a worker that main cannot be told about at the deadline: the owner is told, and it is not sent later`,
+      async () => {
+        const clock = fakeClock(new Date().toISOString())
+        const t = await heldTap(action, clock)
+        await pastClaimDeadline(clock, CLAIM_DEADLINE_MS + 1_000)
+        await waitFor(() => t.notices().includes(said), 5000, `the owner notice (${t.notices().join(' | ')})`)
+        expect(t.hh.bridge.ctx.ledger.get(t.id)?.state).toBe('done') // nothing was running: not a failure
+        expect(t.failedUpdates()).toHaveLength(0)
+        t.channel.open = true
+        await pastClaimDeadline(clock, CLAIM_DEADLINE_MS)
+        expect(t.sentToMain).toHaveLength(0)
+      },
+      t(60_000),
+    )
 
   for (const action of ['primary', 'kill'] as const)
     test(`a ${action} still held when the thread's own session is switched off, and main cannot be told: the owner hears it`, async () => {

@@ -20,7 +20,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterAll } from 'vitest'
+import { afterAll, expect } from 'vitest'
 
 export const REPO = resolve(__dirname, '..')
 export const SCRIPT = join(REPO, 'install.sh')
@@ -73,6 +73,15 @@ export function recordPnpmInstall(bin: string, log: string) {
   if (viaCorepack) symlinkSync(at, join(bin, 'pnpm'))
 }
 
+/** The machine's own PATH with a launchctl that refuses in front of it, for a test that cannot use a sandbox's private PATH. */
+export function refusingPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'talos-no-launchctl-'))
+  made.push(dir)
+  writeFileSync(join(dir, 'launchctl'), '#!/bin/sh\necho "launchctl: test stub, nothing was loaded" >&2\nexit 1\n')
+  chmodSync(join(dir, 'launchctl'), 0o755)
+  return `${dir}:${process.env.PATH ?? '/usr/bin:/bin'}`
+}
+
 export type Sandbox = { home: string; bin: string; log: string; desktop: string; agent: string; root: string }
 export const flag = (sb: Sandbox, name: string) => join(sb.root, name)
 
@@ -105,6 +114,17 @@ export function sandbox(opts: { claude?: boolean } = {}): Sandbox {
     claude: `case "$1" in --version|-v) echo "2.1.330 (Claude Code)"; exit 0 ;; esac`,
   }
   for (const t of tools) stub(bin, t, `${versions[t] ?? ''}\n${record(t)}`)
+  // Chronos's own installer asks `uname -s`: here it is always a Mac (as TALOS_INSTALL_OS says for the kit), so the macOS branch runs the same on
+  // Linux and on a Mac.
+  const realUname = which('uname')
+  if (realUname) {
+    rmSync(join(bin, 'uname'), { force: true })
+    stub(bin, 'uname', `case "$1" in -s) echo Darwin ;; *) exec "${realUname}" "$@" ;; esac`)
+  }
+  // The macOS tools Chronos's installer calls, which a private PATH would not have (it died with "plutil: command not found" on a Mac): plutil
+  // passes, and launchctl records the call and refuses in plain words. A test never reaches the real launchd; `run` fails any run that called it.
+  stub(bin, 'plutil', 'exit 0')
+  stub(bin, 'launchctl', `${record('launchctl')}\necho "launchctl: test stub, nothing was loaded" >&2\nexit 1`)
   // The running-app probe: osascript answers "is running" from a flag file and records any quit request; lsappinfo gives a path.
   stub(
     bin,
@@ -148,12 +168,16 @@ export function run(
   sb: Sandbox,
   args: string[],
   env: Record<string, string> = {},
-  opts: { groupTimeoutMs?: number } = {},
+  opts: { groupTimeoutMs?: number; chronos?: boolean } = {},
 ) {
   const limit = opts.groupTimeoutMs
+  // Chronos installs by default on a Mac (and this harness is one: TALOS_INSTALL_OS). A test about something else runs without it
+  // (the hidden --no-chronos test switch); a test that names Chronos, or passes `chronos: true`, gets it.
+  const aboutChronos = opts.chronos || args.some((a) => a === '--with-chronos' || a === '--no-chronos')
+  const all = aboutChronos ? args : [...args, '--no-chronos']
   const [cmd, argv] = limit
-    ? ['perl', ['-e', GROUP_LIMIT, String(Math.ceil(limit / 1000)), 'bash', SCRIPT, ...args]]
-    : ['bash', [SCRIPT, ...args]]
+    ? ['perl', ['-e', GROUP_LIMIT, String(Math.ceil(limit / 1000)), 'bash', SCRIPT, ...all]]
+    : ['bash', [SCRIPT, ...all]]
   const r = spawnSync(cmd as string, argv as string[], {
     encoding: 'utf8',
     cwd: REPO,
@@ -175,6 +199,13 @@ export function run(
       ...env,
     },
   })
+  // no test may reach launchd: the stub on the sandbox PATH records any call, and a run that made one fails here
+  expect(
+    readFileSync(sb.log, 'utf8')
+      .split('\n')
+      .filter((l) => l.startsWith('launchctl')),
+    'launchctl was called',
+  ).toEqual([])
   return { code: r.status, out: `${r.stdout}${r.stderr}`, stdout: r.stdout, stderr: r.stderr }
 }
 

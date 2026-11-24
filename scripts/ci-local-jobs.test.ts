@@ -2,7 +2,16 @@
 // `gh` that records statuses, and fake `pnpm` and `bun` that write down what they were asked to run, so these tests prove
 // the order of events and that every gate is still a gate, without running any of the real suites.
 import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -129,6 +138,15 @@ case "$sub:\${GIT_FAKE_NET:-}" in
     while :; do sleep 1; done ;;
 esac
 exec "$real" "$@"`
+
+// a job's log before the job has written it reads as empty
+const tryLog = (read: () => string) => {
+  try {
+    return read()
+  } catch {
+    return ''
+  }
+}
 
 describe('ci-local.sh: git never waits for a person', () => {
   it.each(['prompt', 'stdin', 'hang'])(
@@ -271,15 +289,17 @@ job_three() { sleep 1; }`)
     // a job that waited for nothing keeps its plain line
     expect(run.out()).toMatch(/✓ three \(\d+s\)\n/)
     // timings.tsv: a ninth column, each job's wall/steps seconds; the first eight are as before. A tenth, appended: the desktop
-    // job's pty peak and limit, "-" for a run without it (older rows keep nine and read the same). An eleventh: the run's bun.
+    // job's pty peak and limit, "-" for a run without it (older rows keep nine and read the same). An eleventh: the run's bun. A twelfth:
+    // the seconds of Chronos's suite inside check, "chronos=-" for a run that did not have it.
     const row = readFileSync(join(r.home, '.cache/talos-ci/logs/timings.tsv'), 'utf8')
       .trim()
       .split('\n')
       .pop() as string
     const cols = row.split('\t')
-    expect(cols).toHaveLength(11)
+    expect(cols).toHaveLength(12)
     expect(cols[9]).toBe('-')
     expect(cols[10]).toBe('bun=1.4.4')
+    expect(cols[11]).toBe('chronos=-')
     // and each job's log says first which bun it runs, and from where
     expect(r.log('two').split('\n')[0]).toBe(`bun: 1.4.4 (${join(r.T, 'bin')}/bun)`)
     expect(cols[3]).toBe('one,two,three')
@@ -547,14 +567,14 @@ describe('the parts of check that run on another machine, and the Linux report j
     expect(existsSync(join(r.T, 'calls')) ? r.calledLines().filter((l) => l.startsWith('bun ')) : []).toEqual([])
   })
 
-  it('vitest runs the root suite on CI_PART_WORKERS workers, with the retry and the flake log of check', async () => {
+  it('vitest runs the root suite on CI_PART_WORKERS workers, with no retry and the flake log of check', async () => {
     const r = repo()
     const run = r.start([...noStatus, '--jobs', 'vitest'], { ...PART, CI_PART_WORKERS: '4' })
     expect(await run.done, run.out()).toBe(0)
     const v = r.calledLines().filter((l) => l.startsWith('pnpm test '))
     expect(v).toEqual([
       expect.stringMatching(
-        /^pnpm test --maxWorkers=4 .*--retry=1 --reporter=default --reporter=\S+ci-flake-vitest\.ts/,
+        /^pnpm test --maxWorkers=4 .*--retry=0 --reporter=default --reporter=\S+ci-flake-vitest\.ts/,
       ),
     ])
   })
@@ -607,12 +627,84 @@ exit 0`
       expect(await run.done, run.out()).toBe(allSkipped ? 1 : 0)
       const vitest = r.calledLines().filter((l) => l.includes('vitest run'))
       expect(vitest[1]).toMatch(
-        /vitest run --project scripts scripts\/a-linux\.test\.ts +--reporter=default --reporter=\S+ci-no-silent-skip\.ts/,
+        /vitest run --project scripts scripts\/a-linux\.test\.ts +--retry=0 --reporter=default --reporter=\S+ci-no-silent-skip\.ts/,
       )
       expect(vitest.join('\n')).not.toContain('b-mac')
       expect(r.log('linux')).toContain('the script tests that skip on macOS, run here: scripts/a-linux.test.ts')
       if (allSkipped) expect(r.log('linux')).toContain(`skipped on this Linux box: ${why}`)
     }
+  })
+})
+
+// part_lockwait reads the clock through `date`, which this script replaces by a fixed time per look; each look is [time, row]
+describe('how Lemnos reads a lock-wait heartbeat (part_lockwait)', () => {
+  const WHAT = 'the heavy lock'
+  const wait = (n: number, beat: string | number = 30) =>
+    `pending\twaiting for lock: ${n}s on titan${beat === '' ? '' : ` (beat ${beat}s)`}: ${WHAT}`
+  const running = 'pending\trunning on titan'
+  const looks = (env: Record<string, string>, steps: [number, string][]) => {
+    const T = mkdtempSync(join(tmpdir(), 'cijl-'))
+    dirs.push(T)
+    const script = `RESULTS="${T}"; . "${join(here, 'ci-local/jobs-check.sh')}"
+date() { echo "$NOW"; }
+${steps.map(([t, row]) => `NOW=${t}; part_lockwait '${row}' "$RESULTS/seen"`).join('\n')}`
+    const out = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } })
+    return out.stdout.trim().split('\n')
+  }
+  const q = (n: number) => `queued ${n} ${WHAT}`
+  // the same words at 1000 and at 1000 + gap: alive or gone
+  const gap = (env: Record<string, string>, row: string, gaps: number[]) =>
+    looks(env, [[1000, row], ...gaps.map((g): [number, string] => [1000 + g, row])]).slice(1)
+
+  it('the window is the part’s own beat (from its status) plus Lemnos’s poll plus 30 s', () => {
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, 30), [70, 71])).toEqual([q(5), 'working'])
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, 10), [50, 51])).toEqual([q(5), 'working']) // a part that beats faster
+  })
+  it('no beat in the words (older text), or one outside 10..300 s: 30 s, and the nearest end', () => {
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, ''), [70, 71])).toEqual([q(5), 'working'])
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, 100000), [340, 341])).toEqual([q(5), 'working']) // 300
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, 1), [50, 51])).toEqual([q(5), 'working']) // 10
+    expect(gap({ CI_PART_POLL: '10' }, wait(5, 'x'), [70, 71])).toEqual([q(5), 'working']) // not a number: 30
+  })
+  it('CI_PART_BEAT_STALE sets it outright, whatever the part says', () => {
+    expect(gap({ CI_PART_BEAT_STALE: '5' }, wait(5, 100), [5, 6])).toEqual([q(5), 'working'])
+  })
+  it('a knob with a leading zero is a decimal number, not a bad octal that quietly ends the reading', () => {
+    // 08 is eight: a window of 30 + 8 + 30
+    expect(gap({ CI_PART_POLL: '08' }, wait(5, 30), [68, 69])).toEqual([q(5), 'working'])
+    expect(gap({ CI_PART_BEAT_STALE: '08' }, wait(5, 30), [8, 9])).toEqual([q(5), 'working'])
+  })
+  it('the cap counts every wait of the part: two waits of 60% of it are stuck', () => {
+    const env = { CI_PART_LOCK_WAIT_MAX: '10' }
+    // the first wait ends in "running on" (6 s), the second reaches 5 s: 11 s in all
+    expect(
+      looks(env, [
+        [1000, wait(6)],
+        [1001, running],
+        [1002, wait(5)],
+      ]),
+    ).toEqual([q(6), 'working', `stuck 11 ${WHAT}`])
+    // a second wait that begins between two looks (its count is lower than the last seen) is a new wait too
+    expect(
+      looks(env, [
+        [1000, wait(6)],
+        [1001, wait(2)],
+        [1002, wait(5)],
+      ]),
+    ).toEqual([q(6), q(8), `stuck 11 ${WHAT}`])
+    // one wait of 6 s alone is under the cap
+    expect(looks(env, [[1000, wait(6)]])).toEqual([q(6)])
+  })
+  it('the beat is a number of seconds read in decimal: 010 is ten, and the floor is 10 (part_beat_secs)', () => {
+    const T = mkdtempSync(join(tmpdir(), 'cijl-'))
+    dirs.push(T)
+    const sh = (env: Record<string, string>) =>
+      spawnSync('bash', ['-c', `RESULTS="${T}"; . "${join(here, 'ci-local/jobs-check.sh')}"; part_beat_secs`], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', ...env },
+      }).stdout.trim()
+    expect(sh({ CI_PART_BEAT: '010' })).toBe('10')
+    expect(sh({})).toBe('30')
   })
 })
 
@@ -777,6 +869,160 @@ exit 0`
     expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*vitest here: delphi did not answer/)])
   })
 
+  // A part queued for a lock on its own machine (docs/CI-MACHINES.md, "A part queued for a lock"): its pending status says
+  // "waiting for lock: <n>s ..." and the words change at each beat, so a test changes them once per poll of the main shell (each
+  // poll reads the run's jobs once: the event to wait on), never on a timer.
+  describe('a bridge shard queued for a lock on its own machine', () => {
+    const WHAT = 'the heavy lock, which the other WSL distro holds'
+    const waiting = (n: number) =>
+      `ci-part/bridge-shard-2\tpending\t${A}cyclops\twaiting for lock: ${n}s on cyclops (beat 30s): ${WHAT}`
+    const others = [pass('bridge-shard-1', 'delphi'), pass('vitest', 'delphi')]
+    const jobs = ['delphi\tcompleted', 'cyclops\tin_progress']
+    const ghLines = (r: ReturnType<typeof repo>) =>
+      existsSync(r.env.GH_LOG as string) ? readFileSync(r.env.GH_LOG as string, 'utf8').split('\n') : []
+    const polls = (r: ReturnType<typeof repo>) => ghLines(r).filter((l) => l.includes('/actions/runs/9/jobs')).length
+    // whole or not at all: the fake gh reads the file at any moment, and an empty read in the middle of a rewrite is a poll with no
+    // waiting row (a part "working", which a wait of a second cannot afford)
+    const setRows = (r: ReturnType<typeof repo>, rows: string[]) => {
+      writeFileSync(join(r.home, 'rows.tmp'), `${rows.join('\n')}\n`)
+      renameSync(join(r.home, 'rows.tmp'), join(r.home, 'rows'))
+    }
+    /** One beat per poll of the main shell, `count` of them (it stops at once if the run has ended: the caller's check then fails). */
+    async function beats(
+      r: ReturnType<typeof repo>,
+      run: { done: Promise<number> },
+      count: number,
+      rowsAt = (n: number) => [...others, waiting(n)],
+    ) {
+      let over = false
+      void run.done.then(() => {
+        over = true
+      })
+      const base = polls(r)
+      for (let i = 0; i < count && !over; i++) {
+        await vi.waitUntil(() => over || polls(r) > base + i, { timeout: scaled(30_000), interval: 25 })
+        setRows(r, rowsAt(i + 1))
+      }
+    }
+    // A wait of 1 s against real-time polls: with every look "queued" the wait can never run out (its queued seconds are added at each look),
+    // but ONE look that is not (a heartbeat read as stale because the test or the machine was slow to change the words, an empty read)
+    // costs the whole gap since the last look, 1 s or more. So the window for a stale heartbeat is far wider than any load: the staleness
+    // itself is tested on its own (the cases with CI_PART_BEAT_STALE 1, and part_lockwait's, with a clock of their own)
+    const queued = { ...env(ALL_REMOTE, '1'), CI_PART_BEAT_STALE: '60' }
+
+    it('a fresh heartbeat holds CI_PART_WAIT: not taken while it beats, and its answer is folded', async () => {
+      const r = setup([...others, waiting(1)], jobs)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], queued)
+      await beats(r, run, 6)
+      expect(r.log('check')).not.toContain('taking')
+      setRows(r, [...others, pass('bridge-shard-2', 'cyclops'), waiting(7)])
+      expect(await run.done, run.out()).toBe(0)
+      expect(rest(r)).toEqual([])
+      expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*shard 2 on cyclops/)])
+    })
+
+    it('stuck past CI_PART_LOCK_WAIT_MAX: taken here, and the log names the lock wait and the machine', async () => {
+      const r = setup([...others, waiting(10)], jobs)
+      // an hour's answer wait: only the lock-wait cap can end this before the test's own timeout
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], {
+        ...env(ALL_REMOTE, '3600'),
+        CI_PART_LOCK_WAIT_MAX: '3',
+      })
+      expect(await run.done, run.out()).toBe(0)
+      expect(r.log('check')).toContain(
+        `taking bridge-shard-2: waiting for a lock on cyclops for 10s in all, over CI_PART_LOCK_WAIT_MAX (3s): ${WHAT}`,
+      )
+      expect(rest(r)).toEqual([expect.stringMatching(/--shard 2\/2 /)])
+      expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*shard 2 here: cyclops did not answer/)])
+    })
+
+    // Two shards on other machines: each has its own wait, and a queued one's time is its own (not the other's)
+    const waiting1 = (n: number) =>
+      `ci-part/bridge-shard-1\tpending\t${A}delphi\twaiting for lock: ${n}s on delphi (beat 30s): ${WHAT}`
+    const vitestPass = pass('vitest', 'delphi')
+    const bothJobs = ['delphi\tin_progress', 'cyclops\tin_progress']
+
+    it('shard 1 hung, shard 2 queued: shard 1 is taken at CI_PART_WAIT, shard 2 is not (its queue is not counted)', async () => {
+      const r = setup([vitestPass, waiting(1)], bothJobs)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], queued)
+      await beats(r, run, 6, (n) => [vitestPass, waiting(n)])
+      expect(r.log('check')).not.toContain('taking bridge-shard-2')
+      setRows(r, [vitestPass, pass('bridge-shard-2', 'cyclops'), waiting(7)])
+      expect(await run.done, run.out()).toBe(0)
+      expect(rest(r)).toEqual([expect.stringMatching(/--shard 1\/2 /)])
+      expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*shard 1 here: delphi did not answer/)])
+      expect(checkPosts(r).join('\n')).not.toContain('shard 2 here')
+    })
+
+    it('shard 1 queued, shard 2 hung: shard 2 is taken at its own CI_PART_WAIT, not after shard 1’s queue', async () => {
+      const r = setup([vitestPass, waiting1(1)], bothJobs)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], queued)
+      await beats(r, run, 6, (n) => [vitestPass, waiting1(n)])
+      // both answer late: shard 2 after its own wait is over (1 s), though shard 1's queue went on for five more
+      setRows(r, [vitestPass, pass('bridge-shard-1', 'delphi'), pass('bridge-shard-2', 'cyclops'), waiting1(7)])
+      expect(await run.done, run.out()).toBe(0)
+      expect(rest(r)).toEqual([expect.stringMatching(/--shard 2\/2 /)])
+      expect(r.log('check')).toContain('taking bridge-shard-2: no answer within 1s')
+      expect(checkPosts(r)).toEqual([expect.stringMatching(/state=success .*shard 2 here: cyclops did not answer/)])
+    })
+
+    it('the cap covers every wait of the shard: two waits of 60% of it are stuck, though each is under it', async () => {
+      const r = setup([...others, waiting(1)], jobs)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], {
+        ...env(ALL_REMOTE, '3600'),
+        CI_PART_LOCK_WAIT_MAX: '10',
+      })
+      let over = false
+      void run.done.then(() => {
+        over = true
+      })
+      const running = `ci-part/bridge-shard-2\tpending\t${A}cyclops\trunning on cyclops`
+      // A wait that reaches 6 s, "running on", a wait that reaches 5 s. The shards are polled jobs first, then statuses, so a poll that
+      // began before a write may read it a moment later: each row is held for two poll starts, which is one whole poll that read it.
+      // (A row replaced before any poll read it would leave the first wait at 5 s and the total at 10, which is not over the cap.)
+      for (const row of [waiting(6), running, waiting(5)]) {
+        const base = polls(r)
+        await vi.waitUntil(() => over || polls(r) > base, { timeout: scaled(30_000), interval: 25 })
+        if (over) break
+        setRows(r, [...others, row])
+        const written = polls(r)
+        await vi.waitUntil(() => over || polls(r) > written + 1, { timeout: scaled(30_000), interval: 25 })
+      }
+      // the poll that reads it writes stuck; the fold loop reads that on its own beat, so answer only once it took the shard (or
+      // never did: a red build ends here, with the part's pass)
+      await vi
+        .waitUntil(() => over || tryLog(() => r.log('check')).includes('taking bridge-shard-2'), {
+          timeout: scaled(30_000),
+          interval: 250,
+        })
+        .catch(() => {})
+      if (!over) setRows(r, [...others, pass('bridge-shard-2', 'cyclops')])
+      expect(await run.done, run.out()).toBe(0)
+      expect(r.log('check')).toContain(
+        `taking bridge-shard-2: waiting for a lock on cyclops for 11s in all, over CI_PART_LOCK_WAIT_MAX (10s): ${WHAT}`,
+      )
+      expect(rest(r)).toEqual([expect.stringMatching(/--shard 2\/2 /)])
+    })
+
+    it('a heartbeat that went stale holds nothing: taken at CI_PART_WAIT, as a part that is only working', async () => {
+      const r = setup([...others, waiting(5)], jobs) // the same words at every poll: nobody beats
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...env(ALL_REMOTE, '1'), CI_PART_BEAT_STALE: '1' })
+      expect(await run.done, run.out()).toBe(0)
+      expect(r.log('check')).toContain('taking bridge-shard-2: no answer within 1s')
+      expect(rest(r)).toEqual([expect.stringMatching(/--shard 2\/2 /)])
+    })
+
+    it('once it runs (a "running on" status above the wait), the normal wait applies from then', async () => {
+      const r = setup([...others, waiting(1)], jobs)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], queued)
+      await beats(r, run, 6)
+      expect(r.log('check')).not.toContain('taking')
+      setRows(r, [...others, `ci-part/bridge-shard-2\tpending\t${A}cyclops\trunning on cyclops`, waiting(7)])
+      expect(await run.done, run.out()).toBe(0)
+      expect(r.log('check')).toContain('taking bridge-shard-2: no answer within 1s')
+    })
+  })
+
   it('a part working when the quiet group ends, and green before the wait is over, is not taken', async () => {
     const r = setup(
       [pass('bridge-shard-1', 'delphi'), pass('bridge-shard-2', 'cyclops')],
@@ -843,6 +1089,146 @@ ci_mutex() { [ "$2" = suites ] && { echo "ci-local: timed out waiting for suites
       ])
       expect(partPosts(r)).toEqual([expect.stringContaining('state=success')])
       expect(readFileSync(r.env.GH_LOG as string, 'utf8')).not.toContain('/jobs')
+    })
+
+    // A part queued for the suites lock says so (docs/CI-MACHINES.md, "A part queued for a lock"): a heavy run holds the lock, the
+    // part's pending status turns to "waiting for lock: <n>s on ...: <what>" at each beat, and to "running on" once it has it.
+    const ghLog = (r: ReturnType<typeof repo>) =>
+      existsSync(r.env.GH_LOG as string) ? readFileSync(r.env.GH_LOG as string, 'utf8') : ''
+    const pendings = (r: ReturnType<typeof repo>) =>
+      ghLog(r)
+        .split('\n')
+        .filter((l) => l.includes('-X POST') && l.includes('context=ci-part/check ') && l.includes('state=pending'))
+        .map((l) => l.replace(/^.*-f description=/, '').replace(/ -f target_url=.*$/, ''))
+    // a beat of one second: a seam inside the copy of the script under test, not a knob (CI_PART_BEAT is at least 10 s, always)
+    const FAST_BEAT = 'part_beat_secs() { echo 1; }'
+    const jobLog = (r: ReturnType<typeof repo>) => {
+      try {
+        return r.log('check')
+      } catch {
+        return '' // not started yet
+      }
+    }
+    /** A heavy run (a gate) that holds the suites lock until the file `go` is there. */
+    async function holder(r: ReturnType<typeof repo>) {
+      const go = join(r.T, 'gate.go')
+      const ran = join(r.T, 'gate.ran')
+      const gate = spawn(
+        'bash',
+        [
+          join(here, 'heavy-lock.sh'),
+          'run',
+          'g1',
+          '--',
+          'sh',
+          '-c',
+          `echo ran > "${ran}"; while [ ! -f "${go}" ]; do sleep 0.05; done`,
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? '',
+            HOME: r.home,
+            HEAVY_LOCK_POLL: '0.1',
+            TALOS_HEAVY_GUARD: join(r.T, 'none'),
+            TALOS_HEAVY_SLOTS: '1', // one slot: the run waits for the lock itself, not for a turn before it starts
+          },
+        },
+      )
+      live.push(gate)
+      await vi.waitUntil(() => existsSync(ran), { timeout: scaled(30_000), interval: 25 })
+      return () => writeFileSync(go, '')
+    }
+
+    it('queued for the suites lock: it posts "waiting for lock" while it waits, and "running on" once it has the lock', async () => {
+      const r = setup([], [])
+      // the loud group's Vitest step waits for a file: the part runs on, long enough for the main shell to say so
+      r.inject('step_vitest() { while [ ! -f "$HOME/part-fin" ]; do sleep 0.05; done; }')
+      r.inject(FAST_BEAT)
+      const release = await holder(r)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...PART, TALOS_HEAVY_SLOTS: '1' })
+      await vi.waitUntil(() => pendings(r).some((d) => d.startsWith('waiting for lock: ')), {
+        timeout: scaled(30_000),
+        interval: 25,
+      })
+      release()
+      await vi.waitUntil(() => pendings(r).at(-1)?.startsWith('running on '), { timeout: scaled(30_000), interval: 25 })
+      writeFileSync(join(r.home, 'part-fin'), '')
+      expect(await run.done, run.out()).toBe(0)
+      const all = pendings(r)
+      expect(all[0]).toMatch(/^running on /)
+      expect(all.filter((d) => d.startsWith('waiting for lock: '))[0]).toMatch(
+        /^waiting for lock: \d+s on .+: the heavy lock/,
+      )
+      expect(partPosts(r)).toEqual([expect.stringContaining('state=success')])
+    })
+
+    it('a lock wait shorter than one beat posts nothing of its own', async () => {
+      const r = setup([], [])
+      const release = await holder(r)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...PART, TALOS_HEAVY_SLOTS: '1' }) // a beat of 30 s
+      await vi.waitUntil(() => /waiting for the heavy lock/.test(jobLog(r)), { timeout: scaled(30_000), interval: 25 })
+      release()
+      expect(await run.done, run.out()).toBe(0)
+      expect(pendings(r)).toEqual([expect.stringMatching(/^running on /)])
+    })
+
+    // each call of ci_part_beat is written down (with the file it would write), so a test waits for the wait's own events
+    const SPY = `eval "real_$(declare -f ci_part_beat)"
+ci_part_beat() { echo "beat [$CI_LOCKWAIT_FILE]" >> "$HOME/beats"; real_ci_part_beat "$@"; }`
+    const beats = (r: ReturnType<typeof repo>) =>
+      existsSync(join(r.home, 'beats')) ? readFileSync(join(r.home, 'beats'), 'utf8').trim().split('\n') : []
+
+    it('only a part posts its lock wait: the same wait as Lemnos’s own check (local-ci/) writes no beat file and posts nothing', async () => {
+      for (const prefix of ['ci-part', 'local-ci']) {
+        const r = setup([], [])
+        r.inject(SPY)
+        const release = await holder(r)
+        r.inject(FAST_BEAT)
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], {
+          ...(prefix === 'ci-part' ? PART : {}),
+          TALOS_HEAVY_SLOTS: '1',
+        })
+        // the wait goes on for several looks of the lock (CI_POLL, 0.05 s each): the beat has had its chances
+        await vi.waitUntil(() => beats(r).length >= 3, { timeout: scaled(30_000), interval: 25 })
+        if (prefix === 'ci-part')
+          await vi.waitUntil(() => pendings(r).some((d) => d.startsWith('waiting for lock: ')), {
+            timeout: scaled(30_000),
+            interval: 25,
+          })
+        release()
+        expect(await run.done, run.out()).toBe(0)
+        if (prefix === 'ci-part')
+          expect(new Set(beats(r))).toEqual(new Set([expect.stringMatching(/\/check\.lockwait\]$/)]))
+        else {
+          expect(new Set(beats(r)), prefix).toEqual(new Set(['beat []'])) // no file: the job writes nothing
+          expect(ghLog(r), prefix).not.toContain('waiting for lock')
+        }
+      }
+    })
+
+    it('a job killed while it waits: its failure is the last status posted, no waiting or running after it', async () => {
+      const r = setup([], [])
+      r.inject(FAST_BEAT)
+      const release = await holder(r)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...PART, TALOS_HEAVY_SLOTS: '1' })
+      await vi.waitUntil(() => pendings(r).some((d) => d.startsWith('waiting for lock: ')), {
+        timeout: scaled(30_000),
+        interval: 25,
+      })
+      // the job's own process group (the run's record): killed outright, so it leaves no result file
+      const runs = join(r.home, '.cache/talos-ci/runs')
+      const group = readdirSync(runs)
+        .map((n) => join(runs, n, 'results', 'check.group'))
+        .find((f) => existsSync(f))
+      expect(group).toBeDefined()
+      process.kill(-Number(readFileSync(group as string, 'utf8').trim()), 'SIGKILL')
+      expect(await run.done).toBe(1)
+      release()
+      const posts = ghLog(r)
+        .split('\n')
+        .filter((l) => l.includes('-X POST') && l.includes('context=ci-part/check '))
+        .map((l) => /state=(\w+)/.exec(l)?.[1])
+      expect(posts.at(-1)).toBe('failure')
     })
 
     it('a failed setup: "not tested" (an error Lemnos takes back), never a red, and nothing run', async () => {

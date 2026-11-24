@@ -2,13 +2,15 @@ import Foundation
 import TalosDesktopCore
 
 /// Claude Code's usage-limit screen on a thread session's pane (`UsageLimitScreen`): the session is needs-you while it is up, and the
-/// thread gets one line per appearance, at most one an hour, naming the model, when it resets if the screen says, and how to go on
-/// (Esc in the pane, then `/model`). Talos sends this screen NO key, ever: one of its options spends usage credits. Every key sender checks
-/// `DialogMatcher.takesNoKeys` on the rows it is about to press into.
+/// thread gets one line per appearance, at most one an hour, naming the model and when it resets if the screen says, only when no card came for
+/// it (the card, `WorkerPaneOffer.swift`, is the notice and carries the choices). Talos presses no row of this screen: one of its options spends
+/// usage credits. Every key sender checks `DialogMatcher.takesNoKeys` on the rows it is about to press into; the one exception is the owner's
+/// tap on the card (Escape, then `/model`), through `KeyGuard.Intent.usageLimit`.
 extension WorkerManager {
   func noteUsageLimit(_ id: String, rows: [String]) {
     guard var w = rt[id]?.ul else { return }
-    let info = UsageLimitScreen.read(rows)
+    let menu = UsageLimitScreen.readMenu(rows)
+    let info = menu?.info
     let change = w.look(onScreen: info != nil, now: awake())
     rt[id]?.ul = w
     let kind = UsageLimitScreen.kind
@@ -17,6 +19,7 @@ extension WorkerManager {
       return
     case .gone:
       rt[id]?.ulLine = nil
+      rt[id]?.ulCardPossibleAt = nil
       rt[id]?.needsYouResetsAt = nil
       guard rt[id]?.needsYouPrompt == kind else { return }
       rt[id]?.needsYouPrompt = nil
@@ -30,6 +33,7 @@ extension WorkerManager {
       rt[id]?.needsYouResetsAt = at.map { ISOTime.string($0.timeIntervalSince1970) }
       dirty = true
       raiseScreenNeedsYou(id, kind: kind)
+      rt[id]?.ulCardPossibleAt = menu.map { UsageLimitScreen.offered($0).isEmpty ? nil : awake() } ?? nil
       let model = info?.model ?? "unnamed"
       if rt[id]?.ul.mayTellOwner(now: awake()) == true {
         rt[id]?.ulLine = UsageLimitScreen.threadLine(info ?? .init())
@@ -47,6 +51,10 @@ extension WorkerManager {
 
   private func sendUsageLimitLine(_ id: String) {
     guard let line = rt[id]?.ulLine else { return }
+    // offered to the bridge as a card (`WorkerPaneOffer.swift`): the line is the fallback, after the card wait, and a card the bridge made is its notice.
+    // Before the offer exists (the menu has to hold still for `dialogSettle`) a menu that can be a card waits for it too.
+    if lineWaitsForCard(id) { return }
+    if let r = rt[id], r.entry.dialog == nil, let since = r.ulCardPossibleAt, awake() - since < options.dialogSettle + 2 { return }
     sendNotice(id, \.dlg, kind: UsageLimitScreen.kind, text: line)
   }
 }

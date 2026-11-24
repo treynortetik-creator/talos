@@ -28,6 +28,19 @@ test('Developer page: a row, then Developer mode', async ({ page }, info) => {
   await expect(fence.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
   await expect(notes.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
 
+  // the experimental extra lock: off, with its limits in view, and a tap turns it on (no overflow at phone width)
+  const lock = page.getByTestId('dev-row-os_sandbox')
+  await lock.scrollIntoViewIfNeeded()
+  await expect(lock).toContainText('(experimental)')
+  await expect(lock).toContainText("Experimental. It doesn't stop everything:")
+  await expect(lock).toContainText('claude mcp add')
+  await expect(lock.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+  await lock.getByRole('switch').click()
+  await expect(lock.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await lock.getByRole('switch').click()
+  await expect(lock.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+
   await expect(mode).toHaveAttribute('aria-busy', 'false')
   // the switches slide to their new place: let them settle so the picture matches the state
   await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))

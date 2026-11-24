@@ -6,9 +6,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, t } from '@talos-app/testkit'
 import { emptyStore, loadStore, storeFile } from '../../src/heartbeat/store.ts'
-import { type Harness, startHarness, waitFor } from '../helpers.ts'
+import { HARNESS_START_MS, type Harness, startHarness, waitFor } from '../helpers.ts'
 import { cmd, config, item, type Kit, kit, MON_1000_UTC, ok, printing, script, tmpDir } from './kit.ts'
 
 const HOUR = 3600_000
@@ -49,133 +49,169 @@ const hop = () => clock.set(clock.now() + HOUR)
 const offRows = () => texts().filter((t) => t.includes('was off for') || t.includes('started over')).length
 
 describe('a cold run that nobody answers', () => {
-  test('says it was off for 4 days AND that the check failed, in one message, and promises only what will happen', async () => {
-    await start()
-    seed({ ran: 96, sources: { ss: 96 } })
-    const r = await run([killed(tmpDir())])
-    expect(r.result.outcome).toBe('failed')
-    const text = await rowFor('Heartbeat was off for 4 days.')
-    expect(k.rows().length).toBe(1)
-    expect(text).toContain('Heartbeat check failed: ss (')
-    expect(text).toContain('The backlog will be skipped once a source answers.')
-    expect(text).not.toContain('Skipped the backlog') // nothing was looked at, so nothing was skipped yet
-    expect(text.indexOf('Heartbeat check failed')).toBeLessThan(text.indexOf('Heartbeat was off'))
-  }, 20_000)
+  test(
+    'says it was off for 4 days AND that the check failed, in one message, and promises only what will happen',
+    async () => {
+      await start()
+      seed({ ran: 96, sources: { ss: 96 } })
+      const r = await run([killed(tmpDir())])
+      expect(r.result.outcome).toBe('failed')
+      const text = await rowFor('Heartbeat was off for 4 days.')
+      expect(k.rows().length).toBe(1)
+      expect(text).toContain('Heartbeat check failed: ss (')
+      expect(text).toContain('The backlog will be skipped once a source answers.')
+      expect(text).not.toContain('Skipped the backlog') // nothing was looked at, so nothing was skipped yet
+      expect(text.indexOf('Heartbeat check failed')).toBeLessThan(text.indexOf('Heartbeat was off'))
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('the run is still a run: last_run moves, the source keeps its old last_ok, and cold_since marks when the off period began', async () => {
-    await start()
-    seed({ ran: 96, sources: { ss: 96 } })
-    await run([killed(tmpDir())])
-    const st = k.store()
-    expect(st.last_run).toBe(MON_1000_UTC)
-    expect(st.sources.ss.last_ok).toBe(iso(96))
-    expect(st.cold_since).toBe(iso(96)) // the heartbeat last ran then
-  }, 20_000)
+  test(
+    'the run is still a run: last_run moves, the source keeps its old last_ok, and cold_since marks when the off period began',
+    async () => {
+      await start()
+      seed({ ran: 96, sources: { ss: 96 } })
+      await run([killed(tmpDir())])
+      const st = k.store()
+      expect(st.last_run).toBe(MON_1000_UTC)
+      expect(st.sources.ss.last_ok).toBe(iso(96))
+      expect(st.cold_since).toBe(iso(96)) // the heartbeat last ran then
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('a run that fails while the heartbeat is NOT cold sets nothing and says nothing about being off', async () => {
-    await start()
-    seed({ ran: 2, sources: { ss: 4 * 24 } }) // one source, down for four days while the heartbeat kept running (R1-8)
-    const r = await run([killed(tmpDir())])
-    expect(r.result.outcome).toBe('failed')
-    await rowWith('Heartbeat check failed')
-    expect(texts().join('\n')).not.toContain('was off')
-    expect(k.store().cold_since ?? null).toBeNull()
-  }, 20_000)
+  test(
+    'a run that fails while the heartbeat is NOT cold sets nothing and says nothing about being off',
+    async () => {
+      await start()
+      seed({ ran: 2, sources: { ss: 4 * 24 } }) // one source, down for four days while the heartbeat kept running (R1-8)
+      const r = await run([killed(tmpDir())])
+      expect(r.result.outcome).toBe('failed')
+      await rowWith('Heartbeat check failed')
+      expect(texts().join('\n')).not.toContain('was off')
+      expect(k.store().cold_since ?? null).toBeNull()
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('a store that knows no last_run says only "Heartbeat started over." and stays cold until a source answers', async () => {
-    await start()
-    seed({ ran: null, sources: { ss: null } })
-    await run([killed(tmpDir())])
-    const text = await rowFor('Heartbeat started over.')
-    expect(text).not.toContain('backlog') // no promise: nothing is known of how long it was off
-    expect(k.store().cold_since).toBe(MON_1000_UTC)
-    hop()
-    const d = tmpDir()
-    await run([answering(d, [item('a')])])
-    expect(asked(d)).toMatchObject({ cursor: null, since: null }) // the first answer still starts over
-    await rowWith('Heartbeat started over. Skipped the backlog (1 item).')
-    expect(k.store().cold_since ?? null).toBeNull()
-  }, 20_000)
+  test(
+    'a store that knows no last_run says only "Heartbeat started over." and stays cold until a source answers',
+    async () => {
+      await start()
+      seed({ ran: null, sources: { ss: null } })
+      await run([killed(tmpDir())])
+      const text = await rowFor('Heartbeat started over.')
+      expect(text).not.toContain('backlog') // no promise: nothing is known of how long it was off
+      expect(k.store().cold_since).toBe(MON_1000_UTC)
+      hop()
+      const d = tmpDir()
+      await run([answering(d, [item('a')])])
+      expect(asked(d)).toMatchObject({ cursor: null, since: null }) // the first answer still starts over
+      await rowWith('Heartbeat started over. Skipped the backlog (1 item).')
+      expect(k.store().cold_since ?? null).toBeNull()
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 })
 
 describe('the first answer ends it', () => {
-  test('the next run, with the source back and holding a backlog, skips it once, counts from the start of the off period, and clears cold_since', async () => {
-    await start()
-    seed({ ran: 96, sources: { ss: 96 } })
-    await run([killed(tmpDir())])
-    hop()
-    const d = tmpDir()
-    const r = await run([answering(d, [item('old1'), item('old2')])])
-    expect(r.result.outcome).toBe('fyi')
-    expect(asked(d)).toMatchObject({ cursor: null, since: null }) // every source starts over
-    expect(k.store().items['ss|old1'].state).toBe('surfaced')
-    expect(k.store().cold_since ?? null).toBeNull()
-    await rowWith('Heartbeat was off for 4 days. Skipped the backlog (2 items).') // 97 hours since the heartbeat last ran
-    expect(texts().some((t) => t.includes('Item old1'))).toBe(false) // same row: the digest is one message
-    // and the run after is a normal one
-    hop()
-    await run([answering(d, [item('old1'), item('old2'), item('fresh')])])
-    expect(asked(d)).toMatchObject({ cursor: { n: 2 }, since: iso(1) })
-    await rowWith('Item fresh')
-    expect(offRows()).toBe(2) // the failed run's line and the skipping run's; none after
-  }, 20_000)
+  test(
+    'the next run, with the source back and holding a backlog, skips it once, counts from the start of the off period, and clears cold_since',
+    async () => {
+      await start()
+      seed({ ran: 96, sources: { ss: 96 } })
+      await run([killed(tmpDir())])
+      hop()
+      const d = tmpDir()
+      const r = await run([answering(d, [item('old1'), item('old2')])])
+      expect(r.result.outcome).toBe('fyi')
+      expect(asked(d)).toMatchObject({ cursor: null, since: null }) // every source starts over
+      expect(k.store().items['ss|old1'].state).toBe('surfaced')
+      expect(k.store().cold_since ?? null).toBeNull()
+      await rowWith('Heartbeat was off for 4 days. Skipped the backlog (2 items).') // 97 hours since the heartbeat last ran
+      expect(texts().some((t) => t.includes('Item old1'))).toBe(false) // same row: the digest is one message
+      // and the run after is a normal one
+      hop()
+      await run([answering(d, [item('old1'), item('old2'), item('fresh')])])
+      expect(asked(d)).toMatchObject({ cursor: { n: 2 }, since: iso(1) })
+      await rowWith('Item fresh')
+      expect(offRows()).toBe(2) // the failed run's line and the skipping run's; none after
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('a cold_since that is still waiting keeps the true length across several failed runs', async () => {
-    await start()
-    seed({ ran: 96, sources: { ss: 96 } })
-    await run([killed(tmpDir())])
-    clock.set(clock.now() + 30 * HOUR)
-    await run([killed(tmpDir())])
-    await waitFor(() => offRows() === 2, 5000, 'the second line')
-    expect(texts()[1]).toContain('Heartbeat was off for 5 days.') // 126 hours
-    expect(k.store().cold_since).toBe(iso(126))
-  }, 20_000)
+  test(
+    'a cold_since that is still waiting keeps the true length across several failed runs',
+    async () => {
+      await start()
+      seed({ ran: 96, sources: { ss: 96 } })
+      await run([killed(tmpDir())])
+      clock.set(clock.now() + 30 * HOUR)
+      await run([killed(tmpDir())])
+      await waitFor(() => offRows() === 2, 5000, 'the second line')
+      expect(texts()[1]).toContain('Heartbeat was off for 5 days.') // 126 hours
+      expect(k.store().cold_since).toBe(iso(126))
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('one source dies and one answers on a cold run: the usual note, and the answer ends the cold period', async () => {
-    await start()
-    seed({ ran: 96, sources: { aa: 96, bb: 96 } })
-    const d = tmpDir()
-    const r = await run([killed(tmpDir(), 'aa'), answering(d, [item('old')], 'bb')])
-    expect(r.result.outcome).toBe('partial')
-    await rowWith('Heartbeat was off for 4 days. Skipped the backlog (1 item).')
-    expect(k.store().cold_since ?? null).toBeNull()
-    hop()
-    await run([killed(tmpDir(), 'aa'), answering(d, [item('old'), item('new1')], 'bb')])
-    expect(asked(d, 'bb')).toMatchObject({ cursor: { n: 2 } }) // not cold any more
-    await rowWith('Item new1')
-    expect(offRows()).toBe(1)
-  }, 20_000)
+  test(
+    'one source dies and one answers on a cold run: the usual note, and the answer ends the cold period',
+    async () => {
+      await start()
+      seed({ ran: 96, sources: { aa: 96, bb: 96 } })
+      const d = tmpDir()
+      const r = await run([killed(tmpDir(), 'aa'), answering(d, [item('old')], 'bb')])
+      expect(r.result.outcome).toBe('partial')
+      await rowWith('Heartbeat was off for 4 days. Skipped the backlog (1 item).')
+      expect(k.store().cold_since ?? null).toBeNull()
+      hop()
+      await run([killed(tmpDir(), 'aa'), answering(d, [item('old'), item('new1')], 'bb')])
+      expect(asked(d, 'bb')).toMatchObject({ cursor: { n: 2 } }) // not cold any more
+      await rowWith('Item new1')
+      expect(offRows()).toBe(1)
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 })
 
 describe('stores', () => {
-  test('a store from before cold_since (sources, last_run, no field) loads with it unset and behaves as before', async () => {
-    await start()
-    seed({ ran: 2, sources: { ss: 2 } })
-    const raw = JSON.parse(readFileSync(storeFile(h.home, false, 'beat'), 'utf8'))
-    expect('cold_since' in raw).toBe(true) // emptyStore writes it; strip it to be a store an older version wrote
-    delete raw.cold_since
-    writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(raw))
-    expect(loadStore(storeFile(h.home, false, 'beat')).store.cold_since).toBeNull()
-    const d = tmpDir()
-    await run([answering(d, [item('x')])])
-    expect(asked(d)).toMatchObject({ cursor: { n: 1 } }) // not cold
-    await rowWith('Item x')
-    expect(texts().join('\n')).not.toContain('was off')
-  }, 20_000)
+  test(
+    'a store from before cold_since (sources, last_run, no field) loads with it unset and behaves as before',
+    async () => {
+      await start()
+      seed({ ran: 2, sources: { ss: 2 } })
+      const raw = JSON.parse(readFileSync(storeFile(h.home, false, 'beat'), 'utf8'))
+      expect('cold_since' in raw).toBe(true) // emptyStore writes it; strip it to be a store an older version wrote
+      delete raw.cold_since
+      writeFileSync(storeFile(h.home, false, 'beat'), JSON.stringify(raw))
+      expect(loadStore(storeFile(h.home, false, 'beat')).store.cold_since).toBeNull()
+      const d = tmpDir()
+      await run([answering(d, [item('x')])])
+      expect(asked(d)).toMatchObject({ cursor: { n: 1 } }) // not cold
+      await rowWith('Item x')
+      expect(texts().join('\n')).not.toContain('was off')
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 
-  test('a cold_since that cannot be read is ignored, one that can be read makes the heartbeat cold even right after a run', async () => {
-    await start()
-    seed({ ran: 2, sources: { ss: 2 } })
-    const path = storeFile(h.home, false, 'beat')
-    const raw = JSON.parse(readFileSync(path, 'utf8'))
-    for (const bad of ['yesterday', 7, {}, '']) {
-      writeFileSync(path, JSON.stringify({ ...raw, cold_since: bad }))
-      expect(loadStore(path).store.cold_since).toBeNull()
-    }
-    writeFileSync(path, JSON.stringify({ ...raw, cold_since: iso(100) }))
-    const d = tmpDir()
-    await run([answering(d, [item('x')])])
-    expect(asked(d)).toMatchObject({ cursor: null, since: null })
-    await rowWith('Heartbeat was off for 4 days. Skipped the backlog (1 item).')
-  }, 20_000)
+  test(
+    'a cold_since that cannot be read is ignored, one that can be read makes the heartbeat cold even right after a run',
+    async () => {
+      await start()
+      seed({ ran: 2, sources: { ss: 2 } })
+      const path = storeFile(h.home, false, 'beat')
+      const raw = JSON.parse(readFileSync(path, 'utf8'))
+      for (const bad of ['yesterday', 7, {}, '']) {
+        writeFileSync(path, JSON.stringify({ ...raw, cold_since: bad }))
+        expect(loadStore(path).store.cold_since).toBeNull()
+      }
+      writeFileSync(path, JSON.stringify({ ...raw, cold_since: iso(100) }))
+      const d = tmpDir()
+      await run([answering(d, [item('x')])])
+      expect(asked(d)).toMatchObject({ cursor: null, since: null })
+      await rowWith('Heartbeat was off for 4 days. Skipped the backlog (1 item).')
+    },
+    HARNESS_START_MS + t(20_000),
+  )
 })

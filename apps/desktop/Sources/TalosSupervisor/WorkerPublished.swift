@@ -20,6 +20,7 @@ extension WorkerManager {
 
   /// Replaces what reads return. On the queue, after anything that changes it: the end of each tick, `tune`, `stopAll`.
   func publish() {
+    refreshDeafFile()
     let p = Published(file: fileModel(), needsYou: rt.compactMapValues { waitingOn($0) }, popup: popupItems())
     publishedLock.withLock { _published = p }
   }

@@ -50,8 +50,10 @@ struct PointerOwedConstantsTests {
       contentsOf: here.appendingPathComponent("../../../../packages/protocol/src/thread-sessions.ts").standardized, encoding: .utf8)
     func value(_ name: String) throws -> Double {
       let line = try #require(ts.split(separator: "\n").first { $0.hasPrefix("export const \(name) = ") })
-      let n = line.split(separator: "=").last!.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "_", with: "")
-      return try #require(Double(n))
+      // a number, or a product of them (`10 * 60_000`)
+      let rhs = line.split(separator: "=").last!.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "_", with: "")
+      let factors = try rhs.split(separator: "*").map { try #require(Double($0.trimmingCharacters(in: .whitespaces)), "not a number: \($0)") }
+      return try #require(factors.isEmpty ? nil : factors.reduce(1, *))
     }
     #expect(try value("CLAIM_DEADLINE_MS") / 1000 == PointerTyper.claimDeadline)
     #expect(try value("CLAIM_DEADLINE_COLD_MS") / 1000 == PointerTyper.claimDeadlineCold)

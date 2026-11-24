@@ -315,15 +315,21 @@ export function runInstallGuards(
  * turned off (main-launch.ts). The owner's own `--settings` is kept, with the deny merged into a copy; then the guards are not
  * added and `warning` says so, as does any miss of the deny.
  */
-export function withGuardsSettings(flags: string[], home: string): { flags: string[]; warning?: string } {
-  const r = mainLaunchArgs(flags, home)
+export function withGuardsSettings(
+  flags: string[],
+  home: string,
+  cwd?: string,
+): { flags: string[]; warning?: string; refusal?: string; recheck?: () => string | null } {
+  const r = mainLaunchArgs(flags, home, cwd ? { cwd } : {})
+  if (r.refusal) return { flags, refusal: r.refusal }
   const own = r.warnings.find((w) => w.includes('the guards are NOT active'))
   const lines = r.warnings.map((w) =>
     w === own
       ? `WARNING: the guards are installed (${guardsSettings(home)}) but your flags already include --settings, and Claude Code reads only one. The guards are NOT active for this session. Put the guard rules into your own settings file, or drop your --settings.`
       : `WARNING: ${w}.`,
   )
-  return lines.length ? { flags: r.args, warning: lines.join('\n') } : { flags: r.args }
+  const recheck = r.recheck ? { recheck: r.recheck } : {}
+  return lines.length ? { flags: r.args, warning: lines.join('\n'), ...recheck } : { flags: r.args, ...recheck }
 }
 
 export function cmdInstallGuards(env: BridgeEnv, args: string[], io: Out): number {

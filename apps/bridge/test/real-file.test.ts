@@ -322,15 +322,13 @@ const FOLDER_ONLY: Record<string, string[]> = {
   ],
   'apps/cli.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'return realpathSync(p)'],
   // the deepest existing parent FOLDER of an edited path, to tell whether it sits under a Claude agents/skills/commands folder
+  'peer/secret-store.ts': ["import { realpathSync } from 'node:fs'", 'return realpathSync(home)'],
   'permission/frontmatter-risk.ts': [
     "import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs'",
     'return join(realpathSync(dir), ...rest)',
   ],
   // the agent folder and the folder a gazetteer was built for (memory.json agent_dir, gazetteer `repo`): folders only
-  'memory/reflex.ts': [
-    "import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'",
-    'return realpathSync(p)',
-  ],
+  'memory/reflex.ts': ['realpathSync,', 'return realpathSync(p)'],
   // the agent folder (TALOS_AGENT_DIR), to name the kit's state folder the way the kit does (from the real path): a folder only
   'action-rule-asks.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'real = realpathSync(dir)'],
   'cli-main.ts': [
@@ -368,6 +366,11 @@ const FOLDER_ONLY: Record<string, string[]> = {
   // the agent folder Settings > Memory folders lists (memory/roots.ts realDir): a folder only, checked to be one
   'memory/roots.ts': ["import { realpathSync, statSync } from 'node:fs'", 'const r = realpathSync(p)'],
   'rollback.ts': ["import { existsSync, realpathSync } from 'node:fs'", 'return realpathSync(p)'],
+  // a checkout folder (a folder has one name)
+  'updater-git.ts': [
+    "import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'",
+    'return realpathSync(p)',
+  ],
   'secrets/platform.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'const real = realpathSync(p)'],
   'safe-open.ts': [
     'realpathSync,',

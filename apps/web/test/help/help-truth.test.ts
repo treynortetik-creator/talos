@@ -210,8 +210,8 @@ function pathProblems(place: Place, path: string[]): string[] {
     for (const l of rest) if (!hasLabel(text, l)) bad.push(`"${l}" is not on Settings → ${first}`)
   } else if (place === 'mac') {
     const text = first ? MAC_TAB_TEXT[first] : undefined
-    if (text === undefined || !macTabs().includes(first ?? '')) return [`no Mac settings tab "${first}"`]
-    for (const l of rest) if (!hasLabel(text, l)) bad.push(`"${l}" is not on the Mac settings ${first} tab`)
+    if (text === undefined || !macTabs().includes(first ?? '')) return [`no Talos Settings tab "${first}"`]
+    for (const l of rest) if (!hasLabel(text, l)) bad.push(`"${l}" is not on the Talos Settings ${first} tab`)
   } else if (place === 'thread') {
     for (const l of path) {
       const file = THREAD_LABEL_FILE[l]
@@ -238,7 +238,7 @@ function pathProblems(place: Place, path: string[]): string[] {
   return bad
 }
 
-const PROSE_PLACE: Record<string, Place> = { Settings: 'settings', 'Mac settings': 'mac', 'Menu bar': 'menubar' }
+const PROSE_PLACE: Record<string, Place> = { Settings: 'settings', 'Talos Settings': 'mac', 'Menu bar': 'menubar' }
 
 describe('Help names only what exists, on the screen it says', () => {
   it('every [[name]] is a whole label somewhere in the app', () => {
@@ -321,7 +321,7 @@ describe('Help names only what exists, on the screen it says', () => {
     expect(links.at(-1)).toEqual({ name: 'Help', href: HELP_PATH })
   })
 
-  it('the Mac settings tabs are the five Help names, then Advanced', () => {
+  it('the Talos Settings tabs are the five Help names, then Advanced', () => {
     expect(macTabs()).toEqual(['Your agent', 'Phone & Mac', 'Privacy & access', 'General', 'Advanced'])
   })
 })
@@ -531,7 +531,7 @@ const NOT_A_CLAIM = new Set(['Same as above.'])
 const CLAIMS: Record<string, Proof[]> = {
   // Where do I change…
   'Remove ends that device’s access.': [has(S, 'Remove this device?'), has(S, 'Removing it signs you out here.')],
-  'On the Mac, Mac settings → Phone & Mac has See and remove your devices, which opens this list.': [
+  'On the Mac, Talos Settings → Phone & Mac has See and remove your devices, which opens this list.': [
     has('apps/desktop/Sources/TalosDesktopCore/DevicesPage.swift', 'See and remove your devices'),
     has('apps/desktop/Sources/TalosDesktopCore/DevicesPage.swift', '/settings/account#devices'),
     has('apps/desktop/Sources/TalosDesktop/SettingsPhoneTab.swift', 'DevicesPage'),
@@ -658,7 +658,7 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/lib/keymap.ts', "code: 'KeyK'"),
   ],
   'From any app.': [has('apps/desktop/Sources/TalosDesktop/HotKeys.swift', 'RegisterEventHotKey(spec.keyCode')],
-  'This is the default; change it in Mac settings → General → Change shortcut.': [
+  'This is the default; change it in Talos Settings → General → Change shortcut.': [
     has('apps/desktop/Sources/TalosDesktopCore/DesktopConfig.swift', 'compose: "ctrl+opt+space"'),
     () => expect(hasLabel(MAC_TAB_TEXT.General ?? '', 'Quick message')).toBe(true),
     () => expect(hasLabel(MAC_TAB_TEXT.General ?? '', 'Change shortcut')).toBe(true),

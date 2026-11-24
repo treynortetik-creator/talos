@@ -764,6 +764,7 @@ struct ReviewOC3Panes {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(8) { r.typedLines.count == 1 })
+    #expect(Rig.pinWindowSize(socket: r.socket, session: "t-trip"), "control: the window is pinned to its size")
     let client = Process()
     client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
     client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=t-trip"]

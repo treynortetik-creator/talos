@@ -4,11 +4,45 @@ import TalosDesktopCore
 /// Option C: the wake files the hub writes for a thread (`workers/<id>/wake`) and what each one asks of the worker. Split out of
 /// `WorkerManager` to keep that file under the size limit; behaviour unchanged.
 extension WorkerManager {
+  /// The wakes block of a tick, one named step per call: a stall report then says which call the tick sat in (`wakes.look`,
+  /// `wakes.apply.park`, `wakes.retryHeld`, ...). Step names are fixed words, never an id, a path or text from a file.
+  func wakesRound(settings: DedicatedSettings?, fresh: Bool, now t: Double) {
+    guard let settings else { return }
+    wakeStep("reviveOwed")
+    reviveOwed(settings: settings, now: t)
+    takeWakes(settings: settings, now: t)
+    wakeStep("publish")
+    publish()
+    wakeStep("retryHeld")
+    retryHeld(settings: settings, now: t)
+    wakeStep("enforceCap")
+    enforceCap(settings: settings, now: t)
+    wakeStep("checkLaunchChanges")
+    checkLaunchChanges(settings: settings, now: t)
+    wakeStep("updateRestartTick")
+    updateRestartTick(settings: settings, fresh: fresh)
+    wakeStep("retryMainSettingsNotes")
+    retryMainSettingsNotes()
+  }
+
+  /// The tick is now in `wakes.<call>`. `stepHook` (tests only) runs right after, inside that step.
+  func wakeStep(_ call: String) {
+    watch.step("wakes." + call, at: awake())
+    stepHook?("wakes." + call)
+  }
+
+  /// The action as a step name: only the words a wake can carry (`WakeFile.actions`; the decoder refuses the rest), anything else is "other" (the file is the hub's, but never trusted for a name).
+  static func applyStep(_ action: String) -> String {
+    WakeFile.actions.contains(action) ? "apply." + action : "apply.other"
+  }
+
   func takeWakes(settings: DedicatedSettings, now t: Double) {
+    wakeStep("look")
     let base = options.talosHome + "/workers"
     guard let ids = try? FileManager.default.contentsOfDirectory(atPath: base) else { return }
     // a thread whose saved entry could not be read is never started under a new id: its wake waits for the file to be fixed
     for id in ids.sorted() where WorkerSpec.isThreadId(id) && rt[id]?.adoptPending != true && unreadableKept[id] == nil {
+      wakeStep("look")
       let wake = base + "/" + id + "/wake"
       let taken = wake + ".taken"
       guard rename(wake, taken) == 0 else { continue }  // taken atomically: a rewrite by the hub lands in a new file
@@ -17,6 +51,7 @@ extension WorkerManager {
       guard let data, let w = WakeFile.decode(data), w.thread_id == id else { continue }
       guard let s = settings.threads[id] else { continue }  // not dedicated (any more): the hub won't route to it
       if rt[id] == nil { rt[id] = Runtime(entry: .init(threadId: id, cwd: s.cwd ?? options.agentDir, model: s.model)) }
+      wakeStep(Self.applyStep(w.action))
       perform(w.action, reason: w.reason, id, s, settings, t, wakeAt: ISOTime.parse(w.at))
     }
   }
@@ -34,7 +69,7 @@ extension WorkerManager {
       if state == "failed" { return }  // main answers; [Start fresh] or the settings sheet clears it
       let cold = state != "live" && state != "busy"
       // a wake that waited longer than any message waits for its claim (the app was closed): the hub has given every message it names
-      // back to main, so nothing starts. Not the 90/120 s deadline: a hand-off waits 15 minutes, and the wake does not say which it holds.
+      // back to main, so nothing starts. Not the 600/180 s deadline: a hand-off waits 15 minutes, and the wake does not say which it holds.
       if let at = wakeAt, t - at > PointerTyper.longestClaim { return }
       oweFromWake(id, cold: cold, now: t, wakeAt: wakeAt)
       if resting { requestStart(id, s, resume: resume, settings, t) }

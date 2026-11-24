@@ -4,7 +4,7 @@ import Foundation
 /// the packages are most of it), so each has its own share. The bar only ever moves forward: `percent` of a step that has begun is the
 /// share that step started at, and a finished step's share is where the next begins.
 public enum ProvisionProgress {
-  /// (starts at, ends at), in percent. The agent's own folder and the scheduler follow the provisioner: `agentFolder`, `extras`.
+  /// (starts at, ends at), in percent. The agent's own folder follows the provisioner (`agentFolder`; its one installer run adds the scheduler too), then `extras`.
   static let shares: [CloneProvisioner.Step: (Int, Int)] = [
     .developerTools: (0, 6), .lookup: (6, 10), .clone: (10, 40), .verify: (40, 44), .claude: (44, 62), .prerequisites: (62, 68),
     .dependencies: (68, 86), .record: (86, 88),

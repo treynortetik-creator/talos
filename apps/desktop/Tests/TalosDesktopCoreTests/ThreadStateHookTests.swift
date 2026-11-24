@@ -81,6 +81,23 @@ struct ThreadStateSeedTests {
     #expect(!FileManager.default.fileExists(atPath: out + "/target.md"))
   }
 
+  /// A folder where the state file belongs is a problem, not "exists" (the same as thread-state-seed.ts), with and without dry.
+  @Test func aFolderWhereTheStateFileBelongsIsAProblemNotExists() throws {
+    let agent = try tempFolder("folder")
+    defer { try? FileManager.default.removeItem(atPath: agent) }
+    let file = ThreadStateSeed.path(agentDir: agent, id: "trip")
+    try FileManager.default.createDirectory(atPath: file, withIntermediateDirectories: true)
+    try "x".write(toFile: file + "/planted.md", atomically: true, encoding: .utf8)
+    for dry in [false, true] {
+      guard case .problem(let why) = ThreadStateSeed.seed(agentDir: agent, id: "trip", name: "Trip", dry: dry) else {
+        Issue.record("a folder at the state file's path was accepted (dry \(dry))")
+        return
+      }
+      #expect(why.contains("is not a regular file"))
+    }
+    #expect(try String(contentsOfFile: file + "/planted.md", encoding: .utf8) == "x")
+  }
+
   @Test func aThreadsEntryThatIsNotAFolderIsAProblemNotASeed() throws {
     let agent = try tempFolder("file")
     defer { try? FileManager.default.removeItem(atPath: agent) }
@@ -313,18 +330,22 @@ struct ThreadStateSpecTests {
     #expect(try build(t, hook: Self.staged(), base: ["PATH": "/usr/bin:/bin", "HOME": t.home, WorkerHook.threadStateEnv: "0"]).env[WorkerHook.threadStateEnv] == "1")
   }
 
-  @Test func theAllowRulesAreExactlyTheStateFileAndWhatIsUnderItIsDenied() throws {
+  /// The allow rule is the one exact file and the deny is its children only: `<file>/*`, never `<file>/**` (Claude Code strips only a trailing
+  /// `/**` before matching, so a `/**` deny also names the file itself and made Edit refuse the state file).
+  @Test func theAllowRuleIsTheStateFileAndTheDenyIsItsChildrenOnly() throws {
     let t = try FenceTree()
     defer { t.cleanup() }
     let s = try build(t, hook: Self.staged())
     #expect(perms(s)["allow"] as? [String] == rules(t.agentDir))
     let deny = perms(s)["deny"] as? [String] ?? []
-    for r in rules(t.agentDir, tail: "/**") { #expect(deny.contains(r), "\(r)") }
+    for r in rules(t.agentDir, tail: "/*") { #expect(deny.contains(r), "\(r)") }
+    #expect(!deny.contains { $0.contains("state.md/**") }, "\(deny)")
     #expect(WorkerHook.stateAllowRules(agentDir: t.agentDir, threadId: "trip") == rules(t.agentDir))
-    #expect(WorkerHook.stateDenyRules(agentDir: t.agentDir, threadId: "trip") == rules(t.agentDir, tail: "/**"))
+    #expect(WorkerHook.stateDenyRules(agentDir: t.agentDir, threadId: "trip") == rules(t.agentDir, tail: "/*"))
   }
 
-  /// Claim: the allow does not cover a sibling (another thread's file, a backup, a parent path), and no deny rule names the file itself.
+  /// Claim: no deny rule covers the file itself (Claude Code's matching: a trailing `/**` is stripped, then the path or anything under it,
+  /// without regard to case; `<p>/*` names children only), a child is denied, and the allow does not cover a sibling.
   @Test func noDenyRuleCoversTheFileAndNoAllowRuleCoversASibling() throws {
     let t = try FenceTree()
     defer { t.cleanup() }
@@ -334,17 +355,28 @@ struct ThreadStateSpecTests {
       guard let open = rule.firstIndex(of: "("), rule.hasSuffix(")") else { return false }
       var p = String(rule[rule.index(after: open)..<rule.index(before: rule.endIndex)])
       p.removeFirst()  // the leading "/" of the `//abs` spelling
-      if p.hasSuffix("/**") { return path.hasPrefix(String(p.dropLast(3)) + "/") }
-      return path == p || path.hasPrefix(p + "/")
+      if p.hasSuffix("/**") { p = String(p.dropLast(3)) }
+      if p.hasSuffix("/*") {  // children only: something after the slash
+        let base = String(p.dropLast(1)).lowercased()
+        return path.lowercased().hasPrefix(base) && path.count > base.count
+      }
+      return path.lowercased() == p.lowercased() || path.lowercased().hasPrefix(p.lowercased() + "/")
     }
-    for r in perms(s)["deny"] as? [String] ?? [] where r.hasPrefix("Edit(") || r.hasPrefix("Write(") {
+    let deny = perms(s)["deny"] as? [String] ?? []
+    for r in deny where r.hasPrefix("Edit(") || r.hasPrefix("Write(") {
       #expect(!covers(r, file), "a deny rule covers the state file: \(r)")
+      #expect(!covers(r, file + "/"), "a deny rule covers the state file as a folder: \(r)")
     }
+    // the children, deep ones and a case variant are denied
+    for child in ["/x", "/a/b", "/planted.md"] { #expect(deny.contains { covers($0, file + child) }, Comment(rawValue: child)) }
+    #expect(deny.contains { covers($0, t.agentDir + "/threads/TRIP.state.md/x") })
+    // the control: a bare folder deny, or a `/**` one, would cover the file and go red here
+    #expect(covers("Edit(/\(file))", file) && covers("Edit(/\(file)/**)", file))
     let allow = perms(s)["allow"] as? [String] ?? []
-    for sibling in ["threads/other.state.md", "threads/trip.state.md.bak", "threads/trip.state.md/x", "threads/../x", "threads", "CLAUDE.md"] {
-      let denied = (perms(s)["deny"] as? [String] ?? []).contains { covers($0, t.agentDir + "/" + sibling) }
+    for sibling in ["threads/other.state.md", "threads/trip.state.md.bak", "threads/../x", "threads", "CLAUDE.md", "hooks/x.py", ".claude/settings.json"] {
       let allowed = allow.contains { covers($0, t.agentDir + "/" + sibling) }
-      #expect(!(allowed && !denied), "\(sibling) is writable without a prompt")
+      let denied = deny.contains { covers($0, t.agentDir + "/" + sibling) }
+      #expect(!allowed || denied, "\(sibling) is writable without a prompt")
     }
   }
 

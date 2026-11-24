@@ -1,5 +1,5 @@
 // WP-C1 (docs/CLAUDE-CODE.md C3.2) in a real browser, in all three viewports: the call first, a long call scrolls instead
-// of being cut, Allow only for a whole safe call, the 60 s hint, and axe in light and dark.
+// of being cut, one-tap Allow on the face for a card the bridge composed whole, the 60 s hint, and axe in light and dark.
 import { expect, test } from '@playwright/test'
 import { expectAxeClean, open, sentFrames } from './e2e.ts'
 import { PERM_IDS } from './harness/seed.ts'
@@ -23,7 +23,7 @@ const toEnd = (page: import('@playwright/test').Page) =>
     el.scrollTop = el.scrollHeight
   })
 
-test('in the thread the card is compact: the start of the call, Deny and a way into the sheet, no Allow', async ({
+test('in the thread the card is compact: the start of the call, Deny, Details and Allow on its face', async ({
   page,
 }) => {
   await open(page, '/cards', { seed: 'permission' })
@@ -31,8 +31,9 @@ test('in the thread the card is compact: the start of the call, Deny and a way i
   await expect(c.getByRole('heading', { name: 'Allow Bash?' })).toBeVisible()
   await expect(c.getByTestId('permission-preview')).toContainText('pnpm test')
   await expect(c.getByRole('button', { name: 'Deny' })).toBeVisible()
-  await expect(c.getByRole('button', { name: 'Review to allow' })).toBeVisible()
-  await expect(c.getByRole('button', { name: /^Allow/ })).toHaveCount(0)
+  await expect(c.getByRole('button', { name: 'Details' })).toBeVisible()
+  await expect(c.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await expect(c.getByRole('button', { name: /^Always allow/ })).toHaveCount(0)
   await expect(c.getByText('May already be answered at the Mac')).toHaveCount(0)
 })
 
@@ -50,9 +51,7 @@ test("the sheet shows the raw call above Claude's summary, with Allow and Deny",
   await expect(sheet.getByRole('button', { name: 'Deny' })).toBeVisible()
 })
 
-test('a long call scrolls inside the sheet, every character is in the page, and Allow waits for the end', async ({
-  page,
-}) => {
+test('a long call scrolls inside the sheet, every character is in the page, and Allow is enabled', async ({ page }) => {
   await open(page, '/cards', { seed: 'permission' })
   const sheet = await openSheet(page, PERM_IDS.long)
   const call = sheet.getByTestId('permission-call')
@@ -91,7 +90,7 @@ test('a bidi override shows as [U+202E] and the call stays approvable (the owner
   await expect(sheet.getByRole('button', { name: /^Allow/ })).toBeEnabled()
 })
 
-test('Allow runs the step-up and sends a primary resolve', async ({ page }) => {
+test('Allow sends a primary resolve', async ({ page }) => {
   await open(page, '/cards', { seed: 'permission' })
   const sheet = await openSheet(page, PERM_IDS.plain)
   const allow = sheet.getByRole('button', { name: /^Allow/ })

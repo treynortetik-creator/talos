@@ -16,6 +16,7 @@ final class AttachedClient: @unchecked Sendable {
   private let input = Pipe()
 
   init(_ r: WorkerRig, session: String = "t-trip") throws {
+    #expect(Rig.pinWindowSize(socket: r.socket, session: session), "control: the window is pinned to its size")
     process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
     process.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=\(session)"]
     process.environment = ["TERM": "xterm-256color", "PATH": "/usr/bin:/bin", "HOME": r.root + "/home"]

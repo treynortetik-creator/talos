@@ -2,18 +2,19 @@
 // pending list lived in memory and receipts stop at delivered. Real Bridge + FakeRelay + FakeApp; a "restart" is a second
 // Bridge on the same home (a new process run id). Also pinned: a plain socket reconnect never reports (`ready` fires on every
 // reconnect), an answered message never reports, old entries are dropped, and the message is not sent again.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { SeenTracker, UNANSWERED_MAX_AGE_MS } from '../src/context.ts'
 import { nullLogger } from '../src/log.ts'
 import type { Notification } from '../src/notify.ts'
-import { type Harness, sleep, startHarness, waitFor } from './helpers.ts'
-import { longTimeouts } from './schedules/harness.ts'
+import { HARNESS_START_MS, type Harness, sleep, startHarness, waitFor } from './helpers.ts'
 
-longTimeouts()
+// the harness start, a restart (its connect wait is 30 s at x3) and the waits add up past bun's 5 s default
+setDefaultTimeout(t(30_000))
 
 let h: Harness | undefined
 let second: Bridge | undefined
@@ -54,110 +55,135 @@ async function restart(x: Harness): Promise<{ bridge: Bridge; notes: Notificatio
 }
 
 describe('D39 a message in flight when the session dies', () => {
-  test('is reported once after a restart: a line in the thread and a system notification to the agent, and not sent again', async () => {
-    h = await startHarness()
-    await h.app.sendMessage('general', 'please do the thing')
-    await h.waitNotes(1)
-    const sentId = h.notes[0]?.meta.message_id
-    expect(sentId).toBeTruthy()
-    expect(noticeRows(h)).toHaveLength(0)
-
-    const next = await restart(h)
-    await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line')
-    const row = noticeRows(h)[0]?.raw.message as { thread_id: string; text: string }
-    expect(row.thread_id).toBe('general')
-    expect(row.text).toContain('may not have been answered')
-    await waitFor(() => next.notes.some((n) => n.meta.kind === 'system'), 5000, 'the agent notification')
-    const sys = next.notes.find((n) => n.meta.kind === 'system')
-    expect(sys?.content).toMatch(NOTICE)
-    expect(sys?.meta.thread_id).toBe('general')
-    // the agent decides: the original message is not delivered again
-    await sleep(300)
-    expect(next.notes.some((n) => n.meta.message_id === sentId)).toBe(false)
-    expect(noticeRows(h)).toHaveLength(1)
-  })
-
-  test('a message the agent answered is never reported', async () => {
-    h = await startHarness()
-    await h.app.sendMessage('general', 'a question')
-    await h.waitNotes(1)
-    await h.bridge.callTool('reply', { thread_id: 'general', text: 'the answer' })
-    await restart(h)
-    await sleep(500)
-    expect(noticeRows(h)).toHaveLength(0)
-  })
-
-  test('a socket drop and reconnect inside one session never reports, with a message pending', async () => {
-    h = await startHarness()
-    await h.app.sendMessage('general', 'still pending')
-    await h.waitNotes(1)
-    for (let i = 0; i < 2; i++) {
-      const before = h.relay.frames.filter((r) => r.direction === 'from_bridge' && r.raw.type === 'hello').length
-      h.relay.dropBridge()
-      await waitFor(
-        () =>
-          h?.relay.frames.filter((r) => r.direction === 'from_bridge' && r.raw.type === 'hello').length === before + 1,
-        15_000,
-        'reconnect',
-      )
-      await waitFor(() => h?.bridge.client?.connected === true, 10_000, 'authed again')
-    }
-    await sleep(500)
-    expect(noticeRows(h)).toHaveLength(0)
-    expect(h.notes.filter((n) => n.meta.kind === 'system')).toHaveLength(0)
-  })
-
-  test('after the report, a later reconnect of the new session does not repeat it', async () => {
-    h = await startHarness()
-    await h.app.sendMessage('general', 'lost')
-    await h.waitNotes(1)
-    const next = await restart(h)
-    await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line')
-    h.relay.dropBridge()
-    await waitFor(() => next.bridge.client?.connected !== true, 5000, 'dropped').catch(() => {})
-    await waitFor(() => next.bridge.client?.connected === true, 15_000, 'reconnected')
-    await sleep(500)
-    expect(noticeRows(h)).toHaveLength(1)
-  })
-
-  test('a session that marked the thread working, or read it, and then died is still reported', async () => {
-    for (const touch of ['set_status', 'read_thread'] as const) {
+  test(
+    'is reported once after a restart: a line in the thread and a system notification to the agent, and not sent again',
+    async () => {
       h = await startHarness()
-      await h.app.sendMessage('general', 'a long task')
+      await h.app.sendMessage('general', 'please do the thing')
       await h.waitNotes(1)
-      const r = await h.bridge.callTool(
-        touch,
-        touch === 'set_status' ? { thread_id: 'general', state: 'working' } : { thread_id: 'general' },
-      )
-      expect(r.isError, touch).toBeFalsy()
-      expect(JSON.parse(h.bridge.ctx.store.kvGet('unanswered_v1') ?? '{}')).not.toEqual({})
-      await restart(h)
-      await waitFor(() => noticeRows(h as Harness).length === 1, 5000, `the unanswered line after ${touch}`)
-      await second?.stop()
-      second = undefined
-      await h.stop()
-      h = undefined
-    }
-  })
+      const sentId = h.notes[0]?.meta.message_id
+      expect(sentId).toBeTruthy()
+      expect(noticeRows(h)).toHaveLength(0)
 
-  test('a card raised in the thread counts as an answer', async () => {
-    h = await startHarness()
-    await h.app.sendMessage('general', 'ship it?')
-    await h.waitNotes(1)
-    const c = await h.bridge.callTool('card', {
-      thread_id: 'general',
-      kind: 'generic',
-      title: 'T',
-      primary_label: 'OK',
-      kill_label: 'Kill T',
-      risk: 'low',
-      origin: 'chat',
-    })
-    expect(c.isError, c.content[0]?.text).toBeFalsy()
-    await restart(h)
-    await sleep(500)
-    expect(noticeRows(h)).toHaveLength(0)
-  })
+      const next = await restart(h)
+      await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line')
+      const row = noticeRows(h)[0]?.raw.message as { thread_id: string; text: string }
+      expect(row.thread_id).toBe('general')
+      expect(row.text).toContain('may not have been answered')
+      await waitFor(() => next.notes.some((n) => n.meta.kind === 'system'), 5000, 'the agent notification')
+      const sys = next.notes.find((n) => n.meta.kind === 'system')
+      expect(sys?.content).toMatch(NOTICE)
+      expect(sys?.meta.thread_id).toBe('general')
+      // the agent decides: the original message is not delivered again
+      await sleep(t(300)) // timing-ok: negative window, from the unanswered line and the agent's notification both seen: no redelivery, still one line
+      expect(next.notes.some((n) => n.meta.message_id === sentId)).toBe(false)
+      expect(noticeRows(h)).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(75_000),
+  )
+
+  test(
+    'a message the agent answered is never reported',
+    async () => {
+      h = await startHarness()
+      await h.app.sendMessage('general', 'a question')
+      await h.waitNotes(1)
+      await h.bridge.callTool('reply', { thread_id: 'general', text: 'the answer' })
+      await restart(h)
+      await sleep(t(500)) // timing-ok: negative window, from the new bridge authed (its ready, and the once-per-process check, have run): no report
+      expect(noticeRows(h)).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(45_000),
+  )
+
+  test(
+    'a socket drop and reconnect inside one session never reports, with a message pending',
+    async () => {
+      h = await startHarness()
+      await h.app.sendMessage('general', 'still pending')
+      await h.waitNotes(1)
+      for (let i = 0; i < 2; i++) {
+        const before = h.relay.frames.filter((r) => r.direction === 'from_bridge' && r.raw.type === 'hello').length
+        h.relay.dropBridge()
+        await waitFor(
+          () =>
+            h?.relay.frames.filter((r) => r.direction === 'from_bridge' && r.raw.type === 'hello').length ===
+            before + 1,
+          15_000,
+          'reconnect',
+        )
+        await waitFor(() => h?.bridge.client?.connected === true, 10_000, 'authed again')
+      }
+      await sleep(t(500)) // timing-ok: negative window, from the last reconnect authed (its ready has run): no report, no system notification
+      expect(noticeRows(h)).toHaveLength(0)
+      expect(h.notes.filter((n) => n.meta.kind === 'system')).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(165_000),
+  )
+
+  test(
+    'after the report, a later reconnect of the new session does not repeat it',
+    async () => {
+      h = await startHarness()
+      await h.app.sendMessage('general', 'lost')
+      await h.waitNotes(1)
+      const next = await restart(h)
+      await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line')
+      h.relay.dropBridge()
+      await waitFor(() => next.bridge.client?.connected !== true, 5000, 'dropped').catch(() => {})
+      await waitFor(() => next.bridge.client?.connected === true, 15_000, 'reconnected')
+      await sleep(t(500)) // timing-ok: negative window, from the reconnect authed (one line seen before "still one"): not repeated
+      expect(noticeRows(h)).toHaveLength(1)
+    },
+    HARNESS_START_MS + t(120_000),
+  )
+
+  test(
+    'a session that marked the thread working, or read it, and then died is still reported',
+    async () => {
+      for (const touch of ['set_status', 'read_thread'] as const) {
+        h = await startHarness()
+        await h.app.sendMessage('general', 'a long task')
+        await h.waitNotes(1)
+        const r = await h.bridge.callTool(
+          touch,
+          touch === 'set_status' ? { thread_id: 'general', state: 'working' } : { thread_id: 'general' },
+        )
+        expect(r.isError, touch).toBeFalsy()
+        expect(JSON.parse(h.bridge.ctx.store.kvGet('unanswered_v1') ?? '{}')).not.toEqual({})
+        await restart(h)
+        await waitFor(() => noticeRows(h as Harness).length === 1, 5000, `the unanswered line after ${touch}`)
+        await second?.stop()
+        second = undefined
+        await h.stop()
+        h = undefined
+      }
+    },
+    HARNESS_START_MS * 2 + t(115_000),
+  )
+
+  test(
+    'a card raised in the thread counts as an answer',
+    async () => {
+      h = await startHarness()
+      await h.app.sendMessage('general', 'ship it?')
+      await h.waitNotes(1)
+      const c = await h.bridge.callTool('card', {
+        thread_id: 'general',
+        kind: 'generic',
+        title: 'T',
+        primary_label: 'OK',
+        kill_label: 'Kill T',
+        risk: 'low',
+        origin: 'chat',
+      })
+      expect(c.isError, c.content[0]?.text).toBeFalsy()
+      await restart(h)
+      await sleep(t(500)) // timing-ok: negative window, from the new bridge authed (its ready, and the once-per-process check, have run): no report
+      expect(noticeRows(h)).toHaveLength(0)
+    },
+    HARNESS_START_MS + t(45_000),
+  )
 
   describe('a dedicated thread', () => {
     const dedicated = () =>
@@ -203,41 +229,57 @@ describe('D39 a message in flight when the session dies', () => {
         }),
       )
 
-    test('a message that fell back to main is reported if main dies with it', async () => {
-      h = await dedicated()
-      workers(h.home, true) // no fresh supervisor heartbeat: main takes it
-      await h.app.sendMessage('trip', 'anyone there?')
-      await h.waitNotes(1)
-      expect(h.notes[0]?.meta.routed).toBe('fallback')
-      await restart(h)
-      await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line for the fallback')
-      const row = noticeRows(h)[0]?.raw.message as { thread_id: string }
-      expect(row.thread_id).toBe('trip')
-    })
-
-    test("a message handed to the thread worker is the router's: main stores nothing for it", async () => {
-      h = await dedicated()
-      workers(h.home, false)
-      await h.app.sendMessage('trip', 'for the worker')
-      await sleep(600)
-      expect(h.notes).toHaveLength(0) // waiting for the worker's claim, not delivered to main
-      expect(h.bridge.ctx.store.kvGet('unanswered_v1') ?? '{}').toBe('{}')
-    })
-  })
-
-  test('an entry more than a day old is dropped without a word', async () => {
-    h = await startHarness()
-    h.bridge.ctx.store.kvSet(
-      'unanswered_v1',
-      JSON.stringify({
-        m_old: { thread: 'general', at: Date.now() - UNANSWERED_MAX_AGE_MS - 60_000, run: 'run_earlier', pid: 1 },
-      }),
+    test(
+      'a message that fell back to main is reported if main dies with it',
+      async () => {
+        h = await dedicated()
+        workers(h.home, true) // no fresh supervisor heartbeat: main takes it
+        await h.app.sendMessage('trip', 'anyone there?')
+        await h.waitNotes(1)
+        expect(h.notes[0]?.meta.routed).toBe('fallback')
+        await restart(h)
+        await waitFor(() => noticeRows(h as Harness).length === 1, 5000, 'the unanswered line for the fallback')
+        const row = noticeRows(h)[0]?.raw.message as { thread_id: string }
+        expect(row.thread_id).toBe('trip')
+      },
+      HARNESS_START_MS + t(60_000),
     )
-    const next = await restart(h)
-    await sleep(500)
-    expect(noticeRows(h)).toHaveLength(0)
-    expect(next.bridge.ctx.store.kvGet('unanswered_v1')).toBe('{}')
+
+    test(
+      "a message handed to the thread worker is the router's: main stores nothing for it",
+      async () => {
+        h = await dedicated()
+        workers(h.home, false)
+        const sent = await h.app.sendMessage('trip', 'for the worker')
+        // the bridge's delivered receipt comes after the router took the message and the unanswered list was told of it
+        await h.relay.expectFrame('receipt', (f) => f.message_id === sent.client_msg_id && f.state === 'delivered', {
+          direction: 'from_bridge',
+        })
+        await sleep(t(600)) // timing-ok: negative window, from the delivered receipt: main is told nothing and stores nothing
+        expect(h.notes).toHaveLength(0) // waiting for the worker's claim, not delivered to main
+        expect(h.bridge.ctx.store.kvGet('unanswered_v1') ?? '{}').toBe('{}')
+      },
+      HARNESS_START_MS + t(20_000),
+    )
   })
+
+  test(
+    'an entry more than a day old is dropped without a word',
+    async () => {
+      h = await startHarness()
+      h.bridge.ctx.store.kvSet(
+        'unanswered_v1',
+        JSON.stringify({
+          m_old: { thread: 'general', at: Date.now() - UNANSWERED_MAX_AGE_MS - 60_000, run: 'run_earlier', pid: 1 },
+        }),
+      )
+      const next = await restart(h)
+      await sleep(t(500)) // timing-ok: negative window, from the new bridge authed (its ready, and the once-per-process check, have run): no report
+      expect(noticeRows(h)).toHaveLength(0)
+      expect(next.bridge.ctx.store.kvGet('unanswered_v1')).toBe('{}')
+    },
+    HARNESS_START_MS + t(35_000),
+  )
 })
 
 describe('SeenTracker persistence', () => {

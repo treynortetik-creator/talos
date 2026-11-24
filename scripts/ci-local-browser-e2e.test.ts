@@ -2,7 +2,16 @@
 // protocol and the web package and folds ci-part/browser-e2e in, taking those packages back when the part gives no answer; the
 // browser-e2e part runs every other e2e package. The harness of ci-local-jobs.test.ts.
 import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -107,8 +116,13 @@ function repo() {
     (existsSync(env.GH_LOG as string) ? readFileSync(env.GH_LOG as string, 'utf8') : '')
       .split('\n')
       .filter((l) => l.includes('-X POST') && l.includes(`context=${ctx} `) && !l.includes('state=pending'))
-  const set = (name: string, lines: string[]) =>
-    writeFileSync(join(home, name), lines.length ? `${lines.join('\n')}\n` : '')
+  // whole or not at all: the fake gh reads these files at any moment, and an empty read in the middle of a rewrite is a part
+  // that "answers nothing" for a poll (a status list with no waiting row, which a wait of a second cannot afford)
+  const set = (name: string, lines: string[]) => {
+    const f = join(home, name)
+    writeFileSync(`${f}.tmp`, lines.length ? `${lines.join('\n')}\n` : '')
+    renameSync(`${f}.tmp`, f)
+  }
   return { T, home, clone, git, start, log, calls, posts, set }
 }
 
@@ -134,6 +148,15 @@ const e2eCalls = (r: ReturnType<typeof repo>) =>
     .map((l) => l.replace(/ W=\d+$/, ''))
 const WEB = 'pnpm -r --workspace-concurrency=1 --no-bail --if-present --filter @talos-app/web test:e2e'
 const THERE = 'pnpm -r --workspace-concurrency=1 --no-bail --if-present --filter !@talos-app/web --filter !{.} test:e2e'
+
+// a job's log before the job has written it reads as empty
+const tryLog = (read: () => string) => {
+  try {
+    return read()
+  } catch {
+    return ''
+  }
+}
 
 describe('the browser job with CI_BROWSER_E2E_PART: web here, every other e2e package on the part, folded like check folds its parts', () => {
   it("runs protocol and the web package only (no grep: this is the Mac), and the part's green is browser's", async () => {
@@ -191,6 +214,141 @@ describe('the browser job with CI_BROWSER_E2E_PART: web here, every other e2e pa
     expect(await run.done, run.out()).toBe(0)
     expect(e2eCalls(r)).toEqual([WEB, THERE])
     expect(r.log('browser')).toContain('taking the e2e packages back from titan-e2e: no answer within 2s (working)')
+  })
+
+  // A part queued for a lock on its own machine (docs/CI-MACHINES.md, "A part queued for a lock"): its pending status says
+  // "waiting for lock: <n>s ...", the words change at each beat, so the test changes them once per poll of the main shell.
+  const WHAT = 'the heavy lock, which the other WSL distro holds'
+  const waiting = (n: number) =>
+    `ci-part/browser-e2e\tpending\t${A}titan-e2e\twaiting for lock: ${n}s on titan (beat 30s): ${WHAT}`
+
+  it('queued for a lock on its machine with a fresh heartbeat: not taken back after CI_BROWSER_E2E_WAIT; its green is folded', async () => {
+    const r = repo()
+    r.set('rows', [waiting(1)])
+    r.set('jobs', ['titan-e2e\tin_progress'])
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '1', CI_PART_BEAT_STALE: '60' })
+    let over = false
+    void run.done.then(() => {
+      over = true
+    })
+    const polls = () => {
+      const f = join(r.T, 'gh.log')
+      return existsSync(f) ? readFileSync(f, 'utf8').split('/actions/runs/9/jobs').length - 1 : 0
+    }
+    const base = polls()
+    for (let i = 0; i < 6 && !over; i++) {
+      await vi.waitUntil(() => over || polls() > base + i, { timeout: scaled(30_000), interval: 25 })
+      r.set('rows', [waiting(i + 1)])
+    }
+    expect(r.log('browser')).not.toContain('taking the e2e packages back')
+    r.set('rows', [partPass, waiting(7)])
+    expect(await run.done, run.out()).toBe(0)
+    expect(e2eCalls(r)).toEqual([WEB])
+  })
+
+  it('stuck in the lock wait past CI_PART_LOCK_WAIT_MAX: the packages are taken back, and the log names the lock wait', async () => {
+    const r = repo()
+    r.set('rows', [waiting(10)])
+    r.set('jobs', ['titan-e2e\tin_progress'])
+    // an hour's answer wait: only the lock-wait cap can end this before the test's own timeout
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '3600', CI_PART_LOCK_WAIT_MAX: '3' })
+    expect(await run.done, run.out()).toBe(0)
+    expect(r.log('browser')).toContain(
+      `taking the e2e packages back from titan-e2e: waiting for a lock on titan-e2e for 10s in all, over CI_PART_LOCK_WAIT_MAX (3s): ${WHAT}`,
+    )
+    expect(e2eCalls(r)).toEqual([WEB, THERE])
+  })
+
+  it('the cap covers every wait of the part: two waits of 60% of it are stuck, though each is under it', async () => {
+    const r = repo()
+    r.set('rows', [waiting(1)])
+    r.set('jobs', ['titan-e2e\tin_progress'])
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '3600', CI_PART_LOCK_WAIT_MAX: '10' })
+    let over = false
+    void run.done.then(() => {
+      over = true
+    })
+    const polls = () => {
+      const f = join(r.T, 'gh.log')
+      return existsSync(f) ? readFileSync(f, 'utf8').split('/actions/runs/9/jobs').length - 1 : 0
+    }
+    const running = `ci-part/browser-e2e\tpending\t${A}titan-e2e\trunning on titan`
+    const steps = [...[2, 3, 4, 5, 6].map(waiting), running, ...[1, 2, 3, 4, 5].map(waiting)]
+    for (const row of steps) {
+      const base = polls()
+      await vi.waitUntil(() => over || polls() > base, { timeout: scaled(30_000), interval: 25 })
+      if (over) break
+      r.set('rows', [row])
+    }
+    const last = polls() // the last row is read by the next poll; only then an answer after the waits
+    await vi.waitUntil(() => over || polls() > last, { timeout: scaled(30_000), interval: 25 })
+    // the poll that reads it writes stuck; the fold loop reads that on its own beat, so answer only once it took the part back (or
+    // never did: a red build ends here, with the part's pass)
+    await vi
+      .waitUntil(() => over || tryLog(() => r.log('browser')).includes('taking the e2e packages back'), {
+        timeout: scaled(30_000),
+        interval: 250,
+      })
+      .catch(() => {})
+    if (!over) r.set('rows', [partPass])
+    expect(await run.done, run.out()).toBe(0)
+    expect(r.log('browser')).toContain(
+      `taking the e2e packages back from titan-e2e: waiting for a lock on titan-e2e for 11s in all, over CI_PART_LOCK_WAIT_MAX (10s): ${WHAT}`,
+    )
+    expect(e2eCalls(r)).toEqual([WEB, THERE])
+  })
+
+  it('while browser waits only for the part it does not hold the turn from a gate; taking the packages back takes the turn again', async () => {
+    const r = repo()
+    r.set('rows', [])
+    r.set('jobs', ['titan-e2e\tin_progress'])
+    const cache = join(r.home, '.cache/talos-ci')
+    const marker = () =>
+      existsSync(join(cache, 'runs')) &&
+      readdirSync(join(cache, 'runs')).some((n) => existsSync(join(cache, 'runs', n, 'results', 'folding-browser')))
+    const until = async (f: () => boolean, ms = 30_000) => {
+      const end = Date.now() + scaled(ms)
+      while (!f()) {
+        if (Date.now() > end) throw new Error('timed out')
+        await new Promise((ok) => setTimeout(ok, 50))
+      }
+    }
+    // the turn rule needs two or more heavy slots: this test's own machine, whatever slots the machine it runs on has
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '8', TALOS_HEAVY_SLOTS: '4', TALOS_CI_SLOTS: '2' })
+    await until(marker) // protocol and web are done here; the part is awaited
+    const go = join(r.T, 'gate.go')
+    const gate = spawn(
+      'bash',
+      [
+        join(here, 'heavy-lock.sh'),
+        'run',
+        'g1',
+        '--',
+        'sh',
+        '-c',
+        `echo ran > "${r.T}/gate.ran"; while [ ! -f "${go}" ]; do sleep 0.05; done`,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: r.home,
+          HEAVY_LOCK_POLL: '0.1',
+          TALOS_HEAVY_GUARD: join(r.T, 'none'),
+          TALOS_HEAVY_SLOTS: '4', // the same slots as the run's (above)
+          TALOS_CI_SLOTS: '2',
+        },
+      },
+    )
+    live.push(gate)
+    await until(() => existsSync(join(r.T, 'gate.ran'))) // it goes at once, though the run is alive
+    const said = () => run.out().includes('browser waits to go on: a gate holds the machine')
+    await until(said)
+    await new Promise((ok) => setTimeout(ok, 1000)) // timing-ok: a negative window, it must not have started
+    expect(r.log('browser')).not.toContain('taking the e2e packages back') // the take-back waits for the gate, it is not killed
+    writeFileSync(go, '')
+    expect(await run.done, run.out()).toBe(0)
+    expect(e2eCalls(r)).toEqual([WEB, THERE])
+    expect(r.log('browser')).toContain('taking the e2e packages back from titan-e2e: no answer within 8s (working)')
   })
 
   it('a wait of 0 still sees an answer that is already there: the green is folded, nothing taken back', async () => {

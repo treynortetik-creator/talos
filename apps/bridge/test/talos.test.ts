@@ -138,6 +138,7 @@ describe('talos commands', () => {
   const unknown = /Unknown option/
   const PROBES: Record<string, Probe> = {
     status: { argv: ['status', '--no-such-flag'], says: unknown, code: 1 },
+    facts: { argv: ['facts', '--no-such-flag'], says: unknown, code: 1 },
     doctor: { argv: ['doctor', '--no-such-flag'], says: unknown, code: 1 },
     logs: { argv: ['logs', '--no-such-flag'], says: unknown, code: 1 },
     report: { argv: ['report', '--no-such-flag'], says: unknown, code: 1 },
@@ -189,6 +190,7 @@ describe('talos commands', () => {
     'lead check': { argv: ['lead', 'check'], says: /usage: talos-app lead/, code: 2 },
     peer: { argv: ['peer', '--no-such-flag'], says: /usage: talos-app peer/, code: 2 },
     relay: { argv: ['relay', '--no-such-flag'], says: /usage: talos-app relay/, code: 2 },
+    sandbox: { argv: ['sandbox', '--no-such-flag'], says: /usage: talos-app sandbox on/, code: 2 },
     'relay connect': { argv: ['relay', 'connect', '--no-such-flag'], says: /never goes on the command line/, code: 1 },
     trust: { argv: ['trust', '--no-such-flag'], says: /usage: talos-app trust/, code: 2 },
     'trust on': { argv: ['trust', 'on', 'extra'], says: /usage: talos-app trust/, code: 2 },

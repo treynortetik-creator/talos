@@ -54,6 +54,15 @@ export const QUESTION: WorkerDialogT = {
   cursor: null,
   free_text: 2,
 }
+export const USAGE_ID = 'Ul7Zq3LmWt5RcXvNa2KdBe'
+/** Claude Code's usage-limit menu (pane-prompts row 7): the reset in plain words, and the only two choices. */
+export const USAGE: WorkerDialogT = {
+  ...dialogOn(USAGE_ID, 'usage_limit', 'Fable limit reached. It resets Aug 8, 4pm (UTC).', [
+    'Stop and wait',
+    'Switch model',
+  ]),
+  cursor: null,
+}
 /** A tool permission: the tool and the command, and only Allow once and Deny. */
 export const TOOL: WorkerDialogT = {
   ...dialogOn(TOOL_ID, 'tool_permission', 'Bash command \u00B7 touch hello.txt && ls -l hello.txt', [
@@ -254,6 +263,19 @@ export async function buildAnswerFixtures() {
   const swapped = structuredClone(files['dialog-answer-text.json']) as { proof: { signed: string } }
   swapped.proof.signed = swapped.proof.signed.replace('purple', 'orange')
   files['dialog-answer-text-changed.json'] = swapped
+  const usageCard = card('c_01JBF3V7Q8K2M4N6P8R0S2T410', 'trip', 'Trip', USAGE)
+  files['dialog-answer-usage-wait.json'] = await signedAnswer({
+    c: usageCard,
+    choice: 0,
+    deviceId: a.deviceId,
+    key: keyA,
+  })
+  files['dialog-answer-usage-switch.json'] = await signedAnswer({
+    c: usageCard,
+    choice: 1,
+    deviceId: a.deviceId,
+    key: keyA,
+  })
   const toolCard = card('c_01JBF3V7Q8K2M4N6P8R0S2T409', 'trip', 'Trip', TOOL)
   files['dialog-answer-tool.json'] = await signedAnswer({ c: toolCard, choice: 0, deviceId: a.deviceId, key: keyA })
   files['dialog-answer-tool-text.json'] = await signedAnswer({

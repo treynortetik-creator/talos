@@ -193,9 +193,8 @@ unregistered, which is the check that catches a merge you thought you did.
 
 **New jobs.** If the new kit ships a job the old one did not, `python3 scripts/talos-jobs.py register
 --agent-dir "<agent folder>" --kit-dir "<new kit>"` adds it to Chronos, disabled. Jobs that already exist,
-and any prompt the user edited, are never overwritten. **The upgrade never touches Chronos itself.** To
-move Chronos to a newer commit, bump `CHRONOS_PINNED_REF` in `install.sh` after testing, or pull the
-vendored clone by hand.
+and any prompt the user edited, are never overwritten. **The upgrade never touches Chronos itself.** Chronos
+lives in the Talos repository (`apps/chronos`) and comes with it: updating the Talos clone updates Chronos.
 
 **A worked example.** An agent installed from a kit that predates the pre-tool guard gets the new code, the
 gate goes green (the new code is sound), and `verify-install.sh` reports exactly one failure: guard
@@ -366,11 +365,13 @@ need a person, because they touch what the upgrade never writes:
    older Chronos ignores the setting and would run a "restricted" job with permission prompts skipped. `talos-jobs.py`
    reads the version from the runtime named in `~/Library/LaunchAgents/io.github.chronos.tick.plist` (not from the clone
    Talos made, which can be newer than what is installed), and refuses to register, enable or harden restricted jobs when
-   that version is older than 0.2.2 **or cannot be determined**. *Moving Chronos:* the clone at
-   `~/.local/share/talos/chronos` is a detached checkout, so `git pull` does nothing. Run
-   `git -C ~/.local/share/talos/chronos fetch origin && git -C ~/.local/share/talos/chronos checkout --detach <CHRONOS_PINNED_REF from the new kit's install.sh>`
-   then `bash ~/.local/share/talos/chronos/install.sh --workspace "<agent folder>"` (that rewrites the launchd plist). For a
-   brand-new agent folder, `./install.sh --reinstall-chronos` does the same. Or stay on 1.1.1's behaviour on purpose.
+   that version is older than 0.2.2 **or cannot be determined**. *Moving Chronos:* Chronos now
+   lives in the Talos repository (`apps/chronos`). Run the root `./install.sh` again: when the Chronos it recorded is
+   another one (the older `~/.local/share/talos/chronos` clone), it runs this Chronos's installer, which rewrites the launchd
+   plist and keeps your config and jobs. `./install.sh --reinstall-chronos` runs it again whatever is recorded; do that after
+   pulling a clone that lives under Desktop, Documents or Downloads, where Chronos runs from a copy in `~/.local/share/chronos`
+   that a pull does not change. A Chronos of your own (`--chronos-path`) lasts until the next plain `./install.sh`, which moves
+   Chronos back to `apps/chronos` and says so. Or stay on 1.1.1's behaviour on purpose.
 2. **Jobs already registered keep running exactly as before until you harden them.** Run
    `python3 scripts/talos-jobs.py harden --agent-dir "<agent folder>" --kit-dir "<new kit>"`. It sets `restricted` and the
    tool list on each registered `talos-*` Claude job, replaces a job's `prompt.md` / `guard.md` only if it is still

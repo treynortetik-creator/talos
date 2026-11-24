@@ -222,6 +222,8 @@ struct PaneSelectMainTests {
     r.timings.devDialogClientQuiet = 600
     defer { r.teardown(); keys.remove() }
     let o = try offered(r)
+    // an attach must not resize the window: the fake draws once, and a cropped screen ends the offer before the typing check is reached
+    #expect(Rig.pinWindowSize(socket: r.socket, session: "agent"), "control: the window is pinned to its size")
     let client = Process()
     client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
     client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=agent"]
@@ -238,6 +240,44 @@ struct PaneSelectMainTests {
     #expect(r.wait(10) { listed() }, "control: the client attached")
     #expect(click(r, o, 0) == .nothing(.typing))
     #expect(keys.keys.isEmpty)
+  }
+
+  /// L14: the owner's own signed tap that pressed nothing (a client is typing) ends Main's offer, so the next settled look makes a new id and a new card.
+  /// A tap from a device that is not paired never does. Old code kept the same id for the rest of its time.
+  @Test func aSignedTapThatPressedNothingEndsMainsOfferAndAForgedOneDoesNot() throws {
+    let (r, keys) = try make("tool")
+    r.timings.devDialogClientQuiet = 600
+    defer { r.teardown(); keys.remove() }
+    let o = try offered(r)
+    let owner = TestOwner()
+    try r.pairPhone(owner)
+    // a forged tap: refused, and the offer stands
+    try tap(r, o, owner: TestOwner(), choice: 0, control: "ctl_forged")
+    #expect(r.wait(20) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_forged" })
+    #expect(r.result?["reason"] as? String == "unverified")
+    Thread.sleep(forTimeInterval: 2)
+    #expect(r.sup.panePopupItem()?.dialog.id == o.id, "a forged answer ended the offer")
+    // a client types: the owner's real tap presses nothing and ends the offer
+    #expect(Rig.pinWindowSize(socket: r.socket, session: "agent"), "control: the window is pinned to its size")
+    let client = Process()
+    client.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+    client.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", r.socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=agent"]
+    client.environment = ["TERM": "xterm-256color", "PATH": "/usr/bin:/bin", "HOME": r.home]
+    client.standardInput = Pipe()
+    client.standardOutput = FileHandle.nullDevice
+    client.standardError = FileHandle.nullDevice
+    try client.run()
+    defer {
+      if client.isRunning { client.terminate() }
+      client.waitUntilExit()
+    }
+    let listed = { !ProcessRunner.run([Rig.tmuxPath!, "-L", r.socket, "list-clients", "-t", "=agent", "-F", "#{client_activity}"], env: ["PATH": "/usr/bin:/bin"]).out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    #expect(r.wait(10) { listed() }, "control: the client attached")
+    try tap(r, o, owner: owner, choice: 0, control: "ctl_real")
+    #expect(r.wait(20) { r.sup.tickNow(); return r.result?["control_id"] as? String == "ctl_real" })
+    #expect(r.result?["outcome"] as? String == "nothing_pressed", "\(String(describing: r.result))")
+    #expect(keys.keys.isEmpty)
+    #expect(r.wait(25) { r.sup.panePopupItem().map { $0.dialog.id != o.id } ?? false }, "no new offer after a tap that pressed nothing")
   }
 
   // MARK: delivery that is not known

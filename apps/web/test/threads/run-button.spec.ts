@@ -8,8 +8,9 @@ const LONG = Array.from(
   { length: 40 },
   (_, i) => `echo "step ${i}: a fairly long line that must wrap and never scroll away"`,
 ).join('\n')
+const MSG_ID = 'm_01JBF3V7Q8K2M4N6P8R0S1T' // every test message's id is this plus its own letters (A1, C2, ...)
 const agent = (id: string, text: string, over: Record<string, unknown> = {}) => ({
-  id: `m_01JBF3V7Q8K2M4N6P8R0S1T${id}`,
+  id: `${MSG_ID}${id}`,
   thread_id: 'general',
   author: 'agent',
   kind: 'text',
@@ -45,7 +46,9 @@ async function open(page: Page) {
 type Box = { x: number; y: number; width: number; height: number }
 const hits = (a: Box, b: Box) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-const row = (page: Page, n: number) => page.locator(`[data-msg-id$="A${n}"]`)
+// the whole id, never a suffix: a message the app makes (a queued send, a reply) has a random id that can end in the
+// same letters (a suffix match on "A1" matched two rows about 1 run in 1000: a strict-mode violation)
+const row = (page: Page, n: number) => page.locator(`[data-msg-id="${MSG_ID}A${n}"]`)
 const noHorizontalScroll = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
 

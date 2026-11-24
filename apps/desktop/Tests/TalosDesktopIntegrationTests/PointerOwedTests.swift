@@ -68,6 +68,7 @@ extension WorkerRig {
 
   /// A tmux client on the thread's session, as the Terminals window is while the owner looks at it. Control mode needs no terminal.
   func attachClient() throws -> Process {
+    #expect(Rig.pinWindowSize(socket: socket, session: "t-trip"), "control: the window is pinned to its size")
     let p = Process()
     p.executableURL = URL(fileURLWithPath: Rig.tmuxPath!)
     p.arguments = ["-L", socket, "-f", Rig.tmuxConf, "-C", "attach-session", "-t", "=t-trip:"]
@@ -171,7 +172,7 @@ struct PointerOwedTests {
     try r.wake("trip")
     #expect(owedAndOnDisk(r, phase: phase), "\(r.why("trip")) \(r.owed())")
     r.appGone(how)
-    _ = r.comeBack(ahead: 400)  // past 120 s, the longest the hub waits
+    _ = r.comeBack(ahead: 700)  // past 600 s, the longest the hub waits for a claim (and past the 180 s of a cold start)
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") }, "the box never came: \(r.why("trip"))")
     #expect(r.wait(5) { r.owed().until == nil }, "the dropped pointer is still owed on disk: \(r.owed())")
@@ -180,9 +181,10 @@ struct PointerOwedTests {
     #expect(!r.screen().contains(PointerTyper.text))
   }
 
-  /// A cold start waits 120 s, a warm worker 90 (the hub's `CLAIM_DEADLINE_COLD_MS` and `CLAIM_DEADLINE_MS`). 100 s on, a cold
-  /// start's pointer is still wanted and a warm worker's is not.
-  @Test func theDeadlineIsTheHubsOwnColdAndWarm() throws {
+  /// A cold start waits 180 s, a live or busy worker 600 (the hub's `CLAIM_DEADLINE_COLD_MS` and `CLAIM_DEADLINE_MS`). 160 s after the
+  /// hub wrote the wake a cold start's pointer is still wanted; 190 s after, it is not (it would still be wanted by a live worker).
+  @Test(arguments: [(160.0, true), (190.0, false)])
+  func theColdStartDeadlineIs180Seconds(after: Double, wanted: Bool) throws {
     let (r, gate) = try gated("noBox")
     defer { r.teardown() }
     r.firstCopy("crash").startTicking()
@@ -190,12 +192,22 @@ struct PointerOwedTests {
     try r.wake("trip", at: at)  // a cold start: the thread had no worker
     #expect(owedAndOnDisk(r, phase: "noBox"))
     r.appGone("crash")
-    _ = r.comeBack(clock: OwedClock(reading: at + 100))  // 100 s after the hub wrote the wake, however long the start above took
+    _ = r.comeBack(clock: OwedClock(reading: at + after))  // after s from the hub's write of the wake, however long the start above took
     FileManager.default.createFile(atPath: gate, contents: nil)
-    #expect(r.wait(10) { r.typedLines.count == 1 }, "a cold start's pointer is wanted until 120 s: \(r.typedLines)")
+    if wanted {
+      #expect(r.wait(10) { r.typedLines.count == 1 }, "a cold start's pointer is wanted until 180 s: \(r.typedLines)")
+    } else {
+      #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") }, "the box never came: \(r.why("trip"))")
+      #expect(r.wait(5) { r.owed().until == nil }, "a cold start's pointer outlived 180 s: \(r.owed())")
+      r.ticksPass()
+      #expect(r.typedLines.isEmpty, "typed for a message the hub gave to main: \(r.typedLines)")
+    }
   }
 
-  @Test func aWarmWorkersPointerIsDroppedAfter90Seconds() throws {
+  /// A live worker's pointer is wanted for 10 minutes: held by a draft, 500 s on it is still owed and goes in once the box is clear;
+  /// 700 s on it is dropped, and nothing is typed for a message main has.
+  @Test(arguments: [(500.0, true), (700.0, false)])
+  func aWarmWorkersPointerIsWantedFor600Seconds(after: Double, wanted: Bool) throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.env["FAKE_RV_ECHO_BOX"] = "1"
@@ -212,11 +224,18 @@ struct PointerOwedTests {
       r.wait(5) { !FileManager.default.fileExists(atPath: r.talosHome + "/workers/trip/wake") && r.owed().until != nil },
       "the held pointer is not on disk")
     r.appGone("crash")
-    _ = r.comeBack(ahead: 100)
-    #expect(r.wait(10) { r.owed().until == nil }, "a warm worker's pointer outlived 90 s: \(r.owed())")
-    r.ownerBackspaces("half a thought".count)
-    r.ticksPass()
-    #expect(r.typedLines.count == 1, "a pointer was typed for a message main has: \(r.typedLines)")
+    _ = r.comeBack(ahead: after)
+    if wanted {
+      r.ticksPass()
+      #expect(r.owed().until != nil, "a warm worker's pointer was dropped inside 600 s: \(r.owed())")
+      r.ownerBackspaces("half a thought".count)
+      #expect(r.wait(10) { r.typedLines.count == 2 }, "the wanted pointer never went in: \(r.typedLines)")
+    } else {
+      #expect(r.wait(10) { r.owed().until == nil }, "a warm worker's pointer outlived 600 s: \(r.owed())")
+      r.ownerBackspaces("half a thought".count)
+      r.ticksPass()
+      #expect(r.typedLines.count == 1, "a pointer was typed for a message main has: \(r.typedLines)")
+    }
   }
 
   /// A thread whose worker had gone (the file says parked) and whose pointer was owed: it is started for it, or not, by the deadline.
@@ -307,7 +326,7 @@ struct PointerOwedTests {
     #expect(r.wait(10) { r.up("trip") && r.screen().contains(PointerTyper.text) }, "\(r.why("trip"))")
     #expect(r.wait(5) { r.owed().enter == true })
     r.appGone(how)
-    _ = r.comeBack(ahead: 400)
+    _ = r.comeBack(ahead: 700)
     #expect(r.wait(10) { !r.screen().contains(PointerTyper.text) }, "our text is still in the box:\n\(r.screen())")
     #expect(r.wait(5) { r.owed().until == nil && r.owed().enter == nil }, "\(r.owed())")
     r.ticksPass()
@@ -319,8 +338,8 @@ struct PointerOwedTests {
   }
 
   /// The owner added to the box while the app was away. The box holds more than our line: nothing is typed, sent or cleared, and the
-  /// thread is told, with the usual unsent-text line while the message is still wanted.
-  @Test func anOwedEnterWithMoreInTheBoxIsHeldAndTellsTheThread() throws {
+  /// thread shows Needs you for it and is told nothing while the message is still wanted (the hub's deadline decides, not a line).
+  @Test func anOwedEnterWithMoreInTheBoxIsHeldAndShowsNeedsYouWithoutALine() throws {
     let r = try WorkerRig(scenario: scenario)
     defer { r.teardown() }
     r.env["FAKE_RV_ECHO_BOX"] = "1"
@@ -337,9 +356,8 @@ struct PointerOwedTests {
     r.trackNotices(log, on: m)
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.draftKind }, "\(m.needsYou())")
-    #expect(r.wait(5) { log.all.count == 1 }, "\(log.all)")
-    #expect(log.all.first?.text == WorkerNotice.draftLine())
     r.ticksPass()
+    #expect(log.all.isEmpty, "a held draft is told to the thread: \(log.all)")
     #expect(r.typedLines.isEmpty, "Enter went in on the owner's text: \(r.typedLines)")
     #expect(r.screen().contains("\(PointerTyper.text) and my own notes"), "the box was touched:\n\(r.screen())")
     // the owner clears the box: the message is still wanted, so the line is typed again and sent
@@ -363,7 +381,7 @@ struct PointerOwedTests {
     r.appGone("crash")
     r.ownerTypes(" and my own notes")
     let log = NoticeLog()
-    let m = r.comeBack(ahead: 400)
+    let m = r.comeBack(ahead: 700)
     r.trackNotices(log, on: m)
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.leftoverKind }, "\(m.needsYou())")
@@ -398,7 +416,7 @@ struct PointerOwedTests {
     let client = try r.attachClient()
     defer { if client.isRunning { client.terminate() } }
     let log = NoticeLog()
-    let m = r.comeBack(ahead: 400)
+    let m = r.comeBack(ahead: 700)
     r.trackNotices(log, on: m)
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.leftoverKind }, "\(m.needsYou())")
@@ -427,7 +445,7 @@ struct PointerOwedTests {
     #expect(r.wait(5) { r.owed().enter == true })
     r.appGone("crash")
     let log = NoticeLog()
-    let m = r.comeBack(ahead: 400)
+    let m = r.comeBack(ahead: 700)
     r.trackNotices(log, on: m)
     m.tune { $0.draftNoticeAfter = 0.5 }
     #expect(r.wait(10) { m.needsYou()["trip"] == WorkerNotice.leftoverKind }, "\(m.needsYou())")
@@ -480,8 +498,8 @@ struct PointerOwedTests {
     try r.wake("trip", at: at)
     #expect(owedAndOnDisk(r, phase: "noBox"))
     r.appGone("crash")
-    // 150 s after the hub wrote it: past its 120 s, while a deadline counted from the take (a minute later) would still be ahead
-    _ = r.comeBack(clock: OwedClock(reading: at + 150))
+    // 190 s after the hub wrote it: past its 180 s, while a deadline counted from the take (a minute later) would still be ahead
+    _ = r.comeBack(clock: OwedClock(reading: at + 190))
     FileManager.default.createFile(atPath: gate, contents: nil)
     #expect(r.wait(10) { r.up("trip") && r.screen().contains("auto mode") })
     #expect(r.wait(5) { r.owed().until == nil }, "\(r.owed())")
@@ -579,18 +597,19 @@ struct PointerOwedTests {
   /// a hold (a stale `leftover` would make a later ordinary draft hold post the wrong line).
   @Test func theDeadlineKeepsTheEarliestAndNothingOwedLeavesNothingBehind() {
     var r = WorkerManager.Runtime(entry: .init(threadId: "trip", cwd: "/tmp/x"))
-    r.owePointer(cold: false, now: 1000, wakeAt: 400)  // a stale file: counts from when the hub wrote it
-    #expect(r.owed.until == 490)
+    let live = PointerTyper.claimDeadline, cold = PointerTyper.claimDeadlineCold
+    r.owePointer(cold: false, now: 1000, wakeAt: 300)  // a stale file: counts from when the hub wrote it
+    #expect(r.owed.until == 300 + live)
     r.owePointer(cold: true, now: 1100, wakeAt: nil)  // a park finished, a crash: no new wake
-    #expect(r.owed.until == 490, "pushed out without a wake")
+    #expect(r.owed.until == 300 + live, "pushed out without a wake")
     r.owed.leftover = true
     r.owePointer(cold: true, now: 2000, wakeAt: 2000)  // a newer message
-    #expect(r.owed.until == 2120 && !r.owed.leftover)
+    #expect(r.owed.until == 2000 + cold && !r.owed.leftover)
     r.owed.leftover = true
     r.owed.clears = 2
     r.pendingPointer = false  // fail(), a drop, stopAll, a typed pointer: whatever clears it
     #expect(r.owed.leftover == false && r.owed.clears == 0 && r.owed.until == nil)
     r.owePointer(cold: false, now: 3000, wakeAt: nil)
-    #expect(r.owed.until == 3090 && !r.owed.leftover)
+    #expect(r.owed.until == 3000 + live && !r.owed.leftover)
   }
 }

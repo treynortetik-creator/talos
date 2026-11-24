@@ -183,7 +183,8 @@ struct ResumeWordingIntegrationTests {
     #expect(r.wait(40) { stopReason(r.phase()) == .resumeMissing(id) }, "\(r.phase()) \(r.audit)")
     usleep(3_000_000)  // the restart backoff (0.3 to 0.5 s) plus the slowed display-message (2 s): a retry would show by now
     #expect(r.starts.count == 2, "never restarted again: \(r.starts)")
-    #expect(r.starts[1].hasSuffix("--resume=\(id)"), "\(r.starts)")
+    let second = try #require(r.starts.count > 1 ? r.starts[1] : nil, "no second start: \(r.starts)")  // not an index: a missing start must fail, not crash
+    #expect(second.hasSuffix("--resume=\(id)"), "\(r.starts)")
     // the second start is the supervisor's own restart (its `start` line never comes: no pid was read)
     #expect(r.audit.contains(" restart attempt=0 kind=supervisorRestart"), "\(r.audit)")
     #expect(r.allEvents.filter { $0 == .resumeFailed(sessionId: id) }.count == 1)
@@ -191,7 +192,8 @@ struct ResumeWordingIntegrationTests {
     // `fail()` and `crashedWithoutChild` audit no fields: the line ends at the name
     for name in [" restart_failed", " start_failed", " crash_loop"] { #expect(!r.audit.contains(name), "\(name): \(r.audit)") }
     #expect(!r.allEvents.contains(.stoppedRestarting))
-    #expect(r.phonePosts.isEmpty, "no crash message to the phone: \(r.phonePosts)")
+    #expect(r.crashPosts.isEmpty && !r.phonePosts.contains { $0.contains("could not start it again") }, "no crash message to the phone: \(r.phonePosts)")
+    #expect(r.phonePosts == ["post general " + StartStallPhoneLineTests.resumeLine], "only row 12's resume line: \(r.phonePosts)")
   }
 
   @Test(arguments: resumeWordings)

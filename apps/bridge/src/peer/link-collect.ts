@@ -7,7 +7,6 @@
 import { checkPeerInboxUrl, isPeerSecret, PEER_DAILY_CAP_DEFAULT, PEER_MAX, PeerName } from '@talos-app/protocol'
 import { type BridgeContext, postSystemNotice } from '../context.ts'
 import { RelayHttpError } from '../relay-http.ts'
-import { homeScopedStore } from '../secrets/home-scope.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { PeerLedger } from './ledger.ts'
 import {
@@ -17,6 +16,7 @@ import {
   peerSecretAccount,
   readInboundPeers,
 } from './records.ts'
+import { peerScopedStore } from './secret-store.ts'
 
 /** The poll keeps asking this long past the code's expiry, so a use that raced the clock is still seen. */
 const WATCH_SLACK_MS = 60_000
@@ -122,10 +122,10 @@ async function accept(
   const checked = checkPeerInboxUrl(url)
   if (checked === null || typeof secret !== 'string' || !isPeerSecret(secret)) return 'invalid'
   const name = rec.name
-  const store = homeScopedStore(
+  const store = peerScopedStore(
     ctx.peers?.opts.secrets ?? (await openSecretStore({ home: ctx.env.home })),
     ctx.env.home,
-    { kind: 'peer', log: (m) => ctx.log.info(m) },
+    { log: (m) => ctx.log.info(m) },
   )
   const file = ctx.config
   file.refresh()

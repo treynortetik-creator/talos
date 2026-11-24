@@ -101,6 +101,13 @@ export const AgentConfig = z.object({
     })
     .default({ thread_fence: true, note_lookup: true })
     .catch({ thread_fence: true, note_lookup: true }),
+  /**
+   * "Extra lock on protected files" (opt-in OS sandbox, docs/SECURITY.md "OS sandbox"). Absent or anything but `true` = off, the
+   * default: no launch changes. On, Main and every thread session start inside Claude Code's own sandbox, so the files that guard the
+   * Talos home cannot be changed by any command however it is written. The agent may turn it on or off when the owner asks, like the
+   * other guard switches (a card while "Lock Talos settings" is on).
+   */
+  os_sandbox: z.boolean().optional().catch(undefined),
   /** "Always allow": the send kinds sent without a card (always-allow.ts). An unreadable list is no list. */
   always_allow: AlwaysAllowList.default([]).catch([]),
   /** Option C (docs/OPTION-C.md): the master switch and limits for per-thread sessions. Absent = off. */

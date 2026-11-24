@@ -223,4 +223,19 @@ PY
 then pass=$((pass+1)); echo "  ok   guard findings on a fully-new file equal the lint's errors (same rules)"
 else fail=$((fail+1)); echo "  FAIL guard and lint disagree"; fi
 
+echo "a deny that cannot be written still blocks (exit 2, never Python's exit-time 120, which Claude Code lets through)"
+# the pipe's read end is closed before the hook starts, so the first write or flush fails: no timing involved
+bp() { ( cd "$A" && python3 -c '
+import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+print(subprocess.run(sys.argv[2:], input=sys.argv[1].encode(), stdout=w, stderr=subprocess.DEVNULL).returncode)' "$1" python3 hooks/timeline-guard.py ); }
+BADW="$(EDIT "$NOTE" "$E2" "$E2
+- Whether the session is one-off or recurring.")"
+GOODW="$(EDIT "$NOTE" "$E2" "$E2
+$GOODNEW")"
+rc="$(bp "$BADW")"; if [ "$rc" = 2 ]; then pass=$((pass+1)); echo "  ok   a deny with an unwritable stdout exits 2"; else fail=$((fail+1)); echo "  FAIL a deny with an unwritable stdout exited $rc (want 2)"; fi
+rc="$(bp "$GOODW")"; if [ "$rc" = 0 ]; then pass=$((pass+1)); echo "  ok   an allow with an unwritable stdout exits 0"; else fail=$((fail+1)); echo "  FAIL an allow with an unwritable stdout exited $rc (want 0)"; fi
+printf '%s' "$BADW" | ( cd "$A" && python3 hooks/timeline-guard.py >&- 2>/dev/null ); rc=$?
+if [ "$rc" = 2 ]; then pass=$((pass+1)); echo "  ok   a deny with stdout closed outright exits 2"; else fail=$((fail+1)); echo "  FAIL a deny with stdout closed exited $rc (want 2)"; fi
+
 echo; echo "  PASS $pass   FAIL $fail"; [ "$fail" -eq 0 ]

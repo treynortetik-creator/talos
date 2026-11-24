@@ -125,8 +125,8 @@ export function reloadWouldHelp(sw: ServiceWorkerContainer | undefined = globalT
 
 /**
  * Nothing on screen would be lost by a reload: the page is visible, not Settings (a form may be half changed), no dialog or
- * sheet is open, no text is typed into a field, nothing is held by the composer (`busy`: attachments, a quote, words of a
- * failed send).
+ * sheet is open, no text is typed into a field, nothing is held by the composer or in flight (`busy`: attachments, a quote,
+ * words of a failed send, a send not yet acked, a card answer waiting).
  */
 export function safeToReload(o: { busy: boolean; path: string }, doc: Document = document): boolean {
   if (o.busy || doc.visibilityState !== 'visible' || o.path.startsWith('/settings')) return false

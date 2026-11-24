@@ -17,8 +17,9 @@ import {
   type UndoCardPayloadT,
   validateCard,
 } from '@talos-app/protocol'
+import { passBridgeCard } from '../always-allow.ts'
 import type { LedgerRow } from '../cards-ledger.ts'
-import type { BridgeContext } from '../context.ts'
+import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
 import { say } from '../owner-words.ts'
 import { assertFrameFits } from '../transport.ts'
@@ -38,7 +39,8 @@ const LEFT_SHOWN = 20
 const NAME_SHOWN = 150
 const FIELD_MAX = 19_000
 
-export type ProposeResult = { ok: true; cardId: string } | { ok: false; why: string }
+/** `passed`: approved without a card (the owner always allows undos); the app never got a card, so it has no card id. */
+export type ProposeResult = { ok: true; cardId: string; passed?: true } | { ok: false; why: string }
 
 const NOT_READY: Record<string, string> = {
   not_saved: 'No undo point was saved for this message.',
@@ -63,7 +65,7 @@ export class UndoCards {
   }
 
   /** Shows the undo card for one owner message's point. */
-  async propose(messageId: string): Promise<ProposeResult> {
+  async propose(messageId: string, onPassed?: () => void | Promise<void>): Promise<ProposeResult> {
     const { ctx } = this
     if (!this.relayFeatures.includes(UNDO_FEATURE))
       return { ok: false, why: 'The relay and the app need updating before they can show an undo card.' }
@@ -182,6 +184,20 @@ export class UndoCards {
       return { ok: false, why: (e as Error).message }
     }
     ctx.ledger.create(card, 'bridge')
+    // "Always allow undos": the standing yes is applied as his tap would be, with no card shown. Never when the restore would
+    // delete files (the Delete box is the owner's to read) or when Talos can't tell whether the session is working: those keep
+    // the card, which says so.
+    if (
+      deletable.length === 0 &&
+      activity.state === 'idle' &&
+      (await passBridgeCard(ctx, card, async (r, approved) => {
+        // the app is told BEFORE the restore runs (a long one would outlast its wait), and the request's result is recorded then,
+        // so a replay of the request after a restart finds it and never starts a second restore
+        await onPassed?.()
+        return this.onResolved(r, 'primary', approved, card.id)
+      }))
+    )
+      return { ok: true, cardId: card.id, passed: true }
     try {
       await ctx.transport.sendDurable(cardCreateFrame(now, card))
     } catch (e) {
@@ -270,6 +286,16 @@ export class UndoCards {
   private async end(cardId: string, ok: boolean, text: string) {
     const { ctx } = this
     if (!ctx.ledger.finish(cardId, ok)) return // ended by someone else meanwhile: say nothing more
+    const passed = ctx.ledger.get(cardId)
+    if (passed?.resolution?.by === 'always_allow') {
+      // passed by the grant, so no app ever got this card (the ledger says so, which a restart does not lose): the result is a
+      // line in the thread, never a card.update for a card nobody has
+      await postSystemNotice(ctx, `Undo ${ok ? 'done' : 'failed'}: ${clipUnits(text, 500)}`, {
+        thread: threadRef(ctx, passed.thread_id),
+        silent: ok,
+      }).catch((e) => ctx.log.warn('undo result not posted', { error: (e as Error).message }))
+      return
+    }
     await ctx.transport
       .sendDurable(
         cardUpdateFrame(ctx.clock.now(), {

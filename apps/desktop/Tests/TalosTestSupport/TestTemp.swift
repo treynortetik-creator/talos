@@ -26,4 +26,10 @@ public enum TestTemp {
     else { return NSTemporaryDirectory() }
     return t.hasSuffix("/") ? t : t + "/"
   }
+
+  /// `file://` + `path`, percent-encoded as a URL needs it, so a temp folder with a space (a TMPDIR such as "/private/tmp/my files/") is
+  /// one address and not an exit-3 "malformed URL" from curl. For test fixtures only: production feeds and repos are https.
+  public static func fileURL(_ path: String) -> String {
+    "file://" + (path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)
+  }
 }

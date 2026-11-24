@@ -179,6 +179,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -231,6 +232,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -276,6 +278,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -736,6 +739,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -788,6 +792,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -833,6 +838,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -1575,6 +1581,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -1627,6 +1634,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -1672,6 +1680,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -2425,6 +2434,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -2477,6 +2487,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -2522,6 +2533,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -3111,6 +3123,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -3163,6 +3176,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -3208,6 +3222,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -3740,6 +3755,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -3792,6 +3808,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -3837,6 +3854,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -4330,6 +4348,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -4382,6 +4401,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -4427,6 +4447,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -4907,6 +4928,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -4959,6 +4981,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -5004,6 +5027,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -5734,6 +5758,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -5786,6 +5811,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -5831,6 +5857,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -6336,6 +6363,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -6388,6 +6416,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -6433,6 +6462,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }
@@ -7010,6 +7040,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -7062,6 +7093,7 @@
               "problems-install/1",
               "peer/1",
               "themes/2",
+              "always-allow/2",
               "attest/1"
             ]
           },
@@ -7107,6 +7139,7 @@
             "problems-install/1",
             "peer/1",
             "themes/2",
+            "always-allow/2",
             "attest/1"
           ]
         }

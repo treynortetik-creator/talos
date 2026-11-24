@@ -357,11 +357,10 @@ export class MainSupervisor {
     this.lastSessionId = sessionId
     // the optional guards (talos-app install-guards) ride as Main's --settings, unless the owner's args carry their own
     const guarded = env.TALOS_APP_HOME
-      ? mainArgsWithGuards(withSession(cfg.args, mode), resolve(cfg.agentDir, env.TALOS_APP_HOME), cfg.agentDir)
-      : { args: withSession(cfg.args, mode), warning: null }
-    if (guarded.warning) this.d.audit('guards_not_applied', { why: guarded.warning })
+      ? mainArgsWithGuards(withSession(cfg.args, mode), resolve(cfg.agentDir, env.TALOS_APP_HOME), cfg.agentDir, this.d)
+      : { args: withSession(cfg.args, mode), warning: null, start: {} }
     const args = guarded.args
-    const ptyLaunch = { session: this.d.session, argv: [claude, ...args], cwd: cfg.agentDir, env }
+    const ptyLaunch = { session: this.d.session, argv: [claude, ...args], cwd: cfg.agentDir, env, ...guarded.start }
     let pid: number
     try {
       // a cold start refuses a live pane; a restart replaces the dead one in place

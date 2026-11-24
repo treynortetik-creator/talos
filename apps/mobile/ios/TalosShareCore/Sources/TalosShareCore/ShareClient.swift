@@ -28,16 +28,24 @@ public enum ShareClient {
     ///
     /// `relayHost` is the compiled relay origin, never a value from a web page. https only. Files are checked against
     /// the token's scopes and the limits before anything is sent.
+    ///
+    /// `idempotencyKey` goes in the `Idempotency-Key` header (never in the body: an older relay refuses unknown form
+    /// fields and ignores unknown headers). Send the same key when retrying the same share (`ShareRetryKey`) and the relay
+    /// stores it once. A key the relay would refuse is left out.
     public static func send(
-        _ payload: SharePayload, token: ShareToken, relayHost: URL, session: URLSessionProtocol = ShareURLSession()
+        _ payload: SharePayload, token: ShareToken, relayHost: URL, session: URLSessionProtocol = ShareURLSession(),
+        idempotencyKey: String? = nil
     ) async -> ShareResult {
-        await send(payload, token: token, relayHost: relayHost, session: session, allowLoopbackHTTP: false)
+        await send(
+            payload, token: token, relayHost: relayHost, session: session, allowLoopbackHTTP: false,
+            idempotencyKey: idempotencyKey)
     }
 
     /// Test-only seam: `internal`, so only `@testable import` can reach it. Allows `http://` to 127.0.0.1, localhost
     /// and ::1 for the local-relay tests, and to nothing else.
     static func send(
-        _ payload: SharePayload, token: ShareToken, relayHost: URL, session: URLSessionProtocol, allowLoopbackHTTP: Bool
+        _ payload: SharePayload, token: ShareToken, relayHost: URL, session: URLSessionProtocol, allowLoopbackHTTP: Bool,
+        idempotencyKey: String? = nil
     ) async -> ShareResult {
         let endpoint: URL
         do { endpoint = try endpointURL(relayHost, allowLoopbackHTTP: allowLoopbackHTTP) } catch {
@@ -70,6 +78,9 @@ public enum ShareClient {
         request.httpShouldHandleCookies = false
         request.setValue(writer.contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token.secret)", forHTTPHeaderField: "Authorization")
+        if let key = idempotencyKey, key.range(of: ShareLimits.idempotencyKeyPattern, options: .regularExpression) != nil {
+            request.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+        }
 
         let data: Data
         let response: URLResponse

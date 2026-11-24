@@ -2,31 +2,34 @@
 // session; a parked one is woken; a failed one falls back to main with a plain note; a heartbeat stays main's; and a thread
 // session proposes, lists, changes and deletes only its own thread's jobs. Real bridges (main = the hub, workers in worker
 // mode) over real Chronos and the FakeRelay, on an injected clock; a workers.json written the way the supervisor writes it.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { join } from 'node:path'
 import { type CardT, CLAIM_DEADLINE_MS, HEARTBEAT_META_KEY, ScheduleCardPayload, WakeFile } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import { Bridge } from '../../src/bridge.ts'
 import { loadEnv } from '../../src/config.ts'
 import { HubClient } from '../../src/hub/client.ts'
 import { pgidOf } from '../../src/hub/server.ts'
 import { nullLogger } from '../../src/log.ts'
 import { heartbeatWakeNotification, scheduleRunNotification } from '../../src/notify.ts'
+import { withMainMark } from '../../src/schedules/sidecar.ts'
 import { WORKER_BRIDGE_TOOLS } from '../../src/tools/table.ts'
 import { eventually } from '../helpers.ts'
 import {
   draft,
-  longTimeouts,
   readSidecar,
   restartBridge,
+  SCHED_START_MS,
   type SchedHarness,
   sleep,
   startSched,
   waitFor,
 } from './harness.ts'
 
-longTimeouts()
+// real Chronos processes and minutes of injected time: what longTimeouts() sets (60 s), written out so timing-lint can see it
+setDefaultTimeout(t(60_000))
 
 const BEFORE_0730 = '2026-10-05T11:29:00Z' // 07:29 EDT, Monday
 const NONCE = 'test-nonce-0123456789abcdef'
@@ -149,243 +152,326 @@ async function connected() {
 }
 
 describe('routing: a thread job fires in its own session', () => {
-  test('a dedicated thread job reaches its worker, never main; the others stay where they were', async () => {
-    await start()
-    const { trip } = await connected()
-    await h.advance(90_000)
-    await offered(3)
-    await eventually(() => expect(h.notesOf('schedule_run').map((n) => n.meta.schedule_id)).toEqual(['main-brief']))
-    const got = await inbound(trip)
-    expect(got.messages).toHaveLength(1)
-    const m = got.messages[0]
-    expect(m?.meta).toMatchObject({
-      kind: 'schedule_run',
-      trust: 'owner',
-      thread_id: 'trip',
-      schedule_id: 'trip-digest',
-    })
-    expect(m?.content).toContain('Summarise yesterday and post it.')
-    expect(m?.meta.run_id).toMatch(/^r_/)
-    // garden's session has not read its own: nothing of trip's job is in main either
-    expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
-  })
+  test(
+    'a dedicated thread job reaches its worker, never main; the others stay where they were',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      await h.advance(90_000)
+      await offered(3)
+      await eventually(() => expect(h.notesOf('schedule_run').map((n) => n.meta.schedule_id)).toEqual(['main-brief']))
+      const got = await inbound(trip)
+      expect(got.messages).toHaveLength(1)
+      const m = got.messages[0]
+      expect(m?.meta).toMatchObject({
+        kind: 'schedule_run',
+        trust: 'owner',
+        thread_id: 'trip',
+        schedule_id: 'trip-digest',
+      })
+      expect(m?.content).toContain('Summarise yesterday and post it.')
+      expect(m?.meta.run_id).toMatch(/^r_/)
+      // garden's session has not read its own: nothing of trip's job is in main either
+      expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
+    },
+    SCHED_START_MS + t(70_000),
+  )
 
-  test('a parked worker is woken for it: a wake file names the run, and the thread says a session is starting', async () => {
-    await start()
-    writeWorkers(h, { trip: { state: 'parked' }, garden: { state: 'parked' } })
-    await h.advance(90_000)
-    await offered(3)
-    const wakePath = join(h.home, 'workers', 'trip', 'wake')
-    await waitFor(() => existsSync(wakePath))
-    const wake = WakeFile.parse(JSON.parse(await Bun.file(wakePath).text()))
-    expect(wake.thread_id).toBe('trip')
-    expect(wake.action).toBe('pointer')
-    expect(wake.message_ids).toHaveLength(1)
-    expect(wake.message_ids[0]).toMatch(/^r_/)
-    expect(JSON.stringify(wake)).not.toContain('Summarise') // ids only, never the job text
-    await h.relay.expectFrame('status', (f) => f.thread_id === 'trip' && f.state === 'working', {
-      direction: 'from_bridge',
-    })
-    expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
-  })
+  test(
+    'a parked worker is woken for it: a wake file names the run, and the thread says a session is starting',
+    async () => {
+      await start()
+      writeWorkers(h, { trip: { state: 'parked' }, garden: { state: 'parked' } })
+      await h.advance(90_000)
+      await offered(3)
+      const wakePath = join(h.home, 'workers', 'trip', 'wake')
+      await waitFor(() => existsSync(wakePath))
+      const wake = WakeFile.parse(JSON.parse(await Bun.file(wakePath).text()))
+      expect(wake.thread_id).toBe('trip')
+      expect(wake.action).toBe('pointer')
+      expect(wake.message_ids).toHaveLength(1)
+      expect(wake.message_ids[0]).toMatch(/^r_/)
+      expect(JSON.stringify(wake)).not.toContain('Summarise') // ids only, never the job text
+      await h.relay.expectFrame('status', (f) => f.thread_id === 'trip' && f.state === 'working', {
+        direction: 'from_bridge',
+      })
+      expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
+    },
+    SCHED_START_MS + t(95_000),
+  )
 
-  test('a supervisor that is not running: the job falls back to main with the plain note', async () => {
-    await start()
-    writeWorkers(h, live(), { stale: true })
-    await h.advance(90_000)
-    await offered(3)
-    await eventually(() =>
-      expect(
-        h
-          .notesOf('schedule_run')
-          .map((n) => n.meta.schedule_id)
-          .sort(),
-      ).toEqual(['garden-water', 'main-brief', 'trip-digest']),
-    )
-    const n = h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')
-    expect(n?.meta).toMatchObject({ routed: 'fallback', reason: 'worker_unavailable', thread_id: 'trip' })
-    expect(n?.content).toContain('Summarise yesterday and post it.') // main can run it as it always did
-    await h.relay.expectFrame(
-      'reply',
-      (f) =>
-        f.message.author === 'system' &&
-        f.message.thread_id === 'trip' &&
-        /Thread session didn't pick this up/.test(f.message.text ?? ''),
-      { direction: 'from_bridge' },
-    )
-    expect(existsSync(join(h.home, 'workers', 'trip', 'wake'))).toBe(false)
-  })
+  test(
+    'a supervisor that is not running: the job falls back to main with the plain note',
+    async () => {
+      await start()
+      writeWorkers(h, live(), { stale: true })
+      await h.advance(90_000)
+      await offered(3)
+      await eventually(() =>
+        expect(
+          h
+            .notesOf('schedule_run')
+            .map((n) => n.meta.schedule_id)
+            .sort(),
+        ).toEqual(['garden-water', 'main-brief', 'trip-digest']),
+      )
+      const n = h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')
+      expect(n?.meta).toMatchObject({ routed: 'fallback', reason: 'worker_unavailable', thread_id: 'trip' })
+      expect(n?.content).toContain('Summarise yesterday and post it.') // main can run it as it always did
+      await h.relay.expectFrame(
+        'reply',
+        (f) =>
+          f.message.author === 'system' &&
+          f.message.thread_id === 'trip' &&
+          /Thread session didn't pick this up/.test(f.message.text ?? ''),
+        { direction: 'from_bridge' },
+      )
+      expect(existsSync(join(h.home, 'workers', 'trip', 'wake'))).toBe(false)
+    },
+    SCHED_START_MS + t(95_000),
+  )
 
-  test('a failed worker falls back too, and says why', async () => {
-    await start()
-    writeWorkers(h, {
-      trip: { state: 'failed', error: { code: 'needs_mac', at: new Date(h.clock.now()).toISOString() } },
-      garden: { state: 'live' },
-    })
-    await h.advance(90_000)
-    await offered(3)
-    await eventually(() =>
-      expect(h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta).toMatchObject({
-        routed: 'fallback',
-        reason: 'needs_mac',
-      }),
-    )
-    await h.relay.expectFrame('reply', (f) => /needs you at the Mac/.test(f.message.text ?? ''), {
-      direction: 'from_bridge',
-    })
-  })
+  test(
+    'a failed worker falls back too, and says why',
+    async () => {
+      await start()
+      writeWorkers(h, {
+        trip: { state: 'failed', error: { code: 'needs_mac', at: new Date(h.clock.now()).toISOString() } },
+        garden: { state: 'live' },
+      })
+      await h.advance(90_000)
+      await offered(3)
+      await eventually(() =>
+        expect(h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta).toMatchObject({
+          routed: 'fallback',
+          reason: 'needs_mac',
+        }),
+      )
+      await h.relay.expectFrame('reply', (f) => /needs you at the Mac/.test(f.message.text ?? ''), {
+        direction: 'from_bridge',
+      })
+    },
+    SCHED_START_MS + t(95_000),
+  )
 
-  test('a worker that never reads it: past the deadline main gets it once, and the late worker is told main has it', async () => {
-    await start()
-    const { trip } = await connected()
-    await h.advance(60_000) // the job is offered at 07:30; the worker has not read it
-    await offered(3)
-    await waitFor(() => existsSync(join(h.home, 'workers', 'trip', 'wake')))
-    expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
-    await h.advance(CLAIM_DEADLINE_MS + 5_000)
-    await eventually(() =>
-      expect(h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.routed).toBe('fallback'),
-    )
-    const run = h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.run_id as string
-    const late = await inbound(trip)
-    expect(late.messages).toHaveLength(0)
-    expect(late.already_handled_by_main).toContain(run)
-    // main runs it; the late worker may not touch the run
-    expect(text(await trip.callTool('schedule_run_start', { run_id: run }))).toContain(
-      'SKIP: the main session took that run',
-    )
-    expect(await h.agent.start(run)).toBe('GO')
-    expect(h.notesOf('schedule_run').filter((x) => x.meta.schedule_id === 'trip-digest')).toHaveLength(1)
-  })
+  test(
+    'a worker that never reads it: past the deadline main gets it once, and the late worker is told main has it',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      await h.advance(60_000) // the job is offered at 07:30; the worker has not read it
+      await offered(3)
+      await waitFor(() => existsSync(join(h.home, 'workers', 'trip', 'wake')))
+      expect(h.notes.some((n) => n.meta.schedule_id === 'trip-digest')).toBe(false)
+      await h.advance(CLAIM_DEADLINE_MS + 5_000)
+      await eventually(() =>
+        expect(h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.routed).toBe(
+          'fallback',
+        ),
+      )
+      const run = h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.run_id as string
+      const late = await inbound(trip)
+      expect(late.messages).toHaveLength(0)
+      expect(late.already_handled_by_main).toContain(run)
+      // main runs it; the late worker may not touch the run
+      expect(text(await trip.callTool('schedule_run_start', { run_id: run }))).toContain(
+        'SKIP: the main session took that run',
+      )
+      expect(await h.agent.start(run)).toBe('GO')
+      expect(h.notesOf('schedule_run').filter((x) => x.meta.schedule_id === 'trip-digest')).toHaveLength(1)
+    },
+    SCHED_START_MS + t(75_000),
+  )
 
-  test("a heartbeat wake stays main's even in a dedicated thread; so does a run with no dedicated thread", async () => {
-    await start()
-    await connected()
-    const router = h.bridge.router
-    const ref = { id: 'trip', name: 'Trip' }
-    const hb = heartbeatWakeNotification({
-      thread: ref,
-      runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AA',
-      jobId: 'trip-heartbeat',
-      name: 'Trip check-in',
-      hitsPath: '/home/alex/hits.json',
-      counts: { total: 1, by_source: { mail: 1 }, left_for_next_wake: 0 },
-      ts: new Date(h.clock.now()).toISOString(),
-    })
-    expect(router?.decide(hb)).toEqual({ to: 'main' })
-    const plain = scheduleRunNotification({
-      thread: ref,
-      runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AB',
-      jobId: 'trip-digest',
-      name: 'Trip Digest',
-      ds: undefined,
-      fireAt: undefined,
-      windowEnds: undefined,
-      guard: null,
-      prompt: 'x',
-      ts: new Date(h.clock.now()).toISOString(),
-    })
-    expect(router?.decide(plain)).toMatchObject({ to: 'worker', thread: 'trip' })
-    expect(router?.decide({ ...plain, meta: { ...plain.meta, thread_id: 'shared_one' } })).toEqual({ to: 'main' })
-    expect(router?.decide({ ...plain, meta: { ...plain.meta, thread_id: 'general' } })).toEqual({ to: 'main' })
-    // through the real route(): the heartbeat wake reaches main's emit and no worker route is made
-    await router?.route(hb)
-    expect(h.notes.some((n) => n.meta.run_id === 'r_01JBF3V7Q8K2M4N6P8R0S2T4AA')).toBe(true)
-    expect(router?.store.route('r_01JBF3V7Q8K2M4N6P8R0S2T4AA')).toBeUndefined()
-  })
+  test(
+    'deaf thread: a run Main took because the thread could not be typed into is marked "Ran in Main, not in <thread>" and counted, once',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      await h.advance(60_000)
+      await offered(3)
+      await waitFor(() => existsSync(join(h.home, 'workers', 'trip', 'wake')))
+      await h.advance(CLAIM_DEADLINE_MS + 5_000)
+      await eventually(() =>
+        expect(h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.routed).toBe(
+          'fallback',
+        ),
+      )
+      const run = h.notesOf('schedule_run').find((x) => x.meta.schedule_id === 'trip-digest')?.meta.run_id as string
+      // the tally the supervisor reads when typing works again: for trip, one scheduled run and nothing else
+      const tally = JSON.parse(readFileSync(join(h.home, 'main-handled.json'), 'utf8')) as {
+        threads: Record<string, Array<{ kind: string }>>
+      }
+      expect(Object.keys(tally.threads)).not.toContain('shared_one') // a thread with no session of its own is never counted
+      expect(tally.threads.trip?.map((e) => e.kind)).toEqual(['run'])
+      // Main runs it and calls it done: the history must not read as the thread's own run
+      expect(await h.agent.start(run)).toBe('GO')
+      await h.agent.done(run, true, 'checked read-only: nothing to post')
+      const side = readSidecar(h) as { runs: Record<string, { ran_in_main_for?: { thread: string; name: string } }> }
+      expect(side.runs[run]?.ran_in_main_for).toEqual({ thread: 'trip', name: 'Trip' })
+      // the history's own summary says it, ahead of whatever Main wrote
+      const noteNow = h.bridge.ctx.schedules?.sidecar.note(run)
+      expect(withMainMark(noteNow as never)).toBe('Ran in Main, not in Trip. checked read-only: nothing to post')
+      // the late worker asks again: nothing is delivered a second time, and the tally does not grow
+      expect((await inbound(trip)).messages).toHaveLength(0)
+      const again = JSON.parse(readFileSync(join(h.home, 'main-handled.json'), 'utf8')) as typeof tally
+      expect(again.threads.trip).toHaveLength(1)
+    },
+    SCHED_START_MS + t(75_000),
+  )
 
-  test('a held notice and a non-owner schedule_run are not handed to the worker', async () => {
-    await start()
-    const router = h.bridge.router
-    const base = scheduleRunNotification({
-      thread: { id: 'trip', name: 'Trip' },
-      runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AC',
-      jobId: 'trip-digest',
-      name: 'Trip Digest',
-      ds: undefined,
-      fireAt: undefined,
-      windowEnds: undefined,
-      guard: null,
-      prompt: 'x',
-      ts: new Date(h.clock.now()).toISOString(),
-    })
-    expect(router?.decide({ ...base, meta: { ...base.meta, trust: 'external' } })).toEqual({ to: 'main' })
-    expect(router?.decide({ ...base, meta: { ...base.meta, kind: 'schedule_held' } })).toEqual({ to: 'main' })
-  })
+  test(
+    "a heartbeat wake stays main's even in a dedicated thread; so does a run with no dedicated thread",
+    async () => {
+      await start()
+      await connected()
+      const router = h.bridge.router
+      const ref = { id: 'trip', name: 'Trip' }
+      const hb = heartbeatWakeNotification({
+        thread: ref,
+        runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AA',
+        jobId: 'trip-heartbeat',
+        name: 'Trip check-in',
+        hitsPath: '/home/alex/hits.json',
+        counts: { total: 1, by_source: { mail: 1 }, left_for_next_wake: 0 },
+        ts: new Date(h.clock.now()).toISOString(),
+      })
+      expect(router?.decide(hb)).toEqual({ to: 'main' })
+      const plain = scheduleRunNotification({
+        thread: ref,
+        runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AB',
+        jobId: 'trip-digest',
+        name: 'Trip Digest',
+        ds: undefined,
+        fireAt: undefined,
+        windowEnds: undefined,
+        guard: null,
+        prompt: 'x',
+        ts: new Date(h.clock.now()).toISOString(),
+      })
+      expect(router?.decide(plain)).toMatchObject({ to: 'worker', thread: 'trip' })
+      expect(router?.decide({ ...plain, meta: { ...plain.meta, thread_id: 'shared_one' } })).toEqual({ to: 'main' })
+      expect(router?.decide({ ...plain, meta: { ...plain.meta, thread_id: 'general' } })).toEqual({ to: 'main' })
+      // through the real route(): the heartbeat wake reaches main's emit and no worker route is made
+      await router?.route(hb)
+      expect(h.notes.some((n) => n.meta.run_id === 'r_01JBF3V7Q8K2M4N6P8R0S2T4AA')).toBe(true)
+      expect(router?.store.route('r_01JBF3V7Q8K2M4N6P8R0S2T4AA')).toBeUndefined()
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'a held notice and a non-owner schedule_run are not handed to the worker',
+    async () => {
+      await start()
+      const router = h.bridge.router
+      const base = scheduleRunNotification({
+        thread: { id: 'trip', name: 'Trip' },
+        runId: 'r_01JBF3V7Q8K2M4N6P8R0S2T4AC',
+        jobId: 'trip-digest',
+        name: 'Trip Digest',
+        ds: undefined,
+        fireAt: undefined,
+        windowEnds: undefined,
+        guard: null,
+        prompt: 'x',
+        ts: new Date(h.clock.now()).toISOString(),
+      })
+      expect(router?.decide({ ...base, meta: { ...base.meta, trust: 'external' } })).toEqual({ to: 'main' })
+      expect(router?.decide({ ...base, meta: { ...base.meta, kind: 'schedule_held' } })).toEqual({ to: 'main' })
+    },
+    SCHED_START_MS + t(60_000),
+  )
 })
 
 describe('the run claim protocol from the worker', () => {
-  test('start, reply and done work from the worker; start is repeatable for its own claim, not after done; main records it', async () => {
-    await start()
-    const { trip, garden } = await connected()
-    await h.advance(90_000)
-    await offered(3)
-    await eventually(() => expect(h.notesOf('schedule_run')).toHaveLength(1))
-    const [m] = (await inbound(trip)).messages
-    const runId = m?.meta.run_id as string
-    // another thread's session cannot start or finish trip's run
-    expect(text(await garden.callTool('schedule_run_start', { run_id: runId }))).toContain(
-      'SKIP: that run was not handed to this thread session',
-    )
-    expect(text(await garden.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'stolen' }))).toContain(
-      'not yours',
-    )
-    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
-    // asking again for a run this session already claimed is GO (its answer may have been lost), never "running elsewhere"
-    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
-    const said = await trip.callTool('reply', { thread_id: 'trip', text: 'Trip digest posted.' })
-    expect(said.isError).toBeFalsy()
-    await h.relay.expectFrame('reply', (f) => f.message.text === 'Trip digest posted.', { direction: 'from_bridge' })
-    expect(text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Posted' }))).toBe(
-      'recorded',
-    )
-    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toContain('already done')
-    // main's own list shows the run closed ok
-    const one = text(await h.bridge.callTool('schedules_list', { id: 'trip-digest' }))
-    expect(one).toMatch(/ok/)
-  })
+  test(
+    'start, reply and done work from the worker; start is repeatable for its own claim, not after done; main records it',
+    async () => {
+      await start()
+      const { trip, garden } = await connected()
+      await h.advance(90_000)
+      await offered(3)
+      await eventually(() => expect(h.notesOf('schedule_run')).toHaveLength(1))
+      const [m] = (await inbound(trip)).messages
+      const runId = m?.meta.run_id as string
+      // another thread's session cannot start or finish trip's run
+      expect(text(await garden.callTool('schedule_run_start', { run_id: runId }))).toContain(
+        'SKIP: that run was not handed to this thread session',
+      )
+      expect(
+        text(await garden.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'stolen' })),
+      ).toContain('not yours')
+      expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
+      // asking again for a run this session already claimed is GO (its answer may have been lost), never "running elsewhere"
+      expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
+      const said = await trip.callTool('reply', { thread_id: 'trip', text: 'Trip digest posted.' })
+      expect(said.isError).toBeFalsy()
+      await h.relay.expectFrame('reply', (f) => f.message.text === 'Trip digest posted.', { direction: 'from_bridge' })
+      expect(text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Posted' }))).toBe(
+        'recorded',
+      )
+      expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toContain('already done')
+      // main's own list shows the run closed ok
+      const one = text(await h.bridge.callTool('schedules_list', { id: 'trip-digest' }))
+      expect(one).toMatch(/ok/)
+    },
+    SCHED_START_MS + t(95_000),
+  )
 
-  test('a run id nobody routed, and a bad one, are refused in words', async () => {
-    await start()
-    const { trip } = await connected()
-    expect(text(await trip.callTool('schedule_run_start', { run_id: 'r_NOPE' }))).toContain('SKIP')
-    expect(text(await trip.callTool('schedule_run_done', { run_id: 'r_NOPE', ok: true, summary: 'x' }))).toContain(
-      'not yours',
-    )
-    expect((await trip.callTool('schedule_run_start', {})).isError).toBe(true)
-  })
+  test(
+    'a run id nobody routed, and a bad one, are refused in words',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      expect(text(await trip.callTool('schedule_run_start', { run_id: 'r_NOPE' }))).toContain('SKIP')
+      expect(text(await trip.callTool('schedule_run_done', { run_id: 'r_NOPE', ok: true, summary: 'x' }))).toContain(
+        'not yours',
+      )
+      expect((await trip.callTool('schedule_run_start', {})).isError).toBe(true)
+    },
+    SCHED_START_MS + t(60_000),
+  )
 })
 
 describe('worker tool scope', () => {
-  test("the worker has the four schedule tools; main's are unchanged", async () => {
-    await start()
-    const trip = await startWorker('trip', false)
-    const names = trip.tools.map((t) => t.name)
-    expect(names.sort()).toEqual([...WORKER_BRIDGE_TOOLS].sort())
-    for (const t of ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done'])
-      expect(names).toContain(t)
-    expect(h.bridge.tools.map((t) => t.name)).toContain('create_thread')
-  })
+  test(
+    "the worker has the four schedule tools; main's are unchanged",
+    async () => {
+      await start()
+      const trip = await startWorker('trip', false)
+      const names = trip.tools.map((t) => t.name)
+      expect(names.sort()).toEqual([...WORKER_BRIDGE_TOOLS].sort())
+      for (const t of ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done'])
+        expect(names).toContain(t)
+      expect(h.bridge.tools.map((t) => t.name)).toContain('create_thread')
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test("schedules_list shows only the worker's own thread; main's list shows every job", async () => {
-    await start()
-    const { trip, garden } = await connected()
-    const mine = text(await trip.callTool('schedules_list', {}))
-    expect(mine).toContain('trip-digest')
-    expect(mine).not.toContain('garden-water')
-    expect(mine).not.toContain('main-brief')
-    expect(text(await garden.callTool('schedules_list', {}))).not.toContain('trip-digest')
-    const all = text(await h.bridge.callTool('schedules_list', {}))
-    for (const id of ['trip-digest', 'garden-water', 'main-brief']) expect(all).toContain(id)
-    // one job in full: its own yes, another thread's the same words as a job that does not exist
-    expect(text(await trip.callTool('schedules_list', { id: 'trip-digest' }))).toContain(
-      'Summarise yesterday and post it.',
-    )
-    const other = await trip.callTool('schedules_list', { id: 'garden-water' })
-    const none = await trip.callTool('schedules_list', { id: 'nope' })
-    expect(other.isError).toBe(true)
-    expect(text(other).replace('garden-water', 'X')).toBe(text(none).replace('nope', 'X'))
-  })
+  test(
+    "schedules_list shows only the worker's own thread; main's list shows every job",
+    async () => {
+      await start()
+      const { trip, garden } = await connected()
+      const mine = text(await trip.callTool('schedules_list', {}))
+      expect(mine).toContain('trip-digest')
+      expect(mine).not.toContain('garden-water')
+      expect(mine).not.toContain('main-brief')
+      expect(text(await garden.callTool('schedules_list', {}))).not.toContain('trip-digest')
+      const all = text(await h.bridge.callTool('schedules_list', {}))
+      for (const id of ['trip-digest', 'garden-water', 'main-brief']) expect(all).toContain(id)
+      // one job in full: its own yes, another thread's the same words as a job that does not exist
+      expect(text(await trip.callTool('schedules_list', { id: 'trip-digest' }))).toContain(
+        'Summarise yesterday and post it.',
+      )
+      const other = await trip.callTool('schedules_list', { id: 'garden-water' })
+      const none = await trip.callTool('schedules_list', { id: 'nope' })
+      expect(other.isError).toBe(true)
+      expect(text(other).replace('garden-water', 'X')).toBe(text(none).replace('nope', 'X'))
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
   const create = (extra: Record<string, unknown> = {}) => ({
     op: 'create',
@@ -397,226 +483,279 @@ describe('worker tool scope', () => {
     ...extra,
   })
 
-  test('a worker cannot propose into another thread, nor a job that runs in another thread', async () => {
-    await start()
-    const { trip } = await connected()
-    const wrongCard = await trip.callTool('schedule_propose', create({ thread_id: 'garden' }))
-    expect(wrongCard.isError).toBe(true)
-    expect(text(wrongCard)).toContain('Valid thread ids: trip')
-    const general = await trip.callTool('schedule_propose', create({ thread_id: 'general' }))
-    expect(general.isError).toBe(true)
-    const wrongRun = await trip.callTool('schedule_propose', create({ result_thread_id: 'garden' }))
-    expect(wrongRun.isError).toBe(true)
-    expect(text(wrongRun)).toContain('own thread')
-    expect(h.bridge.ctx.ledger.list('pending').filter((r) => r.binding.kind === 'schedule')).toHaveLength(0)
-  })
+  test(
+    'a worker cannot propose into another thread, nor a job that runs in another thread',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      const wrongCard = await trip.callTool('schedule_propose', create({ thread_id: 'garden' }))
+      expect(wrongCard.isError).toBe(true)
+      expect(text(wrongCard)).toContain('Valid thread ids: trip')
+      const general = await trip.callTool('schedule_propose', create({ thread_id: 'general' }))
+      expect(general.isError).toBe(true)
+      const wrongRun = await trip.callTool('schedule_propose', create({ result_thread_id: 'garden' }))
+      expect(wrongRun.isError).toBe(true)
+      expect(text(wrongRun)).toContain('own thread')
+      expect(h.bridge.ctx.ledger.list('pending').filter((r) => r.binding.kind === 'schedule')).toHaveLength(0)
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test("a worker cannot update or delete a job that is not its thread's: another thread's, main's, a heartbeat", async () => {
-    await start()
-    const { trip } = await connected()
-    for (const id of ['garden-water', 'main-brief', 'nope']) {
-      for (const op of ['update', 'delete']) {
-        const r = await trip.callTool('schedule_propose', {
-          op,
-          id,
-          thread_id: 'trip',
-          reason: 'trying',
-          ...(op === 'update' ? { name: 'Hijacked' } : {}),
-        })
-        expect(r.isError, `${op} ${id}`).toBe(true)
-        expect(text(r), `${op} ${id}`).toMatch(/not one of this thread's jobs|no scheduled job/)
+  test(
+    "a worker cannot update or delete a job that is not its thread's: another thread's, main's, a heartbeat",
+    async () => {
+      await start()
+      const { trip } = await connected()
+      for (const id of ['garden-water', 'main-brief', 'nope']) {
+        for (const op of ['update', 'delete']) {
+          const r = await trip.callTool('schedule_propose', {
+            op,
+            id,
+            thread_id: 'trip',
+            reason: 'trying',
+            ...(op === 'update' ? { name: 'Hijacked' } : {}),
+          })
+          expect(r.isError, `${op} ${id}`).toBe(true)
+          expect(text(r), `${op} ${id}`).toMatch(/not one of this thread's jobs|no scheduled job/)
+        }
       }
-    }
-    // the same call from the worker's own job works
-    const mine = await trip.callTool('schedule_propose', {
-      op: 'update',
-      id: 'trip-digest',
-      thread_id: 'trip',
-      reason: 'Rename',
-      name: 'Trip Digest v2',
-    })
-    expect(mine.isError, text(mine)).toBeFalsy()
-    expect(text(mine)).toMatch(/^card c_/)
-    expect(h.bridge.ctx.ledger.list('pending').filter((r) => r.binding.kind === 'schedule')).toHaveLength(1)
-    // a heartbeat is main's: refused to create, and an existing one in the thread is neither listed nor changeable
-    const hb = await trip.callTool('schedule_propose', create({ meta: { [HEARTBEAT_META_KEY]: { v: 1 } } }))
-    expect(hb.isError).toBe(true)
-    expect(text(hb)).toContain('heartbeat')
-  })
+      // the same call from the worker's own job works
+      const mine = await trip.callTool('schedule_propose', {
+        op: 'update',
+        id: 'trip-digest',
+        thread_id: 'trip',
+        reason: 'Rename',
+        name: 'Trip Digest v2',
+      })
+      expect(mine.isError, text(mine)).toBeFalsy()
+      expect(text(mine)).toMatch(/^card c_/)
+      expect(h.bridge.ctx.ledger.list('pending').filter((r) => r.binding.kind === 'schedule')).toHaveLength(1)
+      // a heartbeat is main's: refused to create, and an existing one in the thread is neither listed nor changeable
+      const hb = await trip.callTool('schedule_propose', create({ meta: { [HEARTBEAT_META_KEY]: { v: 1 } } }))
+      expect(hb.isError).toBe(true)
+      expect(text(hb)).toContain('heartbeat')
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test("a worker cannot supersede another session's card, and is capped at three waiting cards", async () => {
-    await start()
-    const { trip, garden } = await connected()
-    const theirs = text(
-      await garden.callTool('schedule_propose', { ...create({ name: 'Water Plants', thread_id: 'garden' }) }),
-    )
-    const theirCard = /card (c_\S+) pending/.exec(theirs)?.[1]
-    expect(theirCard).toBeDefined()
-    const steal = await trip.callTool('schedule_propose', create({ supersedes: theirCard }))
-    expect(steal.isError).toBe(true)
-    expect(text(steal)).toContain('own pending')
-    for (const n of ['One', 'Two', 'Three'])
-      expect((await trip.callTool('schedule_propose', create({ name: `Check ${n}` }))).isError, n).toBeFalsy()
-    const fourth = await trip.callTool('schedule_propose', create({ name: 'Check Four' }))
-    expect(fourth.isError).toBe(true)
-    expect(text(fourth)).toContain('3 schedule cards')
-    // garden still can: the cap is per session
-    expect(
-      (await garden.callTool('schedule_propose', create({ name: 'Water More', thread_id: 'garden' }))).isError,
-    ).toBeFalsy()
-  })
+  test(
+    "a worker cannot supersede another session's card, and is capped at three waiting cards",
+    async () => {
+      await start()
+      const { trip, garden } = await connected()
+      const theirs = text(
+        await garden.callTool('schedule_propose', { ...create({ name: 'Water Plants', thread_id: 'garden' }) }),
+      )
+      const theirCard = /card (c_\S+) pending/.exec(theirs)?.[1]
+      expect(theirCard).toBeDefined()
+      const steal = await trip.callTool('schedule_propose', create({ supersedes: theirCard }))
+      expect(steal.isError).toBe(true)
+      expect(text(steal)).toContain('own pending')
+      for (const n of ['One', 'Two', 'Three'])
+        expect((await trip.callTool('schedule_propose', create({ name: `Check ${n}` }))).isError, n).toBeFalsy()
+      const fourth = await trip.callTool('schedule_propose', create({ name: 'Check Four' }))
+      expect(fourth.isError).toBe(true)
+      expect(text(fourth)).toContain('3 schedule cards')
+      // garden still can: the cap is per session
+      expect(
+        (await garden.callTool('schedule_propose', create({ name: 'Water More', thread_id: 'garden' }))).isError,
+      ).toBeFalsy()
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test('the whole way: propose, approve the card, the job fires in that session, it reports done', async () => {
-    await start()
-    const { trip } = await connected()
-    const res = await trip.callTool('schedule_propose', create({ when: { type: 'daily', time: '07:40' } }))
-    expect(res.isError, text(res)).toBeFalsy()
-    const id = /card (c_\S+) pending/.exec(text(res))?.[1]
-    const cc = await h.app.expectFrame('card.create', (c) => c.card.id === id, { direction: 'in' })
-    const card = cc.card as CardT
-    // the card lands in the proposing thread and says who wants what, where it runs, when, and what it does
-    expect(card.thread_id).toBe('trip')
-    expect(card.title).toBe("Trip's session wants to schedule Packing Check")
-    expect(card.primary_label).toBe('Approve')
-    expect(card.kill_label).toBe('Not now')
-    const rows = Object.fromEntries(card.destination.map((d) => [d.label, d.value]))
-    expect(rows['Runs in']).toBe(
-      "This thread's own session (wakes it if parked), or Main if that session can't take it",
-    )
-    expect(rows.As).toMatch(/permissions/i)
-    expect(rows.When).toMatch(/7:40/)
-    expect(rows.Does).toBe('Check the packing list and post what is missing.')
-    expect(rows['Proposed by']).toBe("Trip's session")
-    expect(rows['Posts to']).toBe('Trip')
-    const payload = ScheduleCardPayload.parse(card.payload)
-    expect(payload.proposed_by).toBe('agent')
-    expect(payload.change.op === 'create' && payload.change.draft.thread_id).toBe('trip')
-    // nothing is written until the owner approves
-    expect(h.box.api<{ schedules: Array<{ id: string }> }>(['snapshot']).schedules.map((s) => s.id)).not.toContain(
-      'packing-check',
-    )
-    await h.app.resolveCard(card, 'primary', card.payload_hash, { stepup_token: h.relay.mintStepup(`card:${card.id}`) })
-    await h.app.expectFrame('card.update', (u) => u.card_id === card.id && u.state === 'done', { direction: 'in' })
-    expect(h.bridge.ctx.schedules?.sidecar.threadOf('packing-check')).toBe('trip')
-    await h.advance(15 * 60_000)
-    let runId = ''
-    for (let i = 0; i < 100 && !runId; i++) {
-      for (const m of (await inbound(trip)).messages)
-        if (m.meta.schedule_id === 'packing-check') runId = m.meta.run_id as string
-      if (!runId) await sleep(100)
-    }
-    expect(runId).toMatch(/^r_/)
-    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
-    expect(
-      text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Packing list checked' })),
-    ).toBe('recorded')
-    expect(h.notes.some((n) => n.meta.schedule_id === 'packing-check')).toBe(false)
-  })
+  test(
+    'the whole way: propose, approve the card, the job fires in that session, it reports done',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      const res = await trip.callTool('schedule_propose', create({ when: { type: 'daily', time: '07:40' } }))
+      expect(res.isError, text(res)).toBeFalsy()
+      const id = /card (c_\S+) pending/.exec(text(res))?.[1]
+      const cc = await h.app.expectFrame('card.create', (c) => c.card.id === id, { direction: 'in' })
+      const card = cc.card as CardT
+      // the card lands in the proposing thread and says who wants what, where it runs, when, and what it does
+      expect(card.thread_id).toBe('trip')
+      expect(card.title).toBe("Trip's session wants to schedule Packing Check")
+      expect(card.primary_label).toBe('Approve')
+      expect(card.kill_label).toBe('Not now')
+      const rows = Object.fromEntries(card.destination.map((d) => [d.label, d.value]))
+      expect(rows['Runs in']).toBe(
+        "This thread's own session (wakes it if parked), or Main if that session can't take it",
+      )
+      expect(rows.As).toMatch(/permissions/i)
+      expect(rows.When).toMatch(/7:40/)
+      expect(rows.Does).toBe('Check the packing list and post what is missing.')
+      expect(rows['Proposed by']).toBe("Trip's session")
+      expect(rows['Posts to']).toBe('Trip')
+      const payload = ScheduleCardPayload.parse(card.payload)
+      expect(payload.proposed_by).toBe('agent')
+      expect(payload.change.op === 'create' && payload.change.draft.thread_id).toBe('trip')
+      // nothing is written until the owner approves
+      expect(h.box.api<{ schedules: Array<{ id: string }> }>(['snapshot']).schedules.map((s) => s.id)).not.toContain(
+        'packing-check',
+      )
+      await h.app.resolveCard(card, 'primary', card.payload_hash, {
+        stepup_token: h.relay.mintStepup(`card:${card.id}`),
+      })
+      await h.app.expectFrame('card.update', (u) => u.card_id === card.id && u.state === 'done', { direction: 'in' })
+      expect(h.bridge.ctx.schedules?.sidecar.threadOf('packing-check')).toBe('trip')
+      await h.advance(15 * 60_000)
+      let runId = ''
+      for (let i = 0; i < 100 && !runId; i++) {
+        for (const m of (await inbound(trip)).messages)
+          if (m.meta.schedule_id === 'packing-check') runId = m.meta.run_id as string
+        if (!runId) await sleep(t(100)) // the poll interval of this loop, which reads the exact state it waits for (the run in the worker's inbox)
+      }
+      expect(runId).toMatch(/^r_/)
+      expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
+      expect(
+        text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Packing list checked' })),
+      ).toBe('recorded')
+      expect(h.notes.some((n) => n.meta.schedule_id === 'packing-check')).toBe(false)
+    },
+    SCHED_START_MS + t(90_000),
+  )
 
-  test("switched back to shared: the session's schedule requests are refused and the job is main's again", async () => {
-    await start()
-    const { trip } = await connected()
-    h.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'shared' } : t)),
-    }))
-    const r = await trip.callTool('schedules_list', {})
-    expect(r.isError).toBe(true)
-    expect(text(r)).toContain('no longer has its own session')
-    await h.advance(90_000)
-    await offered(3)
-    await eventually(() => expect(h.notesOf('schedule_run').map((n) => n.meta.schedule_id)).toContain('trip-digest'))
-  })
+  test(
+    "switched back to shared: the session's schedule requests are refused and the job is main's again",
+    async () => {
+      await start()
+      const { trip } = await connected()
+      h.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'shared' } : t)),
+      }))
+      const r = await trip.callTool('schedules_list', {})
+      expect(r.isError).toBe(true)
+      expect(text(r)).toContain('no longer has its own session')
+      await h.advance(90_000)
+      await offered(3)
+      await eventually(() => expect(h.notesOf('schedule_run').map((n) => n.meta.schedule_id)).toContain('trip-digest'))
+    },
+    SCHED_START_MS + t(70_000),
+  )
 
-  test('switched back to shared mid-run: the run the session already claimed can still be finished, a new start cannot', async () => {
-    await start()
-    const { trip } = await connected()
-    await h.advance(90_000)
-    await offered(3)
-    const [m] = (await inbound(trip)).messages
-    const runId = m?.meta.run_id as string
-    expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
-    h.bridge.ctx.config.update((c) => ({
-      ...c,
-      threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'shared' } : t)),
-    }))
-    expect(
-      text(await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Finished after the switch' })),
-    ).toBe('recorded')
-    const again = await trip.callTool('schedule_run_start', { run_id: runId })
-    expect(again.isError).toBe(true)
-    expect(text(again)).toContain('no longer has its own session')
-  })
+  test(
+    'switched back to shared mid-run: the run the session already claimed can still be finished, a new start cannot',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      await h.advance(90_000)
+      await offered(3)
+      const [m] = (await inbound(trip)).messages
+      const runId = m?.meta.run_id as string
+      expect(text(await trip.callTool('schedule_run_start', { run_id: runId }))).toBe('GO')
+      h.bridge.ctx.config.update((c) => ({
+        ...c,
+        threads: c.threads.map((t) => (t.id === 'trip' ? { ...t, session: 'shared' } : t)),
+      }))
+      expect(
+        text(
+          await trip.callTool('schedule_run_done', { run_id: runId, ok: true, summary: 'Finished after the switch' }),
+        ),
+      ).toBe('recorded')
+      const again = await trip.callTool('schedule_run_start', { run_id: runId })
+      expect(again.isError).toBe(true)
+      expect(text(again)).toContain('no longer has its own session')
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test('a scheduler that is switched off gives the worker no schedule tools', async () => {
-    await start()
-    const off = await Bridge.create({
-      env: loadEnv({
-        TALOS_APP_HOME: h.home,
-        TALOS_APP_RELAY_URL: h.relay.httpUrl,
-        TALOS_APP_WORKER_THREAD: 'trip',
-        TALOS_APP_WORKER_NONCE: NONCE,
-        TALOS_APP_SCHEDULER: 'off',
-      }),
-      logger: nullLogger,
-    })
-    workers.push(off)
-    expect(off.tools.map((t) => t.name).filter((n) => n.startsWith('schedule'))).toEqual([])
-  })
+  test(
+    'a scheduler that is switched off gives the worker no schedule tools',
+    async () => {
+      await start()
+      const off = await Bridge.create({
+        env: loadEnv({
+          TALOS_APP_HOME: h.home,
+          TALOS_APP_RELAY_URL: h.relay.httpUrl,
+          TALOS_APP_WORKER_THREAD: 'trip',
+          TALOS_APP_WORKER_NONCE: NONCE,
+          TALOS_APP_SCHEDULER: 'off',
+        }),
+        logger: nullLogger,
+      })
+      workers.push(off)
+      expect(off.tools.map((t) => t.name).filter((n) => n.startsWith('schedule'))).toEqual([])
+    },
+    SCHED_START_MS + t(60_000),
+  )
 })
 
 describe('the hub socket for schedule requests', () => {
-  test('a connection that never said hello cannot ask', async () => {
-    await start()
-    const sock = createConnection(join(h.home, 'run', 'hub.sock'))
-    const lines: string[] = []
-    sock.setEncoding('utf8')
-    sock.on('data', (d: string) => lines.push(d))
-    await new Promise((r) => sock.on('connect', r))
-    sock.write(`${JSON.stringify({ t: 'rpc', id: 'x', tool: 'schedules_list', args: {} })}\n`)
-    await eventually(() => expect(lines.join('')).toContain('unauthorized'))
-    sock.destroy()
-  })
+  test(
+    'a connection that never said hello cannot ask',
+    async () => {
+      await start()
+      const sock = createConnection(join(h.home, 'run', 'hub.sock'))
+      const lines: string[] = []
+      sock.setEncoding('utf8')
+      sock.on('data', (d: string) => lines.push(d))
+      await new Promise((r) => sock.on('connect', r))
+      sock.write(`${JSON.stringify({ t: 'rpc', id: 'x', tool: 'schedules_list', args: {} })}\n`)
+      await eventually(() => expect(lines.join('')).toContain('unauthorized'))
+      sock.destroy()
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test("the thread is the connection's: a request that names another thread in its args gets its own", async () => {
-    await start()
-    const { trip } = await connected()
-    const r = await trip.hubClient?.rpc('schedules_list', { thread_id: 'garden', id: 'garden-water' })
-    expect(r?.ok).toBe(false)
-    expect(r?.text).toContain('no scheduled job')
-  })
+  test(
+    "the thread is the connection's: a request that names another thread in its args gets its own",
+    async () => {
+      await start()
+      const { trip } = await connected()
+      const r = await trip.hubClient?.rpc('schedules_list', { thread_id: 'garden', id: 'garden-water' })
+      expect(r?.ok).toBe(false)
+      expect(r?.text).toContain('no scheduled job')
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test('an unknown tool is one refused answer, not a dropped line', async () => {
-    await start()
-    const { trip } = await connected()
-    const r = await trip.hubClient?.rpc('schedules_nuke', {})
-    expect(r).toEqual({ ok: false, text: 'unknown tool schedules_nuke' })
-    expect((await trip.hubClient?.rpc('schedules_list', {}))?.ok).toBe(true) // the connection is still good
-  })
+  test(
+    'an unknown tool is one refused answer, not a dropped line',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      const r = await trip.hubClient?.rpc('schedules_nuke', {})
+      expect(r).toEqual({ ok: false, text: 'unknown tool schedules_nuke' })
+      expect((await trip.hubClient?.rpc('schedules_list', {}))?.ok).toBe(true) // the connection is still good
+    },
+    SCHED_START_MS + t(60_000),
+  )
 
-  test('hub down or silent reads as a failure in words, never an empty answer', async () => {
-    await start()
-    const down = new HubClient({ sockPath: join(h.home, 'nope.sock'), threadId: 'trip', nonce: NONCE, log: nullLogger })
-    const r = await down.rpc('schedules_list', {})
-    expect(r.ok).toBe(false)
-    expect(r.text).toContain("isn't reachable")
-    // a hub that never answers
-    const { createServer } = await import('node:net')
-    const path = join(h.home, 'silent.sock')
-    const srv = createServer((s) => {
-      s.on('data', (d) => {
-        if (String(d).includes('"hello"')) s.write(`${JSON.stringify({ t: 'welcome', thread_id: 'trip' })}\n`)
+  test(
+    'hub down or silent reads as a failure in words, never an empty answer',
+    async () => {
+      await start()
+      const down = new HubClient({
+        sockPath: join(h.home, 'nope.sock'),
+        threadId: 'trip',
+        nonce: NONCE,
+        log: nullLogger,
       })
-    })
-    await new Promise<void>((res) => srv.listen(path, () => res()))
-    const quiet = new HubClient({ sockPath: path, threadId: 'trip', nonce: NONCE, log: nullLogger })
-    expect(await quiet.connect()).toBe(true)
-    const slow = await quiet.rpc('schedules_list', {}, 150)
-    expect(slow.ok).toBe(false)
-    expect(slow.text).toContain('did not answer in time')
-    expect(slow.text).toContain('schedules_list')
-    quiet.close()
-    srv.close()
-    await sleep(10)
-  })
+      const r = await down.rpc('schedules_list', {})
+      expect(r.ok).toBe(false)
+      expect(r.text).toContain("isn't reachable")
+      // a hub that never answers
+      const { createServer } = await import('node:net')
+      const path = join(h.home, 'silent.sock')
+      const srv = createServer((s) => {
+        s.on('data', (d) => {
+          if (String(d).includes('"hello"')) s.write(`${JSON.stringify({ t: 'welcome', thread_id: 'trip' })}\n`)
+        })
+      })
+      await new Promise<void>((res) => srv.listen(path, () => res()))
+      const quiet = new HubClient({ sockPath: path, threadId: 'trip', nonce: NONCE, log: nullLogger })
+      expect(await quiet.connect()).toBe(true)
+      const slow = await quiet.rpc('schedules_list', {}, 150)
+      expect(slow.ok).toBe(false)
+      expect(slow.text).toContain('did not answer in time')
+      expect(slow.text).toContain('schedules_list')
+      quiet.close()
+      srv.close()
+      await sleep(10)
+    },
+    SCHED_START_MS + t(60_000),
+  )
 })

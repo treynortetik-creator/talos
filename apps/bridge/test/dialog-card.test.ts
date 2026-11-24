@@ -25,7 +25,7 @@ import {
   type WorkerDialogT,
 } from '@talos-app/protocol'
 import { fakeClock, t } from '@talos-app/testkit'
-import { DialogCards } from '../src/dialog-card.ts'
+import { DialogCards, REOFFER_GRACE_MS } from '../src/dialog-card.ts'
 import { advanceSteps, type Harness, pushCardResolvePastRelay, sleep, startHarness, waitFor } from './helpers.ts'
 
 // the waits of one test (the harness, ticks, answers) add up past bun's 5 s default
@@ -895,6 +895,11 @@ describe('first sighting plus 15 minutes', () => {
     const card = await show(x, trust(x))
     await advanceSteps(clock, 901_000)
     await waitFor(() => lastUpdate(x, card.id)?.state === 'expired', 4000, 'expired')
+    // not at once: a Mac that offers the question again would make the line false (L14), so it waits REOFFER_GRACE_MS
+    // timing-ok: negative window: no line inside the grace
+    await sleep(100)
+    expect(notices(x).filter((m) => m.text.includes('is waiting on a'))).toHaveLength(0)
+    await advanceSteps(clock, REOFFER_GRACE_MS + 1000)
     const line = dialogFallbackLine(
       'trust',
       process.platform === 'darwin'
@@ -929,6 +934,173 @@ describe('first sighting plus 15 minutes', () => {
     // timing-ok: negative window: no waiting notice after the card closed
     await sleep(100)
     expect(notices(x).filter((m) => m.text.includes('is waiting on a'))).toHaveLength(0)
+  })
+})
+
+describe('a question left standing (L14)', () => {
+  const AGAIN_ID = 'Qm8Wt3ZxLp5Rv9NaKc2HdB'
+  /** The inbound settle window runs on the injected clock: the clock is nudged (as the no-report test above does) until the answer file is written. */
+  async function tapUntilAnswered(x: Harness, clock: ReturnType<typeof fakeClock>, card: CardT) {
+    await x.app.resolveCard(card, 'primary', card.payload_hash, { choice: 1, ts: iso(now(x)) })
+    for (let i = 0; i < 200 && !existsSync(file(x, 'trip', 'dialog-answer.json')); i++) {
+      clock.advance(50)
+      await sleep(20)
+    }
+    expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(true)
+  }
+  const waitingLine = (x: Harness) => notices(x).filter((m) => m.text.includes('is waiting on a'))
+
+  test('the Mac offers the same question again under a new id when the card runs out: a new card, and no line saying to go to the Mac', async () => {
+    const clock = fakeClock(new Date().toISOString()) // the app's taps are stamped with the real time: the fake clock starts there too
+    await start({ clock })
+    const x = h as Harness
+    const first = await show(x, trust(x))
+    await advanceSteps(clock, 901_000)
+    await waitFor(() => lastUpdate(x, first.id)?.state === 'expired', 4000, 'expired')
+    // the Mac's next look: same question, new id
+    const second = await show(x, trust(x, { id: AGAIN_ID }))
+    expect(second.id).not.toBe(first.id)
+    expect(x.bridge.ctx.ledger.get(first.id)?.state).toBe('expired')
+    expect(dialogCards(x).filter((c) => x.bridge.ctx.ledger.get(c.id)?.state === 'pending')).toHaveLength(1)
+    await advanceSteps(clock, REOFFER_GRACE_MS + 5000)
+    // timing-ok: negative window: no line after the grace either, the question has a fresh card
+    await sleep(100)
+    expect(waitingLine(x)).toHaveLength(0)
+  })
+
+  test('a tap on the expired card presses nothing and does not answer the new one', async () => {
+    const clock = fakeClock(new Date().toISOString()) // the app's taps are stamped with the real time: the fake clock starts there too
+    await start({ clock })
+    const x = h as Harness
+    const first = await show(x, trust(x))
+    await advanceSteps(clock, 901_000)
+    await waitFor(() => lastUpdate(x, first.id)?.state === 'expired', 4000, 'expired')
+    const second = await show(x, trust(x, { id: AGAIN_ID }))
+    const f = await pushCardResolvePastRelay(x, first, first.payload_hash, 'primary', { choice: 1, ts: iso(now(x)) })
+    await waitFor(() => errors(x).some((e) => e.ref === f.id), 4000, 'the refusal')
+    expect(['card_expired', 'card_not_pending']).toContain(errors(x).find((e) => e.ref === f.id)?.code as string)
+    expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(false)
+    expect(x.bridge.ctx.ledger.get(second.id)?.state).toBe('pending')
+    await tapUntilAnswered(x, clock, second)
+    expect(answerOf(x)).toMatchObject({ dialog_id: AGAIN_ID })
+  })
+
+  test('an older Mac never offers it again: the line is posted once, after the grace, and not before', async () => {
+    const clock = fakeClock(new Date().toISOString()) // the app's taps are stamped with the real time: the fake clock starts there too
+    await start({ clock })
+    const x = h as Harness
+    const card = await show(x, trust(x))
+    await advanceSteps(clock, 901_000)
+    await waitFor(() => lastUpdate(x, card.id)?.state === 'expired', 4000, 'expired')
+    expect(waitingLine(x)).toHaveLength(0)
+    await advanceSteps(clock, REOFFER_GRACE_MS + 5000)
+    await waitFor(() => waitingLine(x).length === 1, 4000, 'the line')
+    await advanceSteps(clock, 5 * 60_000)
+    // timing-ok: negative window: still exactly one
+    await sleep(100)
+    expect(waitingLine(x)).toHaveLength(1)
+  })
+
+  /** The Mac's report for a tap it never got to (it was away): nothing written, so after DIALOG_RESULT_WAIT_MS the card ends "not confirmed". */
+  const cardsOf = (x: Harness, dialogId: string) => dialogCards(x).filter((c) => dialogOf(c)?.dialog_id === dialogId)
+  const pending = (x: Harness) => dialogCards(x).filter((c) => x.bridge.ctx.ledger.get(c.id)?.state === 'pending')
+
+  test(
+    'a card that ended with no report from the Mac gets ONE replacement while the same dialog is on the pane, and never a third',
+    async () => {
+      const clock = fakeClock(new Date().toISOString())
+      await start({ clock })
+      const x = h as Harness
+      const first = await show(x, trust(x))
+      await tapUntilAnswered(x, clock, first)
+      await advanceSteps(clock, DIALOG_RESULT_WAIT_MS + 2000) // the Mac never reports
+      await waitFor(() => lastUpdate(x, first.id)?.state === 'failed', 4000, 'the card failed (not confirmed)')
+      expect(existsSync(file(x, 'trip', 'dialog-answer.json'))).toBe(false) // taken back, so a late Mac presses nothing
+      writeWorkers(x, { trip: trust(x) }) // the Mac is back, the same dialog (same id) still on the pane
+      x.bridge.optionCTick()
+      await waitFor(() => cardsOf(x, TRIP_ID).length === 2, 4000, 'the replacement card')
+      const second = cardsOf(x, TRIP_ID).find((c) => c.id !== first.id) as CardT
+      expect(x.bridge.ctx.ledger.get(second.id)?.state).toBe('pending')
+      expect(pending(x)).toHaveLength(1)
+      // it answers (the same dialog id, a new card); and when that one ends unconfirmed too there is no third
+      await tapUntilAnswered(x, clock, second)
+      await advanceSteps(clock, DIALOG_RESULT_WAIT_MS + 2000)
+      await waitFor(() => lastUpdate(x, second.id)?.state === 'failed', 4000, 'the second card failed')
+      writeWorkers(x, { trip: trust(x) })
+      x.bridge.optionCTick()
+      // timing-ok: negative window: no third card
+      await sleep(200)
+      expect(cardsOf(x, TRIP_ID)).toHaveLength(2)
+    },
+    t(45_000),
+  )
+
+  test('a REPORTED "nothing pressed" owes no replacement: the Mac that said so makes its own new id', async () => {
+    const clock = fakeClock(new Date().toISOString())
+    await start({ clock })
+    const x = h as Harness
+    const first = await show(x, trust(x))
+    await tapUntilAnswered(x, clock, first)
+    const a = DialogAnswer.parse(answerOf(x))
+    writeMacFile(x, 'trip', 'dialog-result.json', {
+      v: 1,
+      dialog_id: a.dialog_id,
+      control_id: a.control_id,
+      source: 'card',
+      outcome: 'nothing_pressed',
+      reason: 'screen_changed',
+      at: iso(now(x)),
+    })
+    x.bridge.optionCTick()
+    await waitFor(() => lastUpdate(x, first.id)?.state === 'failed', 4000, 'failed, with the Mac words')
+    writeWorkers(x, { trip: trust(x) }) // the same dialog id still on the pane (an older Mac)
+    x.bridge.optionCTick()
+    // timing-ok: negative window: no replacement card for a reported refusal
+    await sleep(200)
+    expect(cardsOf(x, TRIP_ID)).toHaveLength(1)
+  })
+
+  test('a tap that waited too long for the Mac (mac_offline_too_long) leaves the question one replacement card', async () => {
+    const clock = fakeClock(new Date().toISOString())
+    await start({ clock })
+    const x = h as Harness
+    const first = await show(x, trust(x))
+    // a tap stamped 11 minutes ago reaches the bridge now: the ledger expires the card (the dialog's own time is a day away)
+    await advanceSteps(clock, 11 * 60_000)
+    writeWorkers(x, { trip: trust(x, { expires_at: iso(now(x) + 24 * 3600_000) }) })
+    await pushCardResolvePastRelay(x, first, first.payload_hash, 'primary', {
+      choice: 1,
+      ts: iso(now(x) - 11 * 60_000),
+    })
+    await waitFor(() => x.bridge.ctx.ledger.get(first.id)?.state === 'expired', 4000, 'the card expired')
+    x.bridge.optionCTick()
+    await waitFor(() => cardsOf(x, TRIP_ID).length === 2, 4000, 'the replacement card')
+    expect(pending(x)).toHaveLength(1)
+    // not a line saying to go to the Mac: the question has a card again
+    await advanceSteps(clock, REOFFER_GRACE_MS + 5000)
+    // timing-ok: negative window: no line
+    await sleep(100)
+    expect(waitingLine(x)).toHaveLength(0)
+  })
+
+  test('nothing is made for a dialog that is gone, or while the supervisor file is stale', async () => {
+    const clock = fakeClock(new Date().toISOString())
+    await start({ clock })
+    const x = h as Harness
+    const first = await show(x, trust(x))
+    await tapUntilAnswered(x, clock, first)
+    await advanceSteps(clock, DIALOG_RESULT_WAIT_MS + 2000)
+    await waitFor(() => lastUpdate(x, first.id)?.state === 'failed', 4000, 'failed')
+    writeWorkers(x, { trip: trust(x) }, { stale: true }) // an old file proves nothing
+    x.bridge.optionCTick()
+    // timing-ok: negative window: no card from a stale file
+    await sleep(150)
+    expect(cardsOf(x, TRIP_ID)).toHaveLength(1)
+    writeWorkers(x, {}) // the dialog is gone
+    x.bridge.optionCTick()
+    // timing-ok: negative window: no card for a dialog that is gone
+    await sleep(150)
+    expect(dialogCards(x)).toHaveLength(1)
   })
 })
 

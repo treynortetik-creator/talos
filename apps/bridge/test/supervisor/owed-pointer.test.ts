@@ -9,6 +9,7 @@ import {
   WORKER_POINTER_TEXT,
 } from '@talos-app/protocol'
 import {
+  holdReasonOf,
   mayType,
   NOTHING_OWED,
   type OwedState,
@@ -137,6 +138,37 @@ describe('the typing guard', () => {
     d.dialog = true
     expect((await tick(d, owed())).delivered).toBe(false)
     expect(d.box).toBe('')
+  })
+})
+
+describe('the pointer_hold reason of a tick (typed_unseen > draft > scrolled > refused)', () => {
+  it('each hold has its own reason; no box and an Enter check have none', async () => {
+    expect([holdReasonOf('unseen'), holdReasonOf('draft'), holdReasonOf('copy_mode'), holdReasonOf('refused')]).toEqual(
+      ['typed_unseen', 'draft', 'scrolled', 'refused'],
+    )
+    expect([holdReasonOf('no_box'), holdReasonOf('enter_uncertain'), holdReasonOf(null)]).toEqual([null, null, null])
+    const refused = new FakePane()
+    refused.sendText = async () => 'refused' as const
+    expect((await tick(refused, owed())).hold).toBe('refused')
+    const draft = new FakePane()
+    draft.box = 'half'
+    expect((await tick(draft, owed())).hold).toBe('draft')
+  })
+  it('scrolled back alone is scrolled; with a draft under the scroll the draft wins; with our line typed and never seen, that wins', async () => {
+    const a = new FakePane()
+    a.mode = true
+    expect((await tick(a, owed())).hold).toBe('scrolled')
+    const b = new FakePane()
+    b.mode = true
+    b.box = 'half'
+    expect((await tick(b, owed())).hold).toBe('draft')
+    const c = new FakePane()
+    c.mode = true
+    const typed = owed({ enterOwed: true, unseenSince: 100 - WORKER_POINTER.screen_lag_s - 1 })
+    expect((await tick(c, typed)).hold).toBe('typed_unseen')
+    const d = new FakePane() // typed a moment ago (inside the screen's lag): not yet a hold of its own
+    d.mode = true
+    expect((await tick(d, owed({ enterOwed: true, unseenSince: 99 }))).hold).toBe('scrolled')
   })
 })
 

@@ -129,6 +129,11 @@ test.describe('on-screen keyboard', () => {
     ])
     const box = page.getByLabel('Message', { exact: true })
     await expect(box).toBeVisible()
+    // The thread's seeded card is a 96 px placeholder until its lazy chunk loads, then a shorter card: everything below it
+    // jumps. A click that lands in that jump hits the page frame, not Expand (one run in ~200 on a loaded machine).
+    // Settle the layout first: the card is in, so nothing above the button moves any more.
+    await expect(page.getByText('Post v0.3 release notes')).toBeVisible()
+    await expect(page.getByTestId('timeline-card').locator('.animate-pulse')).toHaveCount(0)
     await page.getByRole('button', { name: 'Expand report.html to full screen' }).click()
     await expect(page.getByRole('dialog', { name: 'report.html' })).toBeVisible()
     await frames(page)

@@ -15,7 +15,6 @@ import type { BridgeOptions } from './bridge-options.ts'
 import { BugContextService } from './bug-context/service.ts'
 import { CardExpiry } from './card-expiry.ts'
 import { CardLedger } from './cards-ledger.ts'
-import { sessionMarkerInherited, startupTalosChannel } from './claude-env.ts'
 import { type Clock, realClock } from './clock.ts'
 import { assertSecureRelayUrl, type BridgePaths, paths as pathsOf } from './config.ts'
 import { ConfigFile, supervisorFlagOpts } from './config-file.ts'
@@ -72,7 +71,7 @@ import { ScreenConsent } from './screen-consent.ts'
 import { createSearchService, type SearchServiceHandle } from './search/install.ts'
 import { SessionControls } from './session/controls.ts'
 import { SpeakService } from './speak/service.ts'
-import { StatusWriter } from './status-file.ts'
+import { StatusWriter, statusStartFacts } from './status-file.ts'
 import { BridgeStopping, PendingResults, within } from './stopping.ts'
 import { callTool, toolsFor } from './tools/index.ts'
 import { workerStoreOf } from './tools/read-inbound.ts'
@@ -129,7 +128,7 @@ const toAgent =
   }
 
 /**
- * The status.json fields the update queues read: the governor (the Linux restart-on-update queue holds unless it is ok or off) and
+ * The status.json fields the update queues read: the governor (the Linux restart-on-update queue holds unless it is ok, off or unknown) and
  * the owner's newest message time (the Mac app's updater postpones on a change). See status-file.ts.
  */
 function queueSignals(ctx: BridgeContext): {
@@ -479,8 +478,7 @@ export class Bridge {
         log: this.log,
         instance,
         commit: BRIDGE_COMMIT,
-        sessionMarkerInherited: sessionMarkerInherited(),
-        talosChannel: startupTalosChannel(this.log),
+        ...statusStartFacts(env, this.log),
         snapshot: () => ({
           mode: 'live',
           relay: {

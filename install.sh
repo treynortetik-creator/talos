@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Talos installer: a working agent from a fresh clone of this repo.
 #
-#   ./install.sh [--agent-dir PATH] [--no-app] [--no-relay-wait] [--no-tmux] [--dry-run] [--yes] [--apply] [--with-chronos] [--repoint] [--relay-url URL] [kit flags]
+#   ./install.sh [--agent-dir PATH] [--no-app] [--no-relay-wait] [--no-tmux] [--dry-run] [--yes] [--apply] [--repoint] [--relay-url URL] [kit flags]
 #
 #   --agent-dir PATH  where the agent lives (default ~/talos-agent). Must be new, empty, or already a Talos agent.
 #                     Any other non-empty folder is refused, and an existing CLAUDE.md is never overwritten.
@@ -16,17 +16,19 @@
 #   --yes             no confirmation prompt (required when there is no terminal to ask on)
 #   --repoint         an agent whose .mcp.json or start-talos.sh points at ANOTHER clone of this repo is refused unless you
 #                     pass this; it then points both at this clone
-#   --with-chronos    also install Chronos, the scheduler (macOS; fetches it from GitHub). Off by default. On an agent that
-#                     already exists it adds Chronos and registers the jobs (kit/install.sh --add-to-existing).
-#   --no-chronos      accepted for the kit docs; it is the default. --no-memory-search, --no-reranker: see scripts/install-memory.sh
+#   Chronos, the scheduler, comes with every Mac install, from apps/chronos in this clone (nothing is fetched), with its Claude
+#                     jobs off until you enable them; an agent that exists gets it added (kit/install.sh --add-to-existing).
+#                     A Chronos you made yourself (or run from a folder of your own) is never taken over: --reinstall-chronos moves it here.
+#   --with-chronos    kept for older callers (the Mac app passed it): it adds nothing on a Mac, and never takes over a Chronos of yours.
+#   --no-memory-search, --no-reranker: see scripts/install-memory.sh.
 #   --relay-url URL   also set up the bridge (its key and settings) for your relay: a bare https origin, https://<host>, no path, query or user name. Without it
 #                     the installer prints the exact command to run once the relay exists (docs: SETUP.md).
 #
 # Kit flags are passed to kit/install.sh unchanged: --with-vault DIR, --with-memory-search, --embed-model base|small,
 # --with-reranker, --with-voice, --with-qwen-voice, --with-parakeet, --with-diarize, --global-pointer, --allow-protected-folder,
-# --allow-synced-folder, and the Chronos-only ones (need --with-chronos): --notify talos|macos|none, --no-jobs,
-# --full-access-jobs, --no-load, --no-session-hook, --reinstall-chronos, --set-chronos-workspace, --chronos-path DIR,
-# --chronos-repo URL, --chronos-ref SHA. See kit/install.sh --help for what each does.
+# --allow-synced-folder, and the Chronos ones: --notify talos|macos|none, --no-jobs, --full-access-jobs, --no-load,
+# --no-session-hook, --reinstall-chronos, --set-chronos-workspace, --chronos-path DIR (a Chronos of your own, for development).
+# See kit/install.sh --help for what each does.
 #
 # Steps: prerequisites; JS dependencies of this clone; the agent folder (the kit, default CLAUDE.md); a first git commit
 # there; the talos-app MCP server for that folder; a launch script that loads the Talos mod with --plugin-dir; the Mac app
@@ -64,18 +66,18 @@ while [ $# -gt 0 ]; do
     --apply) APPLY=1; shift ;;
     --no-tmux) NO_TMUX=1; shift ;;
     --yes|-y) YES=1; shift ;;
-    --with-chronos) CHRONOS=1; shift ;;
+    --with-chronos) CHRONOS=1; CHRONOS_ASKED=1; shift ;;
     --no-chronos) NO_CHRONOS=1; shift ;;  --no-memory-search) NO_MEMSEARCH=1; shift ;;  --no-reranker) NO_RERANKER=1; shift ;;
     --repoint) REPOINT=1; shift ;;
     --relay-url) need_value "$@"; RELAY_URL="$2"; shift 2 ;;
     # kit/install.sh flags that take a value
     --with-vault) need_value "$@"; VAULT_RAW="$2"; shift 2 ;;   # resolved and checked below, then passed on
-    --embed-model) need_value "$@"; KIT_ARGS+=("$1" "$2"); shift 2 ;;
-    --notify|--chronos-path|--chronos-repo|--chronos-ref)
+    --embed-model) need_value "$@"; KIT_ARGS+=("$1" "$2"); KIT_OTHER=1; shift 2 ;;
+    --notify|--chronos-path)
       need_value "$@"; KIT_ARGS+=("$1" "$2"); KIT_CHRONOS_ONLY+=("$1"); shift 2 ;;
     # kit/install.sh flags without a value
     --with-memory-search|--with-reranker|--with-voice|--with-qwen-voice|--with-parakeet|--with-diarize|--global-pointer|--allow-protected-folder|--allow-synced-folder)
-      KIT_ARGS+=("$1"); shift ;;
+      KIT_ARGS+=("$1"); KIT_OTHER=1; shift ;;
     --no-jobs|--full-access-jobs|--no-load|--no-session-hook|--reinstall-chronos|--set-chronos-workspace)
       KIT_ARGS+=("$1"); KIT_CHRONOS_ONLY+=("$1"); shift ;;
     -h|--help) usage; exit 0 ;;
@@ -84,8 +86,10 @@ while [ $# -gt 0 ]; do
 done
 if [ "$APPLY" = 1 ] && [ "$DRY" = 1 ]; then echo "--apply and --dry-run contradict each other; pick one." >&2; exit 2; fi; memsearch_flags_ok
 if [ "$CHRONOS" = 1 ] && [ "$NO_CHRONOS" = 1 ]; then echo "--with-chronos and --no-chronos contradict each other; pick one." >&2; exit 2; fi
+# Chronos comes with every Mac install; --no-chronos (not in the help) is the tests' switch for an install without it
+[ "$NO_CHRONOS" = 1 ] || [ "${TALOS_INSTALL_OS:-$(uname -s)}" != Darwin ] || CHRONOS=1
 if [ "$CHRONOS" != 1 ] && [ ${#KIT_CHRONOS_ONLY[@]} -gt 0 ]; then
-  echo "${KIT_CHRONOS_ONLY[*]} only does something with Chronos, which is off unless you pass --with-chronos. Add --with-chronos, or drop the flag. Nothing was changed." >&2
+  echo "${KIT_CHRONOS_ONLY[*]} only does something with Chronos, which this install leaves out (--no-chronos, or not macOS, where --with-chronos adds it). Drop the flag. Nothing was changed." >&2
   exit 2
 fi
 if [ -n "$RELAY_URL" ]; then
@@ -228,7 +232,7 @@ else
 fi
 check_node_pnpm   # node and pnpm, unless TALOS_JS_RUNTIME=bun (scripts/install-js.sh)
 rc=0; check bun "$BUN_NEED" bun --version || rc=$?
-[ "$rc" = 0 ] || problem "Bun $BUN_NEED or newer: $(got $rc). No admin needed: curl -fsSL https://bun.sh/install | bash (it installs into ~/.bun; an older Bun: bun upgrade)."
+[ "$rc" = 0 ] && bun_runs_or_problem || problem "Bun $BUN_NEED or newer: $(got $rc). No admin needed: curl -fsSL https://bun.sh/install | bash (it installs into ~/.bun; an older Bun: bun upgrade)."
 rc=0; check claude "$CLAUDE_NEED" claude --version || rc=$?
 # Claude Code's installer puts claude in ~/.local/bin and leaves the PATH alone: installed but not found is common, so say how.
 LOCAL_BIN_LINE="echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zprofile"
@@ -380,10 +384,14 @@ if os.path.lexists(f):
             a = entry["args"]
             if not isinstance(a, list):
                 raise ValueError("args is not a list")
-            i = a.index("--cwd")
-            cwd = a[i + 1]
+            conf = [x for x in a if isinstance(x, str) and x.startswith("--config=")]
+            if conf:
+                cwd = os.path.dirname(conf[0][len("--config="):])
+            else:
+                i = a.index("--cwd")
+                cwd = a[i + 1]
             if not isinstance(cwd, str) or not cwd:
-                raise ValueError("--cwd has no folder")
+                raise ValueError("the entry names no clone folder")
             if real(cwd) != mine:
                 out.append(".mcp.json: " + cwd)
     except Exception as e:
@@ -649,14 +657,15 @@ fi
 
 # ---------------------------------------------------------------- 4. the kit
 step "4/7 The agent (kit, default CLAUDE.md, first commit)"
-# Flags for kit/install.sh: Chronos stays off unless asked for, and everything else you passed goes through unchanged.
-KARGS=(--agent-dir "$AGENT_DIR"); [ "$CHRONOS" = 1 ] || KARGS+=(--no-chronos)
+KARGS=(--agent-dir "$AGENT_DIR") # for kit/install.sh: everything else you passed goes through unchanged
+# Whose Chronos is on this Mac decides what the kit may do to it: a Chronos that is not Talos's own is never taken over (kit/scripts/install-chronos-scope.sh)
+. "$REPO/kit/scripts/install-chronos-scope.sh"; chronos_scope
 KARGS+=(${KIT_ARGS[@]+"${KIT_ARGS[@]}"}); memsearch_default
 DRYARGS=(--dry-run); [ -e "$PARENT" ] || DRYARGS+=(--parent-will-exist)   # a plan of an install that would create the parent first
 if [ "$ALREADY" = 1 ]; then
   # An agent that exists is left alone, unless you asked for something the first install can still add later:
   # Chronos, or one of the kit's opt-in extras. That runs the kit installer in its add-only mode (no copy, no overwrite).
-  if [ "$CHRONOS" = 1 ] || [ ${#KIT_ARGS[@]} -gt 0 ]; then
+  if [ "$CHRONOS_ADD" = 1 ] || [ "${KIT_OTHER:-0}" = 1 ] || [ -n "$VAULT_RAW" ] || [ ${#KIT_CHRONOS_ONLY[@]} -gt 0 ]; then
     KARGS+=(--add-to-existing)
     if [ "$DRY" = 1 ]; then
       plan "bash kit/install.sh ${KARGS[*]} --dry-run   (adds only what you asked for to the existing agent: no copy, CLAUDE.md untouched)"
@@ -664,7 +673,7 @@ if [ "$ALREADY" = 1 ]; then
       bash "$KIT/install.sh" "${KARGS[@]}" "${DRYARGS[@]}" || fail 1 "the kit refused this combination in its dry run (its message is above). Nothing was changed."
     else
       bash "$KIT/install.sh" "${KARGS[@]}" || fail 1 "kit/install.sh --add-to-existing failed (its output is above). It does not copy or overwrite anything in the agent folder; fix the problem and run ./install.sh again with the same flags."
-      did "added to the existing agent: ${KIT_ARGS[*]-} $([ "$CHRONOS" = 1 ] && echo '--with-chronos')"
+      did "added to the existing agent: ${KIT_ARGS[*]-} $([ "$CHRONOS_ADD" = 1 ] && echo 'Chronos')"
     fi
   else skip "the kit is installed in $AGENT_DIR"; fi
 elif [ "$UNFINISHED" = 1 ]; then
@@ -686,14 +695,14 @@ elif [ "$UNFINISHED" = 1 ]; then
     did "rendered the default CLAUDE.md and the memory files the earlier install did not"
   fi
   # what was asked for this run (Chronos, the kit's extras) is added the way it would be to any existing agent
-  if [ "$CHRONOS" = 1 ] || [ ${#KIT_ARGS[@]} -gt 0 ]; then
+  if [ "$CHRONOS_ADD" = 1 ] || [ "${KIT_OTHER:-0}" = 1 ] || [ -n "$VAULT_RAW" ] || [ ${#KIT_CHRONOS_ONLY[@]} -gt 0 ]; then
     KARGS+=(--add-to-existing)
     if [ "$DRY" = 1 ]; then
       plan "bash kit/install.sh ${KARGS[*]}   (adds what you asked for)"
       bash "$KIT/install.sh" "${KARGS[@]}" "${DRYARGS[@]}" || fail 1 "the kit refused this combination in its dry run (its message is above). Nothing was changed."
     else
       bash "$KIT/install.sh" "${KARGS[@]}" || fail 1 "kit/install.sh --add-to-existing failed (its output is above). Fix the problem and run ./install.sh again with the same flags."
-      did "added to the agent: ${KIT_ARGS[*]-} $([ "$CHRONOS" = 1 ] && echo '--with-chronos')"
+      did "added to the agent: ${KIT_ARGS[*]-} $([ "$CHRONOS_ADD" = 1 ] && echo 'Chronos')"
     fi
   fi
 elif [ "$DRY" = 1 ]; then
@@ -985,7 +994,7 @@ fi
 cat <<EOF
   First run: tell the agent "Read BOOTSTRAP.md and set me up." The interview is optional.
   Phone:     SETUP.md, steps 4 to 7 (relay, bridge, start, pair the phone)$([ -n "$RELAY_URL" ] || printf '; the bridge command comes first: %s' "$BRIDGE_CMD")
-  Chronos:   $([ "$CHRONOS" = 1 ] && echo 'installed; its jobs are off until you enable them (SETUP.md, step 9.1)' || echo './install.sh --with-chronos adds the scheduler to this agent later (SETUP.md, step 9.1)')
+  Chronos:   $(chronos_closing_line)
   Update:    bun --no-env-file run $(printf '%q' "$REPO/apps/bridge/src/cli.ts") update   (then SETUP.md, "Updating")
 EOF
 exit 0

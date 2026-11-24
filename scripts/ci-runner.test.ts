@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { RUNNER_VARS } from './ci-test-env'
+import { cleanEnv, RUNNER_VARS } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -80,6 +80,35 @@ describe('a test never inherits the outer run', () => {
     const set = [...new Set([...runnerYml.matchAll(/^ +([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]))]
     expect(set.length).toBeGreaterThan(10)
     expect(set.filter((k) => !(RUNNER_VARS as readonly string[]).includes(k))).toEqual([])
+  })
+})
+
+describe("a test never inherits the outer heavy-lock hold or the machine's slot settings", () => {
+  // A suite that runs inside a gate's hold (heavy-lock.sh run) has that hold's variables, and a machine may set its own slot
+  // counts (TALOS_HEAVY_SLOTS=1 on a one-slot box): a copy of ci-local.sh or heavy-lock.sh under test that read them would
+  // take the turn rule off (one slot) or pass through on the outer holder's marker. Found when the check-titan turn test
+  // timed out on a machine with TALOS_HEAVY_SLOTS=1.
+  const HELD = [
+    'TALOS_HEAVY_SLOTS',
+    'TALOS_CI_SLOTS',
+    'TALOS_HELD_LOCKS',
+    'TALOS_HEAVY_SLOT',
+    'TALOS_HEAVY_PW_PORT',
+    'TALOS_HEAVY_TMP',
+    'CI_TURN',
+    'CI_TURN_MAX_S',
+    'TALOS_TURN_ALERT_S',
+  ]
+  it('cleanEnv drops them', () => {
+    const was = Object.fromEntries(HELD.map((k) => [k, process.env[k]]))
+    try {
+      for (const k of HELD) process.env[k] = '1'
+      expect(HELD.filter((k) => k in cleanEnv())).toEqual([])
+    } finally {
+      for (const [k, v] of Object.entries(was))
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+    }
   })
 })
 
@@ -2372,33 +2401,44 @@ describe('the workflows', () => {
       ),
     )
 
-  itRunnerYml('each job gets only the permissions it needs, and GITHUB_TOKEN is the only secret', () => {
-    expect(runnerYml).toMatch(/^permissions: \{\}$/m)
-    const want: Record<string, Record<string, string>> = {
-      plan: { contents: 'read' },
-      ci: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the parts of check run elsewhere
-      delphi: { statuses: 'write', contents: 'read' },
-      cyclops: { statuses: 'write', contents: 'read' },
-      hestia: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the earlier Hestia runs' state (sweep)
-      titan: { statuses: 'write', contents: 'read' },
-      'browser-e2e': { statuses: 'write', contents: 'read' }, // it never waits for Lemnos: no actions: read
-      'check-titan': { statuses: 'write', contents: 'read' }, // nor does check's part
-      close: { actions: 'write' }, // cancel the run; it checks nothing out, so no code under test meets this token
-      green: { contents: 'write', statuses: 'read', actions: 'read' }, // push refs/heads/green; actions: read for the run behind each status
-      relays: { contents: 'read', deployments: 'read', statuses: 'read', actions: 'read' }, // reads each relay's deployments and the deployed commit's statuses after green; no write of any kind
-      inbox: { contents: 'read', issues: 'write' }, // the lead's inbox issue; it runs only lead-inbox.sh flush, on main's code
-    }
-    const j = jobs()
-    expect(Object.keys(j).sort()).toEqual(Object.keys(want).sort())
-    for (const [name, perms] of Object.entries(want)) expect(j[name]?.permissions, name).toEqual(perms)
-    const close = JSON.stringify(j.close)
-    expect(close).not.toContain('actions/checkout')
-    expect(close).not.toContain('scripts/')
-    const secrets = [...runnerYml.matchAll(/secrets\.(\w+)/g)].map((m) => m[1])
-    expect(secrets.length).toBeGreaterThan(0)
-    expect(new Set(secrets)).toEqual(new Set(['GITHUB_TOKEN']))
-    expect(runnerYml).not.toMatch(/GH_TOKEN: \$\{\{ (?!secrets\.GITHUB_TOKEN)/)
-  })
+  itRunnerYml(
+    'each job gets only the permissions it needs, and the only secrets are GITHUB_TOKEN and the runners token of plan',
+    () => {
+      expect(runnerYml).toMatch(/^permissions: \{\}$/m)
+      const want: Record<string, Record<string, string>> = {
+        plan: { contents: 'read' },
+        ci: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the parts of check run elsewhere
+        delphi: { statuses: 'write', contents: 'read' },
+        cyclops: { statuses: 'write', contents: 'read' },
+        hestia: { statuses: 'write', contents: 'read', actions: 'read' }, // actions: read for the earlier Hestia runs' state (sweep)
+        titan: { statuses: 'write', contents: 'read' },
+        'browser-e2e': { statuses: 'write', contents: 'read' }, // it never waits for Lemnos: no actions: read
+        'check-titan': { statuses: 'write', contents: 'read' }, // nor does check's part
+        close: { actions: 'write' }, // cancel the run; it checks nothing out, so no code under test meets this token
+        green: { contents: 'write', statuses: 'read', actions: 'read' }, // push refs/heads/green; actions: read for the run behind each status
+        relays: { contents: 'read', deployments: 'read', statuses: 'read', actions: 'read' }, // reads each relay's deployments and the deployed commit's statuses after green; no write of any kind
+        inbox: { contents: 'read', issues: 'write' }, // the lead's inbox issue; it runs only lead-inbox.sh flush, on main's code
+      }
+      const j = jobs()
+      expect(Object.keys(j).sort()).toEqual(Object.keys(want).sort())
+      for (const [name, perms] of Object.entries(want)) expect(j[name]?.permissions, name).toEqual(perms)
+      const close = JSON.stringify(j.close)
+      expect(close).not.toContain('actions/checkout')
+      expect(close).not.toContain('scripts/')
+      const secrets = [...runnerYml.matchAll(/secrets\.(\w+)/g)].map((m) => m[1])
+      expect(secrets.length).toBeGreaterThan(0)
+      // the one other secret is plan's, for the runners list (scripts/ci-runner/online.sh): plan posts nothing and, on a PR, runs the BASE's
+      // scripts; on a push or dispatch it runs the commit's own ci-runner.sh on this Mac, where the owner's gh login is reachable anyway.
+      // It is in plan's env alone: no other job, and no step of plan, names it.
+      expect(new Set(secrets)).toEqual(new Set(['GITHUB_TOKEN', 'CI_RUNNERS_TOKEN']))
+      expect(secrets.filter((x) => x === 'CI_RUNNERS_TOKEN')).toHaveLength(1)
+      expect(JSON.stringify((j.plan as { env: unknown }).env)).toContain('secrets.CI_RUNNERS_TOKEN')
+      for (const [name, job] of Object.entries(j))
+        if (name !== 'plan') expect(JSON.stringify(job), name).not.toContain('CI_RUNNERS_TOKEN')
+      expect(JSON.stringify((j.plan as { steps: unknown }).steps)).not.toContain('CI_RUNNERS_TOKEN')
+      expect(runnerYml).not.toMatch(/GH_TOKEN: \$\{\{ (?!secrets\.GITHUB_TOKEN)/)
+    },
+  )
 
   itRunnerYml(
     'only the steps that talk to GitHub get the token: superseded, dispatch-wait, schedule-yield, run, fallback, alert, sweep, close, green, relays and inbox',
@@ -2838,6 +2878,41 @@ describe('the workflows', () => {
       expect(ci.steps.filter((st) => /check_titan/.test(String(st.if)))).toEqual([shadow, pair])
       const all = ci.steps.reduce((n, st) => n + (mins(st) || 0), 0)
       expect(mins(ci)).toBeGreaterThanOrEqual(all)
+    },
+  )
+
+  // A part queued for a lock on its own machine (docs/CI-MACHINES.md, "A part queued for a lock") may wait CI_PART_LOCK_WAIT_MAX
+  // and then still run: GitHub must not stop the part first (Lemnos would see "gone", and the stuck path would never fire), and
+  // Lemnos's own run step must outlast the cap, the answer wait and a take-back of check here.
+  itRunnerYml(
+    'every part’s run step and job outlast the lock-wait cap plus its own run, the pair outlasts the job, and Lemnos’s run step outlasts the cap, the wait and a take-back',
+    () => {
+      const cap =
+        Number(/CI_PART_LOCK_WAIT_MAX:-(\d+)/.exec(readFileSync(join(here, 'ci-local/jobs-check.sh'), 'utf8'))?.[1]) /
+        60
+      expect(cap).toBeGreaterThan(0)
+      const mins = (x: unknown) => Number((x as { 'timeout-minutes': number })['timeout-minutes'])
+      const j = jobs() as unknown as Record<string, Job>
+      const runStep = (job: Job) => job.steps.find((st) => st.run === 'exec bash scripts/ci-runner.sh run') as Step
+      // the run each part was allowed before the queue counted (minutes): what it needs once it has the lock
+      const own: Record<string, number> = { 'check-titan': 40, 'browser-e2e': 40, delphi: 50, cyclops: 50 }
+      // the pairs Lemnos has for a part (a step of ci that waits for the whole part job): exactly one for these two, none for the others
+      const pairsOf: Record<string, number> = { 'check-titan': 1, 'browser-e2e': 1, delphi: 0, cyclops: 0 }
+      const ci = j.ci as Job
+      for (const [name, run] of Object.entries(own)) {
+        const part = j[name] as Job
+        expect(mins(runStep(part)), `${name} run step`).toBeGreaterThanOrEqual(cap + run)
+        expect(mins(part), `${name} job`).toBeGreaterThan(mins(runStep(part)))
+        const pairs = ci.steps.filter((st) => st.run === 'bash scripts/ci-pair.sh part' && st.env?.CI_PART_JOB === name)
+        expect(pairs.length, `${name} pairs`).toBe(pairsOf[name])
+        for (const pair of pairs) expect(mins(pair), `${name} pair`).toBeGreaterThan(mins(part))
+      }
+      // Lemnos: its own time before the fold (setup, its slot, its other jobs: 20 min), then the part queued for the whole cap, the
+      // wait after it (CI_CHECK_WAIT, 30 min: the repository variable is 1800 s), then check taken back here (25 min with browser)
+      const PRE_FOLD = 20
+      const SLACK = 10 // for the poll, the post and a slow take-back
+      expect(mins(runStep(ci))).toBeGreaterThanOrEqual(PRE_FOLD + cap + 30 + 25 + SLACK)
+      expect(mins(ci)).toBeGreaterThanOrEqual(ci.steps.reduce((n, st) => n + (mins(st) || 0), 0))
     },
   )
 

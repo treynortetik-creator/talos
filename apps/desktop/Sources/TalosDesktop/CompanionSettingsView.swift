@@ -15,9 +15,12 @@ struct CompanionCard: View {
       HStack(spacing: 12) {
         Text(MacSettingsText.companionName).font(OB.body(15, .semibold)).foregroundStyle(SP.ink)
           .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
-        Toggle("Show the Companion", isOn: $enabled).toggleStyle(SettingsSwitchStyle()).labelsHidden()
+        Toggle("Show the Talos character", isOn: $enabled).toggleStyle(SettingsSwitchStyle()).labelsHidden()
       }
       .padding(.horizontal, 18).padding(.vertical, 12)
+      Text(MacSettingsText.companionHint).font(.caption).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18).padding(.bottom, 12)
       SettingsDivider()
       SettingsRow(title: "Size") {
         HStack(spacing: 0) {
@@ -27,7 +30,7 @@ struct CompanionCard: View {
         .overlay(Capsule().stroke(SP.line, lineWidth: 1))
         .clipShape(Capsule())
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Companion size")
+        .accessibilityLabel("Talos character size")
       }
       SettingsDivider()
       SettingsSwitchRow(title: "Let it wander now and then", isOn: $moments)

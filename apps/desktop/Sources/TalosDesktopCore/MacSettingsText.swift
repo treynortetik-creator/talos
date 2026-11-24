@@ -4,8 +4,9 @@ import Foundation
 /// (S6). The names follow the owner's call of 2026-11-01 (O6): "Mac settings" is this window, "Settings" is the page inside
 /// the Talos window, "Companion" is the character.
 public enum MacSettingsText {
-  public static let windowTitle = "Mac settings"
-  public static let companionName = "Companion"
+  public static let windowTitle = "Talos Settings"
+  public static let companionName = "Talos character"
+  public static let companionHint = "A small Talos figure on your screen that shows what your agent is doing."
   /// Where the Talos server address and the talos-app command live now: Advanced. Every notice that points there uses this.
   public static let connectionPath = MacWords.path(MacWords.tabAdvanced)
   /// Where importing a start-up command and taking over a running agent live.
