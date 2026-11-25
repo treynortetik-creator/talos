@@ -411,6 +411,20 @@ describe('ci-runner.sh: the hostile nightly posts under hostile-ci/ and runs onl
     }
   })
 
+  it('ci_logs_dir: logs/hostile for the hostile nightly (also on a schedule run), logs/nightly for the nightly, logs/ otherwise, in ci-runner.sh and machine.sh alike', () => {
+    const where = (file: string, env: Record<string, string>) =>
+      spawnSync('bash', ['-c', `. "${file}"\nci_logs_dir /c`], {
+        env: { PATH: process.env.PATH ?? '', ...env },
+        encoding: 'utf8',
+      }).stdout.trim()
+    for (const f of [RUNNER, join(here, 'ci-local', 'machine.sh')]) {
+      expect(where(f, { CI_HOSTILE: '1' }), f).toBe('/c/logs/hostile')
+      expect(where(f, { CI_HOSTILE: '1', CI_NIGHTLY: '1' }), f).toBe('/c/logs/hostile')
+      expect(where(f, { CI_NIGHTLY: '1' }), f).toBe('/c/logs/nightly')
+      expect(where(f, {}), f).toBe('/c/logs')
+    }
+  })
+
   it('ci_post_status under CI_HOSTILE posts hostile-ci/<job>, never local-ci/*', () => {
     const T = scratch()
     const b = ghBin(`echo "$*" >> "${T}/posts"`)

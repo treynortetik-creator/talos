@@ -261,3 +261,11 @@ ci_where() {
   w="$(printf '%s' "$w" | tr -c 'A-Za-z0-9._ -' '?' | cut -c1-40)"
   [ -n "$w" ] && printf '%s' "$w" || printf '%s' "the owner's Mac"
 }
+# Where a run's job logs go (<short>-<job>.log, its prev/ folder, timings.tsv, flakes.tsv, the per-test file): logs/ for a push run,
+# logs/hostile/ for the hostile nightly, logs/nightly/ for the nightly. They share a commit with the push run's, and a rerun moves
+# the earlier logs of a name away, so the three must never write one folder. The same function is in ci-runner.sh (the alert, the
+# logs upload and the shadow compares read the right run's folder; scripts/ci-hostile.test.ts checks that the two agree). The
+# machine-wide files (green.tsv, lock-waits.tsv, quiet-group.tsv, the shadow tsv files) stay in logs/.
+ci_logs_dir() { # ci_logs_dir <cache>
+  if [ "${CI_HOSTILE:-}" = 1 ]; then printf '%s/logs/hostile\n' "$1"; elif [ "${CI_NIGHTLY:-}" = 1 ]; then printf '%s/logs/nightly\n' "$1"; else printf '%s/logs\n' "$1"; fi
+}

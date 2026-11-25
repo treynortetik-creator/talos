@@ -20,6 +20,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { reservePort } from '../../e2e/harness/port.ts'
 import {
   addCapture,
   captureName,
@@ -38,16 +39,6 @@ import {
   untrackGroup,
 } from './lib.mjs'
 
-const freePort = () =>
-  new Promise((ok, fail) => {
-    const s = createServer()
-    s.once('error', fail)
-    s.listen(0, '127.0.0.1', () => {
-      const { port } = s.address()
-      s.close(() => ok(port))
-    })
-  })
-
 /** The session's own Talos variables change what the CLI does; none of them, and no real home, reaches a step. */
 export function cleanEnv(base, home, fakeHome) {
   const env = {}
@@ -64,16 +55,49 @@ export function parseStep(s) {
   return m ? { exit: Number(m[1]), text: m[2] } : { exit: 0, text: s }
 }
 
-async function waitHealthy(url, ms) {
+/** True when another process already listens on 127.0.0.1:port. The probe's own socket lives only for this check. */
+const listenerOn = (port) =>
+  new Promise((ok) => {
+    const s = createServer()
+    s.once('error', (e) => ok(e.code === 'EADDRINUSE'))
+    s.listen(port, '127.0.0.1', () => s.close(() => ok(false)))
+  })
+
+/**
+ * Waits for the relay on `port`; says what it found: 'up', 'gone' (the relay process has exited), 'taken' (another process has the
+ * port) or 'silent' (the relay is alive, nothing answered, and nobody else is shown on the port).
+ * macOS lets a relay bind 0.0.0.0:port beside another process that listens on 127.0.0.1:port, and loopback then reaches the
+ * other one: the relay stays alive and silent. So on macOS a failed answer is followed by a bind on 127.0.0.1:port: "address in
+ * use" shows the other process (our relay listens on the wildcard, which that bind does not collide with on macOS). A bind that
+ * works proves nothing, and the wait goes on. On Linux a taker makes the relay itself exit with the port error, and the same bind
+ * would collide with our own relay, so there is no probe. A 200 is believed only after a short settle: a relay that dies after a
+ * 200 is 'gone' (a real failure; a retry happens only if its log has the port error), and on macOS another process on the port
+ * makes it 'taken' (the answer may have come from that process).
+ */
+async function waitRelay(url, port, ms, gone) {
+  const probe = process.platform === 'darwin'
   const end = Date.now() + ms
   while (Date.now() < end) {
+    if (gone()) return 'gone'
+    let ok = false
     try {
-      if ((await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(1500) })).ok) return true
+      ok = (await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(1500) })).ok
     } catch {}
+    if (ok) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (gone()) return 'gone'
+      return probe && (await listenerOn(port)) ? 'taken' : 'up'
+    }
+    if (probe && !gone() && (await listenerOn(port))) return 'taken'
     await new Promise((r) => setTimeout(r, 300))
   }
-  return false
+  return gone() ? 'gone' : 'silent'
 }
+
+const RELAY_TRIES = 3
+// the time a relay gets to answer /healthz; a test shortens it
+const relayWaitMs =
+  Number(process.env.TALOS_VERIFY_RELAY_WAIT_MS) > 0 ? Number(process.env.TALOS_VERIFY_RELAY_WAIT_MS) : 30_000
 
 async function main() {
   const args = parseArgs(process.argv.slice(2), { repeatable: ['cli', 'run', 'expect-text'] })
@@ -131,46 +155,82 @@ async function main() {
         throw new Unreachable(
           `the relay build failed (exit ${build.code}): ${redact(`${build.stdout}\n${build.stderr}`.trim().split('\n').slice(-6).join(' / '))}`,
         )
-      const port = await freePort()
-      const origin = `http://127.0.0.1:${port}`
-      const init = await runGroup('bun', ['run', 'apps/bridge/src/cli.ts', 'init', '--relay-url', origin], {
-        cwd: wt,
-        env,
-        timeoutMs: 60_000,
-      })
-      const pubkey = /BRIDGE_PUBKEY=(\S+)/.exec(init.stdout)?.[1]
-      if (init.code !== 0 || !pubkey)
-        throw new Unreachable(
-          `talos-app init failed in the temp home (exit ${init.code}): ${redact(`${init.stdout}${init.stderr}`.trim().slice(0, 300))}`,
+      let origin = ''
+      for (let attempt = 1; ; attempt++) {
+        // The port is held while `init` runs, which takes seconds (no other bind on 127.0.0.1 and no ephemeral port pick can take
+        // it; a wildcard bind on macOS can), and given up right before the relay starts. A port that turns out to be someone
+        // else's (waitRelay) is given up: that relay is stopped and the whole start is tried again on a new port, each try with
+        // a data folder and key of its own. A relay that is only silent, or that exits for another reason, is not tried again.
+        const held = await reservePort()
+        const port = held.port
+        origin = `http://127.0.0.1:${port}`
+        let pubkey
+        try {
+          const init = await runGroup('bun', ['run', 'apps/bridge/src/cli.ts', 'init', '--relay-url', origin], {
+            cwd: wt,
+            env,
+            timeoutMs: 60_000,
+          })
+          pubkey = /BRIDGE_PUBKEY=(\S+)/.exec(init.stdout)?.[1]
+          if (init.code !== 0 || !pubkey)
+            throw new Unreachable(
+              `talos-app init failed in the temp home (exit ${init.code}): ${redact(`${init.stdout}${init.stderr}`.trim().slice(0, 300))}`,
+            )
+        } finally {
+          await held.release()
+        }
+        const relayLog = join(T, 'relay.log')
+        const logFd = openSync(relayLog, 'w')
+        const relay = spawn('node', ['apps/relay/dist/index.js'], {
+          cwd: wt,
+          detached: true,
+          stdio: ['ignore', logFd, logFd],
+          env: {
+            ...env,
+            NODE_ENV: 'development',
+            PORT: String(port),
+            PUBLIC_ORIGIN: origin,
+            RP_ID: '127.0.0.1',
+            DATA_DIR: join(T, `relay-data-${attempt}`),
+            DATA_KEY: randomBytes(32).toString('base64'),
+            BRIDGE_PUBKEY: pubkey,
+            TRUST_PROXY_HOPS: '0',
+            LOG_LEVEL: 'warn',
+          },
+        })
+        closeSync(logFd)
+        relayPid = relay.pid
+        let gone = null
+        relay.on('exit', (code, signal) => {
+          gone = code === null ? `signal ${signal}` : `code ${code}`
+        })
+        trackGroup(relayPid)
+        writeFileSync(join(T, 'relay.pid'), `${relayPid}\n`)
+        mkdirSync(join(T, `relay-data-${attempt}`), { recursive: true })
+        const found = await waitRelay(origin, port, relayWaitMs, () => gone !== null)
+        if (found === 'up') break
+        const log = readFileSync(relayLog, 'utf8')
+        const tail = redact(log.trim().split('\n').slice(-5).join(' / '))
+        // the whole log is read for the port error: a stack trace puts it far above the last lines
+        const retry = found === 'taken' || (found === 'gone' && /EADDRINUSE/.test(log))
+        if (!retry || attempt >= RELAY_TRIES)
+          throw new Unreachable(
+            found === 'silent'
+              ? `the relay (pid ${relayPid}) did not answer /healthz within ${relayWaitMs / 1000} s (nobody else is on its port): ${tail}`
+              : found === 'gone'
+                ? `the relay (pid ${relayPid}) exited (${gone}) before /healthz answered: ${tail}`
+                : `the relay's port ${port} is held by another process (${attempt} tries): ${tail}`,
+          )
+        lines.push(
+          `# relay port ${port} did not work (${found === 'gone' ? 'the relay found it in use' : 'another process has it'}); trying another port`,
+          '',
         )
-      const relayLog = join(T, 'relay.log')
-      const logFd = openSync(relayLog, 'w')
-      const relay = spawn('node', ['apps/relay/dist/index.js'], {
-        cwd: wt,
-        detached: true,
-        stdio: ['ignore', logFd, logFd],
-        env: {
-          ...env,
-          NODE_ENV: 'development',
-          PORT: String(port),
-          PUBLIC_ORIGIN: origin,
-          RP_ID: '127.0.0.1',
-          DATA_DIR: join(T, 'relay-data'),
-          DATA_KEY: randomBytes(32).toString('base64'),
-          BRIDGE_PUBKEY: pubkey,
-          TRUST_PROXY_HOPS: '0',
-          LOG_LEVEL: 'warn',
-        },
-      })
-      closeSync(logFd)
-      relayPid = relay.pid
-      trackGroup(relayPid)
-      writeFileSync(join(T, 'relay.pid'), `${relayPid}\n`)
-      mkdirSync(join(T, 'relay-data'), { recursive: true })
-      if (!(await waitHealthy(origin, 30_000)))
-        throw new Unreachable(
-          `the relay (pid ${relayPid}) did not answer /healthz within 30 s: ${redact(readFileSync(relayLog, 'utf8').trim().split('\n').slice(-5).join(' / '))}`,
-        )
+        try {
+          process.kill(-relayPid, 'SIGKILL')
+        } catch {}
+        untrackGroup(relayPid)
+        relayPid = null
+      }
       lines.push(
         `# throwaway home and a real relay of this checkout at ${origin} (pid ${relayPid}); the bridge key is the one init just made`,
         '',

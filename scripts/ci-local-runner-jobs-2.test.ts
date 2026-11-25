@@ -21,6 +21,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { ciLocalSource, cleanEnv, copyCiLocalParts, systemPathWithout } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -224,7 +225,7 @@ exit 0`
   })
 
   it('a pass after another pass of this attempt posts nothing more: the first green stands', async () => {
-    const r = repo('job_x() { until [ -f "$HOME/go" ]; do sleep 0.05; done; }', { gh: GH })
+    const r = repo(`job_x() { ${waitForFile('$HOME/go')}; }`, { gh: GH })
     const run = r.start([...withStatus, '--jobs', 'x'], env)
     await vi.waitUntil(() => /state=pending .*context=local-ci\/x /.test(r.posted()), { timeout: 30_000, interval: 25 })
     rows(r, [`local-ci/x\tsuccess\t${ATTEMPT}titan\tpassed on titan in 9s`])
@@ -236,7 +237,7 @@ exit 0`
   })
 
   it("a green of this attempt from before this run's pending: the pending is the newest, so this run still answers it", async () => {
-    const r = repo('job_x() { until [ -f "$HOME/go" ]; do sleep 0.05; done; }', { gh: GH })
+    const r = repo(`job_x() { ${waitForFile('$HOME/go')}; }`, { gh: GH })
     const run = r.start([...withStatus, '--jobs', 'x'], env)
     await vi.waitUntil(() => /state=pending .*context=local-ci\/x /.test(r.posted()), { timeout: 30_000, interval: 25 })
     rows(r, [`local-ci/x\tpending\t${ATTEMPT}lemnos\trunning`, `local-ci/x\tsuccess\t${ATTEMPT}titan\tpassed on titan`])

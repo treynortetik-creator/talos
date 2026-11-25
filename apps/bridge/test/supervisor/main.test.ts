@@ -34,9 +34,14 @@ afterEach(() => {
  * SIGTERM lands can miss it and hold the group open until the SIGKILL deadline, which no test without a clock step reaches.
  */
 function agentProcess(ignoreTerm = false): number {
-  const c = Bun.spawn(ignoreTerm ? ['sh', '-c', 'trap "" TERM; while :; do sleep 1; done'] : ['sleep', '300'], {
-    detached: true,
-  } as never)
+  const c = Bun.spawn(
+    ignoreTerm
+      ? ['sh', '-c', 'trap "" TERM; n=0; while [ $n -lt 600 ]; do sleep 1; n=$((n + 1)); done']
+      : ['sleep', '300'],
+    {
+      detached: true,
+    } as never,
+  )
   children.push(c)
   return c.pid
 }

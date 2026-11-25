@@ -331,6 +331,9 @@ describe('the driver: who needs the sign-in, and who resumes after it', () => {
     f.signOutForTest()
     await d.tick()
     await until(() => d.link() !== null)
+    // that sign-in is waiting for a code: end it, or its fake claude stays on the pty
+    d.cancel()
+    await d.settled()
   })
 })
 

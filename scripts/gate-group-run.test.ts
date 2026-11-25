@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { timeFactor } from '../packages/testkit/src/time-factor.ts'
+import { waitForever } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PL = join(here, 'gate', 'group-run.pl')
@@ -26,7 +27,7 @@ const tmp = () => {
 const script = (d: string, ignore: string[]) =>
   `${['INT', 'TERM']
     .map((s) => `trap 'echo ${s} >> "${d}/log"; ${ignore.includes(s) ? ':' : 'exit 0'}' ${s}`)
-    .join('; ')}; echo up > "${d}/up"; while :; do sleep 0.05; done`
+    .join('; ')}; echo up > "${d}/up"; ${waitForever(d)}`
 const signals = (d: string) =>
   existsSync(join(d, 'log')) ? readFileSync(join(d, 'log'), 'utf8').trim().split('\n') : []
 const env = (extra: Record<string, string> = {}) => ({
@@ -74,7 +75,7 @@ describe('gate/group-run.pl', () => {
   it('stops once: a second TERM or INT while it stops does not start the sequence over (Playwright must not get a second INT)', async () => {
     const d = tmp()
     // INT is written down and the command goes on; TERM ends it; so a second INT would show
-    const body = `trap 'echo INT >> "${d}/log"' INT; trap 'echo TERM >> "${d}/log"; exit 0' TERM; echo up > "${d}/up"; while :; do sleep 0.05; done`
+    const body = `trap 'echo INT >> "${d}/log"' INT; trap 'echo TERM >> "${d}/log"; exit 0' TERM; echo up > "${d}/up"; ${waitForever(d)}`
     const c = spawn('perl', [PL, '600', 'sh', '-c', body], { env: env({ GATE_STOP_WAIT: '2' }), stdio: 'ignore' })
     const done = new Promise<number | null>((r) => c.on('exit', (code) => r(code)))
     await vi.waitUntil(() => existsSync(join(d, 'up')), { timeout: 20_000 * F, interval: 25 })

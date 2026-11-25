@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { timeFactor } from '../packages/testkit/src/time-factor.ts'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HL = join(here, 'heavy-lock.sh')
@@ -83,7 +84,7 @@ describe.skipIf(!hasFlock)('the heavy lock shared across WSL distros (CI_SHARED_
     const w = world()
     const release = join(w.root, 'release')
     // a holds until the test says so: no race with how fast b reaches the lock
-    const a = w.distro().run('request-hestia', w.mark('a', `while [ ! -f "${release}" ]; do sleep 0.1; done`))
+    const a = w.distro().run('request-hestia', w.mark('a', waitForFile(release, { step: 0.1 })))
     await w.seen('a start')
     const bd = w.distro()
     const b = spawn('bash', [HL, 'run', 'part', '--', 'true'], { env: bd.env, stdio: ['ignore', 'ignore', 'pipe'] })
@@ -105,7 +106,7 @@ describe.skipIf(!hasFlock)('the heavy lock shared across WSL distros (CI_SHARED_
   it('a waiting CI run goes before a waiting request, whichever asked first; the holder is not stopped', async () => {
     const w = world()
     const release = join(w.root, 'release')
-    const a = w.distro().run('request-a', w.mark('a', `while [ ! -f "${release}" ]; do sleep 0.1; done`))
+    const a = w.distro().run('request-a', w.mark('a', waitForFile(release, { step: 0.1 })))
     await w.seen('a start')
     // a request asks first...
     const b = w.distro().run('request-b', w.mark('b', 'true'))
@@ -132,7 +133,7 @@ describe.skipIf(!hasFlock)('the heavy lock shared across WSL distros (CI_SHARED_
   it('a part queued behind the other distro tells its main shell what it waits for, since when, and stops once it has the lock', async () => {
     const w = world()
     const release = join(w.root, 'release')
-    const a = w.distro().run('request-a', w.mark('a', `while [ ! -f "${release}" ]; do sleep 0.1; done`))
+    const a = w.distro().run('request-a', w.mark('a', waitForFile(release, { step: 0.1 })))
     await w.seen('a start')
     const cd = w.distro()
     const beat = join(w.root, 'lockwait') // the file the part's job writes (CI_LOCKWAIT_FILE): ci-local.sh's main shell posts from it
@@ -176,7 +177,7 @@ describe.skipIf(!hasFlock)('the heavy lock shared across WSL distros (CI_SHARED_
       kids.push(c)
       return c
     }
-    const one = ciRun('ci1', `while [ ! -f "${release}" ]; do sleep 0.1; done`)
+    const one = ciRun('ci1', waitForFile(release, { step: 0.1 }))
     await w.seen('ci1 start')
     const two = ciRun('ci2', 'true')
     // ci2 waits for its own distro's mutex, not yet at the flock: its marker is there already

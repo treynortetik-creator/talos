@@ -66,6 +66,7 @@ esac
 ci_ns() { local ns=nightly-ci; if [ "${CI_HOSTILE:-}" = 1 ]; then ns=hostile-ci; elif [ "${CI_NIGHTLY:-}" != 1 ]; then printf '%s\n' "$1"; return 0; fi
   case "$1" in local-ci/*) printf '%s/%s\n' "$ns" "${1#local-ci/}" ;; ci-part/*) printf '%s/part-%s\n' "$ns" "${1#ci-part/}" ;;
     report-ci/*) printf '%s/report-%s\n' "$ns" "${1#report-ci/}" ;; *) printf '%s\n' "$1" ;; esac; }
+ci_logs_dir() { if [ "${CI_HOSTILE:-}" = 1 ]; then printf '%s/logs/hostile\n' "$1"; elif [ "${CI_NIGHTLY:-}" = 1 ]; then printf '%s/logs/nightly\n' "$1"; else printf '%s/logs\n' "$1"; fi; } # as in scripts/ci-local/machine.sh
 
 # git never waits for a person: no terminal prompt, no credential manager window, no ssh passphrase question (Titan's runner
 # hung 4 h 23 m in a fetch that asked for a credential nobody was there to give). Exported, so ci-local.sh and every git get it.
@@ -536,7 +537,9 @@ ci_exec_local() {
   # No sleep while it works. Plugged in, -s stops system sleep, -i idle sleep, -m disk sleep; on battery with the lid shut the Mac
   # sleeps whatever this says, and ci-local.sh then warns on the jobs of that run (ci_slept_since; CI_SLEEP_GUARD=1 fails them).
   if command -v caffeinate >/dev/null 2>&1; then caffeinate -i -m -s -w $$ >/dev/null 2>&1 & fi
-  export CI_REPO="$GITHUB_REPOSITORY" CI_STATUS_WHERE="${CI_STATUS_WHERE:-ci-runner}" CI_WT_BASE="$cache/wt" TALOS_CI_CACHE="$cache"
+  # CI_MOD_REAL=1: the mod job may run the real claude and npm (scripts/ci-local/jobs-mod-browser.sh, claude_at); ci-local.sh keeps it
+  # out of every job's environment, and nothing else sets it but a hand run that means it
+  export CI_REPO="$GITHUB_REPOSITORY" CI_STATUS_WHERE="${CI_STATUS_WHERE:-ci-runner}" CI_WT_BASE="$cache/wt" TALOS_CI_CACHE="$cache" CI_MOD_REAL=1
   # Bun's package cache and Playwright's browsers live in the cache too when it has them, beside the slots' temp folders: one
   # folder the Mac's antivirus can be told to skip, instead of ~/.bun and ~/Library/Caches that every run churns through.
   [ -d "$cache/bun-cache" ] && export BUN_INSTALL_CACHE_DIR="${BUN_INSTALL_CACHE_DIR:-$cache/bun-cache}"

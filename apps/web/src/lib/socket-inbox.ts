@@ -2,7 +2,7 @@
 // Done/Snooze changes kept until the relay acks them, sent again on each `ready`, and taken back off the row when the
 // relay refuses one. And the read marks: a thread read while the socket could not carry it, sent at the next `ready`.
 
-import { type FrameOf, type InboxItemT, newUlid, ownValue } from '@talos-app/protocol'
+import { type Frame, type FrameOf, type InboxItemT, newUlid, ownValue } from '@talos-app/protocol'
 import { INBOX_QUEUE } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 import type { InboxOutcome, InboxPatch } from './socket-types.ts'
@@ -78,11 +78,22 @@ export function createSocketInbox(c: SocketCtx) {
     const f = inboxInFlight.get(frameId)
     if (!f) return false
     inboxInFlight.delete(frameId)
+    settle(f, outcome)
+    // A socket kept open for its answers closes once the last one is in.
+    if (f.sock !== c.ws && !onWire(f.sock)) {
+      const timer = graceTimers.get(f.sock)
+      if (timer) clearTimeout(timer)
+      graceTimers.delete(f.sock)
+      closeKept(f.sock)
+    }
+    return true
+  }
+  function settle(f: { eventId: string; patch: InboxPatch; sock: WebSocket | null }, outcome: InboxOutcome) {
     if (outcome === 'retry') {
       // Came on a socket let go of: the current one skipped it while it was on the wire there, so it goes out now. On the
       // current socket it waits for the next connection, not a resend loop.
       if (f.sock !== c.ws) flushInbox()
-      return true
+      return
     }
     // Only the change that was sent leaves the queue: a newer one for the same item stays.
     const newest = c.inboxQueue.get(f.eventId) === f.patch
@@ -104,10 +115,12 @@ export function createSocketInbox(c: SocketCtx) {
               : {}),
         })
     }
-    return true
   }
 
-  /** Changes sent on `sock` will not be answered now: they go out again on the current socket. */
+  /**
+   * Changes sent on `sock` will not be answered now (it closed, or its grace is over): they go out again on the current
+   * socket, once. A socket kept open for them is closed.
+   */
   function releaseSocket(sock: WebSocket | null) {
     const timer = graceTimers.get(sock)
     if (timer) clearTimeout(timer)
@@ -118,7 +131,36 @@ export function createSocketInbox(c: SocketCtx) {
         inboxInFlight.delete(id)
         released = true
       }
+    closeKept(sock)
     if (released) flushInbox()
+  }
+  const onWire = (sock: WebSocket | null) => [...inboxInFlight.values()].some((f) => f.sock === sock)
+  /** Sockets let go of but left open: inbox changes sent on them still wait for their answer there. */
+  const keptOpen = new Set<WebSocket>()
+  function closeKept(sock: WebSocket | null) {
+    if (!sock || !keptOpen.delete(sock)) return
+    try {
+      sock.close()
+    } catch {}
+  }
+  /**
+   * `sock` stops being the current socket. While inbox changes sent on it are unanswered it is left open: a WebSocket
+   * fires no message once close() is called, so closing it now would drop their answers, and each change would go out a
+   * second time. It closes when the last one is answered, or when the grace ends (then they go out again, once). If the
+   * relay or the network closes it first, its close event sends them again, once. False: nothing waits on it, close it.
+   */
+  function inboxLetGo(sock: WebSocket | null): boolean {
+    if (!sock || !onWire(sock)) return false
+    keptOpen.add(sock)
+    inboxSocketGone(sock)
+    return true
+  }
+  /** A frame on a socket let go of: only an answer to an inbox change sent there counts; the rest is the old link's. */
+  function inboxAnswerOnOld(sock: WebSocket, frame: Frame) {
+    if (frame.type !== 'ack' && frame.type !== 'error') return
+    const ref = frame.ref
+    if (typeof ref !== 'string' || inboxInFlight.get(ref)?.sock !== sock) return
+    inboxSettled(ref, frame.type === 'ack' ? 'acked' : frame.code === 'internal' ? 'retry' : 'refused')
   }
   /**
    * `sock` is no longer the current socket. What was sent on it stays on the wire until it closes: frames the relay sent
@@ -137,6 +179,7 @@ export function createSocketInbox(c: SocketCtx) {
     for (const t of graceTimers.values()) clearTimeout(t)
     graceTimers.clear()
     inboxInFlight.clear()
+    for (const s of [...keptOpen]) closeKept(s)
   }
 
   // ---- read marks ----------------------------------------------------------------------------------------------
@@ -204,6 +247,8 @@ export function createSocketInbox(c: SocketCtx) {
   c.inboxSettled = inboxSettled
   c.inboxSocketGone = inboxSocketGone
   c.inboxSocketClosed = releaseSocket
+  c.inboxLetGo = inboxLetGo
+  c.inboxAnswerOnOld = inboxAnswerOnOld
   c.inboxForget = inboxForget
   c.saveInboxQueue = saveInboxQueue
   c.queueRead = queueRead

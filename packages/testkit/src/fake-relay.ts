@@ -291,6 +291,31 @@ export class FakeRelay {
   swallowAcks = false
   /** While set, an `inbox.update` from an app is answered with this error code and is neither stored nor passed on. */
   inboxError: string | null = null
+  /**
+   * While true, the relay's answer to an app's `inbox.update` (its ack, or the `inboxError` refusal) is not sent yet:
+   * it is on its way. `releaseInboxAnswers()` sends each one on the socket it came in on, while that socket is still
+   * open; `dropInboxAnswerSockets()` closes those sockets from the relay's side with the answers never sent. The whole
+   * handling waits, not only the answer: a change is stored, and ack-or-refusal is chosen from `inboxError`, at release.
+   * A dropped one was never handled by the relay at all.
+   */
+  holdInboxAnswers = false
+  private heldInboxAnswers: Array<{ ws: WebSocket; answer: () => void }> = []
+  /** How many app sockets are open on the relay's side. */
+  get appSocketCount() {
+    return this.appWss.clients.size
+  }
+  /** How many inbox answers are held. */
+  get heldInboxAnswerCount() {
+    return this.heldInboxAnswers.length
+  }
+  releaseInboxAnswers() {
+    this.holdInboxAnswers = false
+    for (const h of this.heldInboxAnswers.splice(0)) if (h.ws.readyState === WebSocket.OPEN) h.answer()
+  }
+  dropInboxAnswerSockets() {
+    this.holdInboxAnswers = false
+    for (const h of this.heldInboxAnswers.splice(0)) h.ws.terminate()
+  }
   /** The real relay forgets its seen ids after 8 days: this is that, without waiting. */
   forgetSeen() {
     this.seenClientMsg.clear()
@@ -803,13 +828,19 @@ export class FakeRelay {
         return this.acceptOwnerFrame(ws, frame.id, raw)
       }
       case 'inbox.update': {
-        if (this.inboxError)
-          return this.error(ws, 'to_app', this.inboxError, 'The relay could not save that.', frame.id)
-        // The relay owns inbox state: store, ack, tell the owner's other devices. The bridge does not receive it.
-        const stamped = this.stamp(raw)
-        this.sendTo(ws, 'to_app', mkFrame('ack', { ref: frame.id, seq: (stamped.relay as { seq: number }).seq }))
-        for (const a of this.receivers('inbox.update', ws)) this.sendTo(a, 'to_app', stamped)
-        return
+        const answer = () => {
+          if (this.inboxError)
+            return this.error(ws, 'to_app', this.inboxError, 'The relay could not save that.', frame.id)
+          // The relay owns inbox state: store, ack, tell the owner's other devices. The bridge does not receive it.
+          const stamped = this.stamp(raw)
+          this.sendTo(ws, 'to_app', mkFrame('ack', { ref: frame.id, seq: (stamped.relay as { seq: number }).seq }))
+          for (const a of this.receivers('inbox.update', ws)) this.sendTo(a, 'to_app', stamped)
+        }
+        if (this.holdInboxAnswers) {
+          this.heldInboxAnswers.push({ ws, answer })
+          return
+        }
+        return answer()
       }
       case 'thread.read':
         for (const a of this.receivers('thread.read', ws)) this.sendTo(a, 'to_app', raw)

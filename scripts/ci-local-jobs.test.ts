@@ -19,6 +19,8 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { fixtureGitEnv, harnessBin, harnessEnv, withoutInherited } from './harness-path'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -26,8 +28,13 @@ vi.setConfig({ testTimeout: scaled(60_000), hookTimeout: scaled(60_000) })
 
 const dirs: string[] = []
 const live: ChildProcess[] = []
+const sandboxes: { T: string; allowed: boolean }[] = []
 afterEach(() => {
   for (const c of live.splice(0)) c.kill('SIGKILL')
+  // a refusing stub was called (scripts/harness-path.ts): a real tool no test stubbed. The test fails, unless it said it expects that.
+  const marked = sandboxes.splice(0).filter((b) => !b.allowed && existsSync(join(b.T, 'refused')))
+  const hits = marked.map((b) => readFileSync(join(b.T, 'refused'), 'utf8').trim()).filter(Boolean)
+  if (hits.length > 0) throw new Error(`a refusing stub was called: ${hits.join(' | ')}`)
 })
 afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -37,8 +44,15 @@ afterAll(() => {
 function repo(jobs = '', tools: Record<string, string> = {}) {
   const T = mkdtempSync(join(tmpdir(), 'cij-'))
   dirs.push(T)
+  const sandbox = { T, allowed: false }
+  sandboxes.push(sandbox)
+  // a fake home, no configuration and no GIT_* of a running gate: an inherited GIT_DIR would aim a commit at the real repository
   const git = (cwd: string, ...a: string[]) =>
-    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd, encoding: 'utf8' }).trim()
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], {
+      cwd,
+      encoding: 'utf8',
+      env: fixtureGitEnv(T),
+    }).trim()
   const src = join(T, 'src')
   mkdirSync(join(src, 'apps/bridge/scripts'), { recursive: true })
   git(src, 'init', '-q', '-b', 'main')
@@ -56,6 +70,7 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
   const bin = join(T, 'bin')
   mkdirSync(bin)
+  harnessBin(bin) // the PATH is this folder alone: real tools by name, refusing stubs for the rest (scripts/harness-path.ts)
   const home = join(T, 'home')
   mkdirSync(home)
   const calls = join(T, 'calls')
@@ -70,14 +85,13 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   tool('bun', `[ "$1" = --version ] && { echo 1.4.4; exit 0; }\n${fake('bun')}`) // a version question is not a call
   for (const [n, b] of Object.entries(tools)) tool(n, b)
   const env = {
-    ...cleanEnv(),
+    ...withoutInherited(cleanEnv()),
     CI_MAX_LOAD: '0',
     CI_POLL: '0.05',
     CI_LOCK_TIMEOUT: '30',
     TALOS_CI_NESTED: '0',
     CI_SLOTS: '1',
-    HOME: home,
-    PATH: `${bin}:${process.env.PATH}`,
+    ...harnessEnv(T, bin, home), // PATH is the private folder alone; HOME is the test's
     GH_LOG: join(T, 'gh.log'),
     CALLS: calls,
     TMPDIR: T,
@@ -95,9 +109,9 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
     const done = new Promise<number>((r) => child.on('exit', (c, s) => r(c ?? (s ? 128 : -1))))
     return { child, done, out: () => out }
   }
-  const log = (job: string) => {
+  const log = (job: string, dir = '') => {
     const sha = git(clone, 'rev-parse', '--short=7', 'HEAD')
-    return readFileSync(join(home, '.cache/talos-ci/logs', `${sha}-${job}.log`), 'utf8')
+    return readFileSync(join(home, '.cache/talos-ci/logs', dir, `${sha}-${job}.log`), 'utf8')
   }
   /** more shell code in the copy, beside the job functions (an override of a lock, say) */
   const inject = (code: string) =>
@@ -112,6 +126,9 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
     env,
     inject,
     calledLines: () => readFileSync(calls, 'utf8').trim().split('\n'),
+    allowRefused: () => {
+      sandbox.allowed = true // this test expects a refusing stub to be called
+    },
   }
 }
 const noStatus = ['--ref', 'HEAD', '--no-status']
@@ -135,7 +152,7 @@ case "$sub:\${GIT_FAKE_NET:-}" in
     if [ "\${GIT_FAKE_NET}" = slow-term ]; then trap 'echo term > "$GIT_FAKE_PIDS.term"; sleep 2; exit 143' TERM; else trap '' TERM; fi
     sleep 300 &
     echo "$$ $!" > "$GIT_FAKE_PIDS"
-    while :; do sleep 1; done ;;
+    ${waitForFile('$GIT_FAKE_LOCK.never', { step: 1 })} ;;
 esac
 exec "$real" "$@"`
 
@@ -725,8 +742,8 @@ exit 0`
     CI_PART_POLL: '0.2',
     CI_PART_WAIT: wait,
   })
-  const setup = (rows: string[], jobs: string[]) => {
-    const r = repo('', { gh: GH })
+  const setup = (rows: string[], jobs: string[], inject = '') => {
+    const r = repo(inject, { gh: GH })
     writeFileSync(join(r.clone, 'apps/bridge/scripts/test-parallel.ts'), '// knows --shard K/N\n')
     r.git(r.clone, 'commit', '-qam', 'runner with --shard')
     writeFileSync(join(r.home, 'rows'), rows.length ? `${rows.join('\n')}\n` : '')
@@ -824,6 +841,104 @@ exit 0`
       expect(await run.done).toBe(1)
       expect(checkPosts(r)).toEqual([expect.stringMatching(/state=failure /)])
       expect(checkPosts(r).join('\n')).not.toContain('needs tmux')
+    })
+  })
+
+  // A red quiet suite on Lemnos: a push run stops there and says which parts it never ran or read, one `NOT RUN:` line each; a
+  // hostile run goes on to the parts and still fails check.
+  describe('a red quiet suite and the parts', () => {
+    const answered = () =>
+      setup(
+        [pass('bridge-shard-1', 'delphi'), pass('vitest', 'delphi'), pass('bridge-shard-2', 'cyclops')],
+        ['delphi\tcompleted', 'cyclops\tcompleted'],
+      )
+    const notRun = (log: string) => log.split('\n').filter((l) => l.startsWith('NOT RUN: '))
+    const why = 'step_contract, step_bun_schedules or step_chronos failed'
+
+    it('a push run: every part is NOT RUN, those on another machine say so, and nothing of them is read', async () => {
+      const r = answered()
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...env(ALL_REMOTE), FAIL_ON: 'test:contract' })
+      expect(await run.done, run.out()).toBe(1)
+      expect(notRun(r.log('check'))).toEqual([
+        'NOT RUN: step_bun_schedules (step_contract failed)',
+        `NOT RUN: step_corepack_install (${why})`,
+        `NOT RUN: bridge-shard-1 (${why}; it runs on delphi and its result is not read here)`,
+        `NOT RUN: bridge-shard-2 (${why}; it runs on cyclops and its result is not read here)`,
+        `NOT RUN: vitest (${why}; it runs on delphi and its result is not read here)`,
+      ])
+      expect(rest(r)).toEqual([])
+    })
+
+    it('a red quick gate with parts configured: the parts that run elsewhere are named as parts, never as step_vitest or step_bun_rest', async () => {
+      const r = answered()
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...env(ALL_REMOTE), FAIL_ON: 'lint' })
+      expect(await run.done, run.out()).toBe(1)
+      const why = 'pnpm lint failed'
+      expect(notRun(r.log('check'))).toEqual([
+        `NOT RUN: notices:check (${why})`,
+        `NOT RUN: step_contract (${why})`,
+        `NOT RUN: step_bun_schedules (${why})`,
+        `NOT RUN: step_chronos (${why})`,
+        `NOT RUN: step_corepack_install (${why})`,
+        `NOT RUN: bridge-shard-1 (${why}; it runs on delphi and its result is not read here)`,
+        `NOT RUN: bridge-shard-2 (${why}; it runs on cyclops and its result is not read here)`,
+        `NOT RUN: vitest (${why}; it runs on delphi and its result is not read here)`,
+        `NOT RUN: audit (${why})`,
+      ])
+    })
+
+    it('the quiet lock not had in time: the quiet steps, the corepack step and every part are NOT RUN, with no second wait, hostile or not', async () => {
+      for (const hostile of ['', '1']) {
+        const r = setup(
+          [pass('bridge-shard-1', 'delphi'), pass('vitest', 'delphi'), pass('bridge-shard-2', 'cyclops')],
+          ['delphi\tcompleted', 'cyclops\tcompleted'],
+          'eval "orig_$(declare -f ci_mutex_all)"\nci_mutex_all() { [ "$3" = quiet_and_parts ] && return 1; orig_ci_mutex_all "$@"; }',
+        )
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...env(ALL_REMOTE), CI_HOSTILE: hostile })
+        await run.done
+        const why = 'the suites lock was not had in time'
+        expect(notRun(r.log('check', hostile ? 'hostile' : ''))).toEqual([
+          `NOT RUN: step_contract (${why})`,
+          `NOT RUN: step_bun_schedules (${why})`,
+          `NOT RUN: step_chronos (${why})`,
+          `NOT RUN: step_corepack_install (${why})`,
+          `NOT RUN: bridge-shard-1 (${why}; it runs on delphi and its result is not read here)`,
+          `NOT RUN: bridge-shard-2 (${why}; it runs on cyclops and its result is not read here)`,
+          `NOT RUN: vitest (${why}; it runs on delphi and its result is not read here)`,
+        ])
+        expect(rest(r), hostile).toEqual([]) // nothing was taken here
+      }
+    })
+
+    it('the second look: the suites lock not had in time for the parts taken late names those parts NOT RUN', async () => {
+      const r = setup(
+        [pass('bridge-shard-1', 'delphi'), pass('bridge-shard-2', 'cyclops')],
+        ['delphi\tin_progress', 'cyclops\tcompleted'],
+        'eval "orig_$(declare -f ci_mutex)"\nci_mutex() { [ "$3" = parts_here ] && return 1; orig_ci_mutex "$@"; }',
+      )
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], env(ALL_REMOTE, '1'))
+      expect(await run.done, run.out()).toBe(1)
+      // vitest never answered (its machine still works), was taken late, and its lock was not had: it never ran here
+      expect(notRun(r.log('check'))).toEqual(['NOT RUN: vitest (the suites lock was not had in time)'])
+    })
+
+    it('a hostile run: the parts are looked at (here or read from their machines), nothing is NOT RUN, check is red', async () => {
+      const r = setup(
+        [pass('bridge-shard-1', 'delphi'), pass('vitest', 'delphi')].map((l) =>
+          l.replace('ci-part/', 'hostile-ci/part-'),
+        ), // a hostile run's own contexts
+        ['delphi\tcompleted', 'cyclops\tqueued'],
+      )
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], {
+        ...env(ALL_REMOTE),
+        FAIL_ON: 'test:contract',
+        CI_HOSTILE: '1',
+      })
+      expect(await run.done, run.out()).toBe(1)
+      expect(notRun(r.log('check', 'hostile'))).toEqual([]) // a hostile run's own log folder
+      // shard 2's machine never picked it up: it ran here, after the red quiet suite
+      expect(rest(r)).toEqual([expect.stringMatching(/--skip test\/schedules\/ --shard 2\/2 /)])
+      expect(r.log('check', 'hostile')).toContain('+ step_corepack_install')
     })
   })
 
@@ -1115,15 +1230,7 @@ ci_mutex() { [ "$2" = suites ] && { echo "ci-local: timed out waiting for suites
       const ran = join(r.T, 'gate.ran')
       const gate = spawn(
         'bash',
-        [
-          join(here, 'heavy-lock.sh'),
-          'run',
-          'g1',
-          '--',
-          'sh',
-          '-c',
-          `echo ran > "${ran}"; while [ ! -f "${go}" ]; do sleep 0.05; done`,
-        ],
+        [join(here, 'heavy-lock.sh'), 'run', 'g1', '--', 'sh', '-c', `echo ran > "${ran}"; ${waitForFile(go)}`],
         {
           env: {
             PATH: process.env.PATH ?? '',
@@ -1142,7 +1249,7 @@ ci_mutex() { [ "$2" = suites ] && { echo "ci-local: timed out waiting for suites
     it('queued for the suites lock: it posts "waiting for lock" while it waits, and "running on" once it has the lock', async () => {
       const r = setup([], [])
       // the loud group's Vitest step waits for a file: the part runs on, long enough for the main shell to say so
-      r.inject('step_vitest() { while [ ! -f "$HOME/part-fin" ]; do sleep 0.05; done; }')
+      r.inject(`step_vitest() { ${waitForFile('$HOME/part-fin')}; }`)
       r.inject(FAST_BEAT)
       const release = await holder(r)
       const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...PART, TALOS_HEAVY_SLOTS: '1' })

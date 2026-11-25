@@ -101,9 +101,15 @@ function setup() {
   const green = (sha: string, at?: string) => status(sha, Object.fromEntries(SIX.map((j) => [j, 'success'])), at)
   const red = (sha: string, jobs: string[]) =>
     status(sha, Object.fromEntries(SIX.map((j) => [j, jobs.includes(j) ? 'failure' : 'success'])))
-  const log = (sha: string, job: string, text: string) => {
-    mkdirSync(join(cache, 'logs'), { recursive: true })
-    writeFileSync(join(cache, 'logs', `${sha.slice(0, 7)}-${job}.log`), text)
+  // dir: the log folder of the kind of run (a push run's is logs/; the hostile nightly's logs/hostile/, the nightly's logs/nightly/)
+  const log = (sha: string, job: string, text: string, dir = 'logs') => {
+    mkdirSync(join(cache, dir), { recursive: true })
+    writeFileSync(join(cache, dir, `${sha.slice(0, 7)}-${job}.log`), text)
+  }
+  // the NOT RUN lines a job wrote (ci-local's not_run): the file beside its log that a report reads, and only that
+  const notrun = (sha: string, job: string, text: string, dir = 'logs') => {
+    mkdirSync(join(cache, dir), { recursive: true })
+    writeFileSync(join(cache, dir, `${sha.slice(0, 7)}-${job}.notrun`), text)
   }
   const alert = (sha: string, extra: Record<string, string> = {}) => {
     if (!existsSync(r)) {
@@ -203,6 +209,7 @@ function setup() {
     status,
     main,
     log,
+    notrun,
     alert,
     alerts,
     read,
@@ -356,6 +363,78 @@ describe('ci-runner.sh alert: one message when main goes red, one when it is gre
     expect(m).not.toContain('\u001b')
     expect(m).not.toContain('Suite Flags')
     expect(m).not.toMatch(/\n\s*\n/) // no blank lines
+  })
+
+  // Python unittest (Chronos's suite, apps/chronos/tests/run.sh: each test file by itself): the summary header of a failed test,
+  // "FAIL: test_x (__main__.Class.test_x)" or "ERROR: ...", under a line of "=". Not the verbose "... FAIL" line (the same test),
+  // and not another tool's "FAIL:" or "error:" prose.
+  const UNITTEST = [
+    'test_a (__main__.Alpha.test_a) ... FAIL',
+    'test_b (__main__.Beta.test_b) ... ERROR',
+    'test_fine (__main__.Beta.test_fine) ... ok',
+    '',
+    '======================================================================',
+    'FAIL: test_a (__main__.Alpha.test_a)',
+    '----------------------------------------------------------------------',
+    'Traceback (most recent call last):',
+    'AssertionError: 1 != 2',
+    '',
+    '======================================================================',
+    'ERROR: test_b (__main__.Beta.test_b)',
+    '----------------------------------------------------------------------',
+    '======================================================================',
+    'FAIL: test_sub (__main__.Alpha.test_sub) (i=1)',
+    '======================================================================',
+    'FAIL: test_old (__main__.Gamma)', // Python before 3.11 names the class only
+    'FAILED (failures=3, errors=1)',
+    // the same file's test again from a second file's run (each Chronos test file runs by itself): named once
+    '======================================================================',
+    'FAIL: test_a (__main__.Alpha.test_a)',
+    // other tools' lines: prose, an annotation, a shell test's own report
+    'FAIL: kit test sandbox (exit 1)',
+    'FAIL: test_prose (not a unittest header)',
+    '======================================================================',
+    'ERROR: cannot read the file (x)',
+    'error: something went wrong',
+    'ERROR: not_under_a_rule (__main__.Alpha.not_under_a_rule)',
+  ].join('\n')
+  const NAMES = ['test_a (Alpha.test_a)', 'test_b (Beta.test_b)', 'test_sub (Alpha.test_sub)', 'test_old (Gamma)']
+
+  it('Python unittest: each failed or errored test is named once, as "test_x (Class.test_x)", from its summary header only', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    s.green(c1)
+    s.alert(c1)
+    const c2 = s.commit('breaks chronos')
+    s.red(c2, ['check'])
+    s.log(c2, 'check', UNITTEST)
+    s.alert(c2)
+    const m = s.read(s.alerts()[0] as string)
+    expect(m).toContain(`failing tests:\n${NAMES.map((n) => `  ${n}\n`).join('')}`)
+    for (const prose of ['kit test sandbox', 'test_prose', 'cannot read', 'something went wrong', 'not_under_a_rule'])
+      expect(m).not.toContain(prose)
+    expect(m).not.toContain('none named')
+  })
+
+  it('Python unittest: the nightly and the hostile report name them too', () => {
+    const rows = (prefix: string) =>
+      SIX.map((j) => `${prefix}${j}\t${j === 'check' ? 'failure' : 'success'}\tx\t2026-11-15T11:50:00Z\n`).join('')
+    const n = setup()
+    const cn = n.commit('base')
+    writeFileSync(join(n.T, 'status', cn), rows('nightly-ci/'))
+    n.log(cn, 'check', UNITTEST, 'logs/nightly')
+    n.alert(cn, { GITHUB_EVENT_NAME: 'schedule' })
+    expect(n.read(n.alerts()[0] as string)).toContain(`failing tests:\n${NAMES.map((x) => `  ${x}\n`).join('')}`)
+    const h = setup()
+    const ch = h.commit('base')
+    writeFileSync(join(h.T, 'status', ch), rows('hostile-ci/'))
+    h.log(ch, 'check', UNITTEST, 'logs/hostile')
+    h.alert(ch, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' })
+    expect(h.read(h.alerts()[0] as string).split('\n')[0]).toContain(
+      `HOSTILE nightly at ${ch.slice(0, 7)}: 4 finding(s)`,
+    )
+    const rep = readFileSync(join(h.cache, 'hostile', `${new Date().toISOString().slice(0, 10)}.md`), 'utf8')
+    expect(rep).toContain(`(4; nothing is retried):\n${NAMES.map((x) => `- ${x}\n`).join('')}`)
   })
 
   it('Swift Testing: every test that failed is named once, from its own "failed after" line (nothing is rerun)', () => {
@@ -603,7 +682,7 @@ describe("ci-runner.sh alert for the nightly: its own nightly-ci/* only, never m
         SIX_ROWS('nightly-ci/', (j) => (j === 'check' ? 'failure' : 'success')) +
         'nightly-ci/report-linux\tfailure\tfailed on hestia\t2026-11-14T16:30:00Z\n',
     )
-    s.log(c1, 'check', ' FAIL  apps/bridge/test/a.test.ts > a nightly-only fuzz\n')
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/a.test.ts > a nightly-only fuzz\n', 'logs/nightly')
     const r = s.alert(c1, { GITHUB_EVENT_NAME: 'schedule' })
     expect(r.status, r.stderr).toBe(0)
     const files = s.alerts()
@@ -616,6 +695,32 @@ describe("ci-runner.sh alert for the nightly: its own nightly-ci/* only, never m
     expect(msg).toContain('a nightly-only fuzz')
     expect(msg).not.toContain('linux') // a report-only nightly context is not a job of the six
     expect(readFileSync(join(s.cache, 'main-streak'), 'utf8')).toBe(streak)
+  })
+
+  it('a red nightly lists every NOT RUN line of its red jobs, with a count in its first line, and none of a green job', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      SIX_ROWS('nightly-ci/', (j) => (j === 'check' ? 'failure' : 'success')),
+    )
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/a.test.ts > a nightly-only fuzz\n', 'logs/nightly')
+    s.notrun(
+      c1,
+      'check',
+      'NOT RUN: step_bun_rest (step_contract, step_bun_schedules or step_chronos failed)\nNOT RUN: step_vitest (step_contract, step_bun_schedules or step_chronos failed)\n',
+      'logs/nightly',
+    )
+    s.notrun(c1, 'mod', 'NOT RUN: step_made_up (a green job is not asked)\n', 'logs/nightly')
+    expect(s.alert(c1, { GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    const msg = s.read(s.alerts()[0] as string)
+    expect(msg.split('\n')[0]).toMatch(/is unchanged\), 2 suite\(s\) NOT RUN$/)
+    expect(msg).toContain(
+      'NOT RUN, left out (2):\n' +
+        '  check: NOT RUN: step_bun_rest (step_contract, step_bun_schedules or step_chronos failed)\n' +
+        '  check: NOT RUN: step_vitest (step_contract, step_bun_schedules or step_chronos failed)\n',
+    )
+    expect(msg).not.toContain('step_made_up')
   })
 
   it("a green nightly says nothing; a push run never reads a red nightly as main's verdict", () => {
@@ -660,7 +765,7 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
   const report = (cache: string) =>
     readFileSync(join(cache, 'hostile', `${new Date().toISOString().slice(0, 10)}.md`), 'utf8')
 
-  it('red: one "HOSTILE" alert with a one-line summary; the report has the conditions, the findings and the flakes', () => {
+  it('red: one "HOSTILE" alert with a one-line summary; the report has the conditions and the findings, each "failed once" in the named run', () => {
     const s = setup()
     const c1 = s.commit('base: all good')
     s.green(c1)
@@ -670,12 +775,7 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
       join(s.T, 'status', c1),
       ROWS('local-ci/', () => 'success') + ROWS('hostile-ci/', (j) => (j === 'check' ? 'failure' : 'success')),
     )
-    s.log(
-      c1,
-      'check',
-      ' FAIL  apps/bridge/test/usage.test.ts > the pool resets at month end\npassed on retry: a slow socket test (apps/relay/test/s.test.ts)\n',
-    )
-    s.log(c1, 'mod', 'passed on retry: a timing test (packages/mod/t.test.ts)\n')
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/usage.test.ts > the pool resets at month end\n', 'logs/hostile')
     conditions(s.cache, c1)
     const r = s.alert(c1, { GITHUB_EVENT_NAME: 'schedule', CI_HOSTILE: '1' })
     expect(r.status, r.stderr).toBe(0)
@@ -684,7 +784,7 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
     expect(files[0]).toMatch(/-hostile\.txt$/)
     const msg = s.read(files[0] as string)
     expect(msg.split('\n')[0]).toMatch(
-      /^HOSTILE nightly at [0-9a-f]{7}: 1 finding\(s\) \(failed twice\), 2 flaky \(failed once\); red: check\. Test fixes, not a red main \(local-ci\/\* unchanged\)\.$/,
+      /^HOSTILE nightly at [0-9a-f]{7}: 1 finding\(s\) \(each failed once; nothing is retried\); red: check\. Test fixes, not a red main \(local-ci\/\* unchanged\)\.$/,
     )
     expect(msg).not.toMatch(/main is RED|NIGHTLY/)
     expect(readFileSync(join(s.cache, 'main-streak'), 'utf8')).toBe(streak)
@@ -695,29 +795,60 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
       '- load per hold of the heavy lock: 2 with a burner (its first 600 s), 0 not applied, 0 with burners left over (killed)',
     )
     expect(rep).toContain(
-      'Findings, failed twice (1):\n- apps/bridge/test/usage.test.ts > the pool resets at month end\n',
+      'Findings, each failed once in https://github.com/owner/talos-app/actions/runs/77 (1; nothing is retried):\n- apps/bridge/test/usage.test.ts > the pool resets at month end\n',
     )
-    expect(rep).toContain(
-      'Flaky, failed once and passed on retry (2):\n- a slow socket test (apps/relay/test/s.test.ts)\n- a timing test (packages/mod/t.test.ts)\n',
-    )
+    // nothing retries, so nothing can have "failed twice" or "passed on retry": neither is said, in the alert or the report
+    expect(msg + rep).not.toMatch(/twice|[Ff]laky|on retry/)
   })
 
-  it('green: no alert, the report still counts the flakes; a second run appends a section of its own', () => {
+  it('NOT RUN lines of the red jobs: counted in the summary, listed under their own heading; a report with none says "none recorded"', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      ROWS('hostile-ci/', (j) => (j === 'check' || j === 'desktop' ? 'failure' : 'success')),
+    )
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/a.test.ts > a\n', 'logs/hostile')
+    s.notrun(c1, 'check', 'NOT RUN: step_vitest (step_contract failed)\n', 'logs/hostile')
+    s.notrun(
+      c1,
+      'desktop',
+      'NOT RUN: guards-test.sh (test.sh failed)\nNOT RUN: install-test.sh (test.sh failed)\n',
+      'logs/hostile',
+    )
+    s.notrun(c1, 'mod', 'NOT RUN: step_made_up (a green job is not asked)\n', 'logs/hostile')
+    expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    expect(s.read(s.alerts()[0] as string).split('\n')[0]).toMatch(
+      /^HOSTILE nightly at [0-9a-f]{7}: 1 finding\(s\) \(each failed once; nothing is retried\), 3 suite\(s\) NOT RUN; red: check desktop\. Test fixes/,
+    )
+    expect(report(s.cache)).toContain(
+      '\nNOT RUN, left out (3):\n- check: NOT RUN: step_vitest (step_contract failed)\n' +
+        '- desktop: NOT RUN: guards-test.sh (test.sh failed)\n- desktop: NOT RUN: install-test.sh (test.sh failed)\n',
+    )
+    expect(report(s.cache)).not.toContain('step_made_up')
+    const c2 = s.commit('next')
+    writeFileSync(
+      join(s.T, 'status', c2),
+      ROWS('hostile-ci/', () => 'success'),
+    )
+    expect(s.alert(c2, { CI_HOSTILE: '1' }).status).toBe(0)
+    expect(report(s.cache).split(`## ${c2.slice(0, 7)}`)[1]).toContain('NOT RUN, left out (0):\n- none recorded\n')
+  })
+
+  it('green: no alert; a second run appends a section of its own', () => {
     const s = setup()
     const c1 = s.commit('base')
     writeFileSync(
       join(s.T, 'status', c1),
       ROWS('hostile-ci/', () => 'success'),
     )
-    s.log(c1, 'browser', 'passed on retry: a flaky one (apps/web/x.test.ts)\n')
     expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'workflow_dispatch' }).status).toBe(0)
     expect(s.alerts()).toEqual([])
     expect(existsSync(join(s.cache, 'main-streak'))).toBe(false)
     expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'workflow_dispatch' }).status).toBe(0)
     const rep = report(s.cache)
     expect(rep.match(/^## [0-9a-f]{7}, .*: green$/gm)).toHaveLength(2)
-    expect(rep).toContain('Flaky, failed once and passed on retry (1):\n- a flaky one (apps/web/x.test.ts)\n')
-    expect(rep).toContain('Findings, failed twice (0):\n- none\n')
+    expect(rep).toContain('(0; nothing is retried):\n- none\n')
     expect(rep).toContain('- none recorded (the run did not get as far as its slot)')
   })
 
@@ -750,20 +881,104 @@ describe('ci-runner.sh alert for the hostile nightly: a report, and one "hostile
     expect(report(s.cache).split(`## ${c2.slice(0, 7)}`)[1]).not.toContain('Report-only')
   })
 
-  it("a job the hostile run did not answer: its log (another run's, same commit) adds no flakes", () => {
+  it('a NOT RUN line in a job log is not a suite left out: only the .notrun file beside it is read, so a test that prints one is not counted', () => {
     const s = setup()
     const c1 = s.commit('base')
     writeFileSync(
       join(s.T, 'status', c1),
-      ROWS('hostile-ci/', () => 'success').replace(/^hostile-ci\/mobile\t.*\n/m, '') +
-        ROWS('local-ci/', () => 'success'),
+      ROWS('hostile-ci/', (j) => (j === 'check' ? 'failure' : 'success')),
     )
-    s.log(c1, 'mobile', "passed on retry: the push run's own flake (apps/mobile/x.test.ts)\n")
-    s.log(c1, 'mod', 'passed on retry: a hostile flake (packages/mod/t.test.ts)\n')
-    expect(s.alert(c1, { CI_HOSTILE: '1' }).status).toBe(0)
+    // a test's own output: it printed the shape of one (no .notrun file was written)
+    s.log(
+      c1,
+      'check',
+      ' FAIL  apps/bridge/test/a.test.ts > a\nNOT RUN: step_made_up (printed by a test)\n',
+      'logs/hostile',
+    )
+    expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    expect(s.read(s.alerts()[0] as string).split('\n')[0]).not.toContain('NOT RUN')
     const rep = report(s.cache)
-    expect(rep).toContain('Flaky, failed once and passed on retry (1):\n- a hostile flake (packages/mod/t.test.ts)\n')
-    expect(rep).not.toContain("push run's own flake")
+    expect(rep).not.toContain('step_made_up')
+    expect(rep).toContain('(0):\n- none recorded in the logs of the red job(s): check\n')
+  })
+
+  it('the NOT RUN list is clean and capped: control characters out, a line at most 300 characters, 50 a job then the true count', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      ROWS('hostile-ci/', (j) => (j === 'check' ? 'failure' : 'success')),
+    )
+    const lines = [
+      'NOT RUN: a\u001b[31mred\u001b[0m\r (bell\u0007 and escape)',
+      'a stray line that is not one',
+      `NOT RUN: long (${'x'.repeat(1000)})`,
+      ...Array.from({ length: 80 }, (_v, i) => `NOT RUN: step_${i} (why)`),
+    ]
+    s.notrun(c1, 'check', `${lines.join('\n')}\n`, 'logs/hostile')
+    expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    const rep = report(s.cache)
+    const section = rep.split('NOT RUN, left out')[1]?.split('\n\n')[0] as string
+    expect(section.startsWith(' (82):')).toBe(true) // the true count, though the list is capped
+    const listed = section.split('\n').slice(1).filter(Boolean)
+    expect(listed).toHaveLength(51) // 50 lines and the "and N more" line
+    expect(listed[50]).toBe('- check: ... and 32 more not listed')
+    expect(listed[0]).toBe('- check: NOT RUN: a[31mred[0m (bell and escape)') // no escape, return or bell character
+    expect([...rep].some((c) => (c < ' ' && c !== '\n') || c === '\u007f')).toBe(false)
+    expect(listed[1]?.length).toBeLessThanOrEqual('- check: '.length + 300)
+    expect(listed.some((l) => l.includes('step_47 '))).toBe(true) // the first 50 NOT RUN lines: two, then step_0 to step_47
+    expect(listed.some((l) => l.includes('step_48 '))).toBe(false) // the rest is not listed
+    expect(s.read(s.alerts()[0] as string).split('\n')[0]).toContain(', 82 suite(s) NOT RUN;')
+  })
+
+  it('a job that ended in error (not tested, a slept Mac) is read too: its tests and its NOT RUN lines', () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      ROWS('hostile-ci/', (j) => (j === 'check' ? 'failure' : j === 'mobile' ? 'error' : 'success')),
+    )
+    s.log(c1, 'mobile', ' FAIL  apps/mobile/test/a.test.ts > a mobile test\n', 'logs/hostile')
+    s.notrun(c1, 'mobile', 'NOT RUN: TalosShareCore (BridgeGuard failed)\n', 'logs/hostile')
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/a.test.ts > a\n', 'logs/hostile')
+    expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    const rep = report(s.cache)
+    expect(rep).toContain('- apps/mobile/test/a.test.ts > a mobile test\n')
+    expect(rep).toContain('- mobile: NOT RUN: TalosShareCore (BridgeGuard failed)\n')
+    expect(s.read(s.alerts()[0] as string).split('\n')[0]).toContain('1 suite(s) NOT RUN; red: check mobile.')
+  })
+
+  it("the push run's logs of the same commit (logs/) are never read: not its failing tests or its NOT RUN lines", () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      ROWS('hostile-ci/', (j) => (j === 'check' ? 'failure' : 'success')) + ROWS('local-ci/', () => 'success'),
+    )
+    s.log(c1, 'check', " FAIL  apps/bridge/test/a.test.ts > the push run's test\n")
+    s.notrun(c1, 'check', 'NOT RUN: step_vitest (push)\n')
+    s.log(c1, 'check', ' FAIL  apps/bridge/test/b.test.ts > the hostile test\n', 'logs/hostile')
+    expect(s.alert(c1, { CI_HOSTILE: '1', GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    const rep = report(s.cache)
+    expect(rep).toContain('(1; nothing is retried):\n- apps/bridge/test/b.test.ts > the hostile test\n')
+    expect(rep).toContain('(0):\n- none recorded in the logs of the red job(s): check\n')
+    expect(rep).not.toContain("push run's")
+    expect(rep).not.toContain('step_vitest')
+    expect(s.read(s.alerts()[0] as string)).not.toContain('NOT RUN')
+  })
+
+  it("a nightly alert reads logs/nightly/ only: the push run's log of the same commit is not its", () => {
+    const s = setup()
+    const c1 = s.commit('base')
+    writeFileSync(
+      join(s.T, 'status', c1),
+      ROWS('nightly-ci/', (j) => (j === 'check' ? 'failure' : 'success')),
+    )
+    s.log(c1, 'check', " FAIL  apps/bridge/test/a.test.ts > the push run's test\n")
+    expect(s.alert(c1, { GITHUB_EVENT_NAME: 'schedule' }).status).toBe(0)
+    const msg = s.read(s.alerts()[0] as string)
+    expect(msg).not.toContain("push run's test")
+    expect(msg).toContain(`failing tests: none named in this runner's logs (${s.cache}/logs/nightly/`)
   })
 
   it("a push run never reads a red hostile run: main's verdict stays green, no alert", () => {

@@ -79,10 +79,15 @@ export function createSocketConnection(c: SocketCtx) {
       }
       const res = parseFrame(raw, { direction: 'relay_to_app' })
       if (!res.ok) {
-        c.noteUnknown(unknownOfFrame(raw))
+        if (c.ws === sock) c.noteUnknown(unknownOfFrame(raw)) // a socket let go of (below) is not ours to report
         return
       }
       const frame = res.frame
+      // Let go of but left open for its inbox answers (inboxLetGo): nothing else on it is ours any more.
+      if (c.ws !== sock) {
+        c.inboxAnswerOnOld(sock, frame)
+        return
+      }
       c.noteUnknown(unknownOfParsed(raw)) // an error code from a newer build: delivered as 'internal', still noted (O5)
       if (frame.type === 'ping') {
         send({ type: 'pong', nonce: frame.nonce })

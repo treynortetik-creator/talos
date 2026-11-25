@@ -19,7 +19,7 @@ ci_e2e_shadow() {
   local l_tests="" t_tests="" tmp f agree=- diff="" only_t only_l
   [ -n "$repo" ] && [ -n "$sha" ] && [ -n "$run" ] || { echo "ci-runner: e2e-shadow: needs GITHUB_REPOSITORY, CI_PLAN_SHA and GITHUB_RUN_ID; nothing recorded"; return 0; }
   cache="$(ci_cache_dir)" || { echo "ci-runner: e2e-shadow: no cache dir; nothing recorded"; return 0; }
-  short="${sha:0:7}" log="$cache/logs/$short-browser.log" tsv="$cache/logs/e2e-shadow.tsv"
+  short="${sha:0:7}" log="$(ci_logs_dir "$cache")/$short-browser.log" tsv="$cache/logs/e2e-shadow.tsv" # Lemnos's own browser log, of this kind of run
   attempt="${GITHUB_SERVER_URL:-https://github.com}/$repo/actions/runs/$run/attempts/$n#"
   # Titan's answer of this attempt. The job is read before the statuses: a job seen done means its status, if any, is in them.
   start=$(date +%s)

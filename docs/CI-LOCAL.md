@@ -20,6 +20,8 @@ the job code it started with; the helpers it runs later (`ci-affected.sh`, `ci-d
 `ci-swift-retry.sh`) are still read from the checkout when used, so **do not `git pull` into a checkout while a hand run of
 `ci-local.sh` from it is waiting** (the runners are not exposed: one job each, in a workspace nothing changes meanwhile).
 
+**The `mod` job needs `CI_MOD_REAL=1` on a hand run.** It runs the real Claude Code CLI (`claude plugin validate`, `plugin test`) and, when the local one is not the pinned version, a throwaway npm copy fetched over the network. It does so only on purpose: `claude_at` (`scripts/ci-local/jobs-mod-browser.sh`) refuses with one line, and the job is red (never a pass, never "not tested"), unless `CI_MOD_REAL=1`. `ci-runner.sh` sets it for every CI run; a hand run says it: `CI_MOD_REAL=1 scripts/ci-local.sh --pr 39 --jobs mod` (a default `--jobs` list includes `mod`, so it needs it too). `ci-local.sh` keeps it out of every job's environment, and the test environment builders drop it, so a test (or a probe) never reaches the real CLI or npm. A `plugins/talos-app-mod/CLAUDE_CODE_VERSION` that is not `digits.digits.digits` (or `latest` for `--latest`) is refused the same way: an empty one once became `npm exec @anthropic-ai/claude-code@`.
+
 Options: `--jobs check,mod,browser,image,desktop,mobile` (default all, exactly the ones named), `--full` (no job is skipped, see "Running only what a change can affect"), `--latest` (also the advisory latest-CLI mod run),
 `--no-status` (post nothing), `--keep` (keep the scratch worktree), `--reap` (stop and clean up after runs that died, then exit). `TALOS_CI_FORCE_DESKTOP=1` runs the desktop job even
 when no desktop path changed (only a hand run needs it; `apps/desktop/scripts/review-d0-test.sh` uses it as its control; `ci-local.sh` keeps it out of every job's environment). A commit that is already on `origin/main` runs the desktop and mobile jobs with no flag at all, unless "Running only what a change can affect" shows the change cannot reach them. Logs: `~/.cache/talos-ci/logs/<sha>-<job>.log`, plus `<sha>-setup.log`. A rerun of the same commit moves the earlier ones to `logs/prev/<sha>-<job>.<time>.log` first. Exit 0 only if every
@@ -117,7 +119,21 @@ trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
    (`bash apps/chronos/tests/run.sh`, each test file by itself; skipped with a line in the log where python3 is older than 3.9,
    or for a commit with no `apps/chronos`; no `CHRONOS_PR_BASE`, so its PR-range scan skips). It runs whatever the earlier two said. Then the loud group side by side: the other bridge files 4 at once and
    Vitest. Output of the loud group goes to `<log>.<step>` while it runs and into the job log, whole, with failed steps
-   last so the reason is in the tail a failed job prints. Last comes the known-vulnerability audit (`pnpm audit --prod
+   last so the reason is in the tail a failed job prints. A push run stops at the first red suite (the contract suite red: the
+   schedules suite and the loud group do not run; Chronos always does; the bun rest or Vitest red: the corepack variant does not;
+   a red type check, lint or notices check: no suite), and **every suite it leaves out is a log line, `NOT RUN: <suite> (<why>)`**,
+   one each (also in `<short>-<job>.notrun` beside the log, the file a report reads), in any kind of run, so a report never reads as if they had passed. The same line is written wherever a job leaves
+   steps out: after a red quick gate (the gates after it, every suite and the audit, the red one named; with parts on other machines
+   the parts, not step_vitest), when setup failed (every step of the job), when the suites or desktop lock is not had in time (a
+   hostile run then does not go on, and never waits a second time), the part that would have run here or on another machine, check
+   on Titan after a red macOS subset ("its result was not read here"), the mod job's plugin test after a red validate, the browser
+   job when the browsers are not ready, the iPhone shell's Swift steps one by one after a red one, the desktop job's steps (all
+   of them with no usable tmux or no lock; after a red one, `apps/desktop/scripts/ci.sh` names `guards-test.sh` with the six
+   scripts it runs, `auto-update-apply-test.sh` among them), and the image job's steps after docker, the build or a check
+   failed. A hostile run
+   (`CI_HOSTILE=1`) goes on after a red suite and runs the later ones too (the job still fails; the type check and lint still stop
+   it, they are no suite); the desktop job stops early in a hostile run too (its guards control reuses the green-tests stamp and
+   would run the whole suite again, and the install steps want the app the build made). Last comes the known-vulnerability audit (`pnpm audit --prod
    --audit-level high`), which also only warns, because an advisory or a registry outage says nothing about this commit's code.
    A step that warns adds a `warning:` line to the log, a `!` line to the run's output and "with warnings" to the job's status,
    which still counts as a pass. The one-day wait before pnpm picks a new package version stays in force.
@@ -211,6 +227,10 @@ say which order each one used. An earlier six-job green is described under "What
 Starting a process is what gets slow on a loaded Mac: the CPU can be half idle while the load reads 20 or more. If those short
 waits are ever made robust, or agents stop running suites on this Mac at the same time, overlapping `check` and `browser` is
 the next 6 minutes to win: the side-by-side code (`together`, `wait_for_job`) stays for that.
+
+A hostile or nightly run keeps its own log folder, `logs/hostile/` or `logs/nightly/` (`LOGS` in ci-local.sh, from `ci_logs_dir`):
+its job logs, `prev/`, `flakes.tsv`, per-test file and `timings.tsv` never mix with the push run's of the same commit (docs/CI-MACHINES.md,
+"The nightly's own contexts"). What follows about `logs/` is the push run's.
 
 Every run ends with `ci-local: timing: waited Ns, setup Ns, jobs Ns` and adds a line to `logs/timings.tsv`: date, sha, slot,
 jobs, waited, setup, jobs' wall time, failures, then each job that ran as `<job>=<wall>/<own steps>` seconds. A job's wall

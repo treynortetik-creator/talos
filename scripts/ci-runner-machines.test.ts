@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { copyCiLocalParts, copyRunnerMainQueue, systemPathWithout } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-runner.sh')
@@ -306,7 +307,7 @@ case "$sub:\${GIT_FAKE_NET:-}" in
     if [ "\${GIT_FAKE_NET}" = slow-term ]; then trap 'echo term > "$GIT_FAKE_PIDS.term"; sleep 2; exit 143' TERM; else trap '' TERM; fi
     sleep 300 &
     echo "$$ $!" > "$GIT_FAKE_PIDS"
-    while :; do sleep 1; done ;;
+    ${waitForFile('$GIT_FAKE_LOCK.never', { step: 1 })} ;;
 esac
 exec "$real" "$@"`
 

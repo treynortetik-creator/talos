@@ -19,6 +19,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -319,15 +320,7 @@ describe('the browser job with CI_BROWSER_E2E_PART: web here, every other e2e pa
     const go = join(r.T, 'gate.go')
     const gate = spawn(
       'bash',
-      [
-        join(here, 'heavy-lock.sh'),
-        'run',
-        'g1',
-        '--',
-        'sh',
-        '-c',
-        `echo ran > "${r.T}/gate.ran"; while [ ! -f "${go}" ]; do sleep 0.05; done`,
-      ],
+      [join(here, 'heavy-lock.sh'), 'run', 'g1', '--', 'sh', '-c', `echo ran > "${r.T}/gate.ran"; ${waitForFile(go)}`],
       {
         env: {
           PATH: process.env.PATH ?? '',

@@ -72,10 +72,57 @@ step_contract() { pnpm --filter @talos-app/bridge test:contract --retry=0 --repo
 # the list). So each group, and each Swift job, holds the `suites` mutex: one at a time across all CI runs (slot 1), and while the quiet group runs no new gate starts (scripts/ci-local/locks.sh, ci_quiet_active).
 # Each hold of the suites mutex leaves a marker when it was had (suites-quiet, suites-loud), and quiet-ok when the quiet group
 # passed: check as a part tells "not tested" (a hold not had in time) from a red (job_check).
+# A hostile run (CI_HOSTILE=1) goes on after a red suite so the later ones are looked at too (the job still fails); every other run
+# stops at the first red one. Whatever is left out says so in the log, one line each, `NOT RUN: <suite> (<why>)`, and in the .notrun file
+# beside the log: a report (scripts/ci-runner/alert.sh) lists the lines of that file, so a suite that never ran is never read as one that passed.
+QUIET_STEPS="step_contract step_bun_schedules step_chronos" QUIET_RED="step_contract, step_bun_schedules or step_chronos failed" LOUD_STEPS="step_bun_rest step_vitest step_corepack_install"
+hostile_run() { [ "${CI_HOSTILE:-}" = 1 ]; }
+not_run() { # not_run <log> <why> <suite...>: a line each in the log and in the .notrun file beside it, which a report reads alone
+  # (a test that prints "NOT RUN: ..." is no suite left out). Control characters out, a line at most 300 characters, a file at most 200.
+  local log="$1" why="$2" s line side="${1%.log}.notrun"
+  shift 2
+  for s in "$@"; do
+    line="NOT RUN: $s ($why)"
+    line="${line//[[:cntrl:]]/}"
+    line="${line:0:300}"
+    echo "$line" >> "$log"
+    [ "$(wc -l < "$side" 2>/dev/null || echo 0)" -lt 200 ] && echo "$line" >> "$side"
+  done
+  return 0
+}
+CHECK_PRE="typecheck typecheck:mod lint notices:check" # the quick gates before the suites (pnpm <name>), and the audit after them
+JOB_RED="" JOB_HELD=""
+job_step() { # job_step <log> <name> <cmd...>: a step of a job that stops at its first red one (set JOB_RED="" first): the commands after a
+  # red one are not run, and say so (NOT RUN). Always true: the job's verdict is [ -z "$JOB_RED" ].
+  local log="$1" name="$2"
+  shift 2
+  if [ -n "$JOB_RED" ]; then not_run "$log" "$JOB_RED failed" "$name"; return 0; fi
+  run "$log" "$@" || JOB_RED="$name"
+  return 0
+}
+go_on_after_red() { hostile_run && [ -f "$RESULTS/suites-quiet" ]; } # a hostile run goes on after a red suite, but only if the quiet hold was had
+quiet_why() { # quiet_why <log> <rc of the suites run so far>: sets QUIET_WHY, why the suites after them are left out when rc is red
+  QUIET_WHY="a suite run here failed"
+  if [ ! -f "$RESULTS/suites-quiet" ]; then # its hold was never had: none of its suites ran, and the Swift jobs and browser must not wait for it
+    QUIET_WHY="the suites lock was not had in time"
+    : > "$RESULTS/quiet-done"
+    [ "$2" = 0 ] || not_run "$1" "$QUIET_WHY" $QUIET_STEPS
+  elif [ ! -f "$RESULTS/quiet-ok" ]; then QUIET_WHY="$QUIET_RED"; fi
+}
+suite_seq() { # suite_seq <log> <why a suite before these was red, or ""> <step...>: one after another; false if any was red
+  local log="$1" bad="$2" rc=0 s
+  shift 2
+  [ -z "$bad" ] || rc=1
+  for s in "$@"; do
+    if [ -n "$bad" ] && ! hostile_run; then not_run "$log" "$bad" "$s"; continue; fi
+    run "$log" "$s" || { rc=1; bad="${bad:-$s failed}"; }
+  done
+  return $rc
+}
 quiet_suites() {
   : > "$RESULTS/suites-quiet"
   ci_quiet_begin "$LOCKS" # no new gate starts while this runs (ci_mutex); its end is a row in logs/quiet-group.tsv
-  run "$1" step_contract && run "$1" step_bun_schedules
+  suite_seq "$1" "" step_contract step_bun_schedules
   local rc=$?
   # Chronos's suite after them, whatever they said: a red contract suite must not hide a red Chronos test (or the other way round)
   run "$1" step_chronos || rc=1
@@ -86,7 +133,12 @@ quiet_suites() {
 }
 # the corepack variant is in the same hold (a second take of the mutex that was not had in time would read as a red), after the
 # suites that run side by side
-loud_suites() { : > "$RESULTS/suites-loud"; together "$1" step_bun_rest step_vitest && run "$1" step_corepack_install; }
+loud_suites() {
+  : > "$RESULTS/suites-loud"
+  local bad=""
+  together "$1" step_bun_rest step_vitest || bad="step_bun_rest or step_vitest failed"
+  suite_seq "$1" "$bad" step_corepack_install
+}
 
 # The parts of check that run on another machine (docs/CI-MACHINES.md, "check in three places"), posted as ci-part/<job> and
 # folded into local-ci/check by the machine that runs check; and the report-only Linux job (report-ci/linux, Hestia). Each is a
@@ -206,7 +258,7 @@ job_check() {
     echo "not tested: forced (CI_CHECK_PART_REFUSE=1, a manual dispatch)" | tee -a "$log" > "$RESULTS/check.refused"
     return 1
   fi
-  if ! setup_ok "$log"; then
+  if ! setup_ok "$log" $CHECK_PRE $QUIET_STEPS $LOUD_STEPS audit; then
     ! check_part || echo "not tested: setup failed on $WHERE" | tee -a "$log" > "$RESULTS/check.refused"
     return 1
   fi
@@ -215,12 +267,13 @@ job_check() {
 }
 # Today's check, step for step: also what a take-back runs (check_with_part).
 check_today() {
-  local log="$1" rc=0
-  warn_step check "$log" "personal data found (a warning by default)" pnpm check:personal &&
-  run "$log" pnpm typecheck &&
-  run "$log" pnpm typecheck:mod &&
-  run "$log" pnpm lint &&
-  run "$log" pnpm notices:check || rc=1
+  local log="$1" rc=0 bad="" s
+  warn_step check "$log" "personal data found (a warning by default)" pnpm check:personal
+  for s in $CHECK_PRE; do
+    if [ -n "$bad" ]; then not_run "$log" "pnpm $bad failed" "$s"; continue; fi
+    run "$log" pnpm "$s" || { rc=1; bad="$s"; }
+  done
+  if [ "$rc" != 0 ]; then suites_not_run "$log" "pnpm $bad failed"; fi
   if [ "$rc" = 0 ]; then
     suites_then_audit "$log" || rc=1
     # the quiet hold never had, or the quiet group passed and the loud hold never had (a heavy run took the lock in between)
@@ -242,7 +295,7 @@ check_today() {
 check_tests_file() { # check_tests_file <log> [<part>:<machine> ...]
   local log="$1"
   shift
-  run "$log" bun "$ROOT/scripts/ci-test-results.ts" "$CI_TEST_RESULTS_DIR" "$CACHE/logs/$SHORT-check-tests.tsv" "$SHA" "$WHERE" "$@" ||
+  run "$log" bun "$ROOT/scripts/ci-test-results.ts" "$CI_TEST_RESULTS_DIR" "$LOGS/$SHORT-check-tests.tsv" "$SHA" "$WHERE" "$@" ||
     echo "warning: no per-test file (scripts/ci-test-results.ts failed)" >> "$log"
 }
 
@@ -359,6 +412,7 @@ step_bun_shard2() { bun run "$BUN_RUNNER" --jobs "$CI_WORKERS" --skip "$SLOW_PRE
 parts_here() { # parts_here <log> <part...>: those parts side by side, here
   local log="$1" steps=() s1=0 s2=0 p
   shift
+  JOB_HELD=1 # started: the lock around it (parts_second_look) was had
   for p in "$@"; do case "$p" in bridge-shard-1) s1=1 ;; bridge-shard-2) s2=1 ;; vitest) steps+=(step_vitest) ;; esac; done
   # both halves, or a commit whose runner cannot split: the whole rest, as today
   if [ "$s1$s2" = 11 ] || { [ "$s1$s2" != 00 ] && ! grep -q -- '--shard' "$BUN_RUNNER" 2>/dev/null; }; then steps+=(step_bun_rest)
@@ -368,8 +422,9 @@ parts_here() { # parts_here <log> <part...>: those parts side by side, here
   together "$log" "${steps[@]}"
 }
 quiet_and_parts() { # under the suites mutex: the quiet group, then the first look
-  local log="$1" here=() p
-  quiet_suites "$log" || return 1
+  local log="$1" here=() p bad="" rc=0
+  quiet_suites "$log" || rc=1
+  if [ "$rc" != 0 ] && ! hostile_run; then not_run "$log" "$QUIET_RED" step_corepack_install; return 1; fi
   for p in $PARTS; do
     if [ -z "$(part_machine "$p")" ] || [ "$(part_state "$p")" = gone ]; then here+=("$p"); fi
   done
@@ -378,7 +433,17 @@ quiet_and_parts() { # under the suites mutex: the quiet group, then the first lo
     for p in bridge-shard-1 bridge-shard-2; do printf '%s\n' ${here[@]+"${here[@]}"} | grep -qx "$p" || here+=("$p"); done
   fi
   printf '%s\n' ${here[@]+"${here[@]}"} > "$RESULTS/parts-taken"
-  parts_here "$log" ${here[@]+"${here[@]}"} && run "$log" step_corepack_install
+  parts_here "$log" ${here[@]+"${here[@]}"} || { rc=1; bad="the parts run here failed"; }
+  suite_seq "$log" "$bad" step_corepack_install || rc=1
+  return $rc
+}
+parts_not_run() { # parts_not_run <log> <why>: the parts nobody here took or looked at, because an earlier suite was red
+  local log="$1" p m
+  for p in $PARTS; do
+    grep -qx "$p" "$RESULTS/parts-taken" 2>/dev/null && continue
+    m="$(part_machine "$p")"
+    not_run "$log" "$2${m:+; it runs on $m and its result is not read here}" "$p"
+  done
 }
 parts_second_look() { # without the mutex: wait for the parts still working, take the late ones, then fold the answers in
   # Each part has its own wait: CI_PART_WAIT from the start, and the seconds that part spent queued for a lock on its machine (above)
@@ -411,7 +476,11 @@ parts_second_look() { # without the mutex: wait for the parts still working, tak
   if [ ${#late[@]} -gt 0 ]; then
     ci_fold_resume "$RESULTS" check "$LOCKS" # taken here: heavy work again, the turn first
     [ ${#slow[@]} -eq 0 ] || echo "ci-local: taking ${slow[*]}: no answer within ${CI_PART_WAIT:-120}s" >> "$log"
-    run "$log" ci_mutex "$LOCKS" suites parts_here "$log" "${late[@]}" || return 1
+    JOB_HELD=""
+    run "$log" ci_mutex "$LOCKS" suites parts_here "$log" "${late[@]}" || {
+      [ -n "$JOB_HELD" ] || not_run "$log" "the suites lock was not had in time" "${late[@]}" # the late parts never ran here
+      return 1
+    }
   else ci_fold_end "$RESULTS" check; fi
   # where each part ran, for the status text; a part red on its machine fails check
   for m in $(awk '{ print $2 }' "$RESULTS/parts-wanted" | awk '!seen[$0]++'); do
@@ -431,13 +500,30 @@ parts_second_look() { # without the mutex: wait for the parts still working, tak
   printf '%s\n' "$where" > "$RESULTS/check.where"
   if [ -n "$bad" ]; then echo "$bad" | tee -a "$log" > "$RESULTS/check.why"; return 1; fi
 }
+suites_not_run() { # suites_not_run <log> <why>: a red quick gate: no suite, no part and no audit ran (the loud suites run on the parts' machines)
+  if [ -f "$RESULTS/parts-wanted" ]; then
+    not_run "$1" "$2" $QUIET_STEPS step_corepack_install
+    parts_not_run "$1" "$2"
+  else not_run "$1" "$2" $QUIET_STEPS $LOUD_STEPS; fi
+  not_run "$1" "$2" audit
+}
 suites_then_audit() {
   local log="$1" rc=0
   if [ -f "$RESULTS/parts-wanted" ]; then
-    { run "$log" ci_mutex_all "$LOCKS" suites quiet_and_parts "$log" && parts_second_look "$log"; } || rc=1
+    run "$log" ci_mutex_all "$LOCKS" suites quiet_and_parts "$log" || rc=1
+    quiet_why "$log" "$rc"
+    if [ "$rc" = 0 ] || go_on_after_red; then parts_second_look "$log" || rc=1
+    else
+      [ -f "$RESULTS/suites-quiet" ] || not_run "$log" "$QUIET_WHY" step_corepack_install # the hold was never had: quiet_and_parts never ran
+      parts_not_run "$log" "$QUIET_WHY"
+    fi
   else
-    { run "$log" ci_mutex_all "$LOCKS" suites quiet_suites "$log" &&
-      run "$log" ci_mutex "$LOCKS" suites loud_suites "$log"; } || rc=1
+    run "$log" ci_mutex_all "$LOCKS" suites quiet_suites "$log" || rc=1
+    quiet_why "$log" "$rc"
+    if [ "$rc" = 0 ] || go_on_after_red; then
+      run "$log" ci_mutex "$LOCKS" suites loud_suites "$log" || rc=1
+      [ -f "$RESULTS/suites-loud" ] || not_run "$log" "the suites lock was not had in time" $LOUD_STEPS
+    else not_run "$log" "$QUIET_WHY" $LOUD_STEPS; fi
   fi
   warn_step check "$log" "a high or critical advisory, or the registry did not answer" pnpm audit --prod --audit-level high
   return "$rc"
@@ -460,6 +546,7 @@ step_macos_subset() { # each file through check's own runner (scripts/ci-local/m
   # files in one run (step_vitest), and the contract files (step_contract, run in apps/bridge: its paths from there, or its
   # filter matches nothing and --passWithNoTests passes it); --passWithNoTests: KIT_SKIP may leave out them all.
   local list bun vitest contract rc=0 f
+  JOB_HELD=1 # started: the suites lock around it (check_with_part) was had
   list="$(bash "$CI_LOCAL_LIB/macos-only.sh" .)" || { echo "the macOS-only tests could not be listed"; return 1; }
   macos_pick() { printf '%s\n' "$list" | awk -v r="$1" '$1 == r { print $2 }'; }
   bun="$(macos_pick bun | sed 's#^apps/bridge/##')" vitest="$(macos_pick vitest)" contract="$(macos_pick contract | sed 's#^apps/bridge/##')"
@@ -492,10 +579,13 @@ others_done() { # every other job of this run has ended (its result is there, or
 check_with_part() {
   local log="$1" m="$CI_CHECK_PART" deadline=0 first st why lost="did not answer" now prev poll="${CI_PART_POLL:-30}"
   local subset_rc=0
+  JOB_HELD=""
   run "$log" ci_mutex_all "$LOCKS" suites step_macos_subset || subset_rc=1
+  [ "$subset_rc" = 0 ] || [ -n "$JOB_HELD" ] || not_run "$log" "the suites lock was not had in time" step_macos_subset
   : > "$RESULTS/quiet-done" # the Swift jobs and browser go now, whatever the subset said
   if [ "$subset_rc" != 0 ]; then
     echo "the macOS-only tests failed here (or their lock was not had in time); see the log" > "$RESULTS/check.why"
+    not_run "$log" "its result was not read here" "check on $m"
     check_tests_file "$log" "check:$m"
     return 1
   fi

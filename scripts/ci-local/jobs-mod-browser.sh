@@ -1,7 +1,13 @@
 # scripts/ci-local/jobs-mod-browser.sh: the mod and browser jobs. Part of scripts/ci-local.sh, which sources it before any wait (functions and
 # fixed values only, unchanged from when they were in ci-local.sh). Not run on its own.
+# The mod job runs the real Claude CLI, and a throwaway npm copy of it over the network. It does so only on purpose: CI_MOD_REAL=1,
+# which ci-runner.sh sets for a CI run and a hand run sets itself (CI_MOD_REAL=1 scripts/ci-local.sh --jobs mod). Without it, or with
+# a version that is not digits.digits.digits or `latest` (an empty one once became `npm exec @anthropic-ai/claude-code@`), it refuses
+# before it touches claude or npm, and the job is red with that line: a probe or a test that reaches it never reaches them.
 claude_at() { # claude_at <version> <args...>: the local CLI when it is that version, else a throwaway npm copy
   local v="$1"; shift
+  [ "${CI_MOD_REAL:-}" = 1 ] || { echo "claude_at: refused: the mod job runs the real claude and npm only with CI_MOD_REAL=1 (a CI run sets it; by hand: CI_MOD_REAL=1 scripts/ci-local.sh --jobs mod)"; return 1; }
+  [[ "$v" == latest || "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "claude_at: refused: the Claude Code version is '$v', not digits.digits.digits or latest (plugins/talos-app-mod/CLAUDE_CODE_VERSION)"; return 1; }
   local home; home="$(mktemp -d)"
   if [ "$v" != latest ] && [ "$(claude --version 2>/dev/null | cut -d' ' -f1)" = "$v" ]; then
     HOME="$home" claude "$@"
@@ -14,7 +20,7 @@ claude_at() { # claude_at <version> <args...>: the local CLI when it is that ver
 job_mod() {
   local log="$1" v
   v="$(tr -d '[:space:]' < plugins/talos-app-mod/CLAUDE_CODE_VERSION)"
-  run "$log" claude_at "$v" plugin validate plugins/talos-app-mod &&
+  run "$log" claude_at "$v" plugin validate plugins/talos-app-mod || { not_run "$log" "claude plugin validate failed" "claude plugin test"; return 1; }
   run "$log" claude_at "$v" plugin test plugins/talos-app-mod || return 1
   if [ "$LATEST" = 1 ]; then
     { run "$log" claude_at latest plugin validate plugins/talos-app-mod && run "$log" claude_at latest plugin test plugins/talos-app-mod; } \
@@ -84,6 +90,7 @@ browser_e2e_fold() { # browser_e2e_fold <log>: the part's answer (its state from
   echo "e2e packages here: $m did not answer" > "$RESULTS/browser.where"
   run "$log" pnpm -r --workspace-concurrency=1 --no-bail --if-present "${E2E_THERE[@]}" test:e2e
 }
+BROWSER_STEPS="test:browser test:e2e" # for the NOT RUN lines of a browser job that could not start them
 job_browser() {
   local log="$1" only=()
   [ -z "${CI_BROWSER_E2E_PART:-}" ] || only=("${E2E_HERE[@]}")
@@ -97,12 +104,12 @@ job_browser() {
   # default 4173 nor a run in another slot can collide with it. The e2e suite and the relay specs pick free ports.
   # After the check job, not beside it: the e2e suite has the same 3-second waits on real processes, and the web specs want the
   # CPU. That costs the most time of anything in this script, and every overlap tried failed on some run (docs/CI-LOCAL.md).
-  setup_ok "$log" &&
+  setup_ok "$log" $BROWSER_STEPS &&
   job_tmp browser &&
   # (with check on Titan, CI_CHECK_PART, only the macOS-only subset runs here: browser goes when it ends, as desktop does, and
   # does not wait for the part's answer)
   { if [ -n "${CI_CHECK_PART:-}" ]; then wait_for_job check quiet-done; else wait_for_job check; fi; } &&
-  browser_ready "$log" &&
+  { browser_ready "$log" || { not_run "$log" "the browsers could not be made ready" $BROWSER_STEPS; false; }; } &&
   {
     # One failing part never hides the next: the protocol browser suite, then every e2e package (--no-bail, so a web
     # failure does not stop the relay or e2e package after it). The job fails if any part did.

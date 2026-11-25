@@ -22,10 +22,12 @@ export function createSocketLifecycle(c: SocketCtx) {
     c.ready = false
     c.stopPing()
     c.rejectAllPending(new NoAnswerError('internal', 'Offline'))
-    c.inboxSocketGone(s)
-    try {
-      s?.close()
-    } catch {}
+    // Left open while inbox changes sent on it wait for their answer (a closing socket drops every frame); its grace
+    // ends the wait if the network is really gone.
+    if (!c.inboxLetGo(s))
+      try {
+        s?.close()
+      } catch {}
   }
   function onVisibility() {
     c.lastReportAt = now()

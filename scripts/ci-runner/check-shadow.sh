@@ -69,7 +69,7 @@ ci_check_shadow() {
   d_end="$(printf '%s\n' "$rows" | awk -F'\t' -v r="$runurl" -v c="$(ci_ns local-ci/desktop)" '$1 == c && $2 != "pending" && ($3 == r || index($3, r "/") == 1) { print $4; exit }')"
   [ -n "$d_end" ] || d_end=-
   # the two results files: Lemnos's here, Titan's (and its log, for the lock wait) from its job's artifact
-  lf="$cache/logs/$short-check-tests.tsv"
+  lf="$(ci_logs_dir "$cache")/$short-check-tests.tsv" # Lemnos's own per-test file, of this kind of run
   if tmp="$(mktemp -d)"; then
     # the artifact is uploaded after Titan's status is posted: tried until its job is completed (then twice more), 10 tries at most
     local tries=0 after=0

@@ -11,5 +11,6 @@ for (const k of [
   'CI_TEST_RESULTS_DIR',
   'TALOS_TEST_JUNIT_DIR',
   'CI_TEST_RESULTS_ROOT',
+  'CI_MOD_REAL', // the mod job's opt-in to the real claude and npm (ci-runner.sh sets it): no test inherits it
 ])
   delete process.env[k]

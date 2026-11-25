@@ -76,8 +76,11 @@ jq -r "$q" "$f"
     writeFileSync(join(d, `${SHORT}-check-tests.tsv`), tsv)
     writeFileSync(join(d, `${SHORT}-check-lock-wait.txt`), log)
   }
-  const lemnos = (tsv: string) => writeFileSync(join(logs, `${SHORT}-check-tests.tsv`), tsv)
-  const run = () => {
+  const lemnos = (tsv: string, dir = '') => {
+    mkdirSync(join(logs, dir), { recursive: true })
+    writeFileSync(join(logs, dir, `${SHORT}-check-tests.tsv`), tsv)
+  }
+  const run = (env: Record<string, string> = {}) => {
     const r = spawnSync('bash', [join(here, 'ci-runner.sh'), 'check-shadow'], {
       encoding: 'utf8',
       env: {
@@ -95,6 +98,7 @@ jq -r "$q" "$f"
         CI_CHECK_SHADOW_QUEUED: '2',
         CI_PART_JOB: 'check-titan',
         CI_PART_RUN_STEP: RUN,
+        ...env,
       },
       timeout: 60_000,
     })
@@ -147,6 +151,26 @@ describe.skipIf(!hasJq)('ci-runner.sh check-shadow: test by test, one row and on
     })
     expect(r.out).not.toContain('::warning::')
     expect(s.run().rows).toHaveLength(3) // a second commit appends under the one header
+  })
+
+  it("a nightly run compares with Lemnos's per-test file of logs/nightly/, not the push run's of the same commit", () => {
+    const s = setup()
+    s.part('completed')
+    s.statuses(
+      both().map((r) => ({
+        ...r,
+        context: r.context.replace(
+          /^(local-ci|report-ci)\//,
+          (_m, p) => `nightly-ci/${p === 'report-ci' ? 'report-' : ''}`,
+        ),
+      })),
+    )
+    s.titan(results('titan', [V('a.test.ts', 'x > y', 'pass')]))
+    s.lemnos(results('lemnos', [V('a.test.ts', 'x > y', 'fail')])) // the push run's
+    s.lemnos(results('lemnos', [V('a.test.ts', 'x > y', 'pass')]), 'nightly')
+    const r = s.run({ CI_NIGHTLY: '1' })
+    expect(r.code).toBe(0)
+    expect(r.row).toMatchObject({ titan: 'pass', lemnos: 'pass', disagree: '0' })
   })
 
   it('a different state is a disagreement, named; skips are listed per side; a test only one side has is named', () => {

@@ -26,6 +26,7 @@ import { findTestFiles } from '../apps/bridge/scripts/test-parallel.ts'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -356,6 +357,23 @@ describe('check with CI_CHECK_PART: the macOS subset here, Titan folded in, toda
     const run = r.start(checkRun, { ...on, FAIL_ON: '--passWithNoTests scripts/mac-x.test.ts' })
     expect(await run.done).toBe(1)
     expect(r.posts('local-ci/check')).toEqual([expect.stringMatching(/state=failure .*macOS-only tests failed here/)])
+    // check returned without reading Titan's answer: the log says so, the way it says any suite it left out
+    expect(r.log('check')).toContain('NOT RUN: check on check-titan (its result was not read here)')
+  })
+
+  it('on, the suites lock not had in time for the macOS subset: it names the subset and the part it did not read, and check is red', async () => {
+    const r = repo(
+      [],
+      'eval "orig_$(declare -f ci_mutex_all)"\nci_mutex_all() { [ "$3" = step_macos_subset ] && return 1; orig_ci_mutex_all "$@"; }',
+    )
+    r.set('rows', [partPass])
+    r.set('jobs', ['check-titan\tcompleted'])
+    const run = r.start(checkRun, on)
+    expect(await run.done, run.out()).toBe(1)
+    const log = r.log('check')
+    expect(log).toContain('NOT RUN: step_macos_subset (the suites lock was not had in time)')
+    expect(log).toContain('NOT RUN: check on check-titan (its result was not read here)')
+    expect(subset(r)).toEqual([]) // nothing of the subset ran
   })
 
   it('the macOS subset runs its schedules files first, one at a time, before the rest', async () => {
@@ -478,15 +496,7 @@ describe('check with CI_CHECK_PART: the macOS subset here, Titan folded in, toda
     const go = join(r.T, 'gate.go')
     const gate = spawn(
       'bash',
-      [
-        join(here, 'heavy-lock.sh'),
-        'run',
-        'g1',
-        '--',
-        'sh',
-        '-c',
-        `echo ran > "${r.T}/gate.ran"; while [ ! -f "${go}" ]; do sleep 0.05; done`,
-      ],
+      [join(here, 'heavy-lock.sh'), 'run', 'g1', '--', 'sh', '-c', `echo ran > "${r.T}/gate.ran"; ${waitForFile(go)}`],
       {
         env: {
           PATH: process.env.PATH ?? '',
@@ -698,7 +708,7 @@ describe('check on Titan: the macOS subset runs alone beside this run’s other 
 [ "$1" = --version ] && { echo 1.4.4; exit 0; }
 echo "bun $*" >> "$CALLS"
 case "$*" in *"--only test/keychain.test.ts") echo "subset started" >> "$CALLS"
-  until [ -f "$HOME/go" ]; do sleep 0.05; done
+  ${waitForFile(`$HOME/go`)}
   echo "subset ended" >> "$CALLS" ;;
 esac
 exit 0

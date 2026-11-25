@@ -97,7 +97,10 @@ jq -r "$q" "$f"
     mkdirSync(join(T, 'artifact'), { recursive: true })
     writeFileSync(join(T, 'artifact', 'ci-logs-browser-e2e-2'), `${lines.join('\n')}\n`)
   }
-  const lemnos = (text: string) => writeFileSync(join(logs, `${SHORT}-browser.log`), text)
+  const lemnos = (text: string, dir = '') => {
+    mkdirSync(join(logs, dir), { recursive: true })
+    writeFileSync(join(logs, dir, `${SHORT}-browser.log`), text)
+  }
   const run = (env: Record<string, string> = {}) => {
     const r = spawnSync('bash', [join(here, 'ci-runner.sh'), 'e2e-shadow'], {
       encoding: 'utf8',
@@ -166,6 +169,20 @@ describe.skipIf(!hasJq)('ci-runner.sh e2e-shadow: one row per shadow commit, eve
     expect(r.row[COL.afterWeb]).toBe('230')
     // a second commit appends, under the one header
     expect(s.run().rows).toHaveLength(3)
+  })
+
+  it("a nightly run compares with Lemnos's browser log of logs/nightly/, not the push run's of the same commit", () => {
+    const s = setup()
+    s.part('completed')
+    s.statuses([
+      { ...st('success', at(330), 'passed on titan in 320s'), context: 'nightly-ci/report-browser-e2e' },
+      { ...st('pending', T0, 'running'), context: 'nightly-ci/report-browser-e2e' },
+    ])
+    s.lemnos(lemnosLog({ rc: 1, rest: [red('apps/e2e/a.spec.ts:1:1 › the push run failed here')] })) // the push run's
+    s.lemnos(lemnosLog(), 'nightly')
+    const r = s.run({ CI_NIGHTLY: '1' })
+    expect(r.code).toBe(0)
+    expect([r.row[COL.titan], r.row[COL.lemnos], r.row[COL.agree]]).toEqual(['pass', 'pass', 'yes'])
   })
 
   it("Titan red, Lemnos green: a disagreement, with Titan's failing tests from its log artifact; said in the job's log", () => {

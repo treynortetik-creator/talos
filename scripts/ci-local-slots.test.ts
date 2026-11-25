@@ -11,6 +11,7 @@ import { processStartTime } from '../apps/bridge/src/proc-identity.ts'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { ciLocalSource, cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -135,7 +136,7 @@ describe('ci-local.sh slots', () => {
       const racers = Array.from({ length: 10 }, (_, i) =>
         bgSh(
           `for try in 1 2 3 4 5 6 7 8 9 10; do
-             if ci_lock_try "${L}" r${i}; then echo WON; until [ -f "${T}/stop" ]; do sleep 0.02; done; exit 0; fi
+             if ci_lock_try "${L}" r${i}; then echo WON; ${waitForFile(`${T}/stop`, { step: 0.02 })}; exit 0; fi
            done`,
         ),
       )
@@ -155,7 +156,7 @@ describe('ci-local.sh slots', () => {
   // lock: 40 of 44 forced rounds, and 3 of 52 rounds of plain load (docs/CI-LOCAL.md, "How the locks work").
   const stallAt = (fn: string, T: string) =>
     `eval "real_${fn}() $(declare -f ${fn} | sed 1d)"
-     ${fn}() { touch "${T}/stalled"; until [ -f "${T}/go" ]; do sleep 0.02; done; real_${fn} "$@"; }`
+     ${fn}() { touch "${T}/stalled"; ${waitForFile(`${T}/go`, { step: 0.02 })}; real_${fn} "$@"; }`
   const noGrace = { CI_LOCK_GRACE: '0' }
 
   it('a claimer stalled before it writes keeps its claim: nobody takes the lock from under it', async () => {

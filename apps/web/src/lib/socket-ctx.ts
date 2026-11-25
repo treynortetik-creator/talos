@@ -187,6 +187,10 @@ export type SocketCtx = {
   inboxSettled: (frameId: string, outcome?: InboxOutcome) => boolean
   inboxSocketGone: (sock: WebSocket | null) => void
   inboxSocketClosed: (sock: WebSocket) => void
+  /** Lets go of `sock`, keeping it open while inbox changes sent on it wait for their answer; false: close it now. */
+  inboxLetGo: (sock: WebSocket | null) => boolean
+  /** A frame on a socket that was let go of: only an answer to an inbox change sent there is read. */
+  inboxAnswerOnOld: (sock: WebSocket, frame: Frame) => void
   queueRead: (threadId: string, upTo: number, cleared: number, known: number | undefined) => void
   flushReads: () => void
   /** After a `ready` is applied: squares the read marks still waiting with the relay's counts, then sends them. */

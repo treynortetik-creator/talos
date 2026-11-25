@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { cleanEnv, RUNNER_VARS } from './ci-test-env'
+import { gateOwned } from './gate-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -1820,7 +1821,14 @@ describe("ci-runner.sh logs: a red run uploads its own commit's logs, not the wh
     const T = scratch()
     const logs = join(T, 'cache/logs')
     mkdirSync(logs, { recursive: true })
-    for (const f of ['aaaaaaa-check.log', 'aaaaaaa-setup.log', 'aaaaaaa-check.log.step_vitest', 'bbbbbbb-check.log'])
+    for (const f of [
+      'aaaaaaa-check.log',
+      'aaaaaaa-setup.log',
+      'aaaaaaa-check.log.step_vitest',
+      'aaaaaaa-check.notrun',
+      'bbbbbbb-check.log',
+      'bbbbbbb-check.notrun',
+    ])
       writeFileSync(join(logs, f), f)
     writeFileSync(join(logs, 'timings.tsv'), 'row\n')
     if (sha !== null) writeFileSync(join(T, 'sha'), `${sha}\n`)
@@ -1829,16 +1837,37 @@ describe("ci-runner.sh logs: a red run uploads its own commit's logs, not the wh
   }
   const files = (d: string) => (existsSync(d) ? readdirSync(d).sort() : [])
 
-  it("copies only this sha's <short>-*.log and <short>-*.log.* files, and timings.tsv", () => {
+  it("copies only this sha's <short>-*.log, <short>-*.log.* and <short>-*.notrun files, and timings.tsv", () => {
     const { out, e } = setup(SHA)
     const r = run('logs', e)
     expect(r.code, r.err).toBe(0)
     expect(files(out)).toEqual([
       'aaaaaaa-check.log',
       'aaaaaaa-check.log.step_vitest',
+      'aaaaaaa-check.notrun', // the NOT RUN lines a report reads travel with the logs
       'aaaaaaa-setup.log',
       'timings.tsv',
     ])
+  })
+
+  it("a hostile or nightly run uploads the logs of its own folder (logs/hostile/, logs/nightly/), never the push run's of the same commit", () => {
+    for (const [kind, dir] of [
+      ['CI_HOSTILE', 'hostile'],
+      ['CI_NIGHTLY', 'nightly'],
+    ] as const) {
+      const { out, e } = setup(SHA)
+      const own = join(e.TALOS_CI_CACHE, 'logs', dir)
+      mkdirSync(own, { recursive: true })
+      writeFileSync(join(own, 'aaaaaaa-check.log'), `${dir} log`)
+      writeFileSync(join(own, 'aaaaaaa-check-tests.tsv'), `${dir} tests`)
+      writeFileSync(join(own, 'timings.tsv'), `${dir} row\n`)
+      const r = run('logs', { ...e, [kind]: '1', CI_TESTS_OUT: join(out, '../tests') })
+      expect(r.code, r.err).toBe(0)
+      expect(files(out), dir).toEqual(['aaaaaaa-check-tests.tsv', 'aaaaaaa-check.log', 'timings.tsv'])
+      expect(readFileSync(join(out, 'aaaaaaa-check.log'), 'utf8')).toBe(`${dir} log`)
+      expect(readFileSync(join(out, 'timings.tsv'), 'utf8')).toBe(`${dir} row\n`)
+      expect(readFileSync(join(out, '../tests/aaaaaaa-check-tests.tsv'), 'utf8')).toBe(`${dir} tests`)
+    }
   })
 
   it('a run that never reached a commit copies only timings.tsv', () => {
@@ -3490,5 +3519,27 @@ describe('ci-runner.sh main-queue part: what a main push run and a dispatch do a
     for (const sub of ['run', 'fallback', 'settled', 'superseded', 'dispatch-wait'])
       expect(runner, sub).toMatch(new RegExp(`^  ${sub}\\) \\. "\\$HERE/ci-runner/main-queue\\.sh" && `, 'm'))
     expect(runner.split('\n').length).toBeLessThan(1000)
+  })
+})
+
+// The mod job runs the real claude and npm only with CI_MOD_REAL=1 (scripts/ci-local/jobs-mod-browser.sh, claude_at). The runner is
+// where a CI run starts ci-local.sh (ci_exec_local: run and fallback alike), so it is the one place that sets it; a test's own copy
+// of the environment never has it (scripts/ci-test-env.ts).
+describe('ci-runner.sh starts ci-local.sh with CI_MOD_REAL=1, and nothing else does', () => {
+  it('ci_exec_local gives the script it becomes CI_MOD_REAL=1', () => {
+    const T = scratch()
+    const fake = join(T, 'fake-ci-local.sh')
+    writeFileSync(fake, 'echo "real=${CI_MOD_REAL:-unset}"\n')
+    const r = sh(
+      `caffeinate() { :; }\nci_bun_pinned() { echo /usr/bin; }\nci_have_bun() { echo bun; }\nci_exec_local "${T}" "${fake}"`,
+      { GITHUB_REPOSITORY: 'owner/talos-app' },
+    )
+    expect(r.code, r.err).toBe(0)
+    expect(r.out).toContain('real=1')
+  })
+
+  it("the test environment builders drop it: a run under test never inherits the runner's", () => {
+    expect(RUNNER_VARS as readonly string[]).toContain('CI_MOD_REAL')
+    expect(gateOwned('CI_MOD_REAL')).toBe(true)
   })
 })

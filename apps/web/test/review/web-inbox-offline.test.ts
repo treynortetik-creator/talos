@@ -111,8 +111,17 @@ describe('an inbox change the relay answers with an error', () => {
         super(url, protocols)
         made.push(this)
       }
+      // A held frame is still on its way. It arrives at release(), and a socket no longer OPEN by then drops it, as a
+      // real one does (a WebSocket fires no message once close() was called): replaying it anyway hid the race.
       override set onmessage(h: ((ev: MessageEvent) => void) | null) {
-        super.onmessage = h && ((ev) => (this.holding ? this.held.push(() => h.call(this, ev)) : h.call(this, ev)))
+        super.onmessage =
+          h &&
+          ((ev) =>
+            this.holding
+              ? this.held.push(() => {
+                  if (this.readyState === WebSocket.OPEN) h.call(this, ev)
+                })
+              : h.call(this, ev))
       }
       override get onmessage() {
         return super.onmessage
@@ -188,7 +197,11 @@ describe('an inbox change the relay answers with an error', () => {
       await waitUntil(() => sent(EVENT).length === 1 && old.held.length > 0, 3000, 'sent, its ack not yet read')
       client.reconnect()
       await waitUntil(() => client.store.getState().connection === 'online', 3000, 'online again')
-      await waitUntil(() => old.readyState === WebSocket.CLOSED, 3000, 'the old socket closed, its close held')
+      await waitUntil(
+        () => old.readyState === WebSocket.CLOSED,
+        3000,
+        'the grace closed the old socket, its close held',
+      )
       old.held.length = 0 // the ack and the close are lost: nothing more comes on it
       old.release()
       // its close never reaches the client either: the grace gives it up
@@ -212,11 +225,113 @@ describe('an inbox change the relay answers with an error', () => {
       client.reconnect()
       await waitUntil(() => made.length === 2 && client.store.getState().connection === 'online', 3000, 'online again')
       expect(sent(EVENT)).toHaveLength(1) // still on the wire on the old socket
-      await waitUntil(() => old.readyState === WebSocket.CLOSED, 3000, 'the old socket closed, its close held')
-      const close = old.held.pop() // the answer arrives; the close stays held, so only the answer can send it again
-      old.release()
+      old.release() // the answer arrives on the old socket, still open for it
       await waitUntil(() => sent(EVENT).length === 2, 3000, 'sent again on the new connection')
-      close?.()
+      await waitUntil(() => old.readyState === WebSocket.CLOSED, 3000, 'the old socket closed once nothing waits on it')
+      expect(sent(EVENT)).toHaveLength(2)
+    } finally {
+      client.close()
+      await relay.stop()
+    }
+  })
+})
+
+// The relay's answer is on its way, on real sockets, when the client reconnects: the gate's one failure (line 94 above).
+// reconnect() closed the old socket, a closing socket drops every frame, so the answer was lost and the change went out
+// a second time.
+describe("a reconnect while the relay's inbox answer is on its way", () => {
+  const EVENT = 'e_01JBF40000000000000000000A'
+  const OTHER = 'e_01JBF40000000000000000000B'
+  async function start() {
+    const relay = await new FakeRelay().start()
+    const client = createSocketClient({
+      storage: createMemoryStorage(),
+      wsUrl: `${relay.wsBase}/ws`,
+      backoff: { baseMs: 20, maxMs: 40 },
+      isOnline: () => true,
+      inboxAnswerGraceMs: 60_000, // only reading the answer on the old socket can settle it in time
+    })
+    await client.ensureDevice()
+    await client.start({ pinned: true })
+    await waitUntil(() => client.store.getState().connection === 'online', 3000, 'online')
+    const sent = (eventId: string) =>
+      relay.frames.filter(
+        (f) => f.direction === 'from_app' && f.raw.type === 'inbox.update' && f.raw.event_id === eventId,
+      )
+    const hellos = () => relay.frames.filter((f) => f.direction === 'from_app' && f.raw.type === 'hello').length
+    const answered = (id: unknown) =>
+      relay.frames.some(
+        (f) => f.direction === 'to_app' && (f.raw.type === 'ack' || f.raw.type === 'error') && f.raw.ref === id,
+      )
+    /** Sends EVENT, holds the relay's answer, and reconnects: the answer is on its way on the old socket. */
+    const reconnectWithAnswerOnItsWay = async () => {
+      relay.holdInboxAnswers = true
+      await client.updateInbox(EVENT, { state: 'done' })
+      await waitUntil(() => relay.heldInboxAnswerCount === 1, 3000, 'the answer, on its way')
+      const before = hellos()
+      client.reconnect()
+      await waitUntil(
+        () => hellos() > before && client.store.getState().connection === 'online',
+        3000,
+        'online again on a new socket',
+      )
+      return sent(EVENT)[0]?.raw.id
+    }
+    /** A later change: frames from the app arrive in order, so once it is seen a resend of EVENT would be seen too. */
+    const later = async (n: number) => {
+      await client.updateInbox(
+        OTHER,
+        n % 2 ? { state: 'done' } : { state: 'snoozed', snoozeUntil: '2030-01-01T00:00:00.000Z' },
+      )
+      await waitUntil(() => sent(OTHER).length === n, 3000, 'the later change')
+    }
+    return { relay, client, sent, answered, reconnectWithAnswerOnItsWay, later }
+  }
+
+  it('a refusal on its way still reaches the client, and the change is not sent again', async () => {
+    const { relay, client, sent, answered, reconnectWithAnswerOnItsWay, later } = await start()
+    try {
+      relay.inboxError = 'bad_frame'
+      const first = await reconnectWithAnswerOnItsWay()
+      relay.releaseInboxAnswers()
+      await waitUntil(() => answered(first), 3000, 'the refusal sent on the old socket')
+      await waitUntil(() => relay.appSocketCount === 1, 3000, 'the old socket closed: its refusal was read there')
+      relay.inboxError = null
+      await later(1)
+      expect(sent(EVENT)).toHaveLength(1)
+    } finally {
+      client.close()
+      await relay.stop()
+    }
+  })
+
+  it('an ack on its way still reaches the client, and the change is not sent again', async () => {
+    const { relay, client, sent, answered, reconnectWithAnswerOnItsWay, later } = await start()
+    try {
+      const first = await reconnectWithAnswerOnItsWay()
+      relay.releaseInboxAnswers()
+      await waitUntil(() => answered(first), 3000, 'the ack sent on the old socket')
+      await waitUntil(() => relay.appSocketCount === 1, 3000, 'the old socket closed: its ack was read there')
+      await later(1)
+      expect(sent(EVENT)).toHaveLength(1)
+    } finally {
+      client.close()
+      await relay.stop()
+    }
+  })
+
+  it('goes out exactly once more when the relay closes the old socket before answering', async () => {
+    const { relay, client, sent, answered, reconnectWithAnswerOnItsWay, later } = await start()
+    try {
+      await reconnectWithAnswerOnItsWay()
+      expect(sent(EVENT)).toHaveLength(1) // still on the wire on the old socket
+      relay.dropInboxAnswerSockets() // the old socket goes, its answer never sent
+      await waitUntil(() => sent(EVENT).length === 2, 3000, 'sent again on the new connection')
+      await waitUntil(() => answered(sent(EVENT)[1]?.raw.id), 3000, 'and acked there')
+      await later(1)
+      await later(2)
+      expect(sent(EVENT)).toHaveLength(2)
+      expect(client.store.getState().connection).toBe('online')
     } finally {
       client.close()
       await relay.stop()

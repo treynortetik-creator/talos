@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HG = join(here, 'heavy-guard.sh')
@@ -193,15 +194,7 @@ describe('the lock\u2019s own work is never refused for the load it causes', () 
   const holder = (m: ReturnType<typeof machine>) => {
     const c = spawn(
       BASH,
-      [
-        HL,
-        'run',
-        'holder',
-        '--',
-        'sh',
-        '-c',
-        `: > "${m.cache}/held"; while [ ! -f "${m.cache}/go" ]; do sleep 0.05; done`,
-      ],
+      [HL, 'run', 'holder', '--', 'sh', '-c', `: > "${m.cache}/held"; ${waitForFile(`${m.cache}/go`)}`],
       { env: m.env },
     )
     kids.push(c)

@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { timeFactor } from '../packages/testkit/src/time-factor.ts'
+import { waitForever, waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HL = join(here, 'heavy-lock.sh')
@@ -89,15 +90,7 @@ function machine(slots = '1') {
     const out: string[] = []
     const c = spawn(
       'bash',
-      [
-        HL,
-        'run',
-        tag,
-        '--',
-        'sh',
-        '-c',
-        `echo "$$" > "${cache}/${tag}.ran"; while [ ! -f "${cache}/${tag}.go" ]; do sleep 0.05; done`,
-      ],
+      [HL, 'run', tag, '--', 'sh', '-c', `echo "$$" > "${cache}/${tag}.ran"; ${waitForFile(`${cache}/${tag}.go`)}`],
       { env: { ...env, ...extra } },
     )
     kids.push(c)
@@ -245,7 +238,7 @@ describe('heavy lock queue order: CI first, then gates, and no gate waits foreve
       [
         '-c',
         `CI_NONCE=ci-${tag}-$$; CI_HELD=; CI_MARKER=; CI_POLL=0.1; CI_LOCK_TIMEOUT=${secs(60)}; CI_LOCK_GRACE=30; CI_SLOT=\${CI_SLOT:-1}; RUN_DIR=; ` +
-          `. "${LOCKS_SH}"; ${old ? OLD_FIFO : ''}ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/${tag}.ran"; while [ ! -f "${m.cache}/${tag}.go" ] && kill -0 $PPID 2>/dev/null; do sleep 0.05; done'`, // ends with its waiter
+          `. "${LOCKS_SH}"; ${old ? OLD_FIFO : ''}ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/${tag}.ran"; ${waitForFile(`${m.cache}/${tag}.go`, { keepWhile: 'kill -0 $PPID 2>/dev/null' })}'`, // ends with its waiter
       ],
       { env: { ...m.env, ...extra } },
     )
@@ -428,7 +421,7 @@ describe('heavy lock queue order: CI first, then gates, and no gate waits foreve
       .run(['status'])
       .stdout.split('\n')
       .filter((l) => l.startsWith('  waiting'))
-    expect(lines.map((l) => l.replace(/pid \d+/, 'pid N').replace(/: sh -c [^)]*/, ''))).toEqual([
+    expect(lines.map((l) => l.replace(/pid \d+/, 'pid N').replace(/: sh -c .*(?=\), \w+$)/, ''))).toEqual([
       '  waiting 1: pid N (red), jump',
       '  waiting 2: pid N (slot 1), ci',
       '  waiting 3: pid N (gate-b), push',
@@ -833,9 +826,13 @@ describe('the gate and the Swift suites take the heavy lock', () => {
     kids.push(other)
     // until it holds the lock (its command is running), however slow the machine: a fixed sleep could pass the check below
     // with nobody holding it
-    spawnSync('bash', ['-c', `until [ -e "${join(T, 'cache/locks/mutex-suites/argv')}" ]; do sleep 0.05; done`], {
-      timeout: 30_000 * F,
-    })
+    spawnSync(
+      'bash',
+      ['-c', `${waitForFile(`${join(T, 'cache/locks/mutex-suites/argv')}`, { test: 'e', folder: T })}`],
+      {
+        timeout: 30_000 * F,
+      },
+    )
     expect(existsSync(join(T, 'cache/locks/mutex-suites/argv'))).toBe(true)
     const inCi = spawnSync('bash', [join(d, 'ci.sh'), 'x'], {
       env: {
@@ -866,7 +863,7 @@ describe('heavy lock: a gate that jumps the queue once', () => {
       [
         '-c',
         `CI_NONCE=ci-c-$$; CI_HELD=; CI_MARKER=; CI_POLL=0.1; CI_LOCK_TIMEOUT=60; CI_LOCK_GRACE=30; CI_SLOT=1; RUN_DIR=; ` +
-          `. "${LOCKS_SH}"; ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/ci-c.ran"; while [ ! -f "${m.cache}/ci-c.go" ] && kill -0 $PPID 2>/dev/null; do sleep 0.05; done'`,
+          `. "${LOCKS_SH}"; ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/ci-c.ran"; ${waitForFile(`${m.cache}/ci-c.go`, { keepWhile: 'kill -0 $PPID 2>/dev/null' })}'`,
       ],
       { env: m.env },
     )
@@ -990,7 +987,7 @@ describe('heavy lock queue order by kind: only a jump goes before CI', () => {
       [
         '-c',
         `CI_NONCE=ci-c-$$; CI_HELD=; CI_MARKER=; CI_POLL=0.1; CI_LOCK_TIMEOUT=${secs(60)}; CI_LOCK_GRACE=30; CI_SLOT=1; RUN_DIR=; ` +
-          `. "${LOCKS_SH}"; ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/c.ran"; while [ ! -f "${m.cache}/c.go" ] && kill -0 $PPID 2>/dev/null; do sleep 0.05; done'`,
+          `. "${LOCKS_SH}"; ci_mutex "${m.cache}/locks" suites sh -c 'echo $$ > "${m.cache}/c.ran"; ${waitForFile(`${m.cache}/c.go`, { keepWhile: 'kill -0 $PPID 2>/dev/null' })}'`,
       ],
       { env: m.env },
     )
@@ -1044,7 +1041,7 @@ describe('the desktop mutex: one Swift desktop suite on the machine at a time', 
         '--',
         'sh',
         '-c',
-        `echo "$$" > "${m.cache}/${tag}.ran"; while [ ! -f "${m.cache}/${tag}.go" ]; do sleep 0.05; done`,
+        `echo "$$" > "${m.cache}/${tag}.ran"; ${waitForFile(`${m.cache}/${tag}.go`)}`,
       ],
       { env: m.env },
     )
@@ -1141,7 +1138,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
         '--',
         'sh',
         '-c',
-        `${dump}; ls "$TMPDIR" > "${m.cache}/${tag}.ls" 2>/dev/null; echo "$$" > "${m.cache}/${tag}.ran"; while [ ! -f "${m.cache}/${tag}.go" ]; do sleep 0.05; done`,
+        `${dump}; ls "$TMPDIR" > "${m.cache}/${tag}.ls" 2>/dev/null; echo "$$" > "${m.cache}/${tag}.ran"; ${waitForFile(`${m.cache}/${tag}.go`)}`,
       ],
       { env: { ...m.env, ...extra } },
     )
@@ -1167,7 +1164,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       [
         '-c',
         `CI_NONCE=${tag}-$$; CI_HELD=; CI_MARKER=; CI_POLL=\${HOLD_POLL:-0.1}; CI_LOCK_TIMEOUT=${secs(60)}; CI_LOCK_GRACE=30; CI_SLOT=1; RUN_DIR=; ` +
-          `. "${LOCKS_SH}"; ${fn} "${m.cache}/locks" suites sh -c 'echo "$TALOS_HEAVY_SLOT $PW_PORT $TALOS_TEST_TMUX_PREFIX" > "${m.cache}/${tag}.env"; echo $$ > "${m.cache}/${tag}.ran"; while [ ! -f "${m.cache}/${tag}.go" ] && kill -0 $PPID 2>/dev/null; do sleep 0.05; done'`,
+          `. "${LOCKS_SH}"; ${fn} "${m.cache}/locks" suites sh -c 'echo "$TALOS_HEAVY_SLOT $PW_PORT $TALOS_TEST_TMUX_PREFIX" > "${m.cache}/${tag}.env"; echo $$ > "${m.cache}/${tag}.ran"; ${waitForFile(`${m.cache}/${tag}.go`, { keepWhile: 'kill -0 $PPID 2>/dev/null' })}'`,
       ],
       { env: { ...m.env, ...extra } },
     )
@@ -1400,15 +1397,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
     const m = machine('3')
     const c = spawn(
       'bash',
-      [
-        HL,
-        'desktop',
-        'd1',
-        '--',
-        'sh',
-        '-c',
-        `echo $$ > "${m.cache}/d1.ran"; while [ ! -f "${m.cache}/d1.go" ]; do sleep 0.05; done`,
-      ],
+      [HL, 'desktop', 'd1', '--', 'sh', '-c', `echo $$ > "${m.cache}/d1.ran"; ${waitForFile(`${m.cache}/d1.go`)}`],
       { env: m.env },
     )
     kids.push(c)
@@ -1540,7 +1529,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
         [
           '-c',
           `CI_NONCE=${tag}-$$; CI_HELD=; CI_MARKER=; CI_POLL=0.1; CI_LOCK_TIMEOUT=${secs(60)}; CI_LOCK_GRACE=30; CI_SLOT=1; RUN_DIR=; SHORT=abc1234; ` +
-            `. "${LOCKS_SH}"; quiet() { ci_quiet_begin "${m.cache}/locks"; echo $$ > "${m.cache}/${tag}.ran"; while [ ! -f "${m.cache}/${tag}.go" ]; do sleep 0.05; done; ci_quiet_end "${m.cache}/locks" ${rc}; }; ci_mutex_all "${m.cache}/locks" suites quiet`,
+            `. "${LOCKS_SH}"; quiet() { ci_quiet_begin "${m.cache}/locks"; echo $$ > "${m.cache}/${tag}.ran"; ${waitForFile(`${m.cache}/${tag}.go`)}; ci_quiet_end "${m.cache}/locks" ${rc}; }; ci_mutex_all "${m.cache}/locks" suites quiet`,
         ],
         { env: m.env },
       )
@@ -1819,7 +1808,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
           '--',
           'sh',
           '-c',
-          `echo $$ > "${m.cache}/other.ran"; while [ ! -f "${m.cache}/other.go" ]; do sleep 0.05; done`,
+          `echo $$ > "${m.cache}/other.ran"; ${waitForFile(`${m.cache}/other.go`)}`,
         ],
         { env: { ...m.env, ...ci } },
       )
@@ -2175,7 +2164,7 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
 
     it('a holder that is stopped is asked to stop with INT first (what Playwright tears its server down on), then TERM', async () => {
       const m = mach()
-      const body = `trap 'touch "${m.cache}/int.seen"; exit 0' INT; echo $$ > "${m.cache}/a.ran"; while :; do sleep 0.05; done`
+      const body = `trap 'touch "${m.cache}/int.seen"; exit 0' INT; echo $$ > "${m.cache}/a.ran"; ${waitForever(m.cache)}`
       const c = spawn('bash', [HL, 'run', 'a', '--', 'sh', '-c', body], { env: m.env })
       kids.push(c)
       const done = new Promise<number | null>((r) => c.on('exit', (code) => r(code)))

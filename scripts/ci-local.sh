@@ -24,7 +24,7 @@
 # temp dir (~/.cache/talos-ci/tmp/talos-ci-sN), Playwright port, image-test port and container, so your checkout is never
 # touched and runs never share a port. A step that needs a machine-wide resource that can't be split (the desktop build,
 # browser downloads, starting colima) takes a mutex for just that step. A queued run re-resolves the PR head once it has
-# its slot, so it never tests a stale commit; statuses go to the commit actually tested. Logs: ~/.cache/talos-ci/logs/.
+# its slot, so it never tests a stale commit; statuses go to the commit actually tested. Logs: ~/.cache/talos-ci/logs/ (logs/hostile/ and logs/nightly/ for those runs).
 # Inside a run the install and build happen once, then mod, image and the Swift jobs go beside check, and browser after it.
 # Exit 0 only if all passed.
 set -uo pipefail
@@ -107,7 +107,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}"
 unset _ci_held # internal (report() sets it): an exported one must never hold back a post
 unset TALOS_CI_CACHE # for this run only: the tests start this script themselves, under a fake HOME, and must not inherit it
-mkdir -p "$CACHE/logs"
+LOGS="$(ci_logs_dir "$CACHE")"; mkdir -p "$LOGS" # this kind of run's logs (ci_logs_dir): a hostile or nightly run never touches a push run's
 
 # The slot temp dir lives beside the slot's lock, under $HOME, because holding the lock is what makes it ours to empty. It
 # used to be $TMPDIR/talos-ci-sN: a run under another HOME has other locks and the same $TMPDIR, so every `pnpm test` in a
@@ -256,7 +256,7 @@ WHERE="$(ci_where)" # what a status says it ran on: the machine's own name (CI_S
 # These are for this script only. Left exported they reach every job: the test suites run ci-local.sh copies of their own (a fake
 # repo, a fake gh) and would post to the real repository's commit, write the real CI_SHA_FILE and say "ci-runner". Like TALOS_CI_CACHE
 # above they stay readable here and in the subshells, and no child process gets them.
-export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_PUSHED_AT
+export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_PUSHED_AT CI_MOD_REAL
 case "${CI_RUN_ID:-}" in *[!0-9]*) echo "ci-local: CI_RUN_ID is a run number, not '$CI_RUN_ID'" >&2; exit 64 ;; esac
 # CI_BROWSER_E2E_PART=<machine> (CI_TITAN_BROWSER=e2e, docs/CI-MACHINES.md, "The e2e packages on Titan"): every e2e package but
 # the web one runs on that machine as ci-part/browser-e2e, so this run's browser job runs protocol and web only and folds that
@@ -602,23 +602,23 @@ keep_prev_log() { # keep_prev_log <log>
   [ -s "$1" ] || return 0
   local base dest n=0
   base="$(basename "$1" .log).$(date +%Y%m%dT%H%M%S)"
-  mkdir -p "$CACHE/logs/prev"
-  dest="$CACHE/logs/prev/$base.log"
-  while [ -e "$dest" ]; do n=$((n + 1)); dest="$CACHE/logs/prev/$base-$n.log"; done
+  mkdir -p "$LOGS/prev"
+  dest="$LOGS/prev/$base.log"
+  while [ -e "$dest" ]; do n=$((n + 1)); dest="$LOGS/prev/$base-$n.log"; done
   mv "$1" "$dest"
 }
-SETUP_LOG="$CACHE/logs/$SHORT-setup.log" SETUP_FAILED=""
+SETUP_LOG="$LOGS/$SHORT-setup.log" SETUP_FAILED=""
 setup_run() {
   keep_prev_log "$SETUP_LOG"
-  : > "$SETUP_LOG"
+  : > "$SETUP_LOG"; for _j in "${WANT[@]}"; do rm -f "$LOGS/$SHORT-$_j.notrun"; done # a job of this run that ends before run_job shows no earlier lines
   wants check browser browser-e2e mobile bridge-shard-1 bridge-shard-2 vitest linux || return 0
   # the commit's own install and build scripts: code under test, so never the token this shell posts statuses with
   run "$SETUP_LOG" env -u GH_TOKEN -u GITHUB_TOKEN pnpm install --frozen-lockfile || { SETUP_FAILED="pnpm install"; return 1; }
   run "$SETUP_LOG" env -u GH_TOKEN -u GITHUB_TOKEN pnpm build || SETUP_FAILED="pnpm build"
 }
 setup_ok() { # a job's first step: a failed install or build fails every job that needed it, with the reason in its log
-  [ -n "$SETUP_FAILED" ] || return 0
-  { echo "setup failed: $SETUP_FAILED"; tail -40 "$SETUP_LOG"; } >> "$1"
+  [ -n "$SETUP_FAILED" ] || return 0; local l="$1"; shift # the rest: what the job could not run, for its NOT RUN lines
+  { echo "setup failed: $SETUP_FAILED"; tail -40 "$SETUP_LOG"; } >> "$l"; not_run "$l" "setup failed: $SETUP_FAILED" "${@:-the steps of this job}"
   return 1
 }
 
@@ -730,9 +730,9 @@ noted() { # noted <job> <text>: the status text cut to 140 characters, ending wi
   printf '%s%s' "$(printf '%s' "$2" | cut -c1-$((140 - ${#n})))" "$n"
 }
 run_job() { # run_job <job>: one job start to finish; leaves "<exit code> <seconds> <why it skipped>" in $RESULTS/<job>
-  local j="$1" log="$CACHE/logs/$SHORT-$j.log" start rc=1 why=""
+  local j="$1" log="$LOGS/$SHORT-$j.log" start rc=1 why=""
   keep_prev_log "$log"
-  : > "$log"
+  : > "$log"; : > "${log%.log}.notrun" # the NOT RUN lines of this run (not_run, jobs-check.sh): what a report reads
   echo "bun: $(ci_bun_version) ($(command -v bun 2>/dev/null || echo not on PATH))" >> "$log" # the bun this job runs
   # Where this job's test runners write each test that failed once and passed when run again ("<test>\t<file>"); report() reads it.
   export CI_FLAKE_FILE="$RESULTS/$j.flaky"
@@ -781,7 +781,7 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
   for j in "$@"; do echo "$!" > "$RESULTS/$j.group"; done
 }
 report() { # report <job> <exit code> <seconds> <why it skipped>
-  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$CACHE/logs/$SHORT-$1.log" slept=0 woke warned="" retried="" n=0 t f rows red answered=0 fb=0 _ci_held="" _all _ok _top parts="" _p _m
+  local j="$1" rc="$2" secs="$3" why="${4:-}" log="$LOGS/$SHORT-$1.log" slept=0 woke warned="" retried="" n=0 t f rows red answered=0 fb=0 _ci_held="" _all _ok _top parts="" _p _m
   # Its own steps against its wall time: a job that waited for another (browser for check) says so, and timings.tsv keeps both.
   local waited steps took
   waited="$(cat "$RESULTS/$j.waited" 2>/dev/null)"
@@ -875,7 +875,7 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
     while IFS=$'\t' read -r t f; do
       [ -n "$t" ] || continue
       n=$((n + 1))
-      printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHA" "$j" "$t" "$f" >> "$CACHE/logs/flakes.tsv"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHA" "$j" "$t" "$f" >> "$LOGS/flakes.tsv"
     done < "$RESULTS/$j.flaky"
     [ "$n" = 0 ] || retried=", passed on retry ($n flaky test$([ "$n" = 1 ] || echo s), see flakes.tsv)"
   fi
@@ -894,7 +894,7 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
   elif [ "$rc" != 0 ]; then
     echo "  ✗ $j ($took), log: $log"; tail -25 "$log" | sed 's/^/    /'
     if [ -s "$RESULTS/$j.why" ]; then post "$j" failure "$(noted "$j" "$(head -1 "$RESULTS/$j.why")")"
-    else post "$j" failure "$(noted "$j" "failed on $WHERE; see ~/.cache/talos-ci/logs/$SHORT-$j.log")"; fi
+    else post "$j" failure "$(noted "$j" "failed on $WHERE; see ~/.cache/talos-ci/logs${LOGS#"$CACHE/logs"}/$SHORT-$j.log")"; fi
     # held: the owner's pass stands for this job, so this run does not end red (the log above is kept)
     if [ "$_ci_held" = 1 ]; then HELD+=("$j"); else FAILED+=("$j"); fi
   elif [ -n "$why" ]; then
@@ -949,7 +949,7 @@ while [ -n "${WAITING// /}" ]; do
         read -r rc secs why < "$RESULTS/$j"
         report "$j" "$rc" "$secs" "$why"
       else
-        echo "the job died without a result" >> "$CACHE/logs/$SHORT-$j.log"
+        echo "the job died without a result" >> "$LOGS/$SHORT-$j.log"
         report "$j" 1 "$(($(date +%s) - T_SETUP))"
       fi
     else
@@ -987,7 +987,7 @@ _pty="$(cat "$RESULTS/desktop.pty" 2>/dev/null)"
 _chronos="$(cat "$RESULTS/chronos.secs" 2>/dev/null)"
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
   "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" "$JOB_TIMES" "${_pty:--}" "bun=$RUN_BUN" \
-  "chronos=${_chronos:--}" >> "$CACHE/logs/timings.tsv"
+  "chronos=${_chronos:--}" >> "$LOGS/timings.tsv"
 [ ${#HELD[@]} -eq 0 ] || echo "::warning::ci-local: failed here, not posted: the owning machine's pass for this attempt stands: ${HELD[*]} ($SHORT)"
 if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ] && [ ${#POSTFAIL[@]} -gt 0 ]; then
   echo "ci-local: FAILED: the jobs passed, but these statuses were not posted: ${POSTFAIL[*]} ($SHORT)"; exit 1

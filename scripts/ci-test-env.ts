@@ -88,6 +88,8 @@ export const RUNNER_VARS = [
   'CI_NIGHTLY',
   // the hostile nightly (the workflow sets it for the whole run): a test's ci-local copy would post under hostile-ci/ and burn
   'CI_HOSTILE',
+  // the mod job's opt-in to the real claude and npm (ci-runner.sh sets it for a CI run): a test's copy must never have it
+  'CI_MOD_REAL',
   // a nightly dispatched by hand (the workflow sets it): ci-runner.sh would take the run for a schedule
   'CI_DISPATCH_NIGHTLY',
   'REPO',

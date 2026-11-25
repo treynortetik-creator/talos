@@ -1,6 +1,6 @@
 // scripts/ci-subset-report.ts reads check's logs for the macOS-only subset (the step's time, the tests that hit bun's 20 s limit,
 // the slowest tests, the machine's load) so a change to how the subset is scheduled can be measured from real runs.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -78,5 +78,21 @@ describe('ci-subset-report', () => {
       '1 runs; subset step: median 1216s, max 1216s; runs with a 20 s timeout: 1; timeouts in all: 2',
     )
     expect(report(d, { since: '2000-01-01', until: '2000-01-02' })).toContain('0 runs')
+  })
+  it("a hostile or nightly run's folder (logs/hostile/, logs/nightly/) is never read as the push run's: its log, its walls", () => {
+    const d = mkdtempSync(join(tmpdir(), 'cisr-'))
+    dirs.push(d)
+    const row = (check: string) => `t\tb340427\t1\tcheck\t0\t10\t100\t0\tcheck=${check}/${check}\t-\tbun=1\tchronos=-\n`
+    writeFileSync(join(d, 'b340427-check.log'), LOG)
+    writeFileSync(join(d, 'timings.tsv'), row('111'))
+    for (const k of ['hostile', 'nightly']) {
+      mkdirSync(join(d, k))
+      writeFileSync(join(d, k, 'b340427-check.log'), LOG)
+      writeFileSync(join(d, k, 'timings.tsv'), row('999'))
+    }
+    const out = report(d, { shas: ['b340427'] })
+    expect(out).toContain('| 111/-/-/- |')
+    expect(out).not.toContain('999')
+    expect(out).toContain('1 runs;')
   })
 })

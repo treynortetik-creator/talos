@@ -96,13 +96,15 @@ export function createClientSession(
       c.retryTimer = null
       c.attempt = 0
       if (c.ws && c.ws.readyState !== WS?.CLOSED) {
-        try {
-          c.ws.close()
-        } catch {}
         // Let go of before its close event: that handler ignores a socket that is no longer the current one, so what
         // it would have done (stop the ping, fail the requests still waiting on this socket) is done here.
         const gone = c.ws
         c.ws = null
+        // Left open while inbox changes sent on it wait for their answer: a closing socket drops every frame.
+        if (!c.inboxLetGo(gone))
+          try {
+            gone.close()
+          } catch {}
         c.socketGone(gone)
       }
       c.connect()

@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { timeFactor } from '../packages/testkit/src/time-factor.ts'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HL = join(here, 'heavy-lock.sh')
@@ -76,15 +77,7 @@ function machine(extra: Record<string, string> = {}) {
   const gate = (name: string, more: Record<string, string> = {}) => {
     const c = spawn(
       'bash',
-      [
-        HL,
-        'run',
-        name,
-        '--',
-        'sh',
-        '-c',
-        `echo "$$" > "${cache}/${name}.ran"; while [ ! -f "${cache}/${name}.go" ]; do sleep 0.05; done`,
-      ],
+      [HL, 'run', name, '--', 'sh', '-c', `echo "$$" > "${cache}/${name}.ran"; ${waitForFile(`${cache}/${name}.go`)}`],
       { env: { ...env, ...more } },
     )
     tags.set(c, name)
@@ -104,7 +97,7 @@ trap 'ci_release_all' EXIT
 ci_acquire_slot "$LOCKS" "${name}" || exit 1
 echo "$$" > "${cache}/${name}.ran"
 ${inner ? `ci_mutex "$LOCKS" suites touch "${cache}/${name}.inner"` : ''}
-while [ ! -f "${cache}/${name}.go" ]; do sleep 0.05; done
+${waitForFile(`${cache}/${name}.go`)}
 `,
     )
     const c = spawn('bash', [script], { env: { ...env, ...more } })
@@ -129,13 +122,13 @@ RD="$CACHE/runs/$CI_NONCE"; mkdir -p "$RD/results"
 printf 'check\nother\n' > "$RD/jobs"
 ${unfinished ? '' : 'echo "0 1 ok" > "$RD/results/other"'}
 echo "$$" > "${cache}/${name}.ran"
-while [ ! -f "${cache}/${name}.fold" ]; do sleep 0.05; done
+${waitForFile(`${cache}/${name}.fold`)}
 ci_fold_wait "$RD/results" check
 echo idle > "${cache}/${name}.idle"
-while [ ! -f "${cache}/${name}.resume" ]; do sleep 0.05; done
+${waitForFile(`${cache}/${name}.resume`)}
 ci_fold_resume "$RD/results" check "$LOCKS"
 echo resumed > "${cache}/${name}.resumed"
-while [ ! -f "${cache}/${name}.go" ]; do sleep 0.05; done
+${waitForFile(`${cache}/${name}.go`)}
 `,
     )
     // insideGate: the run is started by a gate's own command (heavy-lock.sh run), so it runs inside that holder

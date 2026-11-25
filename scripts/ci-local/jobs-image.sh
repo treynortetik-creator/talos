@@ -36,24 +36,27 @@ image_uid() { # image_uid <container>: the relay runs as uid 10001, not root
   echo "the relay does not run as uid 10001: $(docker exec "$1" sh -c 'grep "^Uid:" /proc/1/status' 2>&1)"
   return 1
 }
+IMAGE_CHECKS="healthz image-root image-me image-uid" IMAGE_RUN="docker-run $IMAGE_CHECKS" # for the NOT RUN lines of an image job that stopped early
 job_image() {
   local log="$1" key port image="talos-relay:ci-$SHORT-s$CI_SLOT"
   printf '%s\n' "$image" > "$RUN_DIR/image" # so a cancel during the build or the run can remove it
-  ci_mutex "$LOCKS" docker docker_up >> "$log" 2>&1 || { echo "docker is not running (could not start it)" >> "$log"; return 1; }
+  ci_mutex "$LOCKS" docker docker_up >> "$log" 2>&1 || { echo "docker is not running (could not start it)" >> "$log"; not_run "$log" "docker is not running" docker-build $IMAGE_RUN; return 1; }
   # From the commit, not the worktree: the other jobs are writing into the worktree while this one sends it to Docker.
-  run "$log" bash -c 'set -o pipefail; git archive "$1" | docker build -f apps/relay/Dockerfile -t "$2" -' _ "$SHA" "$image" || return 1
+  run "$log" bash -c 'set -o pipefail; git archive "$1" | docker build -f apps/relay/Dockerfile -t "$2" -' _ "$SHA" "$image" || { not_run "$log" "docker build failed" $IMAGE_RUN; return 1; }
   key="$(openssl rand -base64 32)"
   port=$((SLOT_IMAGE_PORT_BASE + RANDOM % 100))
   run "$log" docker run -d --name "$CONTAINER" -p "$port:8080" \
     -e NODE_ENV=production -e PUBLIC_ORIGIN=https://relay.example.com -e RP_ID=relay.example.com \
     -e DATA_KEY="$key" -e VAPID_PUBLIC_KEY=pub -e VAPID_PRIVATE_KEY=priv -e VAPID_SUBJECT=mailto:owner@example.com \
-    "$image" || return 1
+    "$image" || { not_run "$log" "docker run failed" $IMAGE_CHECKS; return 1; }
   for i in $(seq 1 30); do curl -fsS "localhost:$port/healthz" >/dev/null 2>&1 && break; sleep 1; done
   local ok=0
-  run "$log" curl -fsS "localhost:$port/healthz" &&
-  run "$log" image_root "$port" &&
-  run "$log" image_me "$port" &&
-  run "$log" image_uid "$CONTAINER" || ok=1
+  JOB_RED=""
+  job_step "$log" healthz curl -fsS "localhost:$port/healthz"
+  job_step "$log" image-root image_root "$port"
+  job_step "$log" image-me image_me "$port"
+  job_step "$log" image-uid image_uid "$CONTAINER"
+  [ -z "$JOB_RED" ] || ok=1
   docker logs "$CONTAINER" >> "$log" 2>&1
   docker rm -f "$CONTAINER" >/dev/null 2>&1
   docker image rm "$image" >/dev/null 2>&1

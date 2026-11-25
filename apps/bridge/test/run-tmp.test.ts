@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { timeFactor } from '../../../packages/testkit/src/time-factor.ts'
 import { tempHome } from './helpers.ts'
 import { RUN_PREFIX, runTmp } from './run-tmp.ts'
 
@@ -79,4 +80,59 @@ describe('one temp folder per test run', () => {
     expect(readdirSync(outer)).toEqual([`${RUN_PREFIX}recent`])
     rmSync(outer, { recursive: true, force: true })
   })
+})
+
+describe('a run that leaves a process of its own running', () => {
+  /** Whether `pid` still runs (a stopped child waiting to be reaped is not running). */
+  const running = (pid: number) => {
+    const stat = Bun.spawnSync(['ps', '-o', 'stat=', '-p', String(pid)])
+      .stdout.toString()
+      .trim()
+    return stat !== '' && !stat.startsWith('Z')
+  }
+
+  test(
+    'is named and fails the run (nothing is signalled), and a process with a similar path is not named',
+    () => {
+      const outer = mkdtempSync(join(runTmp, 'outer-'))
+      const dir = mkdtempSync(join(runTmp, 'fixture-'))
+      writeFileSync(
+        join(dir, 'leak.test.ts'),
+        `import { test } from 'bun:test'
+       test('leaves processes', () => {
+         const os = require('node:os'), { spawn } = require('node:child_process')
+         const start = (path: string) => {
+           const c = spawn('sh', ['-c', 'n=0; while [ $n -lt 3000 ]; do sleep 0.2; n=$((n + 1)); done', 'sh', path], { detached: true, stdio: 'ignore' })
+           c.unref()
+           return c.pid
+         }
+         // the run's own folder, and one that only starts like it
+         console.log('PIDS ' + JSON.stringify([start(os.tmpdir() + '/gate.go'), start(os.tmpdir() + 'X/gate.go')]))
+       })\n`,
+      )
+      // a short test timeout of bun's own: the end of the run waits for its leftovers (up to 10 s) and must not be cut short by it
+      // (this test's own limit is longer than that wait, scaled like it)
+      const r = Bun.spawnSync(['bun', 'test', '--timeout', '2000', '--preload', preload, join(dir, 'leak.test.ts')], {
+        cwd: dir,
+        env: { ...process.env, TMPDIR: outer },
+      })
+      rmSync(dir, { recursive: true, force: true })
+      const [own, similar] = JSON.parse(`${r.stdout}`.match(/PIDS (\[.*\])/)?.[1] ?? '[]') as number[]
+      try {
+        expect(own).toBeGreaterThan(0)
+        expect(r.exitCode).not.toBe(0)
+        expect(`${r.stdout}${r.stderr}`).toContain(`pid ${own} sh -c`)
+        expect(`${r.stdout}${r.stderr}`).not.toContain('timed out')
+        expect(`${r.stdout}${r.stderr}`).toContain('left running by this test run')
+        expect(`${r.stdout}${r.stderr}`).not.toContain(`pid ${similar}`)
+        expect(running(own)).toBe(true) // named, never stopped: the test below ends them
+        expect(running(similar)).toBe(true)
+        expect(readdirSync(outer).filter((f) => f.startsWith(RUN_PREFIX))).toEqual([])
+      } finally {
+        for (const pid of [own, similar]) if (pid && running(pid)) process.kill(pid, 'SIGKILL')
+        rmSync(outer, { recursive: true, force: true })
+      }
+    },
+    60_000 * timeFactor(),
+  )
 })

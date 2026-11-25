@@ -23,6 +23,26 @@ ci_alert_tests() { # ci_alert_tests <logs dir> <sha7> <job...>: the failing test
     [ -f "$d/$short-$j.log" ] && perl "$HERE/ci-alert-tests.pl" "$d/$short-$j.log"
   done | awk '!seen[$0]++'
 }
+ci_alert_notrun() { # ci_alert_notrun <logs dir> <sha7> <job...>: the NOT RUN lines the jobs wrote to <short>-<job>.notrun (ci-local's
+  # not_run), as "<job>: NOT RUN: <suite> (<why>)". Only that file: a line a test printed into a job log is no suite left out. At most
+  # 50 a job (then "... and N more not listed"), a line at most 300 characters, control characters out.
+  local d="$1" short="$2" j
+  shift 2
+  for j in "$@"; do
+    [ -f "$d/$short-$j.notrun" ] && awk -v j="$j" '/^NOT RUN: / { t++; if (t <= 50) { gsub(/[[:cntrl:]]/, ""); print j ": " substr($0, 1, 300) } }
+      END { if (t > 50) print j ": ... and " t - 50 " more not listed" }' "$d/$short-$j.notrun"
+  done
+}
+ci_alert_notrun_n() { # ci_alert_notrun_n <logs dir> <sha7> <job...>: how many NOT RUN lines they wrote in all (the list above is capped)
+  local d="$1" short="$2" j n=0 c
+  shift 2
+  for j in "$@"; do
+    [ -f "$d/$short-$j.notrun" ] || continue
+    c="$(grep -c '^NOT RUN: ' "$d/$short-$j.notrun")"
+    n=$((n + c))
+  done
+  echo "$n"
+}
 ci_alert_list() { # ci_alert_list < names: "a, b, c", at most 15 then "and N more"; "none" for none
   awk 'NF { n++; if (n <= 15) s = s (n > 1 ? ", " : "") $0 } END { if (n > 15) s = s ", and " n - 15 " more"; print (n ? s : "none") }'
 }
@@ -112,17 +132,21 @@ ci_alert() {
 # part and report-only contexts left out. Red: one message for the lead, "nightly" in it; green: nothing. It never reads or
 # writes main-streak: the nightly is not main's verdict (a push run's local-ci/* is).
 ci_alert_nightly() {
-  local short="${2:0:7}" line cls jobs tests n out now
+  local short="${2:0:7}" line cls jobs tests n out now notrun nr nrs="" ld
   line="$(printf '%s\n' "$3" | awk -F'\t' 'BEGIN { OFS = "\t" } $1 ~ /^nightly-ci\// && $1 !~ /^nightly-ci\/(part|report)-/ { sub(/^nightly-ci\//, "local-ci/", $1); print }' | ci_classify)"
   cls="${line%%$'\t'*}"
   [ "$cls" = red ] || { echo "ci-runner: alert: the nightly of $short is $cls (nightly-ci/*); nothing to say"; return 0; }
-  jobs="$(printf '%s\n' "$3" | awk -F'\t' '$1 ~ /^nightly-ci\// && $1 !~ /^nightly-ci\/(part|report)-/ && $2 == "failure" { sub(/^nightly-ci\//, "", $1); if (!s[$1]++) printf "%s ", $1 }')"
-  tests="$(ci_alert_tests "$4/logs" "$short" $jobs)" n="$(printf '%s' "$tests" | grep -c .)" now=$(date +%s)
-  out="main's NIGHTLY is RED at $short: ${jobs% } (nightly-ci/*; main's push verdict, local-ci/*, is unchanged)"$'\n'
+  jobs="$(printf '%s\n' "$3" | awk -F'\t' '$1 ~ /^nightly-ci\// && $1 !~ /^nightly-ci\/(part|report)-/ && ($2 == "failure" || $2 == "error") { sub(/^nightly-ci\//, "", $1); if (!s[$1]++) printf "%s ", $1 }')"
+  ld="$(ci_logs_dir "$4")"
+  tests="$(ci_alert_tests "$ld" "$short" $jobs)" n="$(printf '%s' "$tests" | grep -c .)" now=$(date +%s)
+  notrun="$(ci_alert_notrun "$ld" "$short" $jobs)" nr="$(ci_alert_notrun_n "$ld" "$short" $jobs)"
+  [ "$nr" -eq 0 ] || nrs=", $nr suite(s) NOT RUN"
+  out="main's NIGHTLY is RED at $short: ${jobs% } (nightly-ci/*; main's push verdict, local-ci/*, is unchanged)$nrs"$'\n'
   if [ "$n" -gt 0 ]; then
     out="${out}failing tests:"$'\n'"$(printf '%s\n' "$tests" | head -10 | sed 's/^/  /')"$'\n'
     [ "$n" -le 10 ] || out="${out}  ... and $((n - 10)) more"$'\n'
-  else out="${out}failing tests: none named in this runner's logs ($4/logs/$short-<job>.log)"$'\n'; fi
+  else out="${out}failing tests: none named in this runner's logs ($ld/$short-<job>.log)"$'\n'; fi
+  [ "$nr" -eq 0 ] || out="${out}NOT RUN, left out ($nr):"$'\n'"$(printf '%s\n' "$notrun" | sed 's/^/  /')"$'\n'
   out="${out}run: ${GITHUB_SERVER_URL:-https://github.com}/$1/actions/runs/${GITHUB_RUN_ID:-}"
   mkdir -p "$4/alerts" || return 0
   printf '%s\n' "$out" > "$4/alerts/.$now-$short-nightly.part" && mv -f "$4/alerts/.$now-$short-nightly.part" "$4/alerts/$now-$short-nightly-red.txt"
@@ -131,11 +155,11 @@ ci_alert_nightly() {
 
 # ci_alert_hostile <repo> <sha> <cache>: the hostile nightly (docs/CI-MACHINES.md, "The hostile nightly"). Its hostile-ci/<job>
 # read as the six; every run appends a section to <cache>/hostile/<UTC date>.md: the conditions the run said it made
-# (<cache>/hostile/<sha7>.conditions), its load record, each test that failed on every try (a finding: the suites retry a failed
-# test once) and each that failed once and passed on its retry (flaky, counted). A red run also writes ONE alert of its own kind
-# ("hostile"): a finding for a test fix, never "main is RED". It never reads or writes main-streak.
+# (<cache>/hostile/<sha7>.conditions), its load record, each test that failed in the run (a finding: nothing is retried, so each
+# failed once, in the run the section names) and each suite its red jobs left out (NOT RUN). A red run also writes ONE alert of its
+# own kind ("hostile"): a finding for a test fix, never "main is RED". It never reads or writes main-streak.
 ci_alert_hostile() {
-  local repo="$1" sha="$2" cache="$3" short="${2:0:7}" rows line cls jobs tests flaky nt nf rep now url j sum ran reps
+  local repo="$1" sha="$2" cache="$3" short="${2:0:7}" rows line cls jobs tests nt rep now url sum reps notrun nr nrs="" ld
   now=$(date +%s) rep="$cache/hostile/$(date -u +%F).md" url="${GITHUB_SERVER_URL:-https://github.com}/$repo/actions/runs/${GITHUB_RUN_ID:-}"
   mkdir -p "$cache" 2>/dev/null # the error file's folder: a missing one would fail the read itself
   if ! rows="$(gh api --paginate "repos/$repo/commits/$sha/status?per_page=100" --jq '.statuses[] | [.context, .state, .description] | @tsv' </dev/null 2>"$cache/.alert-gh.err")"; then
@@ -145,13 +169,13 @@ ci_alert_hostile() {
   ci_gh_problem_clear "$cache" hostile-read
   line="$(printf '%s\n' "$rows" | awk -F'\t' 'BEGIN { OFS = "\t" } $1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ { sub(/^hostile-ci\//, "local-ci/", $1); print }' | ci_classify)"
   cls="${line%%$'\t'*}"
-  jobs="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ && $2 == "failure" { sub(/^hostile-ci\//, "", $1); if (!s[$1]++) printf "%s ", $1 }')"
-  tests="$(ci_alert_tests "$cache/logs" "$short" $jobs)"
-  # only the logs of jobs this run answered (hostile-ci/<job> final): another run's log of the same commit is not this run's
-  ran="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ && $2 != "pending" { sub(/^hostile-ci\//, "", $1); print $1 }')"
-  flaky="$(for j in $ran; do sed -n 's/^passed on retry: //p' "$cache/logs/$short-$j.log" 2>/dev/null; done | awk 'NF && !s[$0]++')"
-  nt="$(printf '%s' "$tests" | grep -c .)" nf="$(printf '%s' "$flaky" | grep -c .)"
-  sum="$nt finding(s) (failed twice), $nf flaky (failed once)${jobs:+; red: ${jobs% }}"
+  jobs="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\// && $1 !~ /^hostile-ci\/(part|report)-/ && ($2 == "failure" || $2 == "error") { sub(/^hostile-ci\//, "", $1); if (!s[$1]++) printf "%s ", $1 }')"
+  ld="$(ci_logs_dir "$cache")"
+  tests="$(ci_alert_tests "$ld" "$short" $jobs)"
+  nt="$(printf '%s' "$tests" | grep -c .)"
+  notrun="$(ci_alert_notrun "$ld" "$short" $jobs)" nr="$(ci_alert_notrun_n "$ld" "$short" $jobs)"
+  [ "$nr" -eq 0 ] || nrs=", $nr suite(s) NOT RUN"
+  sum="$nt finding(s) (each failed once; nothing is retried)$nrs${jobs:+; red: ${jobs% }}"
   # one line each: "<context>: <state> (<description>)", the description cut to one line of printable text
   reps="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^hostile-ci\/report-/ { d = $3; gsub(/[^[:print:]]/, " ", d); if (length(d) > 160) d = substr(d, 1, 160) "..."; if (!s[$1]++) print $1 ": " $2 (d != "" ? " (" d ")" : "") }')"
   mkdir -p "$cache/hostile" || return 0
@@ -163,10 +187,10 @@ ci_alert_hostile() {
       printf -- '- load per hold of the heavy lock: %s with a burner (its first 600 s), %s not applied, %s with burners left over (killed)\n' \
         "$(grep -c 'none left' "$cache/hostile/$short.load")" "$(grep -c 'not applied' "$cache/hostile/$short.load")" "$(grep -c 'still there' "$cache/hostile/$short.load")"
     fi
-    printf '\nFindings, failed twice (%s):\n' "$nt"
-    if [ "$nt" -gt 0 ]; then printf '%s\n' "$tests" | sed 's/^/- /'; else echo "- none${jobs:+ named in the logs of the red job(s): ${jobs% } ($cache/logs/$short-<job>.log)}"; fi
-    printf '\nFlaky, failed once and passed on retry (%s):\n' "$nf"
-    if [ "$nf" -gt 0 ]; then printf '%s\n' "$flaky" | sed 's/^/- /'; else echo "- none"; fi
+    printf '\nFindings, each failed once in %s (%s; nothing is retried):\n' "$url" "$nt"
+    if [ "$nt" -gt 0 ]; then printf '%s\n' "$tests" | sed 's/^/- /'; else echo "- none${jobs:+ named in the logs of the red job(s): ${jobs% } ($ld/$short-<job>.log)}"; fi
+    printf '\nNOT RUN, left out (%s):\n' "$nr"
+    if [ "$nr" -gt 0 ]; then printf '%s\n' "$notrun" | sed 's/^/- /'; else echo "- none recorded${jobs:+ in the logs of the red job(s): ${jobs% }}"; fi
     # report-only contexts (Titan's check and e2e packages with CI_TITAN_HOSTILE=shadow): as they stand when this step runs, never
     # in the result above. Their findings are in that machine's own logs and its job's per-test artifact, not counted here.
     if [ -n "$reps" ]; then
