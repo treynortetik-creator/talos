@@ -20,6 +20,7 @@ import { type BridgeContext, defaultThreadRef, postSystemNotice, type threadRef 
 import { redact } from '../redact.ts'
 import { openSecretStore } from '../secrets/store.ts'
 import { cleanHandoffText } from '../worker/handoff.ts'
+import { PeerAddressAsk } from './address-ask.ts'
 import { PeerLedger } from './ledger.ts'
 import { PEER_SECRET_SERVICE, peerSecretAccount } from './records.ts'
 import { relinkLine } from './relink.ts'
@@ -34,6 +35,8 @@ const BACKOFF_FIRST_MS = 15_000
 const BACKOFF_MAX_MS = 30 * 60_000
 /** A receiver's UTC day rolls over at midnight; the retry waits this much past it. */
 const MIDNIGHT_SLACK_MS = 30_000
+/** A message held because its agent's address changed is looked at again this often (the ask is already on the owner's screen). */
+const HOLD_RECHECK_MS = 30 * 60_000
 /** The name sent as `from`: shown only, the receiver uses the name of its own connection. */
 const SENDER_NAME = 'linked'
 
@@ -92,6 +95,19 @@ export class PeerService {
     this.clock = opts.clock ?? ctx.clock
     this.secrets = opts.secrets
     this.fetchFn = opts.fetch ?? guardedWith(opts.resolve)
+    ctx.peerAddressAsk = new PeerAddressAsk(ctx, {
+      currentUrl: (peer) => this.peerConfig(peer)?.url,
+      waiting: (peer, url) => this.ledger.waitingElsewhere(peer, url),
+      release: (peer, url) => {
+        const n = this.ledger.release(peer, url, this.clock.now())
+        void this.drain()
+        return n
+      },
+      refuse: (peer, url) => {
+        const n = this.ledger.refuseElsewhere(peer, url)
+        if (n > 0) this.ctx.log.info('peer messages refused: address changed', { peer, count: n })
+      },
+    })
   }
 
   start(): void {
@@ -212,6 +228,7 @@ export class PeerService {
     this.ledger.queue(
       { id, peer, dir: 'out', label: a.label ?? null, chain, in_reply_to: replyTo ?? null, at: now },
       JSON.stringify(message),
+      cfg.url, // the address it is written for: if the link is replaced before it goes, it is held and the owner is asked
     )
     await this.row(
       `Sent to ${peer}${a.label ? ` (${a.label})` : ''}: ${glimpse(redacted)}`,
@@ -297,6 +314,15 @@ export class PeerService {
     if (!cfg || !secret) {
       this.ledger.finish(row.id, 'refused', 'not_linked')
       return void (await this.notice(`A message to ${row.peer} was not sent: ${row.peer} is no longer linked.`))
+    }
+    if (row.url !== null && row.url !== cfg.url) {
+      // The address behind this name changed while the message waited: it was written for the old one. Hold it and ask once;
+      // it goes only when the owner says yes in the app, is refused when they say no, and gives up like any message after a day.
+      if (now - row.created_at > PEER_RETRY_HOURS * 3600_000) return this.giveUp(row, 'address_changed')
+      this.ledger.retryAt(row.id, now + HOLD_RECHECK_MS)
+      const shown = (await this.ctx.peerAddressAsk?.ask({ peer: row.peer, from: row.url, to: cfg.url })) ?? false
+      if (!shown) this.ctx.log.warn('peer address ask not shown; the message stays held', { peer: row.peer })
+      return
     }
     let res: Response
     try {

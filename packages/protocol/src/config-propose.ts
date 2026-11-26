@@ -128,11 +128,17 @@ export const isConfigTrustPath = (path: string): boolean =>
   CONFIG_TRUST_KEYS.some((k) => path === k || path.startsWith(`${k}.`))
 
 /**
- * The payload keys that only the bridge writes, each marking a card with its own way of being answered (a permission-mode, update-resend
- * or screen-allow settings card, a rule-ask card). The agent's card tool refuses a payload that names one: such a card would look like
+ * The payload keys that only the bridge writes, each marking a card with its own way of being answered (a permission-mode, update-resend,
+ * peer-address or screen-allow settings card, a rule-ask card). The agent's card tool refuses a payload that names one: such a card would look like
  * the bridge's and show buttons that do nothing.
  */
-export const BRIDGE_PAYLOAD_KEYS = ['permission_mode', 'update_resend', 'screen_allow', 'action_rule'] as const
+export const BRIDGE_PAYLOAD_KEYS = [
+  'permission_mode',
+  'update_resend',
+  'screen_allow',
+  'action_rule',
+  'peer_address',
+] as const
 
 /** The key of the command field a card of talos-app commands carries (the bridge runs them only on a signed tap in the app). */
 export const CLI_FIELD_KEY = 'talos_cli'
@@ -175,7 +181,7 @@ export function cardOffersAlways(
   if (c.fields.some((f) => f.key === CLI_FIELD_KEY)) return false
   const p = c.payload as Record<string, unknown> | null | undefined
   if (typeof p === 'object' && p !== null) {
-    for (const k of ['permission_mode', 'update_resend', 'screen_allow'])
+    for (const k of ['permission_mode', 'update_resend', 'screen_allow', 'peer_address'])
       if (typeof p[k] === 'object' && p[k] !== null) return false
     const rule = p.action_rule as { kind?: unknown } | null | undefined
     if (typeof rule === 'object' && rule !== null && typeof rule.kind !== 'string') return false

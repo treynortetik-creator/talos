@@ -24,7 +24,7 @@ import {
   verifyDialogAnswer,
   type WorkerDialogT,
 } from '@talos-app/protocol'
-import { fakeClock, t } from '@talos-app/testkit'
+import { fakeClock, mkFrame, t } from '@talos-app/testkit'
 import { DialogCards, REOFFER_GRACE_MS } from '../src/dialog-card.ts'
 import { advanceSteps, type Harness, pushCardResolvePastRelay, sleep, startHarness, waitFor } from './helpers.ts'
 
@@ -1068,10 +1068,17 @@ describe('a question left standing (L14)', () => {
     // a tap stamped 11 minutes ago reaches the bridge now: the ledger expires the card (the dialog's own time is a day away)
     await advanceSteps(clock, 11 * 60_000)
     writeWorkers(x, { trip: trust(x, { expires_at: iso(now(x) + 24 * 3600_000) }) })
-    await pushCardResolvePastRelay(x, first, first.payload_hash, 'primary', {
+    // the phone held it for 11 minutes before the relay took it: the relay's stamp is now, on this test's clock (an in-app tap is
+    // judged at the relay's stamp, so a stamp left to the real clock would make it look fresh)
+    const signed = await x.app.sign({
+      ...mkFrame('card.resolve'),
+      card_id: first.id,
+      action: 'primary',
+      payload_hash: first.payload_hash,
       choice: 1,
       ts: iso(now(x) - 11 * 60_000),
     })
+    x.relay.sendToBridge({ ...signed, relay: { seq: 1, received_at: iso(now(x)) } }, { durable: true })
     await waitFor(() => x.bridge.ctx.ledger.get(first.id)?.state === 'expired', 4000, 'the card expired')
     x.bridge.optionCTick()
     await waitFor(() => cardsOf(x, TRIP_ID).length === 2, 4000, 'the replacement card')

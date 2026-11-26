@@ -1,5 +1,9 @@
 # Changelog
 
+## An agent folder with a space in its path starts with the extra lock on
+
+- With "Extra lock on protected files" on, an agent or lead folder whose path has a space in it (for example `My Agent`) is no longer refused as running something that is not the kit's own. The check now keeps the folder's path as one word when a hook is written the way the kit writes it (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`), in the Mac app and in the bridge, and a server in a kit release whose own path has a space is read as one file. Any other line is still cut at the spaces like the shell cuts it, and a command that runs anything outside the kit's links is still refused. The bridge side now also refuses a hook that names a variable or a file that does not exist yet, as the Mac app already did.
+
 ## Voice messages play again after a pause
 
 - On the iPhone, a voice message that was paused no longer ignores Play until the app is restarted. When a start does not take, the player now tries a pause and play, then loads the clip again at the same spot, and if that does not help it stops and the message says "Couldn't start playing". A clip that is waiting for data shows "Loading audio…". Read aloud and the Files sheet show the same two lines, and a pause that arrives from the system (a call), or a phone that slept while a start was pending, is never played over.

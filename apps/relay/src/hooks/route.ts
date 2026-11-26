@@ -5,7 +5,7 @@ import type { NormalizedEventT } from '@talos-app/protocol'
 import { isQuiet, newId, newUlid } from '@talos-app/protocol'
 import { openEvent, sealEvent } from './event-seal.ts'
 import type { HooksRuntime } from './types.ts'
-import { DAY_MS, HOUR_MS } from './types.ts'
+import { DAY_MS, passthroughHoldMs } from './types.ts'
 
 /** Inbox "Priority" tab = high + normal (spec 7.3); those are the events that earn a push. */
 const PUSH_PRIORITIES = new Set(['high', 'normal'])
@@ -161,7 +161,8 @@ async function deliverPass(rt: HooksRuntime): Promise<{ pushThread: string | nul
           await bus.toBridge(f, {
             durable: true,
             resume: true,
-            ttl_s: r.passthrough ? HOUR_MS / 1000 : env.BUFFER_DAYS * (DAY_MS / 1000),
+            // a work event waits for the Mac for up to a week, however long it sleeps (the sweep in runtime.ts drops it then)
+            ttl_s: (r.passthrough ? passthroughHoldMs(env.BUFFER_DAYS) : env.BUFFER_DAYS * DAY_MS) / 1000,
           })
         }
         db.prepare('update hooks_events set sent_at = ? where event_id = ?').run(rt.now(), r.event_id)

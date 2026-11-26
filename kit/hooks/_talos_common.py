@@ -519,3 +519,41 @@ def log_jsonl(name, rec, keep_lines=2000):
                     fh.writelines(lines[-keep_lines:])
     except Exception:
         pass
+
+
+# ---- permission-relay.py's owner note and mode (Wave 0, 0.8 and 0.9). Here, not in the hook, because the hook is at its size limit and
+# a thread session's copy of the hook is written next to this file (and only this file); the hook runs without any of it (no note,
+# no mode, the old deny message).
+NOTE_MAX_CHARS = 300             # the owner's Deny note, as handed to the model (the bridge cuts at 300 too; neither trusts the other)
+DENY_MESSAGE = "Denied from the Talos app."
+
+
+def clean_note(value):
+    """The owner's Deny note in a form that is safe in the model's context and in the output JSON: text only, NFC, every run of
+    whitespace (line breaks and tabs too) one space, control / format / surrogate / private-use / unassigned characters removed,
+    cut at NOTE_MAX_CHARS characters (code points). None when nothing is left or it is not text."""
+    import re
+    import unicodedata
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", value))
+    text = "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
+    text = re.sub(r"\s+", " ", text).strip()[:NOTE_MAX_CHARS].strip()
+    return text or None
+
+
+def deny_notes(msg):
+    """[the cleaned note] of the bridge's `perm_result` line, or [] (no note, or not text). Only ever read with a deny."""
+    note = clean_note(msg.get("note"))
+    return [note] if note else []
+
+
+def deny_message(notes):
+    """What the model is told on a deny: the old words, then the owner's note when there is one (json.dumps escapes it; clean_note left no line break)."""
+    return DENY_MESSAGE + (" The owner says: " + notes[0] if notes else "")
+
+
+def request_extras(call):
+    """Extra fields for the request line: the session's permission mode as Claude Code names it, which the bridge reads only for "why it asked"."""
+    mode = call.get("permission_mode")
+    return {"permission_mode": mode} if isinstance(mode, str) and 0 < len(mode) <= 30 else {}

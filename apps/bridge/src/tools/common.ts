@@ -17,6 +17,8 @@ export type Tool = {
   inputSchema: JsonSchema
   /** Needs the relay socket (a live session). Headless processes answer these with an error. */
   liveOnly?: boolean
+  /** Sent as the tool's `_meta` in tools/list. Only ALWAYS_LOAD is used: Claude Code then loads the tool up front, with no ToolSearch first. */
+  _meta?: Record<string, unknown>
   handler: (ctx: BridgeContext, args: Record<string, unknown>) => Promise<ToolResult>
 }
 
@@ -24,6 +26,18 @@ export const ok = (text: string): ToolResult => ({ content: [{ type: 'text', tex
 export const fail = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true })
 
 export class ToolError extends Error {}
+
+/** Claude Code loads a tool carrying this up front, with no ToolSearch first (checked on claude 2.1.332). */
+export const ALWAYS_LOAD = { 'anthropic/alwaysLoad': true } as const
+
+/** The tools/list answer: name, description and schema of each tool, plus `_meta` where a tool has one (no `_meta` key where it has none). */
+export const listedTools = (tools: readonly Tool[]) =>
+  tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+    ...(t._meta ? { _meta: t._meta } : {}),
+  }))
 
 export const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 

@@ -34,12 +34,12 @@ const BRIDGE = resolve(import.meta.dir, '..')
 const TRUSTED = { bun: process.execPath, bridgeDir: BRIDGE }
 
 /** The real lead init (--sandbox) into a throwaway Talos home, user home and folder; then the extra lock turned on. */
-function leadFolder() {
+function leadFolder(parent = 'leads') {
   const talosHome = tmp('tsl-home-')
   const agentDir = tmp('tsl-agent-')
   writeFileSync(join(agentDir, '.talos-version'), '1')
   const userHome = tmp('tsl-user-')
-  const dir = join(userHome, 'leads', 'trip')
+  const dir = join(userHome, parent, 'trip')
   const claudeDir = join(userHome, '.claude')
   const cfg = {
     ...defaultConfig,
@@ -159,5 +159,168 @@ describe('the kit link is required only when a command names the folder’s own 
       JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'bash scripts/x.sh' }] }] } }),
     )
     expect(folderKitProblem(w.dir)).toContain('scripts is missing')
+  })
+})
+
+// A folder whose path has a space in it ("My Agent"): the folder variable is replaced inside one word, so the path stays one word.
+describe('a lead folder with a space in its path', () => {
+  const spaced = () => {
+    const w = leadFolder('My Agent')
+    expect(w.dir).toContain(' ')
+    return w
+  }
+  const setCommand = (dir: string, command: string) =>
+    writeFileSync(
+      join(dir, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+    )
+
+  test('starts with the extra lock on, and needs no hooks link for its own .claude/hooks', () => {
+    const w = spaced()
+    expect(refusal(w.start())).toBeNull()
+    expect(folderKitProblem(w.dir)).toBeNull()
+  })
+
+  test('a hook edited by one byte is still refused, naming the hook as written', () => {
+    const w = spaced()
+    appendFileSync(join(w.dir, '.claude', 'hooks', 'board-stop.sh'), '#')
+    const why = refusal(w.start())
+    expect(why).toContain('"$CLAUDE_PROJECT_DIR"/.claude/hooks/board-stop.sh')
+    expect(why).toContain("which is not the kit's own")
+  })
+
+  test('a command through a kit link that is gone is still caught', () => {
+    const w = spaced()
+    setCommand(w.dir, '"$CLAUDE_PROJECT_DIR"/hooks/stop.sh')
+    expect(folderKitProblem(w.dir)).toContain('hooks is missing')
+    setCommand(w.dir, 'bash "$CLAUDE_PROJECT_DIR/scripts/x.sh"')
+    expect(folderKitProblem(w.dir)).toContain('scripts is missing')
+  })
+
+  test('a quoted path with a space that is not the kit’s own is refused', () => {
+    const w = spaced()
+    for (const c of [
+      '"$CLAUDE_PROJECT_DIR"/tools/guard.sh',
+      '"$CLAUDE_PROJECT_DIR/other dir/x.sh"',
+      '"/Else Where/x.sh"',
+      '"$CLAUDE_PROJECT_DIR"/.claude/hooks/evil.sh',
+      // a nested shell cuts the path again; a quote the check misreads (`$'..'`) must not make the variable look quoted
+      'sh -c "$CLAUDE_PROJECT_DIR/.claude/hooks/board-stop.sh"',
+      'eval "$CLAUDE_PROJECT_DIR/.claude/hooks/board-stop.sh"',
+      "true $'\\''\"'\" ; $CLAUDE_PROJECT_DIR/.claude/hooks/board-stop.sh",
+      '"$CLAUDE_PROJECT_DIR"/.claude/hooks/board-stop.sh; true',
+    ]) {
+      setCommand(w.dir, c)
+      expect(refusal(w.start()) ?? `ALLOWED ${c}`, c).toContain("which is not the kit's own")
+    }
+  })
+  /** A kit release with a space in its path (hooks/stop.sh, mcp/server.js) and the folder's `hooks` link into it, with TALOS_KIT_HOME on it for `run`. */
+  const withKit = (w: ReturnType<typeof spaced>, run: (kit: string) => void) => {
+    const kit = join(tmp('tsl-kit-'), 'Kit Release')
+    mkdirSync(join(kit, 'mcp'), { recursive: true })
+    mkdirSync(join(kit, 'hooks'))
+    writeFileSync(join(kit, 'mcp', 'server.js'), '1')
+    writeFileSync(join(kit, 'hooks', 'stop.sh'), '#!/bin/sh\n')
+    symlinkSync(join(kit, 'hooks'), join(w.dir, 'hooks'))
+    const was = process.env.TALOS_KIT_HOME
+    process.env.TALOS_KIT_HOME = kit
+    try {
+      run(kit)
+    } finally {
+      if (was === undefined) delete process.env.TALOS_KIT_HOME
+      else process.env.TALOS_KIT_HOME = was
+    }
+  }
+  const serve = (dir: string, ...args: string[]) => serveWith(dir, 'bash', ...args)
+  const serveWith = (dir: string, command: string, ...args: string[]) =>
+    writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { k: { command, args } } }))
+
+  test('only the variable inside double quotes is one word: where the shell would cut the folder’s path, so is it refused', () => {
+    const w = spaced()
+    withKit(w, () => {
+      setCommand(w.dir, '"$CLAUDE_PROJECT_DIR"/hooks/stop.sh')
+      expect(refusal(w.start())).toBeNull()
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own braced variable
+      setCommand(w.dir, '"${CLAUDE_PROJECT_DIR}/hooks/stop.sh"')
+      expect(refusal(w.start())).toBeNull()
+      for (const c of [
+        '$CLAUDE_PROJECT_DIR/hooks/stop.sh',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own braced variable
+        '${CLAUDE_PROJECT_DIR}/hooks/stop.sh',
+        "'$CLAUDE_PROJECT_DIR'/hooks/stop.sh",
+        'bash $CLAUDE_PROJECT_DIR/hooks/stop.sh',
+      ]) {
+        setCommand(w.dir, c)
+        expect(refusal(w.start()) ?? `ALLOWED ${c}`, c).toContain("which is not the kit's own")
+      }
+    })
+  })
+
+  test('a hook line that keeps the folder in a variable is cut or refused: a second value, a prefix assignment and a nested shell are not the kit’s file', () => {
+    const w = spaced()
+    withKit(w, () => {
+      const set = 'f="$CLAUDE_PROJECT_DIR/hooks/stop.sh"'
+      for (const c of [
+        `${set}; python3 "$f"`,
+        `${set}; f=$TMPDIR/e; bash "$f"`,
+        `${set}; f=/tmp/evilzz; bash "$f"`,
+        `${set} bash "$f"`,
+        `${set}; sh -c "$f"`,
+        `${set}; eval "$f"`,
+        `${set}; python3 $f`,
+        'f="$CLAUDE_PROJECT_DIR/other dir/x.sh"; python3 "$f"',
+      ]) {
+        setCommand(w.dir, c)
+        expect(refusal(w.start()) ?? `ALLOWED ${c}`, c).toContain("which is not the kit's own")
+      }
+    })
+  })
+
+  test('a kit release whose own path has a space: a server that names its file runs; a hook line or a -c argument is cut as the shell cuts it', () => {
+    const w = spaced()
+    withKit(w, (kit) => {
+      const other = join(tmp('tsl-else-'), 'Other Dir')
+      mkdirSync(other)
+      writeFileSync(join(other, 'server.js'), '1')
+      serve(w.dir, join(kit, 'mcp', 'server.js'))
+      expect(refusal(w.start())).toBeNull()
+      serve(w.dir, join(other, 'server.js'))
+      expect(refusal(w.start())).toContain("which is not the kit's own")
+      // run as a command line, the path is cut at its space: the program would be the first word
+      serve(w.dir, '-c', join(kit, 'mcp', 'server.js'))
+      expect(refusal(w.start())).toContain("which is not the kit's own")
+      // env, xargs and the like cut an argument again, so only the programs that take a file as one file keep a spaced path whole
+      serveWith(w.dir, 'env', '-S', join(kit, 'mcp', 'server.js'))
+      expect(refusal(w.start())).toContain("which is not the kit's own")
+      serveWith(w.dir, 'env', join(kit, 'mcp', 'server.js'))
+      expect(refusal(w.start())).toContain("which is not the kit's own")
+      rmSync(join(w.dir, '.mcp.json'))
+      setCommand(w.dir, `bash ${join(kit, 'hooks', 'stop.sh')}`)
+      expect(refusal(w.start())).toContain("which is not the kit's own")
+    })
+  })
+})
+
+describe('a word that is not a path the kit owns, or that the environment decides, is refused', () => {
+  const run = (command: string) => {
+    const w = leadFolder()
+    writeFileSync(
+      join(w.dir, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+    )
+    return refusal(w.start())
+  }
+  const hook = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/board-stop.sh'
+  test('the lead’s own hook starts alone and is refused with any other file, variable or substitution beside it', () => {
+    expect(run(hook)).toBeNull()
+    for (const c of [
+      `$TMPDIR/evilzz; ${hook}`,
+      `$X; ${hook}`,
+      `$(printf /tmp/evilzz); ${hook}`,
+      `\`echo /tmp/evilzz\`; ${hook}`,
+      `/tmp/evilzz; ${hook}`, // a file that does not exist yet: the session can make it
+      '$CLAUDE_PROJECT_DIRS/../trip/.claude/hooks/board-stop.sh', // a longer name is not the project variable
+    ])
+      expect(run(c) ?? `ALLOWED ${c}`, c).toContain("which is not the kit's own")
   })
 })

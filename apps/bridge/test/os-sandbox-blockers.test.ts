@@ -73,7 +73,7 @@ function makeAgent() {
         PreToolUse: [
           {
             matcher: 'Bash',
-            hooks: [{ type: 'command', command: 'f="$CLAUDE_PROJECT_DIR/hooks/pre-tool-guard.py"; python3 "$f"' }],
+            hooks: [{ type: 'command', command: 'python3 "$CLAUDE_PROJECT_DIR/hooks/pre-tool-guard.py"' }],
           },
         ],
         Stop: [{ hooks: [{ type: 'command', command: '"${CLAUDE_PROJECT_DIR}"/scripts/run.sh' }] }],

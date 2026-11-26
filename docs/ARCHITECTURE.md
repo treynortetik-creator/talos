@@ -15,7 +15,9 @@ the repo, start at [`AGENTS.md`](../AGENTS.md).
 
 - **The Mac dials out.** Nothing on the Mac is reachable from the internet.
 - **The relay keeps no long-term history.** A 7-day encrypted buffer covers offline catch-up; full history lives on the Mac.
-- **One Claude Code session serves every thread.** A thread is a `thread_id` tag on each message.
+- **Main answers every thread that has no session of its own.** A thread is a `thread_id` tag on each message. A thread set to
+  "Own session" gets a Claude Code session of its own instead (`threadSessionMode` in `packages/protocol/src/thread-sessions.ts`;
+  `docs/OPTION-C.md`).
 - **The agent controls a computer**, so the relay is treated as a remote-code-execution door: passkey-only login, owner frames
   signed by a device key the Mac pinned, webhook content always delivered as untrusted data.
 

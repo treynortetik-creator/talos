@@ -112,13 +112,13 @@ describe('ci-local.sh slots', () => {
     await until('the holder', () => h.out().includes('got slot'))
     // the nightly looks every 0.05 s, the push run every second
     const n = bgSh(`ci_acquire_slot "${L}" nightly && echo "got slot $CI_SLOT"; sleep 60`, { ...one, CI_NIGHTLY: '1' })
-    await until('the nightly to wait', () => n.out().includes('waiting for a free slot'))
+    await until('the nightly to wait', () => n.out().includes('a push run is on')) // it waits for the queue to be empty, holder included
     const p = bgSh(`ci_acquire_slot "${L}" push && echo "got slot $CI_SLOT"; sleep 60`, { ...one, CI_POLL: '1' })
     await until('the push run to wait', () => p.out().includes('waiting for a free slot'))
     h.child.kill('SIGKILL') // the holder is gone: its slot is free
     await until('the push run to get the slot', () => p.out().includes('got slot 1'))
     expect(n.out()).not.toContain('got slot')
-    expect(n.out()).toContain('a push run is queued')
+    expect(n.out()).toContain('a push run is on') // it waited for the holder, and then for the push run that took the slot
     p.child.kill('SIGKILL') // the push run is gone: the nightly goes
     await until('the nightly to get the slot', () => n.out().includes('got slot 1'))
   })

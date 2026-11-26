@@ -24,8 +24,8 @@ export function MemoryToggle({
         Remember between runs
         <span className="block text-sm text-text-2">
           {restricted
-            ? `Each run sees this job's last 3 results. Only this job sees them. Changing the ${what} clears them.`
-            : `Each run sees this job's last 3 results and a small notepad (up to 2 KB) it can update. Only this job sees them. Changing the ${what} clears them.`}
+            ? `Each run sees this job's last 3 results. Only this job sees them. They stay when you change the ${what}. Moving the job to another thread clears them.`
+            : `Each run sees this job's last 3 results and a small notepad (up to 2 KB) it can update. Only this job sees them. They stay when you change the ${what}. Moving the job to another thread clears them.`}
           {restricted ? " This job reads past results; can't keep notes." : ''}
           {command ? ' The command gets them as files (TALOS_MEMORY_DIR) and may rewrite the notepad.' : ''}
           {background

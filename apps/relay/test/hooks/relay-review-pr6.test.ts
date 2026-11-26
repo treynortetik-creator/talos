@@ -140,4 +140,30 @@ describe('PR6 review', () => {
     const titles = digest.flatMap((d) => d.events.map((e: { title: string }) => e.title))
     expect(titles).toContain('overnight DM')
   })
+
+  it('F9b: a digested work event the Mac has not taken is still held two hours later, and its frame waits a week', async () => {
+    const s = setup({
+      modules: { slack: fakeWork('slack') },
+      config: (c) => {
+        c.quiet_window = { start: '22:00', end: '07:00' }
+        c.timezone = 'UTC'
+        c.work.enabled = ['slack']
+        c.work.retention = 'passthrough'
+      },
+    })
+    const c = await s.create('slack')
+    s.f.clock.set(Date.parse('2026-10-28T23:00:00Z'))
+    await s.send('slack', c.id, c.secret, { title: 'overnight DM', id: 'dm2' }, { id: 'dm2' })
+    await s.drain()
+    for (let h = 0; h < 8; h++) {
+      s.f.clock.advance(3_600_000)
+      await s.tick()
+    }
+    expect(framesOf(s.f.bus.toBridgeLog, 'hook.digest')).toHaveLength(1)
+    const sent = s.f.bus.toBridgeLog.find((l) => l.frame.type === 'hook.digest')
+    expect(sent?.opts).toMatchObject({ ttl_s: 7 * 86_400 })
+    s.f.clock.advance(2 * 3_600_000) // nothing acked it: the Mac is asleep
+    await s.tick()
+    expect(s.events()).toHaveLength(1)
+  })
 })

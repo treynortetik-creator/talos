@@ -442,7 +442,10 @@ struct DevChannelsCardTests {
     r.makeSupervisor()
     let owner = TestOwner()
     try r.pairPhone(owner)
-    r.start()
+    // No ticking of its own: the supervisor looks only when this test says so. A screen without the warning ends the offer after two
+    // looks, so a timer ticking between the swap and the tap (a slow Mac gives it all the time it wants) would end the offer first and
+    // the tap would be left unread for ever.
+    r.sup.start()
     let o = try #require(r.waitForOffer(40), "audit: \(r.audit)")
     FileManager.default.createFile(atPath: swap, contents: Data())
     try r.tap(o, owner: owner, choice: 0, control: "ctl_1")

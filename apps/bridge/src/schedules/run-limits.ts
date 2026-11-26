@@ -14,6 +14,19 @@ export const RUN_TIMEOUT_MS = 40 * 60_000
 const CHRONOS_STALE_CLAIM_MIN = 45
 /** The shortest limit handed out: a tiny stale_claim_min must not give zero or a negative time-out. */
 const MIN_RUN_TIMEOUT_MS = 60_000
+/** A run past its time-out whose session is still visibly working is shown as "running long", not failed. A wedged busy session stays visible, with its Stop. */
+/** What a run that is past its time-out and still going says in the app. */
+export const RUNNING_LONG_TEXT = 'Running long. The session is still working on it.'
+/**
+ * "Visibly working", told from dead. The Mac's Claude session reports its own state to the bridge about every ten seconds (the Talos
+ * mod's sync). It is visibly working when that report is current (the mod was heard from within its live window) and says a turn is
+ * running (busy), and the owner has not stopped it at the Mac. Dead is everything else: no report in the live window (the session
+ * or the mod is gone), a session that says idle (its turn ended and the run never reported), or one stopped at the Mac. A session
+ * the bridge cannot see (a thread's own session) is never "visibly working", so such a run ends as before.
+ */
+export function visiblyWorking(state: { busy?: boolean; stopped_at_mac?: boolean } | undefined): boolean {
+  return state?.busy === true && state.stopped_at_mac !== true
+}
 export function runTimeoutMs(c: { timeout_min?: unknown; stale_claim_min?: unknown } | null): number {
   // Chronos reads both through float()/int(), so "60" counts; anything else that is not a number is its default
   const num = (v: unknown) => {

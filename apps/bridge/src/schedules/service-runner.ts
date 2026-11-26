@@ -7,9 +7,10 @@ import { BUSY_SUMMARY } from '../heartbeat/run-parts.ts'
 import type { RunOutput } from '../heartbeat/runner.ts'
 import { runNowProblem } from '../heartbeat/tested.ts'
 import { scheduleRunNotification } from '../notify.ts'
+import { WorkerStore } from '../worker/store.ts'
 import type { AdapterError } from './chronos-adapter.ts'
 import { memoryForRun } from './job-memory-run.ts'
-import { readChronosLimits, runTimeoutMs } from './run-limits.ts'
+import { RUNNING_LONG_TEXT, readChronosLimits, runTimeoutMs, visiblyWorking } from './run-limits.ts'
 import type { ScheduleService } from './service.ts'
 import { excerptOf, failKeys } from './service-shared.ts'
 import { MAX_SKIPS_PER_SLOT, type Offer } from './sidecar.ts'
@@ -401,6 +402,18 @@ export async function expireRuns(this: ScheduleService) {
   const limit = runTimeoutMs(this.chronosLimits())
   for (const [runId, f] of Object.entries(this.sidecar.all.inflight)) {
     if (f.closed || f.instance !== this.deps.instance || now - f.claimed_at < limit) continue
+    // Past the time-out but the session is visibly working: running long, not failed. It ends as failed the moment that stops being
+    // true (it finishes, reports, goes idle, parks, dies or is stopped); a finish that comes before then is a normal finish.
+    // The report is MAIN's: a run a thread's own session claimed ('worker:<thread>') is not seen by it, so it ends as before.
+    const byThread = new WorkerStore(this.ctx.store.db).claimedBy(runId)?.startsWith('worker:') === true
+    if (!byThread && visiblyWorking(this.ctx.mod?.liveState())) {
+      const note = this.sidecar.note(runId)
+      if (note?.summary !== RUNNING_LONG_TEXT) {
+        this.sidecar.setNote(runId, { id: f.id, ds: f.ds, summary: RUNNING_LONG_TEXT }, now)
+        await this.refresh()
+      }
+      continue
+    }
     await this.closeRun(f.id, f.ds, runId, 'timed_out', 'The agent never reported back.')
   }
 }
@@ -415,7 +428,9 @@ export async function closeRun(
 ) {
   const r = await this.adapter.finish(id, { runId, status, report })
   this.closeInflight(runId, status)
-  this.sidecar.setNote(runId, { id, ds, status }, this.now())
+  // a "running long" line must not outlive the run that said it
+  const stale = this.sidecar.note(runId)?.summary === RUNNING_LONG_TEXT
+  this.sidecar.setNote(runId, { id, ds, status, ...(stale ? { summary: undefined } : {}) }, this.now())
   // A heartbeat wake that never came back (timed out, or its session restarted): the items stay unshown, and any that have
   // now had two tries are posted as plain lines.
   this.wakeRuns.delete(runId)

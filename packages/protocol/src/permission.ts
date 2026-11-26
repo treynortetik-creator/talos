@@ -42,6 +42,38 @@ export const PERMISSION_CARD_TTL_S = 604_800
 /** Without the mod, a card this old adds "May already be answered at the Mac" (C3.4). */
 export const PERMISSION_MAYBE_ANSWERED_MS = 60_000
 
+/**
+ * Why a permission card asked, when it is KNOWN (the line on the card in Bypass mode, where the owner wonders why anything asked).
+ * `your_rule`: the call matches an ask rule in this agent's settings, so Claude Code asks in every mode. Nothing else is here on
+ * purpose: Claude Code's channel request and hook input carry no reason, so "Claude Code's own safety check" cannot be told from
+ * an org rule, a tool that needs the owner, and the like. No guessing: unknown means no line.
+ */
+export const PERMISSION_ASKED_WHY_TEXT = {
+  your_rule: "Asked because of an ask rule in this agent's settings.",
+} as const
+export type PermissionAskedWhy = keyof typeof PERMISSION_ASKED_WHY_TEXT
+
+/** The longest note the owner can add to a Deny (characters, after cleaning). It goes into the agent's context, so it is short. */
+export const PERMISSION_DENY_NOTE_MAX = 300
+
+/**
+ * The owner's Deny note in the one form that is safe to hand to the agent and to JSON: Unicode NFC, every run of whitespace
+ * (line breaks and tabs included) one space, control, bidi, zero-width, other invisible characters and lone surrogates removed,
+ * trimmed, cut at PERMISSION_DENY_NOTE_MAX characters (by code point). Nothing for a non-string or a note with nothing left. The
+ * bridge and the hook each clean again: neither trusts the other's output.
+ */
+export function cleanDenyNote(text: unknown): string | undefined {
+  if (typeof text !== 'string') return undefined
+  const folded = text
+    .normalize('NFC')
+    .replace(/\s+/gu, ' ')
+    .replace(INVISIBLE_OR_BIDI_ALL, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  const cut = [...folded].slice(0, PERMISSION_DENY_NOTE_MAX).join('').trim()
+  return cut === '' ? undefined : cut
+}
+
 /** The start of the note on a card that does not show all of its call (the parts that are not shown follow). */
 export const PERMISSION_HIDDEN_PREFIX = 'Not all of this call is shown: '
 /** Kept for older imports: the prefix is the start of every hidden note (permissionHiddenWarning). */
@@ -245,6 +277,10 @@ export type ComposePermissionCardInput = {
   other_channels?: readonly string[]
   /** An explainer is on: the card starts with `explain: pending` and the explanation follows as a card.update. */
   explain?: boolean
+  /** The prompt came through the PermissionRequest hook, whose deny answer can carry the owner's note: the card offers "Deny with a note". */
+  deny_note?: boolean
+  /** Why Claude Code asked, only when the bridge could prove it (PERMISSION_ASKED_WHY_TEXT); unset otherwise. */
+  asked_why?: PermissionAskedWhy
 }
 
 /** The title the composer writes for a tool name (hidden characters shown as markers; a very long name gets a fixed title). */
@@ -298,6 +334,9 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
   }
   // Beside the card, outside the binding: bindingFrom() does not pick it, so the hash below is the same with or without it.
   if (input.explain) card.explain = { status: 'pending' }
+  // Same: beside the card, outside the binding, so the hash below is the same with or without it
+  if (input.deny_note) card.deny_note = true
+  if (input.asked_why) card.asked_why = input.asked_why
   // the one refusal first; then what is not shown, or an older Claude Code: notes, Allow stays
   if (input.repeated) card.warning = PERMISSION_REPEAT_WARNING
   else if (hidden.length > 0) card.warning = permissionHiddenWarning(hidden)

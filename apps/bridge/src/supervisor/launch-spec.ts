@@ -12,6 +12,15 @@ import { workerEnvStripRulesText } from './worker-spec.ts'
  * flag (`--resume`, `-r`, `--session-id`, or their `=` forms) and is dropped with the flag.
  */
 export const LAUNCH_SPEC_EXCLUDED_ENV = ['TALOS_APP_WORKER_NONCE'] as const
+/**
+ * Also never in the spec, on this platform only (the Mac does not set them yet, so the list the two share and swift-parity
+ * checks stays the nonce alone): what makes a resume run the cut turn again (worker-spec.ts RESUME_TURN_ENV). Set for one
+ * start, never for the next: in the hash they would restart the session once more for nothing.
+ */
+export const LAUNCH_SPEC_EXCLUDED_ENV_LINUX = [
+  'CLAUDE_CODE_RESUME_INTERRUPTED_TURN',
+  'CLAUDE_CODE_RESUME_REASON',
+] as const
 const SESSION_FLAGS = ['--resume', '-r', '--session-id'] as const
 
 /** argv without the session flag and its id (both forms), everything else in order. */
@@ -60,7 +69,12 @@ export const instructionsDigest = (bytes: string | Uint8Array): string => `sha25
 export function launchSpec(i: LaunchSpecInputs, digests: Readonly<Record<string, string>> = {}): LaunchSpecT {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(i.env))
-    if (i.baseEnv[k] !== v && !(LAUNCH_SPEC_EXCLUDED_ENV as readonly string[]).includes(k)) env[k] = v
+    if (
+      i.baseEnv[k] !== v &&
+      !(LAUNCH_SPEC_EXCLUDED_ENV as readonly string[]).includes(k) &&
+      !(LAUNCH_SPEC_EXCLUDED_ENV_LINUX as readonly string[]).includes(k)
+    )
+      env[k] = v
   const files: Record<string, string> = {}
   for (const [name, bytes] of Object.entries(i.files))
     if (bytes !== null && bytes !== undefined) files[name] = sha(bytes)

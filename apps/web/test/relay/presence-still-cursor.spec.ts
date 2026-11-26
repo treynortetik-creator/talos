@@ -11,13 +11,15 @@ test('new messages arriving under a parked cursor send no "someone is here"; a r
   context,
   harness,
 }) => {
-  test.setTimeout(90_000)
+  // The 15 s report throttle runs on the page's clock (the app takes its Date.now when it starts, so the clock goes in first):
+  // the test jumps it instead of waiting it out.
+  await page.clock.install()
   await openSignedIn(harness, page, context)
   const visibility = () => harness.appFrames().filter((f) => f.raw.type === 'visibility' && f.raw.state === 'visible')
   // the cursor is parked over the timeline: the first pointermove only records where it is
   await page.mouse.move(400, 300)
   // let the 15 s report throttle run out, so a counted pointermove would send a frame now
-  await page.waitForTimeout(16_000)
+  await page.clock.fastForward(16_000)
   const before = visibility().length
   // count the pointermoves the page gets: what follows must really reach it
   await page.evaluate(() => {
@@ -32,7 +34,12 @@ test('new messages arriving under a parked cursor send no "someone is here"; a r
     await expect(page.getByTestId('msg-agent').filter({ hasText: `row ${i} ` })).toBeVisible()
     await page.mouse.move(400, 300)
   }
-  await page.waitForTimeout(1_000)
+  // One more reply, and the app's own answer to it (thread.read, not pointer activity) leaves on the same socket after anything
+  // the last move sent: once that arrives, a frame the moves would have caused has arrived too.
+  const reads = () => harness.appFrames().filter((f) => f.raw.type === 'thread.read').length
+  const readsBefore = reads()
+  harness.relay.sendToApps(agentReply({ text: 'last row', format: 'plain' }))
+  await waitUntil(() => reads() > readsBefore, 'the app marking the last reply read')
   expect(await page.evaluate(() => (window as unknown as { __moves: number }).__moves)).toBeGreaterThan(0)
   expect(visibility()).toHaveLength(before)
   // a person moving the mouse still counts

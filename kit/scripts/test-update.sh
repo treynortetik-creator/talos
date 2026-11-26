@@ -107,8 +107,19 @@ cp -pR "$HOME" "$HOME_PRISTINE"
 # A fresh HOME from the pristine copy. The old one must be gone first: if anything is left (a file a process from the last
 # case wrote back meanwhile), `cp -pR pristine HOME` copies the pristine home INTO it as a subfolder, and every agent path is
 # missing (seen on a stock Mac, R2-3). So: removed, retried, checked; then the pristine CONTENTS are copied into a new HOME.
+# session-start.py starts detached, low-priority refreshes (the memory index, the wiki gazetteer) that write into $HOME
+# after the hook has returned. Under load one can still be running when the next case resets the world, and it recreates
+# $HOME/.local between the removal and the copy ("cp: cannot create directory .../.local: File exists"). Wait for every
+# process started from this sandbox to finish first; one still there after the wait is ended by its own pid.
+settle_sandbox(){
+  local i p
+  for i in $(seq 1 150); do pgrep -f -- "$SB/" >/dev/null || return 0; sleep 0.1; done
+  for p in $(pgrep -f -- "$SB/"); do kill "$p" 2>/dev/null; done
+  for i in $(seq 1 20); do pgrep -f -- "$SB/" >/dev/null || break; sleep 0.1; done
+}
 reset_world(){
   local i
+  settle_sandbox
   for i in 1 2 3 4 5; do
     chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME" 2>/dev/null
     [ -e "$HOME" ] || break

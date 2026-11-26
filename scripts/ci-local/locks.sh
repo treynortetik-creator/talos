@@ -440,7 +440,7 @@ ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machin
     ci_self
     tk="$dir.queue/admit/$(perl -MTime::HiRes=time -e 'printf "%017.6f", time').$CI_SELF_PID.$RANDOM"
     CI_TICKET="$tk"
-    printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "" ci $(! ci_scheduled_run || echo sched) > "$tk.part" && mv -f "$tk.part" "$tk" || { rm -f "$tk.part"; turns="" tk="" CI_TICKET=""; }
+    printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "" ci "$(ci_scheduled_run && echo sched || echo "caps $(ci_turn_num "${CI_TURN_PASS_MAX:-}" 2) $(ci_turn_num "${CI_TURN_PASS_MAX_S:-}" 1800)")" > "$tk.part" && mv -f "$tk.part" "$tk" || { rm -f "$tk.part"; turns="" tk="" CI_TICKET=""; }
   fi
   while :; do
     rm -rf "$dir"/*.gone.* 2>/dev/null # renamed away by a release that was killed before it deleted them
@@ -459,19 +459,20 @@ ci_acquire_slot() { # ci_acquire_slot <locks dir> <what>: wait for a calm machin
         elif ci_turn_overdue; then state="beside" # said when its slot is taken, not before: the gate may be gone by then
         else state="turn: $CI_TURN_SAYS"; fi
       fi
-      # a scheduled run leaves a free slot to a queued push run (nothing running is stopped); fail open as the wait for a gate does: after CI_TURN_MAX_S it goes ahead, said
-      if [ -z "$state" ] && [ -n "$turns" ] && ci_scheduled_run && ci_push_queued "$dir.queue/admit" "$tk"; then
+      # a scheduled run starts only on an empty queue (the turn above: no gate; ci_sched_yield: no push run); fail open after CI_TURN_MAX_S, said
+      if [ -z "$state" ] && [ -n "$turns" ] && ci_scheduled_run && ci_sched_yield "$dir" "$tk"; then
         if [ -z "$push_t0" ]; then push_t0="$(date +%s)"; ci_turn_done "$dir" "$what" got; fi # the wait for its turn ends here: its row is its own
         if [ $(($(date +%s) - push_t0)) -lt "$push_max" ]; then ci_turn_leave; state="push"; else push_ahead=1; fi
       fi
       case "$state" in
         turn:*) [ "$state" = "$said" ] || echo "ci-local: waiting for its turn: $CI_TURN_SAYS" ;;
-        push) [ "$state" = "$said" ] || echo "ci-local: waiting: a push run is queued, and goes before this scheduled run" ;;
+        push) [ "$state" = "$said" ] || echo "ci-local: waiting: $CI_SCHED_SAYS, and a scheduled run starts when the queue is empty" ;;
         *)
           while [ "$n" -le "$CI_SLOTS" ]; do
             if ci_lock_try "$dir/slot-$n" "$what"; then
+              if ci_scheduled_run; then : > "$dir/slot-$n/sched"; else rm -f "$dir/slot-$n/sched"; fi # ci_sched_yield: a scheduled run's slot is no push run's
               ci_turn_leave
-              [ -z "$push_ahead" ] || echo "ci-local: went ahead of a queued push run after $((($(date +%s) - push_t0) / 60)) min (CI_TURN_MAX_S)" >&2
+              [ -z "$push_ahead" ] || echo "ci-local: went ahead of a busy queue after $((($(date +%s) - push_t0) / 60)) min (CI_TURN_MAX_S): $CI_SCHED_SAYS" >&2
               [ -z "$tk" ] || { rm -f "$tk"; CI_TICKET=""; }
               if [ "$state" = beside ]; then
                 case "$CI_TURN_BASE" in "the turn lock is busy"*) besides="went ahead because the turn lock stayed busy" ;; *) besides="ran beside a gate" ;; esac
@@ -641,11 +642,9 @@ ci_since() { perl -MPOSIX=strftime -e 'my @s = stat shift; print @s ? strftime("
 # gates, heavy-lock.sh runs), first come first served within each. A holder is never stopped for anyone: this is only who goes
 # next. The one ticket that goes before CI says "jump" (line 5; HEAVY_LOCK_JUMP=1 when it asked): gate-push.sh's checked
 # --red-main gate (the CI it passes judges the commits it turns green). No other gate jumps, however often it was refused.
-# No wait, however long, puts a gate before CI (a 30-minute cap once did: four late gates in a row left main with no verdict for
-# 2 h). A gate's wait behind CI is bounded by CI's arrivals: CI comes from pushes (to main, PRs), reruns and the nightly, and a
-# push needs a gate, so gates that wait trigger no more CI; once CI already queued is done the oldest gate goes. HEAVY_LOCK_TIMEOUT
-# (exit 75: the gate refuses, saying it could not get the heavy lock) caps a wait behind a stream of reruns or other machines' pushes.
-# The ticket carries what it is, so every waiter reads the same order, whatever its own settings.
+# This order is who goes next within one queue; between a gate's hold and a whole CI run the turn decides (turn.sh, ci_turn_ahead).
+# HEAVY_LOCK_TIMEOUT (exit 75: the gate refuses, saying it could not get the heavy lock) caps a wait behind a stream of reruns or
+# other machines' pushes. The ticket carries what it is, so every waiter reads the same order, whatever its own settings.
 ci_ticket_kind() { # ci_ticket_kind <ticket>: jump, ci, push or run. CI by line 6 "ci", which ci_mutex writes only for a ci-local
   # slot (heavy-lock.sh always says push or run), so a run named "slot 1" is no CI; an old ticket with no line 6 is CI by its "slot N"
   local x what="" jump="" kind=""
@@ -844,7 +843,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   label="the $name mutex"
   [ "$name" != suites ] || label="the heavy lock"
   what="${CI_MUTEX_WHAT:-slot ${CI_SLOT:-?}}"
-  local jump="" kind=ci sched=""
+  local jump="" kind=ci sched="" l7=""
   # a gate's one jump ahead of queued CI (ci_queue_order): never for a CI slot, never for another mutex; the wait log shows it
   what="${what//$'\n'/ }" what="${what//$'\r'/ }" # one ticket line: a script's own "jump" or "ci" line never reads as the ticket's
   if [ "$name" = suites ] && [ -n "${HEAVY_LOCK_JUMP:-}" ] && [ -n "${CI_MUTEX_WHAT:-}" ]; then jump=jump what="$what [jump]"; fi
@@ -854,12 +853,13 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
     [ "$name" = suites ] && [ -n "${HEAVY_LOCK_PUSH:-}" ] && kind=push
   fi
   if [ "$kind" = ci ] && ci_scheduled_run; then sched=sched; fi # a scheduled run's job (ci_ticket_sched)
+  l7="$sched"; [ -n "$l7" ] || [ "$kind" = ci ] || l7=turn2 # line 7 of the ticket: sched, or a gate's turn2 (turn.sh)
   if [ "$name" = suites ]; then ci_suites_nested "$locks" && { "$@"; return; }; elif ci_mutex_nested "$lock"; then "$@"; return; fi
   mkdir -p "$(dirname "$lock")" "$q" || return 1
   ci_self
   t="$q/$(perl -MTime::HiRes=time -e 'printf "%017.6f", time').$CI_SELF_PID.$RANDOM"
   CI_TICKET="$t" # first: ci_release_all takes it (and its .part) away if this shell is stopped at any point while it waits
-  printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "$jump" "$kind" ${sched:+"$sched"} > "$t.part" && mv -f "$t.part" "$t" || return 1
+  printf '%s\n' "$CI_SELF_PID" "$(ci_proc_start "$CI_SELF_PID")" "$CI_NONCE" "$what" "$jump" "$kind" ${l7:+"$l7"} > "$t.part" && mv -f "$t.part" "$t" || return 1
   asked=$(date +%s)
   deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
   [ "$CI_LOCK_TIMEOUT" != 0 ] || deadline=$(($(date +%s) + 315360000)) # 0 = wait as long as it takes (heavy-lock.sh: a push gate)
@@ -924,6 +924,7 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
           mine+=("$l")
           [ -n "$excl" ] || break
         done
+        [ -z "${CI_TURN_HELD:-}" ] || [ ${#mine[@]} -eq 0 ] || ci_turn_pass "$locks" # a gate that took its slot (turn lock held) is a pass for the CI runs queued
         ci_turn_leave # the turn lock was kept through the take, if this gate asked for it
         all=1
         for l in "${slotlocks[@]}"; do ci_in_list "$l" ${mine[@]+"${mine[@]}"} || all=""; done
@@ -991,9 +992,9 @@ else
   ci_turn_on() { return 1; }
   ci_turn_leave() { return 0; }
   ci_turn_done() { return 0; }
-  ci_turn_status() { return 0; }
+  ci_turn_status() { return 0; }; ci_turn_pass() { return 0; }
   ci_fold_wait() { return 0; }
   ci_fold_end() { rm -f "$1/folding-$2"; return 0; }
   ci_fold_resume() { rm -f "$1/folding-$2"; return 0; }
-  ci_scheduled_run() { return 1; }; ci_ticket_sched() { return 1; }; ci_push_queued() { return 1; }; ci_part_beat() { return 0; }; ci_part_beat_end() { return 0; } # no scheduled-run rule, no lock-wait beat without turn.sh
+  ci_scheduled_run() { return 1; }; ci_ticket_sched() { return 1; }; ci_push_queued() { return 1; }; ci_sched_yield() { return 1; }; ci_part_beat() { return 0; }; ci_part_beat_end() { return 0; } # no scheduled-run rule, no lock-wait beat without turn.sh
 fi

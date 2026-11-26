@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event'
 import { Profiler } from 'react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentsList, useAgentsView } from '../../src/features/agents/AgentsList.tsx'
 import { SessionPanel } from '../../src/features/session/SessionPanel.tsx'
 import { ClientProvider } from '../../src/lib/client.ts'
@@ -13,9 +13,22 @@ import { createMemoryStorage } from '../../src/lib/storage.ts'
 import { StorageProvider } from '../../src/lib/storageContext.tsx'
 import { setup } from '../cards/helpers.tsx'
 
-afterEach(cleanup)
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+})
 const iso = (ms: number) => new Date(ms).toISOString()
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms)) // a 50 ms yield, not a wait
+// The elapsed-time tick is a setInterval over Date.now: fake both (before the rows exist) and jump the clock instead of sleeping.
+// setTimeout stays real, so Testing Library's findBy/waitFor keep working.
+const fakeTick = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+// One act per second, so each tick is its own commit (a single act would batch them into one render and hide a re-render).
+const advance = async (ms: number) => {
+  for (let left = ms; left > 0; left -= 1000)
+    await act(async () => {
+      vi.advanceTimersByTime(Math.min(left, 1000))
+    })
+}
 
 /** matchMedia stub: `px` is the viewport width; min-width queries match against it. */
 function viewport(px: number) {
@@ -132,6 +145,7 @@ describe('F3: Stop failure handling', () => {
 
 describe('F4: elapsed timers', () => {
   it('F4a: an ended row without ended_at does not keep counting up', async () => {
+    fakeTick()
     const client = mount({ agents: 'empty' }, <ListProbe />)
     act(() =>
       client.session.setAgents([
@@ -140,12 +154,13 @@ describe('F4: elapsed timers', () => {
     )
     const fig = await screen.findByTestId('agent-figures')
     const first = fig.textContent
-    await wait(2200)
+    await advance(31_000) // past the 30 s clock too, which costs nothing on a fake clock
     // ended_at is optional in AgentRow (agentRowsFromEngine leaves it out when the engine has none).
     expect(screen.getByTestId('agent-figures').textContent).toBe(first)
   })
 
   it('F4b: nothing live on screen = no 1 s re-render of the whole list', async () => {
+    fakeTick()
     let commits = 0
     const client = mount(
       { agents: 'empty' },
@@ -166,7 +181,7 @@ describe('F4: elapsed timers', () => {
     )
     await screen.findByTestId('agent-figures')
     const before = commits
-    await wait(3200)
+    await advance(3200)
     expect(commits - before).toBeLessThanOrEqual(1)
   })
 })

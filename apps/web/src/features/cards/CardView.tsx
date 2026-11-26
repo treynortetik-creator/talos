@@ -275,6 +275,12 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       await client.resolveCard(card.id, { action: 'kill', payloadHash: hash })
       setDecided(true)
     })
+  // "Deny with a note" on a permission card: the same kill, with the owner's words signed in `note` (none: a plain kill)
+  const killWithNote = (note: string | undefined) =>
+    run(async () => {
+      await client.resolveCard(card.id, { action: 'kill', payloadHash: hash, ...(note ? { note } : {}) })
+      setDecided(true)
+    })
   // a button of a needs-you dialog card; the login card's one button carries no index
   const choose = (choice: number | null, text?: string) =>
     run(async () => {
@@ -443,7 +449,15 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
 
   // ---- live permission card (docs/CLAUDE-CODE.md C3.2): its own layout, never the generic one ----------------------
   if (card.kind === 'permission')
-    return <PermissionCardLive {...shared} highlighted={highlighted} onAllow={() => primary()} onDeny={kill} />
+    return (
+      <PermissionCardLive
+        {...shared}
+        highlighted={highlighted}
+        onAllow={() => primary()}
+        onDeny={kill}
+        onDenyWithNote={killWithNote}
+      />
+    )
 
   // ---- live pending card ----------------------------------------------------------------------------------------
   const body = card.body ?? ''

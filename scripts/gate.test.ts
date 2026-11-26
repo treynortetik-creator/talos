@@ -291,6 +291,32 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(ok).not.toContain('this repo runs on Node 999')
   })
 
+  it('test-delta: the checks print one line with the tests the change adds, and a broken counter never fails the gate', () => {
+    const r = repo()
+    r.put('node_modules/.bin/biome', '#!/bin/sh\nexit 0\n')
+    chmodSync(join(r.T, 'node_modules/.bin/biome'), 0o755)
+    const bin = join(r.T, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the other steps are stand-ins
+    for (const f of ['test-delta.ts', 'timing-lint.ts', 'check-no-personal.sh', 'denylist.generic.txt'])
+      cpSync(join(here, f), join(r.T, 'scripts', f))
+    r.put('.gitignore', 'node_modules\nbin\n')
+    r.commit({ 'apps/bridge/test/a.test.ts': "it('one', () => {})\nit('two', () => {})\n" })
+    const run = () =>
+      spawnSync('bash', ['scripts/gate.sh', '--checks-only', '--base', r.base], {
+        cwd: r.T,
+        env: { ...env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: 'utf8',
+      })
+    const ok = run()
+    expect(ok.stderr).toContain('gate: test-delta: net +2 (added 2, removed 0): unit +2 -0')
+    expect(ok.status, ok.stderr).toBe(0)
+    writeFileSync(join(r.T, 'scripts/test-delta.ts'), 'throw new Error("broken")\n')
+    const broken = run()
+    expect(broken.stderr).not.toContain('test-delta:')
+    expect(broken.status, broken.stderr).toBe(0)
+  })
+
   it("a gate run sweeps its $TMPDIR's old test folders once, first (tmp-sweep.sh); --plan touches nothing", () => {
     const r = repo()
     for (const f of ['tmp-sweep.sh', 'tmp-sweep-prefixes.txt']) cpSync(join(here, f), join(r.T, 'scripts', f))

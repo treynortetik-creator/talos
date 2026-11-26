@@ -825,12 +825,13 @@ job can have it; a heartbeat (a check the bridge runs itself) is refused with a 
   Results are kept in this file, not in the sidecar's run list, because that list is pruned at 8 days and would hold no
   history for a weekly job.
 - **What wipes it.**
-  - Changing the job's text (a card with `prompt`, or an Adopt of a file edited on disk), and deleting the job: the file is
-    removed. A file is also bound to a hash of the job text it was written for, so it is wiped on its next read if the text
-    changed by any other route.
+  - Deleting the job: the file is removed.
   - Switching memory off, or on again: it starts empty.
-  - Moving the job's result thread: a notepad written for one thread's session must not reach another's. (Saying the thread
-    it already has is not a move.)
+  - Moving the job's result thread: a notepad written for one thread's session must not reach another's. The file is wiped and
+    one old copy is kept beside it (`<id>.old.json`, replaced by the next move, removed with the job; no run reads it). (Saying
+    the thread it already has is not a move.)
+  - Rewording the job (a card with `prompt`, or an Adopt of a file edited on disk) keeps it. A file is bound to the memory's
+    epoch only; one written before this, which was also bound to the text, still loads.
   - Changing only the name, the time or the notify setting does not wipe it.
   - Results from before an edit go with it (they are in the same file).
   - The hash covers the job text only, not the standing rules (the guard): editing the guard does not wipe the memory.
@@ -1196,7 +1197,7 @@ Main's tools do not change.
 > fails, call `schedule_run_done` with `ok:false` and say why. A `kind=schedule_held` notification means the job's
 > instructions changed outside the app: don't run it; tell the owner in its thread.
 
-Why a sub-agent: one session serves every thread (SPEC 1), so a job's tool output would otherwise sit in the shared
+Why a sub-agent: Main serves every thread that has no session of its own (`threadSessionMode` in `packages/protocol/src/thread-sessions.ts`), so a job's tool output would otherwise sit in the shared
 context and bring compaction sooner. The sub-agent runs with the session's permissions. That's the price of session
 runs, and the reason restricted jobs stay headless (S3.3).
 

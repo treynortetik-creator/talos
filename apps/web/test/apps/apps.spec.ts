@@ -11,6 +11,24 @@ import { type Probe, probeView, relayAcceptsAppRequests } from './probe.ts'
 
 const frameOf = (page: Page, title = 'Notes (app)') => page.frameLocator(`iframe[title="${title}"]`)
 const logOf = (page: Page, title?: string) => frameOf(page, title).locator('#log')
+/** The state the render cache has saved for an app view (IndexedDB `cache`/`snapshot`, written on a 250 ms debounce). */
+const savedAppState = (page: Page, viewId: string) =>
+  page.evaluate(
+    (id) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        const open = indexedDB.open('talos-app')
+        open.onerror = () => reject(open.error)
+        open.onsuccess = () => {
+          const req = open.result.transaction('cache').objectStore('cache').get('snapshot')
+          req.onerror = () => reject(req.error)
+          req.onsuccess = () =>
+            resolve(
+              (req.result as { appStates?: Record<string, { state?: string }> } | undefined)?.appStates?.[id]?.state,
+            )
+        }
+      }),
+    viewId,
+  )
 const requests = (harness: Harness) => harness.appFrames().filter((f) => f.raw.type === 'app.request')
 
 async function show(
@@ -217,7 +235,7 @@ test('app.update shows a poster live and after a reload', async ({ page, context
   })
   await expect(page.getByTestId('app-poster')).toContainText('Replaced by a newer view')
   await expect(page.locator('iframe[title="Notes (app)"]')).toHaveCount(0)
-  await page.waitForTimeout(1200) // the cache saves after 250 ms
+  await expect.poll(() => savedAppState(page, probe.view.view_id)).toBe('superseded') // the cache has saved it
   await page.reload()
   await expect(page.getByTestId('app-poster')).toContainText('Replaced by a newer view')
   await expect(page.locator('iframe[title="Notes (app)"]')).toHaveCount(0)

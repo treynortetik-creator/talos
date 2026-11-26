@@ -323,6 +323,10 @@ struct PointerCopyModeTests {
     #expect(r.typedLines.count == 1, "\(r.typedLines)")
     #expect(r.owed().until != nil && r.owed().enter == true, "counted as delivered: \(r.owed())")
     unlink(arm)
+    // A tick that began before the file went is still running the shim, which puts the pane back in copy mode when its look is done: the
+    // pane is left only once a tick that began after has started (ticks run one after another, so the earlier one is over by then).
+    let before = r.lines(looks).count
+    #expect(r.wait(15) { r.lines(looks).count > before }, "the manager stopped looking at the pane")
     r.leaveMode()
     #expect(r.wait(10) { r.typedLines.count == 2 }, "\(r.typedLines)")
     #expect(r.typedLines.last == line, "\(r.typedLines)")

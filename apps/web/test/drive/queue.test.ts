@@ -59,8 +59,14 @@ const mk = (speed = 1) => {
   return { audio, q }
 }
 const tick = () => new Promise((r) => setTimeout(r, 0))
+// The quiet retry of a failed clip waits RETRY_CLIP_MS (300) in the queue; a fake clock jumps past it (400) instead of sleeping.
+const PAST_RETRY_MS = 400
 
 describe('voice queue', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('plays replies first-in first-out, one at a time', async () => {
     const { audio, q } = mk()
     await q.unlock()
@@ -168,9 +174,10 @@ describe('voice queue', () => {
     })
     await q.unlock()
     audio.failAlways = true
+    vi.useFakeTimers()
     q.enqueue(item('bad'))
     q.enqueue(item('good'))
-    await new Promise((r) => setTimeout(r, 400))
+    await vi.advanceTimersByTimeAsync(PAST_RETRY_MS)
     expect(failed).toEqual(['bad'])
     expect(audio.src).toBe('/media/good')
     expect(q.store.getState().playing).toBe(true)
@@ -180,8 +187,9 @@ describe('voice queue', () => {
     const { audio, q } = mk()
     await q.unlock()
     audio.failNext = true
+    vi.useFakeTimers()
     q.enqueue(item('blip'))
-    await new Promise((r) => setTimeout(r, 400))
+    await vi.advanceTimersByTimeAsync(PAST_RETRY_MS)
     expect(q.store.getState().playing).toBe(true)
     expect(q.store.getState().current?.id).toBe('blip')
   })
@@ -195,13 +203,14 @@ describe('voice queue', () => {
       onFail: (i) => failed.push(i.id),
     })
     await q.unlock()
+    vi.useFakeTimers()
     q.enqueue(item('a'))
     q.enqueue(item('b'))
-    await tick()
+    await vi.advanceTimersByTimeAsync(0)
     audio.dispatchEvent(new Event('error'))
-    await new Promise((r) => setTimeout(r, 400))
+    await vi.advanceTimersByTimeAsync(PAST_RETRY_MS)
     audio.dispatchEvent(new Event('error'))
-    await tick()
+    await vi.advanceTimersByTimeAsync(0)
     expect(failed).toEqual(['a'])
     expect(audio.src).toBe('/media/b')
   })
@@ -373,9 +382,10 @@ describe('voice queue', () => {
       })
       await q.unlock()
       audio.failNext = true
+      vi.useFakeTimers()
       q.enqueue(item('blip'))
       audio.dispatchEvent(new Event('error'))
-      await new Promise((r) => setTimeout(r, 400))
+      await vi.advanceTimersByTimeAsync(PAST_RETRY_MS)
       expect(failed).toEqual([])
       expect(q.store.getState().current?.id).toBe('blip')
       expect(q.store.getState().playing).toBe(true)

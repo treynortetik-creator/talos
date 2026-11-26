@@ -108,17 +108,20 @@ describe('work gating', () => {
 })
 
 describe('passthrough retention', () => {
-  it('an event the Mac never took is dropped after an hour (and its raw payload with it)', async () => {
+  it('an event the Mac never took is kept while the Mac sleeps and dropped after a week (and its raw payload with it)', async () => {
     const s = withWork()
     const { id, secret } = await connected(s)
     await s.send('slack', id, secret, { title: 'sensitive', id: 'p1' })
     await s.drain()
     const eventId = s.events()[0]?.event_id as string
-    expect(s.f.bus.toBridgeLog[0]?.opts).toMatchObject({ durable: true, ttl_s: 3600 })
-    s.f.clock.advance(59 * 60_000)
+    expect(s.f.bus.toBridgeLog[0]?.opts).toMatchObject({ durable: true, ttl_s: 7 * 86_400 })
+    s.f.clock.advance(61 * 60_000) // an hour asleep: it is still held
     await s.tick()
     expect(s.events()).toHaveLength(1)
-    s.f.clock.advance(2 * 60_000) // 61 minutes in
+    s.f.clock.advance(3 * 86_400_000) // three days
+    await s.tick()
+    expect(s.events()).toHaveLength(1)
+    s.f.clock.advance(4 * 86_400_000) // past the week
     await s.tick()
     expect(s.events()).toHaveLength(0)
     const raw = await s.app.request(`${s.f.services.env.PUBLIC_ORIGIN}/bridge/raw/${eventId}`, {

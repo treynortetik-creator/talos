@@ -1,5 +1,5 @@
 // WP-I5 / review M6: a push's Approve button arms a card in memory. It never approves by itself, and a URL never arms.
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import { useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { armCard, resetArmForTests } from '../../src/features/cards/arm.tsx'
@@ -11,8 +11,18 @@ function Search() {
 }
 const sent = (c: { sent: Array<Record<string, unknown>> }) => c.sent.filter((f) => f.type === 'card.resolve')
 // The native shell's Approve tap arms the card in memory before the route opens; `q` is only ever a hostile URL.
-const PAST_ARM_DELAY_MS = 600
-afterEach(resetArmForTests)
+const PAST_ARM_DELAY_MS = 600 // longer than CardView's 350 ms arm delay
+// The arm delay runs on a fake clock, so each "nothing happens after the delay" check jumps past it instead of sleeping.
+// Only setTimeout and Date are faked: Testing Library's waitFor/findBy need a real timer, so a faked test queries directly.
+const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+const pastArmDelay = () =>
+  act(async () => {
+    vi.advanceTimersByTime(PAST_ARM_DELAY_MS)
+  })
+afterEach(() => {
+  vi.useRealTimers()
+  resetArmForTests()
+})
 const open = (card: ReturnType<typeof makeCard>, client: ReturnType<typeof setup>, q = '', arm = true) => {
   if (arm) armCard(card.id)
   return renderWith(
@@ -33,9 +43,10 @@ describe('Approve from a push', () => {
     const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish' })
     const client = setup({ cards: [card] })
     const resolve = vi.spyOn(client, 'resolveCard')
+    fakeClock()
     open(card, client)
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' })))
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    await pastArmDelay()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' }))
     expect(resolve).not.toHaveBeenCalled()
     expect(sent(client)).toHaveLength(0)
   })
@@ -46,9 +57,10 @@ describe('Approve from a push', () => {
     try {
       const card = makeCard({ risk: 'high', kind: 'publish', primary_label: 'Publish' })
       const client = setup({ cards: [card] })
+      fakeClock()
       open(card, client)
-      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' })))
-      await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+      await pastArmDelay()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Publish' }))
       expect(sent(client)).toHaveLength(0)
     } finally {
       delete g.Capacitor
@@ -71,8 +83,10 @@ describe('Approve from a push', () => {
     const card = makeCard({ risk: 'low' })
     const client = setup({ cards: [card] })
     const resolve = vi.spyOn(client, 'resolveCard')
+    fakeClock()
     open(card, client)
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ })))
+    await pastArmDelay()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ }))
     expect(resolve).not.toHaveBeenCalled()
     expect(sent(client)).toHaveLength(0)
   })
@@ -80,9 +94,10 @@ describe('Approve from a push', () => {
   it('an Open tap (no arm) never starts anything, even on a high-risk card', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
+    fakeClock()
     open(card, client, '', false)
-    const button = await screen.findByRole('button', { name: /Send/ })
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    const button = screen.getByRole('button', { name: /Send/ })
+    await pastArmDelay()
     expect(document.activeElement).not.toBe(button)
     expect(sent(client)).toHaveLength(0)
   })
@@ -92,9 +107,10 @@ describe('Approve from a push', () => {
     async (q) => {
       const card = makeCard({ risk: 'high' })
       const client = setup({ cards: [card] })
+      fakeClock()
       open(card, client, q, false)
-      const button = await screen.findByRole('button', { name: /Send/ })
-      await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+      const button = screen.getByRole('button', { name: /Send/ })
+      await pastArmDelay()
       expect(document.activeElement).not.toBe(button)
       expect(sent(client)).toHaveLength(0)
     },
@@ -113,8 +129,9 @@ describe('Approve from a push', () => {
   ])('a stale card (%s) ignores it', async (_n, over) => {
     const card = makeCard({ risk: 'high', ...over })
     const client = setup({ cards: [card] })
+    fakeClock()
     open(card, client)
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    await pastArmDelay()
     expect(sent(client)).toHaveLength(0)
   })
 
@@ -122,9 +139,10 @@ describe('Approve from a push', () => {
     const original = makeCard({ risk: 'high' })
     const card = { ...original, body: 'Send the money somewhere else.' }
     const client = setup({ cards: [card] })
+    fakeClock()
     open(card, client)
-    await screen.findByRole('alert')
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    screen.getByRole('alert')
+    await pastArmDelay()
     expect(sent(client)).toHaveLength(0)
   })
 
@@ -139,8 +157,10 @@ describe('Approve from a push', () => {
   it('the URL keeps no arm', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
+    fakeClock()
     open(card, client)
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ })))
+    await pastArmDelay()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ }))
     expect(screen.getByTestId('search').textContent).toBe('')
     expect(screen.getByTestId('location').textContent).toBe(`/card/${card.id}`)
   })
@@ -152,9 +172,10 @@ describe('the arm belongs to one card', () => {
     const b = makeCard({ risk: 'high' })
     armCard(a.id)
     const client = setup({ cards: [a, b] })
+    fakeClock()
     renderWith(<CardDeepLink />, client, `/card/${b.id}`, '/card/:id')
-    const button = await screen.findByRole('button', { name: /Send/ })
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    const button = screen.getByRole('button', { name: /Send/ })
+    await pastArmDelay()
     expect(document.activeElement).not.toBe(button)
     expect(sent(client)).toHaveLength(0)
   })
@@ -162,12 +183,14 @@ describe('the arm belongs to one card', () => {
   it('a spent arm stays spent: a second view of the same card later is not armed', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
+    fakeClock()
     const first = open(card, client)
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ })))
+    await pastArmDelay()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Send/ }))
     first.unmount()
     renderWith(<CardDeepLink />, client, `/card/${card.id}`, '/card/:id')
-    const button = await screen.findByRole('button', { name: /Send/ })
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    const button = screen.getByRole('button', { name: /Send/ })
+    await pastArmDelay()
     expect(document.activeElement).not.toBe(button)
     expect(sent(client)).toHaveLength(0)
   })
@@ -175,10 +198,11 @@ describe('the arm belongs to one card', () => {
   it('an arm older than two minutes lapses', async () => {
     const card = makeCard({ risk: 'high' })
     const client = setup({ cards: [card] })
+    fakeClock()
     armCard(card.id, Date.now() - 121_000)
     open(card, client, '', false)
-    const button = await screen.findByRole('button', { name: /Send/ })
-    await new Promise((r) => setTimeout(r, PAST_ARM_DELAY_MS))
+    const button = screen.getByRole('button', { name: /Send/ })
+    await pastArmDelay()
     expect(document.activeElement).not.toBe(button)
     expect(sent(client)).toHaveLength(0)
   })

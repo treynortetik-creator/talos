@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS peer_outbox (
   next_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'pending',
-  detail TEXT
+  detail TEXT,
+  url TEXT
 );
 CREATE TABLE IF NOT EXISTS peer_state (
   peer TEXT PRIMARY KEY,
@@ -59,11 +60,15 @@ export type OutboxRow = {
   attempts: number
   state: OutboxState
   detail: string | null
+  /** The address the message was queued for; null for one queued before this was kept (it goes to whatever is linked now). */
+  url: string | null
 }
 
 export class PeerLedger {
   constructor(private readonly db: Database) {
     db.exec(SCHEMA)
+    const cols = db.query('PRAGMA table_info(peer_outbox)').all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === 'url')) db.exec('ALTER TABLE peer_outbox ADD COLUMN url TEXT')
   }
 
   get(id: string): PeerRecord | undefined {
@@ -102,13 +107,42 @@ export class PeerLedger {
   }
 
   /** Records the message and queues it in one write. */
-  queue(rec: Omit<PeerRecord, 'emitted'>, body: string): void {
+  queue(rec: Omit<PeerRecord, 'emitted'>, body: string, url: string | null = null): void {
     this.db.transaction(() => {
       this.record(rec)
       this.db
-        .query('INSERT INTO peer_outbox (id, peer, body, label, created_at, next_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(rec.id, rec.peer, body, rec.label, rec.at, rec.at)
+        .query('INSERT INTO peer_outbox (id, peer, body, label, created_at, next_at, url) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(rec.id, rec.peer, body, rec.label, rec.at, rec.at, url)
     })()
+  }
+
+  /** Messages still waiting for `peer` that were queued for another address than `url`. */
+  waitingElsewhere(peer: string, url: string): number {
+    return (
+      this.db
+        .query(
+          "SELECT COUNT(*) AS n FROM peer_outbox WHERE state = 'pending' AND peer = ? AND url IS NOT NULL AND url != ?",
+        )
+        .get(peer, url) as { n: number }
+    ).n
+  }
+
+  /** The owner said yes: those messages are for `url` now, and due at once. */
+  release(peer: string, url: string, now: number): number {
+    return this.db
+      .query(
+        "UPDATE peer_outbox SET url = ?, next_at = ? WHERE state = 'pending' AND peer = ? AND url IS NOT NULL AND url != ?",
+      )
+      .run(url, now, peer, url).changes
+  }
+
+  /** The owner said no: those messages are refused and never go. Returns how many. */
+  refuseElsewhere(peer: string, url: string): number {
+    return this.db
+      .query(
+        "UPDATE peer_outbox SET state = 'refused', detail = 'address_changed' WHERE state = 'pending' AND peer = ? AND url IS NOT NULL AND url != ?",
+      )
+      .run(peer, url).changes
   }
 
   due(now: number): OutboxRow[] {

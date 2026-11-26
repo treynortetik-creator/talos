@@ -541,8 +541,7 @@ test.describe('the focus guard against the ways round it', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
       document.querySelector<HTMLElement>('[aria-label="Message"]')?.focus()
     })
-    await page.waitForTimeout(5400)
-    await page.waitForTimeout(5400)
+    await page.waitForTimeout(5400) // timing-ok: the guard's 5 s rest (RESTING_IDLE_MS) and the browser's 5 s activation window are real time
     await page.mouse.click(box.x + 120, box.y + 30)
     await page.waitForTimeout(150)
     expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('IFRAME')

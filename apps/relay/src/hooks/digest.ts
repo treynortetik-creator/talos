@@ -3,7 +3,7 @@
 import type { IntegrationIdT, NormalizedEventT } from '@talos-app/protocol'
 import { newId } from '@talos-app/protocol'
 import { frame, quietNow } from './route.ts'
-import { DAY_MS, type EventRow, eventOf, HOUR_MS, type HooksRuntime } from './types.ts'
+import { DAY_MS, type EventRow, eventOf, type HooksRuntime, passthroughHoldMs } from './types.ts'
 
 const MAX_DIGEST_EVENTS = 200
 /** Serialized bytes of events in one digest: well under the 256 KiB frame limit, leaving room for the thread counts. */
@@ -169,7 +169,7 @@ async function sendDigest(rt: HooksRuntime, rows: EventRow[], tag: string | null
     await bus.toBridge(f, {
       durable: true,
       resume: true,
-      ttl_s: (passthrough ? HOUR_MS : env.BUFFER_DAYS * DAY_MS) / 1000,
+      ttl_s: (passthrough ? passthroughHoldMs(env.BUFFER_DAYS) : env.BUFFER_DAYS * DAY_MS) / 1000,
     })
   }
   const mark = db.prepare('update hooks_events set digested_at = ?, sent_at = ? where event_id = ?')

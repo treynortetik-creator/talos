@@ -108,13 +108,50 @@ function settingsCommands(s: Json): string[] {
   return out
 }
 
-/** The words of a shell command line that may name a file: quotes, `;`, `|`, `&`, `(`, `)`, `=` and `{`/`}` of `${..}` taken apart. */
+const WORD_BREAK = /[\s"'`;|&()<>=]+/
+const PROJECT_DIR = String.raw`\$(?:\{CLAUDE_PROJECT_DIR\}|CLAUDE_PROJECT_DIR)`
+/**
+ * The one form of a hook line in which the shell certainly keeps the folder's path as ONE word, and so does this check: an optional plain
+ * interpreter (no flag), then the folder variable inside double quotes, then a path of plain characters (`"$CLAUDE_PROJECT_DIR"/hooks/x.sh`,
+ * `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes. Anything else with a space in the folder's path is cut like the shell would.
+ */
+const SIMPLE_HOOK = new RegExp(
+  `^(?:(bash|sh|zsh|python3?|node|bun) )?(?:"${PROJECT_DIR}"/([A-Za-z0-9._@+/-]*)|"${PROJECT_DIR}/([A-Za-z0-9._@+/-]*)")$`,
+)
+
+/**
+ * The words of a shell command line that may name a file: quotes, `;`, `|`, `&`, `(`, `)`, `<`, `>`, `=` taken apart. The project folder
+ * variable (and its braced form, with a quote that closes right after it: `"$CLAUDE_PROJECT_DIR"/tools/x`) becomes the folder BEFORE the cut,
+ * as the shell cuts what it expands, so a folder path with a space in it is cut there too (and refused), except in the one simple form
+ * (SIMPLE_HOOK) whose folder path stays one word. A command with a NUL in it has no words.
+ */
 function words(cmd: string, folder: string): string[] {
-  // the project folder variable, with a quote that closes right after it (`"$CLAUDE_PROJECT_DIR"/tools/x`), becomes the folder
+  if (cmd.includes('\0')) return []
+  const simple = SIMPLE_HOOK.exec(cmd)
+  if (simple) return [simple[1] ?? '', `${folder}/${simple[2] ?? simple[3] ?? ''}`].filter((w) => w.length > 1)
   return cmd
-    .replaceAll(/\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR["']?/g, folder)
-    .split(/[\s"'`;|&()<>=]+/)
+    .replaceAll(/\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])["']?/g, () => folder)
+    .split(WORD_BREAK)
     .filter((w) => w.length > 1)
+}
+
+/** A flag that makes a program read an argument as code or a command line (`-c`, `-e`, `-p`, `-m`, `--eval`): its other arguments are then not plain file names. */
+const RUNS_ITS_ARGUMENT = /^(?:-[A-Za-z]*[cepm][A-Za-z]*|--eval|--print|--command)$/
+/** The programs that take a file argument as one file, with no flag that says otherwise: not env, xargs, ssh, su, watch, script (they cut an argument again). */
+const FILE_TAKERS = /^(?:node|bun|python[\d.]*|bash|sh|zsh)$/
+
+/**
+ * The words of a stdio MCP server's command and arguments. They are no shell line: the program gets each one as it is. For a program that
+ * takes a file argument as one file (FILE_TAKERS), with no flag that makes it run an argument as code, an absolute path with a space in it
+ * that exists as written is that one file (a kit release in a folder with a space). Any other argument is cut as a shell line is, which only
+ * ever finds more.
+ */
+function argvWords(argv: readonly string[], folder: string): string[] {
+  const whole = FILE_TAKERS.test(basename(argv[0] ?? '')) && !argv.some((a) => RUNS_ITS_ARGUMENT.test(a))
+  return argv.flatMap((a) => {
+    const plain = whole && isAbsolute(a) && a.includes(' ') && !/[^\S ]|["'`;|&()<>=]/.test(a) && lstatOk(a)
+    return plain ? [a] : words(a, folder)
+  })
 }
 
 /** This bridge clone (the talos-app MCP entry runs from it): outside the session folder, and not writable from the sandbox. */
@@ -167,30 +204,36 @@ export function tempRoots(): string[] {
 
 const under = (p: string, dir: string): boolean => p === dir || p.startsWith(`${dir}/`)
 
-/** The files a command line names, as real paths: a word that is an absolute or folder-relative path to what exists, or a script by name. */
-function namedFiles(cmd: string, folder: string): string[] {
+/**
+ * The files a command line names, as real paths: a word that is an absolute or folder-relative path, whether or not the file exists yet (a
+ * session can create it later), or a script by name. A word that still has a `$` in it is whatever the environment says: it is named as it
+ * stands, so it is never the kit's own.
+ */
+function namedFiles(ws: readonly string[], folder: string): string[] {
   const out: string[] = []
-  for (const w of words(cmd, folder)) {
+  for (const w of ws) {
+    if (w.includes('$')) {
+      out.push(w)
+      continue
+    }
     let abs: string | null = null
     if (isAbsolute(w)) abs = w
-    else if (w.startsWith('./') || (w.includes('/') && !w.startsWith('$') && !w.startsWith('-')))
-      abs = resolve(folder, w)
+    else if (w.startsWith('./') || (w.includes('/') && !w.startsWith('-'))) abs = resolve(folder, w)
     else if (SCRIPT_EXT.test(w)) abs = resolve(folder, w)
-    if (!abs || abs.includes('$') || abs === folder) continue
-    const real = realOf(abs)
-    if (lstatOk(real) || SCRIPT_EXT.test(real)) out.push(real)
+    if (!abs || abs === folder) continue
+    out.push(realOf(abs))
   }
   return out
 }
 
 /** The stdio MCP servers of a `.mcp.json` (an http or sse server runs nowhere here: it is not listed), by name, as command lines. */
-function mcpServers(dir: string): Array<{ name: string; cmd: string; entry: Json }> {
+function mcpServers(dir: string): Array<{ name: string; cmd: string; argv: string[]; entry: Json }> {
   const servers = objOf(readJson(join(dir, '.mcp.json'))?.mcpServers)
   return Object.entries(servers).flatMap(([name, v]) => {
     const s = objOf(v)
     if (typeof s.command !== 'string' || s.type === 'http' || s.type === 'sse') return []
-    const cmd = [s.command, ...(Array.isArray(s.args) ? s.args : [])].filter((x) => typeof x === 'string').join(' ')
-    return [{ name, cmd, entry: s }]
+    const argv = [s.command, ...(Array.isArray(s.args) ? s.args : [])].filter((x): x is string => typeof x === 'string')
+    return [{ name, cmd: argv.join(' '), argv, entry: s }]
   })
 }
 
@@ -318,8 +361,8 @@ function leadHook(file: string, folder: string, trusted: TrustedBridge | null): 
 function commandsProblem(folder: string, claudeDir: string, loadsProject: boolean, ctx: LaunchContext): string | null {
   const kit = realOf(kitVendorDir(process.env, ctx.userHome ?? homedir()))
   const trusted = ctx.trusted === undefined ? trustedBridge() : ctx.trusted
-  const kitOwn = (cmd: string) => {
-    const files = namedFiles(cmd, folder)
+  const kitOwn = (cmd: string, argv?: readonly string[]) => {
+    const files = namedFiles(argv ? argvWords(argv, folder) : words(cmd, folder), folder)
     return files.length > 0 && files.every((f) => under(f, kit) || leadHook(f, folder, trusted))
   }
   const notKits = (file: string, what: string) =>
@@ -329,11 +372,11 @@ function commandsProblem(folder: string, claudeDir: string, loadsProject: boolea
       for (const [, file] of projectSettings(dir))
         for (const cmd of settingsCommands(readJson(file) ?? {})) if (!kitOwn(cmd)) return notKits(file, `"${cmd}"`)
       const mcp = join(dir, '.mcp.json')
-      for (const { name, cmd, entry } of mcpServers(dir)) {
+      for (const { name, cmd, argv, entry } of mcpServers(dir)) {
         const bad =
           name === 'talos-app'
             ? talosEntryProblem(mcp, entry, folder, ctx.talosHome, trusted)
-            : kitOwn(cmd)
+            : kitOwn(cmd, argv)
               ? null
               : notKits(mcp, `the ${name} server ("${cmd}")`)
         if (bad) return bad

@@ -123,7 +123,7 @@ What the phone has to do, and what each side checks:
    `relay.received_at`). The Mac judges both a Reply and an Approve at that stamp, so a tap queued while the Mac slept still runs
    when it wakes (a Reply for as long as the frame is still held: the relay keeps a frame `BUFFER_DAYS` days, 7 by default, and the Mac's own outer limit is 8 days; an Approve up to 12 hours), **as long as the card itself is still alive**: a card's own expiry is
    always judged on the Mac's clock, so a card that ran out while the Mac slept is expired, not approved. (The app's own
-   `card.resolve` keeps its plain 10-minute rule, measured to the Mac's clock.) If the Mac refuses a tap for any reason, the relay
+   `card.resolve` follows the same two rules: the 10 minutes judged at the relay's stamp, and the 12 hours on the Mac's clock; past 12 hours the app is told to tap again.) If the Mac refuses a tap for any reason, the relay
    puts the card back to pending, adds a system row to the thread and sends a push ("That tap did not go through. Open Talos to
    check."), because the relay already told the phone "done" when it queued the tap. If the Mac never comes back, a Reply gets a `not_delivered` receipt and an Approve puts the
    card back to pending with a system row. A Mac that predates the feature (no `native_act/1` in its hello) gets

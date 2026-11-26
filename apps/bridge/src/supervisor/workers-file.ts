@@ -22,6 +22,7 @@ import {
 } from '@talos-app/protocol'
 import { ensureDir, writeFileAtomic } from '../fsutil.ts'
 import { workerDir, workersJsonPath } from '../worker/files.ts'
+import { type CutFields, type CutTurn, cutFields } from './cut-turn.ts'
 
 /** workers.json as this supervisor publishes it. Thread sessions are on unless the owner turned them off; sub-threads stay off until proven here. */
 export function buildWorkersFile(o: {
@@ -32,18 +33,7 @@ export function buildWorkersFile(o: {
   workersSupported?: boolean
   threads: Record<string, Record<string, unknown> & { state: WorkerStateT }>
   /** This supervisor's own fields per thread (the owed pointer): kept in its copy of the file, read by nobody else. */
-  own?: Record<
-    string,
-    {
-      pointer_owed_until?: string
-      enter_owed?: true
-      pointer_unseen?: true
-      turn_wait_until?: string
-      turn_wait_end?: 'parked' | 'off'
-      turn_wait_why?: string
-      turn_wait_after?: 'restart' | 'fresh'
-    }
-  >
+  own?: Record<string, OwnFields>
 }): WorkersFileT {
   const threads: Record<string, unknown> = {}
   // only a session that holds a slot has a pane the hub may match a hello against
@@ -104,6 +94,17 @@ export function writeNonce(home: string, threadId: string, nonce: string): void 
   const dir = workerDir(home, threadId)
   ensureDir(dir)
   writeFileAtomic(join(dir, WORKER_FILES.nonce), nonce, 0o600)
+}
+
+/** The nonce written for this thread's last start, or null (none, unreadable, or not a nonce): read before its files are released. */
+export function readNonce(home: string, threadId: string): string | null {
+  if (!isThread(threadId)) return null
+  try {
+    const v = readFileSync(join(workerDir(home, threadId), WORKER_FILES.nonce), 'utf8').trim()
+    return /^[0-9a-f]{32,}$/.test(v) ? v : null
+  } catch {
+    return null
+  }
 }
 
 /** The hub's ready file for this thread, or null (none yet, torn, or another thread's). */
@@ -181,7 +182,13 @@ export type OwnFields = {
   turn_wait_end?: 'parked' | 'off'
   turn_wait_why?: string
   turn_wait_after?: 'restart' | 'fresh'
-}
+  /** The footer last said plan mode (cut-turn.ts): kept so a supervisor started meanwhile still knows. */
+  plan_mode?: true
+  /** The launch runs a cut turn again and no new turn has begun: it dying records no cut. */
+  resumed_turn?: true
+  /** Where the running turn began (ms since boot), for the reap's bound after a supervisor restart. */
+  turn_from_boot?: number
+} & CutFields
 
 /**
  * How a session the last supervisor was ending must end: off for the owner's stop (a stop with no wait for a turn, or one
@@ -218,8 +225,18 @@ export function ownFields(o: {
   wallMs: number
   adopting: boolean
   before: Record<string, unknown>
+  /** The turn cut off in this conversation, and whether the pane last showed plan mode (cut-turn.ts). */
+  cut?: CutTurn | null
+  planMode?: boolean
+  /** This launch runs a cut turn again and no new turn has begun (workers.ts resumedTurn). */
+  resumedTurn?: boolean
+  /** Where the running turn began (ms since boot): a supervisor started meanwhile still knows what its tools are (workers.ts noteCut). */
+  turnFromBoot?: number
 }): OwnFields | null {
-  const mine: OwnFields = o.owed.pointer_owed_until ? { ...o.owed } : {}
+  const mine: OwnFields = { ...(o.owed.pointer_owed_until ? o.owed : {}), ...cutFields(o.cut) }
+  if (o.planMode) mine.plan_mode = true
+  if (o.resumedTurn) mine.resumed_turn = true
+  if (o.turnFromBoot !== undefined && Number.isFinite(o.turnFromBoot)) mine.turn_from_boot = o.turnFromBoot
   if (o.state === 'stopping' && o.turnWait?.deadline != null) {
     mine.turn_wait_until = new Date(o.wallMs + Math.max(0, o.turnWait.deadline - o.nowS) * 1000).toISOString()
     mine.turn_wait_end = o.endAs === 'parked' ? 'parked' : 'off'

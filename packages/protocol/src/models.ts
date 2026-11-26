@@ -484,6 +484,17 @@ export const Card = z.object({
    * made without an explainer and from an older Mac; a value a reader does not know reads as unset.
    */
   explain: PermissionExplain.optional().catch(undefined),
+  /**
+   * A permission card raised for a PermissionRequest hook: Deny can carry the owner's note (kill + `note`), which the hook puts in
+   * its deny answer. Beside the card, not in its binding; absent from a channel-relay card (its verdict has no room for words), from
+   * an older Mac and from an older relay; a value a reader does not know reads as unset, and the app then offers no note.
+   */
+  deny_note: z.literal(true).optional().catch(undefined),
+  /**
+   * Why a permission card asked, when the bridge could prove it (permission.ts PERMISSION_ASKED_WHY_TEXT). Beside the card, not in
+   * its binding. Absent when the reason is not known; a value a reader does not know reads as unset, and the app draws no line.
+   */
+  asked_why: z.literal('your_rule').optional().catch(undefined),
   related_event_id: z.string().optional(),
   supersedes: CardId.optional(),
   created_at: IsoTs,

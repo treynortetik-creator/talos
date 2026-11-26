@@ -8,7 +8,7 @@ import { receiptFrame } from '../frames-out.ts'
 import { lookupNotes, type NotePointer } from '../memory/reflex.ts'
 import type { Notification } from '../notify.ts'
 import { WorkerStore } from '../worker/store.ts'
-import { ok } from './common.ts'
+import { ALWAYS_LOAD, ok } from './common.ts'
 import { type ToolRecord, WORKER_NO_THREAD } from './define.ts'
 
 /** Per process: main-claimed ids already reported, so each is said once. */
@@ -72,6 +72,7 @@ export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResu
 
 export const readInboundTool: ToolRecord = {
   name: 'read_inbound',
+  _meta: ALWAYS_LOAD,
   group: 'worker',
   headless: false,
   ...WORKER_NO_THREAD,

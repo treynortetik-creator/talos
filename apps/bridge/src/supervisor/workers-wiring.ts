@@ -91,7 +91,7 @@ import {
   workerSystemPromptPath,
 } from './worker-spec.ts'
 import { effectiveOpts, ownOpts, subLaunch } from './worker-subthreads.ts'
-import type { UnreadOpt } from './worker-types.ts'
+import type { UnreadOpt, WorkerDeps } from './worker-types.ts'
 import type { WorkerPlan, WorkerThread } from './workers.ts'
 
 type RawThread = {
@@ -464,20 +464,16 @@ function startSwitches(i: PlannerInputs, thread: string, folder: string, dry: bo
   return 'refusal' in sb ? sb : { threadFence, osSandbox: sb.pieces, unreadable: on === 'kept_on' }
 }
 
+/**
+ * What one start asks of the planner (worker-types.ts WorkerDeps.plan). `dry` is the update check's plan: the same checks, launch and
+ * spec hash as a real start, with nothing made, copied, removed or audited (a sub-thread's missing folder is refused, never made;
+ * helpers audit nothing either) (Fable R1 on the dry plan).
+ */
+type PlanRequest = Parameters<WorkerDeps['plan']>[0]
+
 /** The plan function WorkerManager takes: one start's launch, or why it may not start. */
 export function workerPlanner(given: PlannerInputs) {
-  return (p: {
-    thread: WorkerThread
-    sessionId: string
-    resume: boolean
-    nonce: string
-    baseEnv: Record<string, string>
-    /**
-     * The update check's plan: the same checks, launch and spec hash as a real start, with nothing made, copied, removed or
-     * audited (a sub-thread's missing folder is refused, never made; helpers audit nothing either) (Fable R1 on the dry plan).
-     */
-    dry?: boolean
-  }): WorkerPlan => {
+  return (p: PlanRequest): WorkerPlan => {
     const i: PlannerInputs = p.dry ? { ...given, audit: undefined } : given
     const audit = i.audit
     const refuse = (
@@ -641,6 +637,7 @@ export function workerPlanner(given: PlannerInputs) {
         threadId: p.thread.id,
         sessionId: p.sessionId,
         resume: p.resume,
+        ...(p.resumeTurn ? { resumeTurn: true } : {}),
         claudePath: claude,
         baseEnv: p.baseEnv,
         talosHome: i.talosHome,

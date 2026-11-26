@@ -88,16 +88,43 @@ const heldIds = (page: import('@playwright/test').Page) =>
       }),
   )
 
+/** The texts of the thread's rows in the render cache (IndexedDB `cache`/`snapshot`). */
+const savedTexts = (page: import('@playwright/test').Page) =>
+  page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open('talos-app')
+        open.onerror = () => reject(open.error)
+        open.onsuccess = () => {
+          const req = open.result.transaction('cache').objectStore('cache').get('snapshot')
+          req.onerror = () => reject(req.error)
+          req.onsuccess = () =>
+            resolve(
+              (
+                (req.result as { messages?: Record<string, Array<{ text?: string }>> } | undefined)?.messages
+                  ?.general ?? []
+              )
+                .map((m) => m.text ?? '')
+                .filter((t) => t !== ''),
+            )
+        }
+      }),
+  )
+
 test('a message that failed offers Edit and Delete; Edit puts it back in the box, Delete removes it for good (also after a reload)', async ({
   page,
   context,
   harness,
 }) => {
   await openSignedIn(harness, page, context, '/t/general', { pinned: false })
+  // a row that is not the failed one: after the reload it shows the timeline has come back from the cache
+  const anchor = agentReply({ text: 'a row that stays', format: 'plain' })
+  harness.relay.sendToApps(anchor)
+  await expect(page.getByTestId('msg-agent').filter({ hasText: 'a row that stays' })).toBeVisible()
   await box(page).fill('doomed words')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByTestId('msg-owner').filter({ hasText: 'doomed words' })).toBeVisible()
-  await waitUntil(() => true)
+  await expect.poll(() => heldIds(page)).toHaveLength(1) // the send is in the outbox
   const [first] = await heldIds(page)
   harness.relay.sendToApps({ type: 'error', ref: first, code: 'internal', message: 'nope' })
   await expect(page.getByTestId('send-failed-edit')).toBeVisible()
@@ -114,10 +141,11 @@ test('a message that failed offers Edit and Delete; Edit puts it back in the box
   await page.getByTestId('send-failed-delete').click()
   await expect(page.getByTestId('msg-owner').filter({ hasText: 'doomed words' })).toHaveCount(0)
   expect(await heldIds(page)).toHaveLength(0)
-  await page.waitForTimeout(700) // the timeline cache saves 250 ms after a change
+  // the timeline cache saves 250 ms after a change: wait until it holds the row that stays and not the deleted one
+  await expect.poll(() => savedTexts(page)).toEqual(['a row that stays'])
   await page.reload()
   await page.getByTestId('thread-screen').waitFor()
-  await page.waitForTimeout(500)
+  await expect(page.getByTestId('msg-agent').filter({ hasText: 'a row that stays' })).toBeVisible() // the cache is back
   await expect(page.getByTestId('msg-owner').filter({ hasText: 'doomed words' })).toHaveCount(0)
   await expect(page.getByTestId('send-failed')).toHaveCount(0)
 })

@@ -26,6 +26,7 @@ import { ancestorCommandLines, ancestorPids, otherChannelsFromLines } from './pe
 import { createExplainerFromEnv } from './permission/explainer.ts'
 import { trackWrites } from './stopping.ts'
 import { APP_INSTRUCTIONS } from './tools/apps.ts'
+import { listedTools } from './tools/common.ts'
 import { toolTableProblems } from './tools/index.ts'
 import {
   BRIDGE_COMMIT,
@@ -167,7 +168,7 @@ async function main() {
     })
   }
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: bridge.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+    tools: listedTools(bridge.tools),
   }))
   mcp.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>

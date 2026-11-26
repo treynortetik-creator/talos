@@ -282,6 +282,63 @@ describe('D39 a message in flight when the session dies', () => {
   )
 })
 
+describe('T10 one combined line', () => {
+  test(
+    'messages left in two threads, one of them days old, give ONE line that counts all of them',
+    async () => {
+      h = await startHarness()
+      const DEAD_PID = 2_147_483_646
+      const old = Date.now() - 3 * 24 * 3600_000
+      h.bridge.ctx.store.kvSet(
+        'unanswered_v1',
+        JSON.stringify({
+          m_a: { thread: 'general', at: old, run: 'run_earlier', pid: DEAD_PID },
+          m_b: { thread: 'work', at: Date.now() - 1000, run: 'run_earlier', pid: DEAD_PID },
+          m_c: { thread: 'work', at: Date.now() - 2000, run: 'run_earlier', pid: DEAD_PID },
+        }),
+      )
+      await restart(h)
+      await waitFor(() => noticeRows(h as Harness).length >= 1, 5000, 'the unanswered line')
+      await sleep(t(500)) // timing-ok: negative window, from the first line seen: no second line follows
+      expect(noticeRows(h)).toHaveLength(1)
+      const row = noticeRows(h)[0]?.raw.message as { text: string } | undefined
+      expect(row?.text).toContain('3 messages in 2 threads')
+    },
+    HARNESS_START_MS + t(45_000),
+  )
+})
+
+describe('T10 how long an unanswered message is remembered', () => {
+  const memStore = () => {
+    const m = new Map<string, string>()
+    return { kvGet: (k: string) => m.get(k), kvSet: (k: string, v: string) => void m.set(k, v) }
+  }
+  const DAY = 24 * 3600_000
+  const NOW = 100 * DAY
+  const seed = (store: ReturnType<typeof memStore>, ages: Record<string, [string, number]>) =>
+    store.kvSet(
+      'unanswered_v1',
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(ages).map(([id, [thread, ageMs]]) => [
+            id,
+            { thread, at: NOW - ageMs, run: 'run_earlier', pid: 1 },
+          ]),
+        ),
+      ),
+    )
+
+  test('a message two days old and one thirteen days old are still reported; one fifteen days old is dropped', () => {
+    const store = memStore()
+    seed(store, { m_2d: ['general', 2 * DAY], m_13d: ['work', 13 * DAY], m_15d: ['work', 15 * DAY] })
+    const me = new SeenTracker({ store, clock: { now: () => NOW } as never })
+    const out = me.takeUnansweredFromEarlierRuns(() => false)
+    expect(out.get('general')).toEqual(['m_2d'])
+    expect(out.get('work')).toEqual(['m_13d'])
+    expect(store.kvGet('unanswered_v1')).toBe('{}')
+  })
+})
+
 describe('SeenTracker persistence', () => {
   const memStore = () => {
     const m = new Map<string, string>()

@@ -146,9 +146,14 @@ struct DeafThreadIntegrationTests {
     let bg = root + "/bg"
     try FileManager.default.createDirectory(atPath: bg, withIntermediateDirectories: true)
     FileManager.default.createFile(atPath: bg + "/leak.run", contents: nil)
+    // only the shells are looked into (the task is a `zsh -c`): reading every process's arguments takes seconds on a busy Mac, and the
+    // task lives only `lifetime` seconds, so a slow scan could miss it altogether
     let ours = { () -> [Int32] in
-      (ProcTable.live() ?? []).map(\.pid).filter { ProcessInspect.snapshot($0)?.argv.contains(where: { $0.contains(root) }) == true }
+      (ProcTable.live() ?? []).filter { $0.name == "zsh" }.map(\.pid).filter {
+        ProcessInspect.snapshot($0)?.argv.contains(where: { $0.contains(root) }) == true
+      }
     }
+    let lifetime = Int(4 * waitScale)  // the task ends by itself after this long: a slower machine gets a longer window to see it in
     defer {
       for pid in ours() { kill(pid, SIGKILL) }  // only if the test failed: processes whose argv names this test's own folder
       try? FileManager.default.removeItem(atPath: root)
@@ -160,15 +165,15 @@ struct DeafThreadIntegrationTests {
     child.arguments = [fixture]
     child.environment = [
       "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TALOS_APP_HOME": root, "TALOS_APP_WORKER_THREAD": "leak", "FAKE_WORKER_BG": bg,
-      "FAKE_MAX_LIFETIME": "4",
+      "FAKE_MAX_LIFETIME": "\(lifetime)",
     ]
     child.standardInput = FileHandle.nullDevice
     child.standardOutput = FileHandle.nullDevice
     child.standardError = FileHandle.nullDevice
     try child.run()
-    #expect(waitUntil(timeout: 10) { !ours().isEmpty }, "control: the task is running")
+    #expect(waitUntil(timeout: Double(lifetime)) { !ours().isEmpty }, "control: the task is running")
     kill(child.processIdentifier, SIGKILL)  // no trap, no teardown
     child.waitUntilExit()
-    #expect(waitUntil(timeout: 20) { ours().isEmpty }, "the task ended by itself: \(ours())")
+    #expect(waitUntil(timeout: Double(lifetime) + 20 * waitScale) { ours().isEmpty }, "the task ended by itself: \(ours())")
   }
 }

@@ -224,8 +224,11 @@ export function headlessWarning(rules: readonly string[]): string[] {
   ]
 }
 
-/** A rule's spelling without the differences Claude Code treats as the same: the older `:*` suffix, runs of spaces. */
-export const normalizeRule = (rule: string): string => rule.replace(/:\*\)$/, ' *)').replace(/\s+/g, ' ')
+/** The older `:*)` suffix as ` *)`: the one difference Claude Code treats as the same, and the only one a call is matched with. */
+export const legacyRuleSuffix = (rule: string): string => rule.replace(/:\*\)$/, ' *)')
+
+/** A rule's spelling without the differences Claude Code treats as the same (the older `:*` suffix, runs of spaces): for comparing and display only, never for matching a call. */
+export const normalizeRule = (rule: string): string => legacyRuleSuffix(rule).replace(/\s+/g, ' ')
 
 /** Every settings file `doctor` reads for ask rules: the project's two and the user's. */
 export function askRuleFiles(agentDir: string, claudeDir?: string): string[] {

@@ -249,6 +249,48 @@ describe('a turn an Update now cut off is offered again, never sent by itself', 
     t(30_000),
   )
 
+  test(
+    'a send that fails is not marked sent, the card says so and names the message, and a later tap can still send it',
+    async () => {
+      const { hub, me } = await claimed()
+      const { id, copy } = ids(hub)
+      mark(hub)
+      await restarted(hub, me)
+      const card = await offered(hub)
+      const deps = (hub.bridge.ctx.updateResend as unknown as { deps: { route: (n: unknown) => Promise<void> } }).deps
+      const real = deps.route
+      deps.route = async () => {
+        throw new Error('the queue is full')
+      }
+      await hub.app.resolveCard(card, 'primary', card.payload_hash)
+      const update = () =>
+        hub.relay.frames.find(
+          (f) =>
+            f.direction === 'from_bridge' &&
+            f.raw.type === 'card.update' &&
+            f.raw.card_id === card.id &&
+            f.raw.state !== 'resolved',
+        )?.raw as { state: string; result: { ok: boolean; text: string } } | undefined
+      await waitFor(() => update() !== undefined, 3000, 'the card update')
+      expect(update()?.state).toBe('failed')
+      expect(update()?.result.ok).toBe(false)
+      expect(update()?.result.text).toContain('did not go')
+      expect(update()?.result.text).toContain(card.fields[0]?.value as string)
+      expect(copy()).toBeUndefined()
+      expect(hub.bridge.ctx.store.kvGet(`update_resent:${id}`)).toBeUndefined() // not marked sent
+      // the queue works again: a tap (here a direct call, as the replayed tap above) sends it, once
+      deps.route = real
+      await hub.bridge.ctx.updateResend?.onResolved(
+        hub.bridge.ctx.ledger.get(card.id) as never,
+        'primary',
+        'card.resolve',
+      )
+      await waitFor(() => copy() !== undefined, 3000, 'the copy')
+      expect(hub.bridge.ctx.store.kvGet(`update_resent:${id}`)).toBeDefined()
+    },
+    t(30_000),
+  )
+
   test('Dismiss sends nothing', async () => {
     const { hub, me } = await claimed()
     const { copy } = ids(hub)

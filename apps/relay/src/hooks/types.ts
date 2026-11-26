@@ -85,6 +85,12 @@ export function eventOf(
 
 export const DAY_MS = 86_400_000
 export const HOUR_MS = 3_600_000
+/**
+ * The longest the relay holds a work (passthrough) event the Mac has not taken. Until then it stays, however long the Mac sleeps;
+ * once the Mac has it, it is gone at once. Never longer than BUFFER_DAYS, which bounds every stored event.
+ */
+export const PASSTHROUGH_HOLD_MS = 7 * DAY_MS
+export const passthroughHoldMs = (bufferDays: number): number => Math.min(PASSTHROUGH_HOLD_MS, bufferDays * DAY_MS)
 /** How long a replaced signing secret keeps verifying: after a rotation, and after a re-pasted vendor secret. */
 export const OLD_SECRET_GRACE_MS = 24 * HOUR_MS
 export const MAX_BODY_BYTES = 1_000_000

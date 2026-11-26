@@ -265,6 +265,13 @@ async function runPeer(
       io.out(
         `Linked "${n}" (${new URL(entry.data.url).host}), up to ${entry.data.daily_cap} messages a day. Your agent can message it now.`,
       )
+      // messages queued for the old address are held, and the owner is asked in the app (peer/address-ask.ts)
+      const held =
+        existing && existing.url !== entry.data.url ? withLedger(env, (l) => l.waitingElsewhere(n, entry.data.url)) : 0
+      if (held)
+        io.out(
+          `${held === 1 ? 'A message' : `${held} messages`} for "${n}" ${held === 1 ? 'was' : 'were'} waiting for the old address. ${held === 1 ? 'It is' : 'They are'} held until you say yes on the card in the app.`,
+        )
       if (!readInboundPeers(env.home).some((p) => p.name === n))
         io.out(
           `Note: there is no inbox named "${n}" here yet; both sides must use the same name for each other, so run: talos-app peer create ${n}`,
@@ -403,12 +410,12 @@ const linkEnvOf = (
 })
 
 /** Runs `fn` on the peer ledger in this home's history, when there is one (a fresh home has nothing to clear). */
-function withLedger(env: BridgeEnv, fn: (l: PeerLedger) => void): void {
+function withLedger<T = void>(env: BridgeEnv, fn: (l: PeerLedger) => T): T | undefined {
   const p = paths(env.home)
-  if (!existsSync(p.historyDb)) return
+  if (!existsSync(p.historyDb)) return undefined
   const history = openHistory(p.historyDb)
   try {
-    fn(new PeerLedger(history.db))
+    return fn(new PeerLedger(history.db))
   } finally {
     history.close()
   }

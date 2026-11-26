@@ -7,7 +7,9 @@
 #                 checkout of the repository has one (it says so when there is none)
 #   4. size       the production file size budget (scripts/size-budget.test.ts)
 #   4a. timing    the timing lint over this change's added and changed test lines (scripts/timing-lint.ts --changed <base>): a literal
-#                 wait or timeout not scaled by the time factor, or a test whose waits outrun its timeout, refuses
+#                 wait or timeout not scaled by the time factor, a test whose waits outrun its timeout, or a skipped test that does not say why
+#                 (no `// skip: <why>` on the line or the line before), refuses
+#   4a'. test-delta  one line, information only: the test cases the change adds and removes (scripts/test-delta.ts), never refuses
 #   4b. swift     "swift build (<package>)": swift build --build-tests in each SwiftPM package a changed *.swift file or Package.swift /
 #                 Package.resolved belongs to, in the fast gate too. Not a Mac, or no swift: REFUSED (land it from a Mac)
 #   5. suites     the tests the change touches, from the changed paths against the base (see `plan_suites`), the e2e specs
@@ -437,6 +439,8 @@ if [ "$IN_LOCK" = 0 ]; then
   step size pnpm exec vitest run --project scripts scripts/size-budget.test.ts
   # a literal wait, or waits that outrun the test's timeout, on the lines this change adds or changes (old code blocks nobody)
   if [ -n "$BASE" ]; then step timing pnpm -s timing-lint --changed "$BASE"; else say "timing: no base to diff against, skipped"; fi
+  # how many tests this change adds or removes, one line (information only: never refuses, and a counter that breaks says nothing)
+  if [ -n "$BASE" ] && [ -f scripts/test-delta.ts ]; then td="$(node scripts/test-delta.ts --base "$BASE" 2>/dev/null | head -1)"; [ -z "$td" ] || say "$td"; fi
   # a file that loses its executable bit without a commit saying so (edits over \\wsl$ did, twice: scripts/gate/exec-bits.sh)
   if [ -n "$BASE" ]; then step "exec bits" bash scripts/gate/exec-bits.sh "$BASE"; fi
   # every Swift package the change touches must build, its tests too (the fast gate as well: nothing else here compiles Swift)

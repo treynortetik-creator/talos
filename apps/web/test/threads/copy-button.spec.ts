@@ -207,14 +207,19 @@ test('touch tap on the lower-right of Run (and of Yes) runs it and does not copy
   await seed(page)
   const r = row(page, 2)
   await r.scrollIntoViewIfNeeded()
-  const run = await box(r.getByTestId('run-button'))
-  await page.touchscreen.tap(run.x + run.width - 8, run.y + run.height - 8)
+  // The tap is made on the element, 8 px in from its lower-right corner: Playwright waits for the box to stop moving and checks that
+  // this very point reaches the button, then taps. (A box read first and a tap at its coordinates later missed the 44 px button when
+  // the list settled in between, on a slow runner.)
+  const corner = async (id: string) => {
+    const b = await box(r.getByTestId(id))
+    return { x: b.width - 8, y: b.height - 8 }
+  }
+  await r.getByTestId('run-button').tap({ position: await corner('run-button') })
   await expect(r.getByTestId('run-confirm')).toBeVisible()
   expect(await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)).toEqual([])
   const p = shotPath(info.project.name, 'copy-run-375')
   if (p) await page.screenshot({ path: p })
-  const yes = await box(r.getByTestId('run-confirm'))
-  await page.touchscreen.tap(yes.x + yes.width - 8, yes.y + yes.height - 8)
+  await r.getByTestId('run-confirm').tap({ position: await corner('run-confirm') })
   await expect(r.getByTestId('run-status')).toBeVisible()
   expect(await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)).toEqual([])
 })

@@ -11,7 +11,7 @@ import { purgePeerFrames } from './peer.ts'
 import { sweepPeerLinks } from './peer-link.ts'
 import { pollDue } from './poller.ts'
 import { deliverPending, dropAppCopies, notifyNewItems, wipeRawIfDone } from './route.ts'
-import { DAY_MS, HOUR_MS, type HooksRuntime, type RuntimeOptions } from './types.ts'
+import { DAY_MS, type HooksRuntime, passthroughHoldMs, type RuntimeOptions } from './types.ts'
 
 const runtimes = new WeakMap<RelayServices, HooksRuntime & { timer?: unknown; stopped?: boolean }>()
 
@@ -33,19 +33,19 @@ export function runtimeFor(services: RelayServices): HooksRuntime {
 }
 
 /**
- * Passthrough events still held after an hour, delivered or not, are dropped for good (spec 7.1). Quiet-window events are never
- * swept before the digest (Addendum 2026-10-28, PR6 F9): their hour starts when the digest carried them. The 7-day
- * buffer purge is the only bound on a collected event.
+ * A passthrough (work) event is dropped for good only when the Mac has it (`markDelivered`, when the Mac acks the frame) or when
+ * it has waited a week without the Mac taking it (`PASSTHROUGH_HOLD_MS`); an hour asleep drops nothing. A quiet-window event
+ * is held the same way: it is a week from when it was stored, whether or not its digest went out. When the raw store is full
+ * (ingest.ts), a new delivery is refused with 429 so the sender retries; nothing held is dropped to make room.
  */
 export function sweepPassthrough(rt: HooksRuntime): number {
-  const { db } = rt.services
-  const cutoff = rt.now() - HOUR_MS
+  const { db, env } = rt.services
+  const cutoff = rt.now() - passthroughHoldMs(env.BUFFER_DAYS)
   const rows = db
     .prepare(
-      `select event_id, raw_id, created_at from hooks_events where passthrough = 1
-         and ((collected = 0 and created_at <= ?) or (collected = 1 and digested_at is not null and digested_at <= ?))`,
+      `select event_id, raw_id, created_at from hooks_events where passthrough = 1 and delivered_at is null and created_at <= ?`,
     )
-    .all(cutoff, cutoff) as Array<{ event_id: string; raw_id: string | null; created_at: number }>
+    .all(cutoff) as Array<{ event_id: string; raw_id: string | null; created_at: number }>
   for (const r of rows) {
     db.prepare('delete from hooks_events where event_id = ?').run(r.event_id)
     dropAppCopies(rt, r.event_id, r.created_at)

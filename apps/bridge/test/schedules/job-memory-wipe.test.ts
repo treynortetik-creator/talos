@@ -123,7 +123,7 @@ const END_FORGERY = '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="0000000000000000">>>'
 // ---- switching it on --------------------------------------------------------------------------------------------------
 
 describe('what wipes it', () => {
-  test('editing the job text wipes the notepad and the results; editing the name does not', async () => {
+  test('rewording the job keeps the notepad and the results, and the next run is shown them', async () => {
     h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
     await setMemory('daily-digest', true)
     await runNow('daily-digest', { summary: 'Result one.', notepad: 'my notes' })
@@ -136,26 +136,18 @@ describe('what wipes it', () => {
     })
     expect(readMem('daily-digest').notepad).toBe('my notes')
     await editPrompt('daily-digest', 'Summarise the week instead.\n')
-    expect(existsSync(memFile('daily-digest'))).toBe(false)
+    expect(readMem('daily-digest').notepad).toBe('my notes')
     const { note } = await runNow('daily-digest')
-    expect(memoryPart(note)).toContain('No earlier results yet')
-    expect(memoryPart(note)).not.toContain('my notes')
-    expect(memoryPart(note)).not.toContain('Result one.')
-    // memory is still on after the edit
+    expect(memoryPart(note)).toContain('my notes')
+    expect(memoryPart(note)).toContain('Result one.')
+    // and it is still the same memory after the next edit and the changing back
+    await editPrompt('daily-digest', 'Summarise yesterday and post it.\n')
+    expect(readMem('daily-digest').notepad).toBe('my notes')
     expect((await snapshotOf()).schedules.find((j) => j.id === 'daily-digest')?.memory).toBe(true)
   })
 
-  test('changing the text and then changing it back does not bring the old notepad back', async () => {
-    h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
-    await setMemory('daily-digest', true)
-    await runNow('daily-digest', { notepad: 'old notes' })
-    await editPrompt('daily-digest', 'Something else.\n')
-    await editPrompt('daily-digest', 'Summarise yesterday and post it.\n')
-    const { note } = await runNow('daily-digest')
-    expect(memoryPart(note)).not.toContain('old notes')
-  })
-
-  test('a run that was in flight when the text changed cannot save anything for the new text: the answer says so and no file comes back', async () => {
+  // timing-ok: the file sets longTimeouts() (60 s) for every test here; these waits are the same as the neighbouring tests'
+  test('a run that was in flight when the text was reworded still saves its notes into the same memory', async () => {
     h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
     await setMemory('daily-digest', true)
     const f = await h.app.runScheduleNow('daily-digest', { again: false })
@@ -168,13 +160,38 @@ describe('what wipes it', () => {
       run_id: runId,
       ok: true,
       summary: 'Done.',
-      notepad: 'notes from old text',
+      notepad: 'notes from the run',
+    })
+    expect(r.content[0]?.text).toMatch(/Notepad saved/)
+    expect(readMem('daily-digest').notepad).toBe('notes from the run')
+  })
+
+  // timing-ok: the file sets longTimeouts() (60 s) for every test here; these waits are the same as the neighbouring tests'
+  test('a run that was in flight when the result thread moved cannot save anything: the answer says so', async () => {
+    h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
+    await setMemory('daily-digest', true)
+    const f = await h.app.runScheduleNow('daily-digest', { again: false })
+    await h.app.expectFrame('ack', (a) => a.ref === f.id, { direction: 'in' })
+    await waitFor(() => runNotes('daily-digest').length === 1, 10_000, 'the run')
+    const runId = runNotes('daily-digest')[0]?.meta.run_id as string
+    expect(await h.agent.start(runId)).toBe('GO')
+    await patchAndApprove({
+      op: 'update',
+      id: 'daily-digest',
+      base_etag: etagOf('daily-digest'),
+      set: { thread_id: 'inbox' },
+    })
+    const r = await h.bridge.callTool('schedule_run_done', {
+      run_id: runId,
+      ok: true,
+      summary: 'Done.',
+      notepad: 'notes for the old thread',
     })
     expect(r.content[0]?.text).toMatch(/^recorded\b.*nothing was kept/)
     expect(existsSync(memFile('daily-digest'))).toBe(false)
   })
 
-  test('moving the result thread wipes it; a rename does not', async () => {
+  test('moving the result thread wipes it and keeps one old copy; a rename does not wipe', async () => {
     h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
     await setMemory('daily-digest', true)
     await runNow('daily-digest', { summary: 'Result one.', notepad: 'my notes' })
@@ -192,6 +209,10 @@ describe('what wipes it', () => {
       set: { thread_id: 'inbox' },
     })
     expect(existsSync(memFile('daily-digest'))).toBe(false)
+    // one old copy is left beside it, and no run is shown it
+    const old = join(h.home, 'job-memory', 'daily-digest.old.json')
+    expect(existsSync(old)).toBe(true)
+    expect((JSON.parse(readFileSync(old, 'utf8')) as { notepad: string }).notepad).toBe('my notes')
     const { note } = await runNow('daily-digest')
     expect(note.meta.thread_id).toBe('inbox')
     expect(memoryPart(note)).toContain('No earlier results yet')
@@ -218,6 +239,7 @@ describe('what wipes it', () => {
     expect(existsSync(memFile('daily-digest'))).toBe(true)
     await patchAndApprove({ op: 'delete', id: 'daily-digest', base_etag: etagOf('daily-digest') })
     expect(existsSync(memFile('daily-digest'))).toBe(false)
+    expect(existsSync(join(h.home, 'job-memory', 'daily-digest.old.json'))).toBe(false)
     expect((readSidecar(h) as { jobs: Record<string, unknown> }).jobs['daily-digest']).toBeUndefined()
     await patchAndApprove({ op: 'create', draft: wireDraft({ id: 'daily-digest', memory: true }) })
     expect(existsSync(memFile('daily-digest'))).toBe(false)

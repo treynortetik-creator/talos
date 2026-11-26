@@ -136,6 +136,8 @@ export type WorkerInputs = {
   sessionId: string
   /** `--resume` (true) or `--session-id` (false): the manager decides (the session-not-saved rule). */
   resume: boolean
+  /** A resume that runs the turn that was cut off again (cut-turn.ts): sets RESUME_TURN_ENV. Never on a fresh start. */
+  resumeTurn?: boolean
   claudePath: string
   /** The login-shell environment Main uses, read again at every start. */
   baseEnv: Record<string, string>
@@ -239,8 +241,24 @@ export const PERMISSION_FLAGS =
 /** In a worker's environment (value `1`) exactly when its settings register the kit's thread-state hook. */
 export const THREAD_STATE_ENV = 'TALOS_APP_THREAD_STATE'
 
+/**
+ * What makes Claude Code run the turn that was cut off again when its session is resumed (measured on 2.1.332: with both it
+ * re-ran after SIGTERM and SIGKILL, without them it waits at "Interrupted"). Set only by a resume of a cut turn
+ * (cut-turn.ts); never part of the launch spec hash (launch-spec.ts LAUNCH_SPEC_EXCLUDED_ENV_LINUX), or the next update check
+ * would see a changed spec and restart the session again.
+ */
+export const RESUME_TURN_ENV = {
+  CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
+  CLAUDE_CODE_RESUME_REASON: 'user_resume',
+} as const
+
 /** The worker identity keys the build sets itself (Claude's marker rule names them too: here they are wanted). */
-const WORKER_KEYS = new Set(['TALOS_APP_WORKER_THREAD', 'TALOS_SESSION_ROLE', 'TALOS_APP_WORKER_NONCE'])
+const WORKER_KEYS = new Set([
+  'TALOS_APP_WORKER_THREAD',
+  'TALOS_SESSION_ROLE',
+  'TALOS_APP_WORKER_NONCE',
+  ...Object.keys(RESUME_TURN_ENV),
+])
 
 /** A worker's argv must never look like Main's (the takeover check): channels on the command line are a bug. */
 export const argvLooksLikeMain = (argv: string[]) =>
@@ -628,6 +646,11 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
   if (i.permissionHook.state && !i.rooted) env[THREAD_STATE_ENV] = '1'
   env.TALOS_APP_HOME = i.talosHome
   env.TALOS_APP_WORKER_NONCE = i.nonce
+  // after the strip above: a login environment that had them never carries them in; only a resume of a cut turn does
+  // (these two are in the session's own environment, so every tool child it starts inherits them too: a Bash command that runs
+  // `claude` itself would see them. They only matter to a claude that is resuming an interrupted session, and it is the
+  // supervisor's resume of this session that they are for.)
+  if (i.resume && i.resumeTurn) Object.assign(env, RESUME_TURN_ENV)
   env.TELEGRAM_STATE_DIR = noChannel
   env.IMESSAGE_STATE_DIR = noChannel
   // with a list, claude.ai connectors are not fetched (the setting below says the same; some versions read only one of them)
@@ -844,6 +867,12 @@ export function validateSpec(spec: WorkerSpec, trusted: Trusted): void {
     if (STRIPPED_PREFIXES.some((p) => k.startsWith(p)) && k !== 'TELEGRAM_STATE_DIR' && k !== 'IMESSAGE_STATE_DIR')
       no('forbidden_env', k)
     if (!WORKER_KEYS.has(k) && isInheritedClaudeVar(k)) no('forbidden_env', k)
+  }
+  // the two resume-turn variables: both, with exactly these values, and only on a resume
+  const turnKeys = Object.keys(RESUME_TURN_ENV) as Array<keyof typeof RESUME_TURN_ENV>
+  if (turnKeys.some((k) => k in spec.env)) {
+    if (turnKeys.some((k) => spec.env[k] !== RESUME_TURN_ENV[k])) no('forbidden_env', 'the resume-turn variables')
+    if (!args.includes('--resume')) no('forbidden_env', 'the resume-turn variables on a start that is not a resume')
   }
   if (spec.env.TALOS_APP_HOME !== home) no('forbidden_env', 'TALOS_APP_HOME')
   if (mcp && spec.env[CONNECTORS_ENV] !== 'false') no('forbidden_env', CONNECTORS_ENV)

@@ -21,7 +21,7 @@ import { CARD_EXPIRY_S, MAX_PENDING_CARDS } from '../heartbeat/cards.ts'
 import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
 import { assertFrameFits, type DurableResult, RelayRejectedError } from '../transport.ts'
 import { mintRisk } from '../trust.ts'
-import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
+import { ALWAYS_LOAD, fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
 import { OWN_THREAD, type ToolRecord, WORKER_NO_THREAD } from './define.ts'
 import { uploadAll } from './send.ts'
 
@@ -35,6 +35,7 @@ const superseding = new Set<string>()
 
 export const card: ToolRecord = {
   name: 'card',
+  _meta: ALWAYS_LOAD,
   group: 'core',
   headless: true,
   ...OWN_THREAD,

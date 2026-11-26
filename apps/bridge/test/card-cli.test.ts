@@ -16,7 +16,7 @@ import {
   signNativeAct,
   signNativeGrant,
 } from '@talos-app/protocol'
-import { fakeClock, t } from '@talos-app/testkit'
+import { fakeClock, mkFrame, t } from '@talos-app/testkit'
 import { agentCliRefusal } from '../src/agent-cli.ts'
 import { argvHash, CARD_CLI_ALLOWED, cliOfBinding, plainSentence, runCardCli } from '../src/card-cli.ts'
 import { type CliIO, runCli } from '../src/cli-main.ts'
@@ -307,9 +307,18 @@ describe("what the owner's signed PRIMARY runs", () => {
       const card = await makeCard()
       const tap = clock.now() + 1_000
       await advanceSteps(clock, 11 * 60_000, 20_000, h.bridge.client)
-      const f = await pushCardResolvePastRelay(h, card, card.payload_hash, 'primary', {
+      // the phone held the tap for 11 minutes before the relay took it (the stamp is the fake clock's now): the app's own rule
+      const signed = await h.app.sign({
+        ...mkFrame('card.resolve'),
+        card_id: card.id,
+        action: 'primary',
+        payload_hash: card.payload_hash,
         ts: new Date(tap).toISOString(),
       })
+      const f = h.relay.sendToBridge(
+        { ...signed, relay: { seq: 1, received_at: new Date(clock.now()).toISOString() } },
+        { durable: true },
+      )
       const err = await h.relay.expectFrame('error', (e) => e.ref === f.id, { direction: 'from_bridge' })
       expect(err.code).toBe('card_expired')
       expect(posted().filter((m) => m.includes('Re-link the two apps'))).toHaveLength(0)

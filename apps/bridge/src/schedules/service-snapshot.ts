@@ -88,7 +88,10 @@ export function overlay(this: ScheduleService, snap: ScheduleSnapshotT): Schedul
         last_run: {
           ...r,
           // Chronos knows a session run only as ran/failed; the bridge knows why it failed (S3.3)
-          ...(n.status && n.status !== 'running' && (r.status === 'failed' || r.status === 'ok')
+          // (a run Chronos closed as timed_out that the agent then finished fine is ok here)
+          ...(n.status &&
+          n.status !== 'running' &&
+          (r.status === 'failed' || r.status === 'ok' || (r.status === 'timed_out' && n.status === 'ok'))
             ? { status: n.status }
             : {}),
           ...(withMainMark(n) ? { summary: (withMainMark(n) as string).slice(0, 280) } : {}),

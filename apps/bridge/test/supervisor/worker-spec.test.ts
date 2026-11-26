@@ -745,3 +745,56 @@ describe('validateSpec: TALOS_APP_THREAD_STATE if and only if the settings run t
     expect(() => validateSpec({ ...s, env: { ...s.env, [THREAD_STATE_ENV]: 'yes' } }, trustedOf(i))).toThrow()
   })
 })
+
+describe('a resume that runs the cut turn again (0.26): CLAUDE_CODE_RESUME_INTERRUPTED_TURN and its reason', () => {
+  const trustedOf = (i: WorkerInputs) => ({
+    talosHome: i.talosHome,
+    main: i.main,
+    claudePath: i.claudePath,
+    cwd: realpathSync(i.agentDir),
+    settingSources: null,
+  })
+  const TURN = { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1', CLAUDE_CODE_RESUME_REASON: 'user_resume' }
+  onCaseExactTmp('a resume with resumeTurn carries exactly these two, and the spec passes its own check', () => {
+    const i = inputs({ resume: true, resumeTurn: true })
+    const s = buildWorkerSpec(i)
+    expect(s.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBe('1')
+    expect(s.env.CLAUDE_CODE_RESUME_REASON).toBe('user_resume')
+    expect(
+      Object.keys(s.env)
+        .filter((k) => k.startsWith('CLAUDE_CODE_'))
+        .sort(),
+    ).toEqual(Object.keys(TURN).sort())
+    expect(() => validateSpec(s, trustedOf(i))).not.toThrow()
+  })
+  onCaseExactTmp('without resumeTurn, a resume, a fresh start and a login environment that has them: none', () => {
+    const base = { ...inputs().baseEnv, ...TURN, CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: '1' }
+    for (const over of [{ resume: true }, { resume: false }, { resume: false, resumeTurn: true }]) {
+      const s = buildWorkerSpec(inputs({ ...over, baseEnv: base }))
+      expect(Object.keys(s.env).filter((k) => k.startsWith('CLAUDE_CODE_'))).toEqual([])
+    }
+  })
+  onCaseExactTmp(
+    'the check refuses them on a --session-id start, one without the other, another value, or the max-age name',
+    () => {
+      const i = inputs({ resume: true, resumeTurn: true })
+      const s = buildWorkerSpec(i)
+      const t = trustedOf(i)
+      const withEnv = (env: Record<string, string>) => () => validateSpec({ ...s, env }, t)
+      expect(withEnv({ ...s.env, CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '0' })).toThrow()
+      expect(withEnv({ ...s.env, CLAUDE_CODE_RESUME_REASON: 'other' })).toThrow()
+      expect(withEnv({ ...s.env, CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: '1' })).toThrow()
+      const { CLAUDE_CODE_RESUME_REASON: _r, ...onlyOne } = s.env
+      expect(withEnv(onlyOne)).toThrow()
+      // the same two on a spec that does not resume
+      const j = inputs({ resume: false })
+      const fresh = buildWorkerSpec(j)
+      expect(() => validateSpec({ ...fresh, env: { ...fresh.env, ...TURN } }, trustedOf(j))).toThrow(
+        /forbidden_env|resume/,
+      )
+      // and a resume with neither passes
+      const k = inputs({ resume: true })
+      expect(() => validateSpec(buildWorkerSpec(k), trustedOf(k))).not.toThrow()
+    },
+  )
+})

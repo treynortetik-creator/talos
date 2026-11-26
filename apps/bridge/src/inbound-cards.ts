@@ -26,6 +26,7 @@ import type { Inbound } from './inbound.ts'
 import { CLOCK_OFF_MESSAGE, type Item, type Of, oneLine } from './inbound-shared.ts'
 import { cardActionNotification } from './notify.ts'
 import { say } from './owner-words.ts'
+import { isPeerAddressCard } from './peer/address-ask.ts'
 import { isPermissionModeCard } from './permission-mode.ts'
 import { isUpdateResendCard } from './router/update-resend.ts'
 import { isScreenAllowCard } from './screen-consent.ts'
@@ -94,6 +95,8 @@ export const cardsFrames = {
     // a permission-mode change is allowed from the card in the app only: its Allow is the owner's signed card.resolve
     if (row && isUpdateResendCard(row.binding))
       return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'update_resend_card')
+    if (row && isPeerAddressCard(row.binding))
+      return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'peer_address_card')
     if (row && isPermissionModeCard(row.binding))
       return deny('open_in_app', 'This card is approved in the app, not from a notification.', 'permission_mode_card')
     // a card with talos-app commands on it is approved in the app: only his signed card.resolve there runs them (card-cli.ts)
@@ -131,6 +134,19 @@ export const cardsFrames = {
   async onCardResolve(this: Inbound, it: Item, f: Of<'card.resolve'>, opts: { ageAtMs?: number } = {}) {
     const { ctx } = this
     const nowMs = ctx.clock.now()
+    // A tap from the app is timed like a notification's Approve: the 10-minute rule is judged at the moment the relay took the
+    // frame (the relay's `received_at`, unsigned, never later than this Mac's clock), and the owner's device-signed `ts` may
+    // be at most twelve hours old on THIS Mac's clock. So a Mac that slept after the tap still takes it, and a relay cannot
+    // stretch the wait. The card's own expiry, the hash, the card state and the duplicate checks are the ledger's and are untouched.
+    const appTap = it.frame.type === 'card.resolve'
+    const stamp = Date.parse((it.raw.relay as { received_at?: string } | undefined)?.received_at ?? '')
+    const resolveOpts =
+      appTap && opts.ageAtMs === undefined
+        ? {
+            ...(Number.isFinite(stamp) ? { ageAtMs: Math.min(stamp, nowMs) } : {}),
+            maxTapAgeMs: NATIVE_APPROVE_MAX_AGE_MS,
+          }
+        : opts
     // A permission card is answered by Claude Code's prompt, never by the agent. Refused here, before the ledger moves.
     const pre = ctx.permission.precheck(f.card_id, f.action)
     if (pre.handled && !pre.ok) {
@@ -162,7 +178,7 @@ export const cardsFrames = {
         ts: f.ts,
       },
       nowMs,
-      { ...opts, frameId: it.frame.id, ...(dlg?.handled ? { by: dlg.by } : {}) },
+      { ...resolveOpts, frameId: it.frame.id, ...(dlg?.handled ? { by: dlg.by } : {}) },
     )
     if (!out.ok) {
       ctx.log.security('card resolve rejected', { card_id: f.card_id, code: out.code, reason: out.reason })
@@ -183,7 +199,11 @@ export const cardsFrames = {
             }),
           )
       }
-      return this.reject(it, out.code, out.reason)
+      return this.reject(
+        it,
+        out.code,
+        out.code === 'stale' ? 'That tap waited too long. Tap the card again in the app.' : out.reason,
+      )
     }
     this.expiry.cancel(f.card_id)
     const row = out.row
@@ -202,7 +222,8 @@ export const cardsFrames = {
       )
     if (pre.handled) {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
-      const sent = await ctx.permission.onResolved(row, f.action)
+      // the card.resolve's signed `note` is the owner's Deny note (relay.ts keeps it only for a Deny to a hook)
+      const sent = await ctx.permission.onResolved(row, f.action, f.note)
       // The card says "failed" in the app either way. A tap from a notification was answered "done" by the relay, so it also
       // gets a refusal: the relay turns that into the failed-tap push, and the owner is not left thinking the Allow went through.
       if (!sent.ok && it.frame.type === 'native.act') return this.reject(it, sent.code, sent.reason)
@@ -255,6 +276,15 @@ export const cardsFrames = {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       await (ctx.updateResend?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
         ctx.log.warn('update resend card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    } else if (row.actor === 'bridge' && isPeerAddressCard(row.binding)) {
+      // "<agent> has a new address": the BRIDGE sends the waiting messages to the new address, only on the owner's own signed tap in
+      // the app (peer/address-ask.ts). The agent is never told about the card.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.peerAddressAsk?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('peer address card not applied', { card: f.card_id, error: (e as Error).message }),
       )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)

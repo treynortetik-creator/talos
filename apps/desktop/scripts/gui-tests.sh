@@ -11,6 +11,8 @@
 #   gui-tests.sh            run every suite
 #   gui-tests.sh --list     print the suite names and stop
 # Env: TALOS_GUI_TEST_RUNNER (default `bash scripts/test.sh`) is the command that runs `swift test`; the guard test swaps it.
+#      TALOS_GUI_INSTALL (default `env -u GH_TOKEN -u GITHUB_TOKEN pnpm install --frozen-lockfile --prefer-offline`) is the package install run first
+#      (not for --list); set it to `true` to skip.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,8 +31,15 @@ if [ "${1:-}" = "--list" ]; then suites; exit 0; fi
 names="$(suites)"
 [ -n "$names" ] || { echo "gui-tests: found no suites in Tests/TalosDesktopGuiTests" >&2; exit 2; }
 runner="${TALOS_GUI_TEST_RUNNER:-bash scripts/test.sh}"
-# Suites that skip by design unless their own env var is set (TALOS_SNAPSHOT_URL, TALOS_SHOT_DIR, TALOS_IDLE_RECORD).
-ENV_GATED=" SnapshotTests ScreenShotTests CompanionIdleRecordGuiTests "
+# Suites that skip by design unless their own env var is set (TALOS_SNAPSHOT_URL, TALOS_SHOT_DIR, TALOS_IDLE_RECORD,
+# TALOS_ONBOARDING_SHOTS, TALOS_SETTINGS_SHOTS). With the variable set they run and must pass like any other suite.
+# gui-tests-test.sh checks this list against the @Suite attributes in the sources.
+ENV_GATED=" SnapshotTests ScreenShotTests CompanionIdleRecordGuiTests OnboardingShotsGuiTests SettingsShotsGuiTests "
+# A fresh worktree has no node_modules: install the packages first, as the repo's own jobs do (ci-local.sh), from the repo root.
+# TALOS_GUI_INSTALL swaps the command; the guard test does.
+install="${TALOS_GUI_INSTALL:-env -u GH_TOKEN -u GITHUB_TOKEN pnpm install --frozen-lockfile --prefer-offline}"
+# shellcheck disable=SC2086
+(cd ../.. && $install </dev/null) || { echo "gui-tests: FAIL: the package install failed ($install)"; exit 1; }
 listed="$(printf '%s\n' "$names" | wc -l | tr -d ' ')"
 fail=0 ran=0 skipped=0
 while IFS= read -r name; do

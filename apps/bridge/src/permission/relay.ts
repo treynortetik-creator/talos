@@ -11,6 +11,7 @@
 import { join } from 'node:path'
 import {
   type CardT,
+  cleanDenyNote,
   composePermissionCard,
   type ErrorCodeT,
   newId,
@@ -27,8 +28,11 @@ import {
 import type { LedgerRow } from '../cards-ledger.ts'
 import type { BridgeContext } from '../context.ts'
 import { cardCreateFrame, cardUpdateFrame } from '../frames-out.ts'
+import { agentDirFromEnv } from '../last-good.ts'
 import { say } from '../owner-words.ts'
 import { assertFrameFits, type DurableResult } from '../transport.ts'
+import { askRuleFiles, askRulesIn } from './ask-rules.ts'
+import { askRuleMatches, BYPASS_MODE } from './ask-why.ts'
 import { type Explainer, type ExplainRequest, explainRequestOf, explainToCard } from './explainer.ts'
 import { agentFileWarning } from './frontmatter-risk.ts'
 import { renderHookCall } from './hook-render.ts'
@@ -41,9 +45,22 @@ type Pending = { card: CardT; requestId: string; hook?: true }
  * A prompt a PermissionRequest hook reports. `thread` is a PROVEN worker thread (hub/server.ts), absent for the main session;
  * `pid` and `cwd` are what a main-session hook says about itself (shown on its card, never trusted for anything else).
  */
-export type HookRequest = { thread?: string; tool_name: string; tool_input: unknown; pid?: number; cwd?: string }
+export type HookRequest = {
+  thread?: string
+  tool_name: string
+  tool_input: unknown
+  pid?: number
+  cwd?: string
+  /** The session's permission mode as the hook's input names it (`permission_mode`); used only for the "why it asked" line. */
+  mode?: string
+}
 /** `allow` and `deny` are only ever the owner's signed answer to the card; everything else is `none` (leave the prompt alone). */
-export type HookDecision = { decision: 'allow' | 'deny' | 'none'; reason: string }
+export type HookDecision = {
+  decision: 'allow' | 'deny' | 'none'
+  reason: string
+  /** The owner's own words with a `deny` (cleaned, capped): signed in the card.resolve, so no program wrote them. Never logged. */
+  note?: string
+}
 
 /**
  * How long a main-session hook request waits to see whether the channel relay carries the same prompt (it then answers it, and a
@@ -112,6 +129,29 @@ export class PermissionRelay {
   }
   setClientVersion(fn: () => string | undefined) {
     this.clientVersion = fn
+  }
+
+  /** The ask rules in the agent folder's and the user's settings files (an agent may edit its own, by the owner's rule, so they are not proof the owner wrote them), for the "why it asked" line (default: the agent folder's and the user's settings files). */
+  setAskRuleSource(fn: () => string[]) {
+    this.askRules = fn
+  }
+  private askRules: () => string[] = () => {
+    const agentDir = agentDirFromEnv(process.env)
+    if (!agentDir) return []
+    return askRuleFiles(agentDir, this.ctx.env.claudeConfigDir).flatMap(askRulesIn)
+  }
+
+  /**
+   * Why Claude Code asked, when that is KNOWN (ask-why.ts): this is the main session's own hook, it says it is in bypassPermissions,
+   * and the call matches an ask rule in the owner's settings. Never throws; anything else is unset (no line on the card).
+   */
+  private askedWhy(req: HookRequest, mainSession: boolean): 'your_rule' | undefined {
+    if (!mainSession || req.mode !== BYPASS_MODE) return undefined
+    try {
+      return askRuleMatches(this.askRules(), req.tool_name, req.tool_input) ? 'your_rule' : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /** The plain explanation of each card (explainer.ts); none: cards are exactly as they were, with no `explain` field. */
@@ -331,7 +371,7 @@ export class PermissionRelay {
    * `ok: false` when the verdict did not reach Claude Code (the card shows "failed"): the caller owes a tap from a
    * notification a refusal, because the relay told the phone "done" when it queued the tap.
    */
-  async onResolved(row: LedgerRow, action: 'primary' | 'kill' | 'revise'): Promise<ResolveOutcome> {
+  async onResolved(row: LedgerRow, action: 'primary' | 'kill' | 'revise', ownerNote?: string): Promise<ResolveOutcome> {
     const { ctx } = this
     const p = this.pending.get(row.id)
     // what the owner reads when the verdict did not get through: what happened, never "answer it at the Mac"
@@ -372,7 +412,11 @@ export class PermissionRelay {
     }
     if (p.hook) {
       // the owner's signed answer, to the hook that asked; false when that hook is already known to be gone
-      if (!waiter?.({ decision: v.verdict.behavior, reason: 'owner' })) return fail('send_failed', 'internal')
+      // The owner's note goes only with a Deny to a hook (an Allow, and a channel relay verdict, have no room for words). Cleaned
+      // here as well as by the caller; it is owner text going into the agent's context and is never logged.
+      const note = v.verdict.behavior === 'deny' ? cleanDenyNote(ownerNote) : undefined
+      if (!waiter?.({ decision: v.verdict.behavior, reason: 'owner', ...(note ? { note } : {}) }))
+        return fail('send_failed', 'internal')
     } else {
       if (!this.sender) return fail('no_channel', 'permission_closed')
       // a send that fails is tried again twice (a moment's hiccup on the channel), then said as failed, with why
@@ -590,6 +634,8 @@ export class PermissionRelay {
       thread_id: req.thread ?? ctx.config.config.default_thread,
       now: nowMs,
       client_version: PERMISSION_MIN_CLIENT_VERSION,
+      deny_note: true, // this card's Deny goes to the hook, whose deny answer can carry the owner's words
+      ...(this.askedWhy(req, mainSession) ? { asked_why: 'your_rule' as const } : {}),
       ...(this.explainer ? { explain: true } : {}),
       // the relay may be asking the same thing in a card of its own (its preview did not match exactly): say so, keep Allow
       ...(relayMayCarry ? { other_channels: ['Another card for this call'] } : {}),

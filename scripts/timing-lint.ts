@@ -14,13 +14,23 @@
 //                     a callback or Promise.all are not summed; --strict reports "cannot-prove" for a test they might push over.
 //   (c) long-advance  (a warning) a fake-clock advance of more than an hour replays every timer in between: clock.jump() or
 //                     clock.set() (7d1846cf).
+//   (d) unreasoned-skip  a skipped test that does not say why: it.skip / test.skip / describe.skip / .skipIf( / xit( in vitest, bun and
+//                     Playwright, and Swift Testing's .disabled(. The reason is a `// skip: <why>` (or `// quarantine: <why>`) comment on the
+//                     line or the line before; Playwright's test.skip(cond, "why") and Swift's .disabled("why") carry it in the call.
 // `// timing-ok: <reason>` on the line, or the line before, allows one. --changed <base> reports only added or changed lines.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type Rule = 'unscaled' | 'speed' | 'empty-reason' | 'exceeds' | 'cannot-prove' | 'long-advance'
+export type Rule =
+  | 'unscaled'
+  | 'speed'
+  | 'empty-reason'
+  | 'exceeds'
+  | 'cannot-prove'
+  | 'long-advance'
+  | 'unreasoned-skip'
 export type Hit = {
   file: string
   line: number
@@ -212,6 +222,7 @@ const defaultTimeout = (r: Runner, file: string) =>
 export function isTestFile(file: string): boolean {
   if (/(^|\/)(node_modules|fixtures)\//.test(file) || /\.d\.ts$/.test(file)) return false
   if (/^kit\/scripts\/test-[^/]+\.sh$/.test(file)) return true
+  if (/(^|\/)[A-Za-z]*Tests?\/.*\.swift$/.test(file)) return true // the (d) skip rule only: lintSource sends Swift there
   if (!/\.(m?ts|tsx)$/.test(file)) return false
   return (
     /^(apps|packages)\/[^/]+\/test(-browser)?\//.test(file) ||
@@ -732,14 +743,99 @@ function lintShell(file: string, text: string, opts: Opts): Hit[] {
   return out.sort((a, b) => a.line - b.line)
 }
 
+// ---- (d) a skip says why ---------------------------------------------------------------------------------------------------
+const SKIP_HINT =
+  'say why on this line or the line before: `// skip: <why>` (Playwright: test.skip(cond, "why"); Swift: .disabled("why")), or delete the test'
+const SKIP_SITE = /\b(?:(?:it|test|describe|suite)\.skip|xit|xtest|xdescribe)\b|\.skipIf\s*\(/g
+const SKIP_COMMENT = /(?:\/\/|\/\*)\s*(?:skip|quarantine):\s*\S/
+
+/** A string literal with something in it: the reason a call carries (the masked text blanks it, so this reads the original). */
+const nonEmptyString = (text: string, a: Arg | undefined): boolean =>
+  a !== undefined && /^(["'`])\s*\S[\s\S]*\1$/.test(text.slice(a.s, a.e).trim())
+
+/** The text of a Swift call's parentheses, from the open paren (strings and a line comment's text do not count as parens). */
+function swiftCallArgs(text: string, open: number): string {
+  let depth = 0
+  let inStr = false
+  for (let i = open; i < text.length; i++) {
+    const c = text[i] as string
+    if (inStr) {
+      if (c === '\\') i++
+      else if (c === '"') inStr = false
+    } else if (c === '"') inStr = true
+    else if (c === '/' && text[i + 1] === '/') while (i < text.length && text[i] !== '\n') i++
+    else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return text.slice(open + 1, i)
+  }
+  return text.slice(open + 1)
+}
+
+function lintSwiftSkips(file: string, text: string): Hit[] {
+  const lines = text.split('\n')
+  const said = (n: number) => [n, n - 1].some((l) => SKIP_COMMENT.test(lines[l - 1] ?? ''))
+  const out: Hit[] = []
+  let at = 0
+  lines.forEach((l, i) => {
+    const n = i + 1
+    const start = at
+    at += l.length + 1
+    if (/^\s*\/\//.test(l)) return
+    // a test trait: on the @Test / @Suite line, or the line or two after it that carries the traits
+    const open = (x: string) => (x.match(/\(/g)?.length ?? 0) > (x.match(/\)/g)?.length ?? 0)
+    if (
+      !lines
+        .slice(Math.max(0, i - 2), i + 1)
+        .some((x, k, a) => /@(?:Test|Suite)\b/.test(x) && (k === a.length - 1 || open(x)))
+    )
+      return
+    for (const m of l.matchAll(/\.disabled\s*\(/g)) {
+      if (/"\s*[^"\s][^"]*"/.test(swiftCallArgs(text, start + m.index + m[0].length - 1)) || said(n)) continue
+      out.push({ file, line: n, rule: 'unreasoned-skip', text: l.trim().slice(0, 140), hint: SKIP_HINT })
+    }
+  })
+  return out
+}
+
+/** The skipped tests of one file that do not say why. */
+export function lintSkips(file: string, text: string): Hit[] {
+  if (file.endsWith('.swift')) return lintSwiftSkips(file, text)
+  if (file.endsWith('.sh')) return []
+  const { masked, comments } = mask(text)
+  const playwright = runnerOf(file, text) === 'playwright'
+  const lineAt = (pos: number) => masked.slice(0, pos).split('\n').length
+  const out: Hit[] = []
+  const seen = new Set<number>()
+  for (const m of masked.matchAll(SKIP_SITE)) {
+    const line = lineAt(m.index)
+    if (seen.has(line)) continue
+    if ([line, line - 1].some((n) => SKIP_COMMENT.test(comments.get(n) ?? ''))) continue
+    // Playwright's test.skip(condition, "why"): the description is the second argument
+    const call =
+      playwright && m[0] === 'test.skip' ? calls(masked, /\btest\.skip\s*\(/g).find((c) => c.at === m.index) : undefined
+    if (call && call.args.length >= 2 && nonEmptyString(text, call.args[1]) && !nonEmptyString(text, call.args[0]))
+      continue
+    seen.add(line)
+    out.push({
+      file,
+      line,
+      rule: 'unreasoned-skip',
+      text: (text.split('\n')[line - 1] ?? '').trim().slice(0, 140),
+      hint: SKIP_HINT,
+    })
+  }
+  return out
+}
+
 export function lintSource(file: string, text: string, opts: Opts = {}): Hit[] {
   if (file.endsWith('.sh')) return lintShell(file, text, opts)
+  if (file.endsWith('.swift')) return lintSkips(file, text)
   const out: Hit[] = []
   const c = makeCtx(file, text, opts, out)
   const tests = findTests(c)
   scanLiterals(c, tests)
   scanSpeedAndAdvance(c)
   checkExceeds(c, tests)
+  out.push(...lintSkips(file, text))
   return out.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule))
 }
 
@@ -869,9 +965,15 @@ export function main(argv: string[]): number {
   if (sum) console.log(summary(hits))
   else for (const h of hits) console.log(format(h))
   const fails = hits.filter((h) => !h.warn)
-  if (fails.length > 0 && base) {
+  const skips = fails.filter((h) => h.rule === 'unreasoned-skip')
+  if (skips.length > 0 && base) {
     console.error(
-      `\ntiming lint: ${fails.length} hit(s) on added or changed lines. A test that waits a fixed time fails on a loaded machine (TALOS_TEST_TIME_FACTOR is 3 on a small one).\n` +
+      `\nskip lint: ${skips.length} skipped test(s) on added or changed lines do not say why.\n  Fix: ${SKIP_HINT}.`,
+    )
+  }
+  if (fails.length > skips.length && base) {
+    console.error(
+      `\ntiming lint: ${fails.length - skips.length} hit(s) on added or changed lines. A test that waits a fixed time fails on a loaded machine (TALOS_TEST_TIME_FACTOR is 3 on a small one).\n` +
         "  Fix: wrap the wait in t() from @talos-app/testkit (scripts/: scaled() from packages/testkit/src/time-factor.ts), or raise the test's timeout above the sum of its waits.\n" +
         '  Allow: when the time is the behaviour under test (a negative window, a product deadline), put `// timing-ok: <reason>` on that line or the line above it. The reason must not be empty.',
     )

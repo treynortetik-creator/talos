@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,7 @@ import { report, timingsFor } from './ci-subset-report.ts'
 import { cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
 import { fixtureGitEnv, harnessBin, harnessEnv, REFUSED_TOOLS, withoutInherited } from './harness-path'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -1032,5 +1034,96 @@ describe('the harness PATH is an allow-list: nothing unlisted is found, every re
     const marker = readFileSync(r.env.REFUSED_MARKER as string, 'utf8')
     expect(marker).toMatch(/^claude --version$/m)
     expect(marker).toMatch(/^npm exec /m)
+  })
+})
+
+describe('the browser job and the Playwright install (its cleanup once read a link into ~/Desktop and hung for 20-30 minutes)', () => {
+  // A fake pnpm: --dry-run lists three build folders under $PW (as Playwright does: no lock, no cleanup); the real install records
+  // whether __dirlock was there and whether the cleanup was off, then (PW_MODE=hang) hangs with a child of its own.
+  const PNPM = `echo "pnpm $* GC=\${PLAYWRIGHT_SKIP_BROWSER_GC:-}" >> "$CALLS"
+case "$*" in
+  *"playwright install --dry-run"*) for d in chromium-1 ffmpeg-1 webkit-1; do echo "  Install location:    $PW/$d"; done ;;
+  *"playwright install"*)
+    echo "lock=$([ -e "$PW/__dirlock" ] && echo present || echo absent)" >> "$CALLS"
+    if [ "\${PW_MODE:-}" = hang ]; then sleep 600 & echo $! > "$PW_SLEEPER"; wait; fi ;;
+esac
+exit 0`
+  const builds = ['chromium-1', 'ffmpeg-1', 'webkit-1']
+  function pwRepo(missing = '') {
+    const r = repo('', { pnpm: PNPM })
+    const pw = join(r.T, 'pw')
+    for (const b of builds) {
+      mkdirSync(join(pw, b), { recursive: true })
+      if (b !== missing) writeFileSync(join(pw, b, 'INSTALLATION_COMPLETE'), '')
+    }
+    const env = { PW: pw, PW_SLEEPER: join(r.T, 'sleeper') }
+    const installs = () => r.calledLines().filter((l) => /playwright install (?!--dry-run)|^lock=/.test(l))
+    return { r, pw, env, installs }
+  }
+  const lockAged = (pw: string, ageSeconds: number) => {
+    mkdirSync(join(pw, '__dirlock'))
+    const t = new Date(Date.now() - ageSeconds * 1000)
+    utimesSync(join(pw, '__dirlock'), t, t)
+  }
+  const browser = ['--ref', 'HEAD', '--no-status', '--jobs', 'browser']
+
+  it('every build the install would fetch is complete: no install, no wait for the mutex, and the log says so', async () => {
+    const { r, env, installs } = pwRepo()
+    expect(await r.start(browser, env).done).toBe(0)
+    expect(installs()).toEqual([])
+    expect(r.log('browser')).toContain('playwright install skipped')
+    expect(r.calledLines().some((l) => l.includes('test:e2e'))).toBe(true)
+  })
+
+  it('a build without its INSTALLATION_COMPLETE marker: the install runs, once, with the cleanup off', async () => {
+    const { r, env, installs } = pwRepo('webkit-1')
+    expect(await r.start(browser, env).done).toBe(0)
+    expect(installs()).toEqual(['pnpm exec playwright install chromium webkit GC=1', 'lock=absent'])
+  })
+
+  it('Playwright names no build (its list is empty): never read as complete, the install runs', async () => {
+    const r = repo()
+    expect(await r.start(browser).done).toBe(0)
+    expect(r.calledLines().some((l) => l.includes('playwright install chromium webkit'))).toBe(true)
+  })
+
+  it('an install that hangs is stopped with its whole group at the limit, the step is loud, and the job is red', async () => {
+    const { r, env } = pwRepo('webkit-1')
+    const run = r.start(browser, { ...env, PW_MODE: 'hang', CI_PW_INSTALL_LIMIT: '2' })
+    expect(await run.done).toBe(1)
+    const log = r.log('browser')
+    expect(log).toContain('playwright install stopped after 2s')
+    expect(log).toContain('NOT RUN: test:browser (the browsers could not be made ready)')
+    const pid = Number(readFileSync(env.PW_SLEEPER, 'utf8'))
+    expect(() => process.kill(pid, 0)).toThrow() // the install's child went with it
+  })
+
+  it('a __dirlock older than the limit with no install running is cleared before the install', async () => {
+    const { r, pw, env, installs } = pwRepo('webkit-1')
+    lockAged(pw, 3600)
+    expect(await r.start(browser, { ...env, CI_PW_INSTALL_LIMIT: '30' }).done).toBe(0)
+    expect(installs()).toContain('lock=absent')
+    expect(r.log('browser')).toContain('stale __dirlock')
+  })
+
+  it('a __dirlock younger than the limit is left alone', async () => {
+    const { r, pw, env, installs } = pwRepo('webkit-1')
+    lockAged(pw, 1)
+    expect(await r.start(browser, { ...env, CI_PW_INSTALL_LIMIT: '30' }).done).toBe(0)
+    expect(installs()).toContain('lock=present')
+  })
+
+  it('an old __dirlock while a Playwright install is running is left alone: that process owns it', async () => {
+    const { r, pw, env, installs } = pwRepo('webkit-1')
+    lockAged(pw, 3600)
+    const up = join(r.T, 'owner-up')
+    const owner = spawn('bash', [
+      '-c',
+      `: > "${up}"; exec -a "node ./node_modules/@playwright/test/cli.js install chromium" sleep 60`,
+    ])
+    live.push(owner)
+    waitForFile(up)
+    expect(await r.start(browser, { ...env, CI_PW_INSTALL_LIMIT: '30' }).done).toBe(0)
+    expect(installs()).toContain('lock=present')
   })
 })

@@ -514,6 +514,12 @@ that step only, and the rest of the run goes on in parallel:
 | `playwright-install` | `playwright install chromium webkit` | one shared browser download folder          |
 | `docker`             | starting Docker (`colima start`)     | one Docker VM                               |
 
+The `playwright-install` step is skipped when `playwright install --dry-run chromium webkit` names build folders that all hold
+`INSTALLATION_COMPLETE` (no mutex, no wait). Otherwise it runs with `PLAYWRIGHT_SKIP_BROWSER_GC=1` and a group time limit,
+`CI_PW_INSTALL_LIMIT` (300 s), and a `__dirlock` older than that with no install running is cleared first. The cleanup is off
+because it reads the `browsers.json` of every project listed in `ms-playwright/.links`, and a link into `~/Desktop` made that
+read hang in the kernel (0% CPU, no output) for 20-30 minutes, twice. Unused browser builds are no longer deleted: remove one by hand.
+
 ### The heavy lock and its guard
 
 The `suites` mutex is also the machine's heavy-work lock for everything outside a CI run: `scripts/heavy-lock.sh run
@@ -523,17 +529,18 @@ holds run at once. Who goes next, with one slot: CI's suites first (a ci-local
 slot's ticket, kind `ci`), then everything else, first come first served within each; with more, CI has its own slot ("Heavy
 slots" below) and the rest go in turn in theirs; a holder is never stopped for anyone. A
 push gate (the gate `gate-push.sh` runs; kind `push`) and a builder's own `heavy-lock.sh run` (a whole suite, `cpu-burn.sh`, a
-stress loop; kind `run`) never go before CI, however long they wait; the same holds for the desktop mutex. The one exception
-is a `jump` ticket: a checked `gate.sh --push --red-main` gate.
+stress loop; kind `run`) go in their own line, and with two slots or more the turn rule below puts a waiting gate before a waiting
+CI run (until that run is starved); for the desktop mutex CI still goes first. The one ticket that goes before CI at once, even a starved run, is
+a `jump` ticket: a checked `gate.sh --push --red-main` gate.
 
-A gate's wait behind CI is bounded by CI's arrivals: CI comes from pushes (to `main`, PRs), reruns and the nightly, and a push
-needs a gate, so gates that wait trigger no more CI and the oldest goes once CI already queued is done. `HEAVY_LOCK_TIMEOUT`
+A gate's wait behind CI is bounded: CI comes from pushes (to `main`, PRs), reruns and the nightly, a waiting gate goes before a
+waiting CI run, and only a run that holds the machine, or one that has waited behind 2 gates or 30 minutes, makes it wait. `HEAVY_LOCK_TIMEOUT`
 (default 3600 s) caps a wait for anything but a push: the waiter then refuses, saying it could not get the heavy lock (exit
 75). **A push gate (`HEAVY_LOCK_PUSH`, set by `gate-push.sh`) waits up to 14400 s (four hours)** and keeps its place in the queue: a
 push that waited behind a long queue and then timed out at an hour threw away its gate and its rebase. An explicit `HEAVY_LOCK_TIMEOUT`
 still applies to it, and an explicit `0` means no limit for anyone. During a changeover a waiter on the old lock code may still let a late push gate go first. (A
-30-minute cap that let a waiting push gate go before CI was removed: four late gates in a row once left `main` with no verdict
-for 2 h.) A ticket is CI only by its kind line, which only ci-local writes; a `heavy-lock.sh run` named `slot 1` is not CI.
+plain 30-minute cap that let a waiting push gate go before CI was removed once: four late gates in a row left `main` with no verdict
+for 2 h. The turn's cap counts gates as well as minutes, so that cannot happen again: see the starvation cap below.) A ticket is CI only by its kind line, which only ci-local writes; a `heavy-lock.sh run` named `slot 1` is not CI.
 
 **Heavy slots.** The number of slots is `TALOS_HEAVY_SLOTS` in the environment, else the first line of
 `~/.cache/talos-ci/heavy-slots` (or `$TALOS_CI_CACHE/heavy-slots`), else **4**; `1` is the one-lock behaviour exactly, and 8 is
@@ -548,7 +555,7 @@ run slots' 4873 and up), tmux socket prefix and `TALOS_HEAVY_SLOT`, as a gate's 
 `job_tmp`), and the environment is put back when it ends. A gate, a loop or an eval (`heavy-lock.sh run`) takes slots K+1..N (`locks/mutex-suites-<k>`),
 the first free one. By default that is CI's two and two for builders, so at most two gates run beside CI (while a run is active
 the cap is two whatever N is). Each class has its own line: CI's jobs in turn (slots 1..K), the gates in turn (a checked
-`--red-main` jump first, then first come first served), and a waiter of one class never holds back the other. **A push run goes before a scheduled run** (the nightly, the hostile nightly: `CI_NIGHTLY=1`, `CI_HOSTILE=1`, "sched" on line 7 of the ticket): within CI's line its tickets go after every other CI ticket, it does not take a free run slot or a free heavy slot while a push run's is queued (the free-slot grace does not apply to it), and a scheduled quiet group that holds one slot lets it go when a push run's comes ahead. A scheduled step that already runs is never stopped. A scheduled run's wait for a queued push run at the run slots is capped as the wait for a gate is: after `CI_TURN_MAX_S` (3000 s) it goes ahead, said in its log. A scheduled run never makes a gate wait (`ci_turn_ahead` leaves its ticket out): the push run waits for the gates queued before it, so a gate that waited for the scheduled run queued before it would close a cycle. **During the changeover** a checkout whose scripts are older (no "sched" on its tickets) can still put a push run's quiet group and a newer scheduled run's ticket in each other's way; the lock timeout bounds that wait, and it ends as worktrees rebase. With **one slot** everyone shares it, CI first, as it always did. A dead holder in any slot is taken over
+`--red-main` jump first, then first come first served), and a waiter of one class never holds back the other. **A push run goes before a scheduled run** (the nightly, the hostile nightly: `CI_NIGHTLY=1`, `CI_HOSTILE=1`, "sched" on line 7 of the ticket): within CI's line its tickets go after every other CI ticket, it does not take a free run slot or a free heavy slot while a push run's is queued (the free-slot grace does not apply to it), and a scheduled quiet group that holds one slot lets it go when a push run's comes ahead. A scheduled step that already runs is never stopped. **A scheduled run starts only on an empty queue:** no gate holds or waits (the turn rule: a gate that waits goes before it, and a scheduled run is never starved), no push run waits for a run slot, and no push run holds one (`ci_sched_yield`; a run that waits only for a part does not hold, and another scheduled run does not count: the nightly and the hostile nightly may overlap, as before). Before, it waited only for a push run that was queued. Its wait at the run slots is capped as the wait for a gate is: after `CI_TURN_MAX_S` (3000 s) it goes ahead, said in its log ("went ahead of a busy queue after N min"), and the wait for its turn has the same cap (it then runs beside the gate, with the alert). A scheduled run marks its run slot (`locks/slot-N/sched`) so that no other scheduled run reads it as a push run. A scheduled run never makes a gate wait (`ci_turn_ahead` leaves its ticket out): the scheduled run waits for every gate that is queued, so a gate that waited for it would close a cycle. **During the changeover** a checkout whose scripts are older (no "sched" on its tickets) can still put a push run's quiet group and a newer scheduled run's ticket in each other's way; the lock timeout bounds that wait, and it ends as worktrees rebase. With **one slot** everyone shares it, CI first, as it always did. A dead holder in any slot is taken over
 like slot 1's. **During the rollout** a checkout whose scripts are older still runs its gate in `mutex-suites`, i.e. slot 1,
 and CI waits for it as before; that goes away as worktrees rebase. **CI's quiet group** (the contract and schedules suites, which give a real bridge and the real Chronos CLI 3 s to answer and
 failed beside anything else) **holds all K of CI's slots** (`ci_mutex_all`: it takes the slots as it finds them free, but only
@@ -571,24 +578,39 @@ classes take turns: _CI_ is a whole `ci-local.sh` run, from the moment it has a 
 _gate_ is a hold of one of the gate slots (K+1..N). Nobody is stopped: a class that is on waits for the other to finish what it has.
 
 - **Who may start.** A new CI run (before `ci_acquire_slot` takes a run slot) and a new gate hold (before `ci_mutex` takes a gate
-  slot) each ask `ci_turn_ok`, which holds a short lock (`locks/mutex-turn`, taken with `ci_lock_try`, a dead holder is taken over
+  slot) each ask `ci_turn_check`, which holds a short lock (`locks/mutex-turn`, taken with `ci_lock_try`, a dead holder is taken over
   as any lock) while it looks and while the caller takes its slot, so the look and the take are one step. The answer is no while a
-  living holder of the other class exists (a run slot, or a gate slot), and no while a waiter of the other class that came
-  earlier is queued (a CI run waits in `locks.queue/admit`, a gate in `locks.queue/suites` as before; tickets sort by arrival, a
-  `jump` gate goes before CI waiters but still waits for the runs that are on). So the order is first come, first served across the two classes, and
-  a class that is on lets newcomers join it only while no older waiter of the other class is queued: a gate that arrives while
-  CI is on is not starved by CI runs that arrive after it, and CI queued behind a gate is not starved by gates that arrive after it.
+  living holder of the other class exists (a run slot, or a gate slot), and no while a waiter of the other class that goes first is
+  queued (a CI run waits in `locks.queue/admit`, a gate in `locks.queue/suites` as before).
+- **Gates go before queued CI (the starvation cap).** A waiting gate goes before a waiting CI run, whichever came first: most of a push's
+  lock wait used to be a gate queued behind the previous push's CI run. So a CI run waits for every gate that is queued, and a gate waits
+  only for the CI runs that hold the machine and for a CI run that is **starved**: one that has waited behind `CI_TURN_PASS_MAX` gates
+  (default **2**) or for `CI_TURN_PASS_MAX_S` seconds (default **1800**), whichever comes first. A starved run goes next: no gate that waits
+  goes before it, and the gates that come later wait for it; the gates that already hold are never stopped, so it starts when they have
+  ended. A gate is a pass for every CI run queued when it takes its gate slot (one line of the time in `locks.queue/gate-passes`, written
+  under the turn lock, emptied when no CI run is queued); two gates that run side by side are two passes. The time is the CI run's
+  place in the queue (the time in its ticket's name). A `jump` gate (a checked `--red-main` gate) goes before every CI run, starved or
+  not. A scheduled run (below) is never starved and never makes a gate wait. A run that holds goes on whatever waits. The two caps are
+  the CI run's own: it writes them on line 7 of its ticket (`caps N S`, from its `CI_TURN_PASS_MAX` and `CI_TURN_PASS_MAX_S`), and the
+  gates and the run read them there, so everybody reads the same order; `0` makes a run starved at once, i.e. CI before waiting gates.
+  **Limits, accepted:** a starved run that cannot start yet (it waits for a free run slot, or for `CI_MAX_LOAD`) still holds the gates
+  back until it starts or gives up at `CI_LOCK_TIMEOUT`; and a gate that the guard keeps refusing (`heavy-guard.sh`, "not now") is still a
+  queued gate, so a CI run waits for it up to its cap (30 min). **During the changeover:** a gate of the older code (no `turn2` on line 7
+  of its ticket) records no passes and still waits for CI queued before it; so a CI run waits for such a gate only if it queued before
+  the run, and the older code's gate that queued later waits for the run, as it always did (otherwise each would wait for the other
+  until a cap). `heavy-lock.sh status` marks a starved run "starved: goes next". The tests inject the clock
+  (`CI_TURN_NOW`, seconds).
 - **What is never held up.** A run already admitted goes on whatever waits: its own holds of CI's slots, its jobs, its cleanup
   (stopping it for a waiting gate would throw away its verdict, and holding its inner holds back would deadlock). Nested calls
   (`TALOS_CI_NESTED`, a run inside a holder) pass straight through, as they do for the locks.
 - **Bounded, and said.** A waiter's line names who it waits for (the runs or gates that hold the machine, with pid, what and
-  since when, or the older waiters) and is said again every five minutes with the time so far. A gate's wait counts in its
+  since when, or the waiters that go first) and is said again every five minutes with the time so far. A gate's wait counts in its
   `HEAVY_LOCK_TIMEOUT` (a push gate four hours) and ends in exit 75 as any lock wait: a gate fails closed. A CI run **fails open**:
   after `CI_TURN_MAX_S` (3000 s) it goes ahead beside the gate, with a loud line in its log and an alert ("ran beside a gate after N
   min"), because an untested main commit is worse than a noisy run; its waits for a run slot keep `CI_LOCK_TIMEOUT`, which does not run while it waits for its turn. The runner's run step
   has 130 minutes: keep `CI_TURN_MAX_S` plus a normal run well inside it, and the line "ran beside a gate" is said when the run's slot is
-  taken, not before. A run that waits for load (`CI_MAX_LOAD`) keeps its place in the queue, so gates queued after it go behind it until it
-  runs or gives up at `CI_LOCK_TIMEOUT`; a run counts from the moment it holds a run slot, including an idle wait for another run of the
+  taken, not before. A run that waits for load (`CI_MAX_LOAD`) keeps its place in the queue, so its wait counts toward its starvation
+  cap (above) until it runs or gives up at `CI_LOCK_TIMEOUT`; a run counts from the moment it holds a run slot, including an idle wait for another run of the
   same commit. After `TALOS_TURN_ALERT_S` (1200 s) of waiting ONE alert file goes to `alerts/` (what waits, for whom, how long). Each
   wait of 1 s or more is a row of `logs/lock-waits.tsv` (kind `turn`), and `heavy-lock.sh status` shows who holds the machine and who waits.
 - **A run that waits only for a part.** When check or browser waits for a part on another machine (`CI_CHECK_PART`,
@@ -640,6 +662,10 @@ A waiter that is not first in line still takes the lock once it has sat free, wi
 seconds (default 15): a waiter running other lock code (main's old first come first served during a changeover, or a branch's
 gate) can then never leave the lock free with both waiting. Every wait of 1 s or more is a row in
 `~/.cache/talos-ci/logs/lock-waits.tsv` (UTC time, lock, what, seconds, `got` or `timed out`, kind: `ci`, `push` or `run`).
+A landed push adds one more row, kind `pushed` (lock `push`; what: `pushed <sha> requeues=N races=M gate=<folder> bases=<the base each
+full gate ran on>`; seconds: all its full gates, lock wait included). `node scripts/push-latency.ts` reads them with the gates' own
+rows and prints, for each of the last pushes, the lock wait, the gate's own run and the re-gates as three numbers (pushes from
+before the row get an inferred gate time, an upper bound, and `n/r` re-gates).
 
 **One heavy lock across WSL distros (Titan).** Titan's Ubuntu (gates, the whole-suite runs other machines ask for) and talos-ci
 (the runner) share one VM but each has its own `~/.cache/talos-ci` and its own PID namespace, so neither side's mutex can see

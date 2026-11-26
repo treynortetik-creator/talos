@@ -29,7 +29,8 @@
 # sets, waits up to 14400, four hours, unless HEAVY_LOCK_TIMEOUT says otherwise: a push keeps its place through a long queue); a command that itself exits
 # 75 reads the same, so a caller that must tell them apart runs one that doesn't. HEAVY_LOCK_POLL: seconds between looks (default 2).
 # With two slots or more a gate's hold and a CI run never overlap: they take turns (scripts/ci-local/turn.sh; docs/CI-LOCAL.md, "Gate and CI
-# take turns"); CI_TURN=0 turns that off.
+# take turns"); CI_TURN=0 turns that off. A waiting gate goes before a waiting CI run, unless that run has waited behind
+# CI_TURN_PASS_MAX gates (2) or CI_TURN_PASS_MAX_S seconds (1800): then it goes next. Nobody is stopped.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CI_LOCAL_LIB="$HERE/ci-local"

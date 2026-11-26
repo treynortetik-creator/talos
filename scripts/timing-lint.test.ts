@@ -436,3 +436,110 @@ describe('--changed: renames and changes away from the use site', () => {
     expect(flagged(root, base)).toEqual(['apps/bridge/test/d.test.ts:4:exceeds'])
   })
 })
+
+describe('(d) a skipped test says why', () => {
+  const dirs: string[] = []
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true })
+  })
+  const skips = (file: string, text: string) =>
+    lintSource(file, text)
+      .filter((h) => h.rule === 'unreasoned-skip')
+      .map((h) => h.line)
+
+  it('vitest and bun: skip, skipIf and the x-forms need a // skip: comment on the line or the line before', () => {
+    const f = 'apps/bridge/test/a.test.ts'
+    expect(skips(f, `${BUN}test.skip('x', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${BUN}it.skip('x', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${BUN}describe.skip('x', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${BUN}test.skipIf(process.platform !== 'linux')('x', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${BUN}describe.skipIf(!ENABLED)(\n  'x',\n  () => {},\n)\n`)).toEqual([3])
+    expect(skips(f, `${BUN}xit('x', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${BUN}test.skip('x', () => {}) // skip: needs the real keychain\n`)).toEqual([])
+    expect(skips(f, `${BUN}// skip: needs the real keychain\ntest.skip('x', () => {})\n`)).toEqual([])
+    expect(
+      skips(f, `${BUN}// quarantine: flaky on a loaded Mac, see the follow-ups list\ntest.skip('x', () => {})\n`),
+    ).toEqual([])
+  })
+
+  it('a reason two lines up, or an empty reason, does not count', () => {
+    const f = 'apps/bridge/test/a.test.ts'
+    expect(skips(f, `${BUN}// skip: too far\n\ntest.skip('x', () => {})\n`)).toEqual([5])
+    expect(skips(f, `${BUN}test.skip('x', () => {}) // skip:\n`)).toEqual([3])
+    expect(skips(f, `${BUN}test.skip('x', () => {}) // skipping this for now\n`)).toEqual([3])
+  })
+
+  it('a title string is not a reason, and a skip named in a string or comment is not a skip', () => {
+    const f = 'scripts/a.test.ts'
+    expect(skips(f, `${VIT}it.skip('flaky because of the clock', () => {})\n`)).toEqual([3])
+    expect(skips(f, `${VIT}// it.skip(x) would hide this\nconst s = "test.skip(x)"\nit('x', () => {})\n`)).toEqual([])
+    expect(skips(f, `${VIT}it('x', () => { permit.skip(1) })\n`)).toEqual([])
+  })
+
+  it("Playwright: test.skip(condition, 'why') carries its reason; a bare or title-only test.skip does not", () => {
+    const f = 'e2e/tests/a.spec.ts'
+    expect(
+      skips(
+        f,
+        `${PW}test('x', async ({ browserName }) => {\n  test.skip(browserName === 'webkit', 'no WebKit here')\n})\n`,
+      ),
+    ).toEqual([])
+    expect(
+      skips(f, `${PW}test('x', async ({ browserName }) => {\n  test.skip(browserName === 'webkit')\n})\n`),
+    ).toEqual([3])
+    expect(skips(f, `${PW}test('x', async () => {\n  test.skip()\n})\n`)).toEqual([3])
+    expect(skips(f, `${PW}test.skip('x', async () => {})\n`)).toEqual([2])
+    expect(skips(f, `${PW}test.skip(true, '')\n`)).toEqual([2])
+    expect(skips(f, `${PW}test.skip('x', async () => {}) // skip: waits on the new relay\n`)).toEqual([])
+  })
+
+  it('Swift Testing: .disabled( needs a reason string, or a // skip: comment', () => {
+    const f = 'apps/desktop/Tests/TalosDesktopCoreTests/AThingTests.swift'
+    expect(skips(f, '@Test(.disabled())\nfunc a() {}\n')).toEqual([1])
+    expect(skips(f, '@Test(.disabled(if: isCI))\nfunc a() {}\n')).toEqual([1])
+    expect(skips(f, '@Test(.disabled("the simulator has no keychain"))\nfunc a() {}\n')).toEqual([])
+    expect(skips(f, '@Test(.disabled(if: isCI, "the CI runner has no display"))\nfunc a() {}\n')).toEqual([])
+    expect(skips(f, '@Test(\n  .disabled(\n    "reason on its own line"\n  )\n)\nfunc a() {}\n')).toEqual([])
+    expect(skips(f, '@Test(\n  .disabled()\n)\nfunc a() {}\n')).toEqual([2])
+    expect(skips(f, '// skip: needs a display\n@Test(.disabled())\nfunc a() {}\n')).toEqual([])
+    expect(skips(f, '@Suite(.disabled())\nstruct S {}\n')).toEqual([1])
+    expect(skips(f, '@Test(.disabled(if: name == ""))\nfunc a() {}\n')).toEqual([1])
+  })
+
+  it('Swift: a SwiftUI .disabled(flag) that is not a test trait is left alone', () => {
+    const f = 'apps/desktop/Tests/TalosDesktopGuiTests/ViewTests.swift'
+    expect(skips(f, 'func view() { Button("Save") {}.disabled(!ready) }\n')).toEqual([])
+    expect(skips(f, '@Test func a() {\n  let v = 1\n  view.disabled(true)\n}\n')).toEqual([])
+  })
+
+  it('--changed: only a skip on an added or changed line fails; an old one does not block', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skip-lint-'))
+    dirs.push(root)
+    const git = (...a: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], {
+        cwd: root,
+        encoding: 'utf8',
+      }).trim()
+    const put = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true })
+      writeFileSync(join(root, rel), text)
+    }
+    git('init', '-q', '-b', 'main')
+    const swift = 'apps/desktop/Tests/TalosDesktopCoreTests/ZTests.swift'
+    put('apps/bridge/test/old.test.ts', `${BUN}test.skip('old', () => {})\n`)
+    put(swift, '@Test(.disabled())\nfunc old() {}\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'base')
+    const base = git('rev-parse', 'HEAD')
+    put('apps/bridge/test/old.test.ts', `${BUN}test.skip('old', () => {})\ntest('new', () => {})\n`)
+    expect(lintChanged(root, base, {})).toEqual([]) // the old skip is not on a changed line
+    put('apps/bridge/test/old.test.ts', `${BUN}test.skip('old', () => {})\ntest.skip('new', () => {})\n`)
+    put(swift, '@Test(.disabled())\nfunc old() {}\n@Test(.disabled())\nfunc fresh() {}\n')
+    git('add', '-A')
+    git('commit', '-q', '-m', 'change')
+    expect(lintChanged(root, base, {}).map((h) => `${h.file}:${h.line}:${h.rule}`)).toEqual([
+      'apps/bridge/test/old.test.ts:4:unreasoned-skip',
+      `${swift}:3:unreasoned-skip`,
+    ])
+  })
+})

@@ -213,6 +213,10 @@ export function publishedThreads(
       wallMs: o.wallMs,
       adopting: o.adopting(w.id),
       before: o.before(w.id),
+      cut: w.cut ?? null,
+      planMode: w.planSeen === true,
+      resumedTurn: w.resumedTurn !== undefined,
+      turnFromBoot: w.turnFromBoot,
     })
     if (mine) own[w.id] = mine
   }

@@ -77,7 +77,7 @@ describe('which cards offer Always allow', () => {
   it('a card of talos-app commands does not (a notification cannot approve it either)', () => {
     expect(cardOffersAlways(card({ fields: [{ key: CLI_FIELD_KEY }] }))).toBe(false)
   })
-  it.each(['permission_mode', 'update_resend', 'screen_allow'])('a %s card does not', (k) =>
+  it.each(['permission_mode', 'update_resend', 'screen_allow', 'peer_address'])('a %s card does not', (k) =>
     expect(cardOffersAlways(card({ kind: 'config', payload: { [k]: { x: 1 } } }))).toBe(false),
   )
   it('a rule-ask card does only with a send kind', () => {

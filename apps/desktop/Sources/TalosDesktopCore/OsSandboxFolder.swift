@@ -65,24 +65,61 @@ enum OsSandboxFolder {
     return out
   }
 
+  private static let wordBreaks = CharacterSet(charactersIn: "\"'`;|&()<>=").union(.whitespacesAndNewlines)
+  private static let projectDir = #"\$(?:\{CLAUDE_PROJECT_DIR\}|CLAUDE_PROJECT_DIR)"#
+
+  /// The one form of a hook line in which the shell certainly keeps the folder's path as ONE word, and so does this check: an optional plain
+  /// interpreter (no flag), then the folder variable inside double quotes, then a path of plain characters (`"$CLAUDE_PROJECT_DIR"/hooks/x.sh`,
+  /// `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes. Anything else with a space in the folder's path is cut like the shell would.
+  private static let simpleHook = try? NSRegularExpression(
+    pattern: #"^(?:(bash|sh|zsh|python3?|node|bun) )?(?:"\#(projectDir)"/([A-Za-z0-9._@+/-]*)|"\#(projectDir)/([A-Za-z0-9._@+/-]*)")\z"#)
+
   /// The words of a shell command line that may name a file: quotes, `;`, `|`, `&`, `(`, `)`, `<`, `>`, `=` taken apart. The project folder
-  /// variable (and its braced form, with a quote that closes right after it) becomes the folder.
+  /// variable (and its braced form, with a quote that closes right after it) becomes the folder BEFORE the cut, as the shell cuts what it expands,
+  /// so a folder path with a space in it is cut there too (and refused), except in the simple hook form (`simpleHook`) whose folder path stays one word.
   private static func words(_ cmd: String, _ folder: String) -> [String] { tokens(cmd, folder).filter { $0.utf16.count > 1 } }
 
-  /// All the words, one-letter ones too (`bun x`).
+  /// All the words, one-letter ones too (`bun x`). A command with a NUL in it has none (nothing real carries one).
   private static func tokens(_ cmd: String, _ folder: String) -> [String] {
+    if cmd.unicodeScalars.contains("\u{0}") { return [] }
+    let ns = cmd as NSString
+    if let m = simpleHook?.firstMatch(in: cmd, range: NSRange(location: 0, length: ns.length)) {
+      var out: [String] = []
+      if m.range(at: 1).location != NSNotFound { out.append(ns.substring(with: m.range(at: 1))) }
+      let rel = m.range(at: 2).location != NSNotFound ? m.range(at: 2) : m.range(at: 3)
+      out.append(folder + "/" + ns.substring(with: rel))
+      return out
+    }
     let replaced = cmd.replacingOccurrences(
-      of: #"\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR["']?"#, with: NSRegularExpression.escapedTemplate(for: folder), options: .regularExpression)
-    let seps = CharacterSet(charactersIn: "\"'`;|&()<>=").union(.whitespacesAndNewlines)
-    return replaced.components(separatedBy: seps).filter { !$0.isEmpty }
+      of: #"\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])["']?"#, with: NSRegularExpression.escapedTemplate(for: folder), options: .regularExpression)
+    return replaced.components(separatedBy: wordBreaks).filter { !$0.isEmpty }
+  }
+
+  /// A flag that makes a program read an argument as code or a command line (`-c`, `-e`, `-p`, `-m`, `--eval`): its other arguments are then not plain file names.
+  private static let runsItsArgument = try? NSRegularExpression(pattern: #"^(?:-[A-Za-z]*[cepm][A-Za-z]*|--eval|--print|--command)$"#)
+  /// The programs that take a file argument as one file, with no flag that says otherwise: not env, xargs, ssh, su, watch, script (they cut an argument again).
+  private static let fileTakers = try? NSRegularExpression(pattern: #"^(?:node|bun|python[\d.]*|bash|sh|zsh)$"#)
+  private static func matches(_ re: NSRegularExpression?, _ s: String) -> Bool { re?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
+
+  /// The words of a stdio MCP server's command and arguments. They are no shell line: the program gets each one as it is. For a program that
+  /// takes a file argument as one file (`fileTakers`), with no flag that makes it run an argument as code, an absolute path with a space in it that
+  /// exists as written is that one file (a kit release in a folder with a space). Any other argument is cut as a shell line is, which only ever finds more.
+  private static func argvWords(_ argv: [String], _ folder: String) -> [String] {
+    let whole = matches(fileTakers, ((argv.first ?? "") as NSString).lastPathComponent) && !argv.contains { matches(runsItsArgument, $0) }
+    let others = wordBreaks.subtracting(CharacterSet(charactersIn: " "))
+    return argv.flatMap { a -> [String] in
+      let plain = whole && a.hasPrefix("/") && a.contains(" ") && a.rangeOfCharacter(from: others) == nil && P.lstatOk(a)
+      return plain ? [a] : words(a, folder)
+    }
   }
 
   private static let scriptExt = try? NSRegularExpression(pattern: #"\.(?:py|sh|js|mjs|cjs|ts|rb|pl)$"#)
   private static func isScriptName(_ w: String) -> Bool { scriptExt?.firstMatch(in: w, range: NSRange(w.startIndex..., in: w)) != nil }
 
   /// The words of a command that name a file or folder: a path (a slash in it, `~`, a `$`) or a script by its extension; flags are not.
-  private static func pathWords(_ cmd: String, _ folder: String) -> [String] {
-    words(cmd, folder).filter { !$0.hasPrefix("-") && ($0.contains("/") || $0.hasPrefix("~") || $0.contains("$") || isScriptName($0)) }
+  private static func pathWords(_ cmd: String, _ folder: String) -> [String] { naming(words(cmd, folder)) }
+  private static func naming(_ ws: [String]) -> [String] {
+    ws.filter { !$0.hasPrefix("-") && ($0.contains("/") || $0.hasPrefix("~") || $0.contains("$") || isScriptName($0)) }
   }
 
   /// A command on one plain line for a refusal: control characters and runs of blanks become one space, and a long one is cut.
@@ -157,8 +194,8 @@ enum OsSandboxFolder {
 
   /// Is every file this command names the kit release's own: reached through the folder's `hooks`/`scripts`/`kit` link into the release, or
   /// inside the release? A command that names no file is not.
-  private static func isKitOwn(_ cmd: String, _ folder: String, _ kitDir: String, templates: String? = nil) -> Bool {
-    let named = pathWords(cmd, folder)
+  private static func isKitOwn(_ cmd: String, _ folder: String, _ kitDir: String, templates: String? = nil, argv: [String]? = nil) -> Bool {
+    let named = argv.map { naming(argvWords($0, folder)) } ?? pathWords(cmd, folder)
     guard !named.isEmpty else { return false }
     for w in named {
       guard !w.contains("$"), !w.hasPrefix("~") else { return false }
@@ -218,14 +255,15 @@ enum OsSandboxFolder {
 
   /// The servers of the folder's `.mcp.json` that start a program, as `(name, entry, command line)`, by server name. A server with no
   /// `command` (a remote http or sse one) runs nothing on this machine and is not listed.
-  private static func stdioServers(_ folder: String) -> [(name: String, entry: [String: Any], line: String)] {
+  private static func stdioServers(_ folder: String) -> [(name: String, entry: [String: Any], line: String, argv: [String])] {
     let servers = readJSON(folder + "/.mcp.json")?["mcpServers"] as? [String: Any] ?? [:]
-    return servers.keys.sorted().compactMap { k -> (String, [String: Any], String)? in
-      guard let s = servers[k] as? [String: Any] else { return (k, [:], "") }
+    return servers.keys.sorted().compactMap { k -> (String, [String: Any], String, [String])? in
+      guard let s = servers[k] as? [String: Any] else { return (k, [:], "", []) }
       let type = (s["type"] as? String)?.lowercased()
       if type == "http" || type == "sse" { return nil }
-      guard let command = s["command"] as? String else { return s["url"] != nil ? nil : (k, s, "") }
-      return (k, s, ([command] + ((s["args"] as? [Any]) ?? []).compactMap { $0 as? String }).joined(separator: " "))
+      guard let command = s["command"] as? String else { return s["url"] != nil ? nil : (k, s, "", []) }
+      let argv = [command] + ((s["args"] as? [Any]) ?? []).compactMap { $0 as? String }
+      return (k, s, argv.joined(separator: " "), argv)
     }
   }
 
@@ -281,7 +319,7 @@ enum OsSandboxFolder {
         }
       }
     }
-    for (name, entry, line) in stdioServers(folder) {
+    for (name, entry, line, argv) in stdioServers(folder) {
       if name == "talos-app" {
         switch talosEntry(entry, folder: folder, talosHome: talosHome, trusted: trusted) {
         case .ok: continue
@@ -293,7 +331,7 @@ enum OsSandboxFolder {
           return "\(folder)/.mcp.json has a talos-app server that is not Talos's own (\(why)); run talos-app adopt for this folder, then start again"
         }
       }
-      if !isKitOwn(line, folder, kitDir, templates: templates) { return moved(folder + "/.mcp.json", "the \(name) server (\"\(shown(line))\")") }
+      if !isKitOwn(line, folder, kitDir, templates: templates, argv: argv) { return moved(folder + "/.mcp.json", "the \(name) server (\"\(shown(line))\")") }
     }
     for c in settingsCommands(readJSON(claudeDir + "/settings.json") ?? [:]) where !userCommandOK(c, folder) {
       return "\(claudeDir)/settings.json runs \"\(shown(c))\", which the extra lock cannot allow (it must be an absolute path to a file outside the session folder and every folder a session can write, with no npx, uvx, bunx, bun x, -m or relative script); change it, then start again"

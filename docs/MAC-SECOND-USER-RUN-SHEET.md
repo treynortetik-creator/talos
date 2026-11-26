@@ -18,6 +18,8 @@ Words used below: **TESTED** means it was run on a Mac for this sheet (Apple Sil
 10, on 2026-11-13, marked DRY RUN). **READ** means it is what the code or docs say. **NOT TESTED** means nobody has seen it on a managed Mac yet; it is
 the best reading, and step G lists how to find out.
 
+**Don't turn on the OS sandbox lock on a kit-settings folder yet.** ("Extra lock on protected files": her agent folder's `.claude/settings.json` hooks come from the kit's template, and the lock refuses them.) See `docs/FOLLOWUPS.md`, "Wave 1, tier 1: the OS sandbox's hook check".
+
 ## A. Before install day: questions for IT and GRC
 
 [HER] asks these, in writing, a week ahead. A "no" to 1 or 2 stops the install; the others have a way around them.

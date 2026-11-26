@@ -1,6 +1,6 @@
 // A gate's heavy hold and a CI run never overlap on one machine (scripts/ci-local/turn.sh): fake machines (a temp cache each), the
-// real heavy-lock.sh for the gate side and ci_acquire_slot for the CI side, no real CI. Nobody is stopped, the two classes go first
-// come first served, a wait is bounded and said, a CI run that waits too long fails open.
+// real heavy-lock.sh for the gate side and ci_acquire_slot for the CI side, no real CI. Nobody is stopped, a waiting gate goes before a
+// waiting CI run until that run is starved (2 gates or 30 min), a wait is bounded and said, a CI run that waits too long fails open.
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -189,14 +189,14 @@ describe('gate and CI take turns', () => {
     expect(await run.done).toBe(0)
   })
 
-  it('first come first served: CI that arrives after a waiting gate goes behind it', async () => {
+  it('CI that arrives while a gate waits goes behind it, whoever queued first', async () => {
     const m = machine()
     const a = m.ci('runA')
     await m.until(() => m.ran('runA'))
     const g = m.gate('g1')
     await m.until(() => m.queue('suites').length === 1)
     const b = m.ci('runB') // arrives after the gate: not admitted just because CI is on
-    await m.until(() => /gates queued before this run go first/.test(b.err()))
+    await m.until(() => /gates that are queued go before this run/.test(b.err()))
     await sleep(500)
     expect(m.ran('runB')).toBe(false)
     a.go()
@@ -208,26 +208,74 @@ describe('gate and CI take turns', () => {
     expect(await b.done).toBe(0)
   })
 
-  it('first come first served: a gate that arrives after waiting CI goes behind it, though a gate slot is free', async () => {
+  it('a gate goes before a CI run that is queued, though the run came first: the run has not waited behind enough gates yet', async () => {
     const m = machine()
     const g1 = m.gate('g1')
     await m.until(() => m.ran('g1'))
     const c = m.ci('runC')
     await m.until(() => m.queue('admit').length === 1)
-    const g2 = m.gate('g2') // slot 4 is free, and a gate is on, but a CI run queued before it
-    await m.until(() => /CI runs queued before this gate go first/.test(g2.err()))
-    await sleep(500)
-    expect(m.ran('g2')).toBe(false)
-    g1.go()
-    await m.until(() => m.ran('runC'))
-    expect(m.ran('g2')).toBe(false)
-    c.go()
+    const g2 = m.gate('g2') // a gate slot is free and a gate is on: it joins it, ahead of the run that queued before it
     await m.until(() => m.ran('g2'))
+    expect(m.ran('runC')).toBe(false)
+    g1.go()
     g2.go()
-    expect(await g2.done).toBe(0)
+    await m.until(() => m.ran('runC')) // the gates' holds ended, nobody was stopped: now the run
+    c.go()
+    expect([await g1.done, await g2.done, await c.done]).toEqual([0, 0, 0])
   })
 
-  it('a class that is on lets a newcomer join when no older waiter of the other class is queued', async () => {
+  it('a queued CI run that has waited behind 2 gates (CI_TURN_PASS_MAX) goes next: the gates that come later wait for it, and no hold is stopped', async () => {
+    const m = machine()
+    const g1 = m.gate('g1')
+    await m.until(() => m.ran('g1'))
+    const c = m.ci('runC')
+    await m.until(() => m.queue('admit').length === 1)
+    const g2 = m.gate('g2') // passes the run: 1
+    await m.until(() => m.ran('g2'))
+    const g3 = m.gate('g3') // both gate slots are busy: it waits for a slot, and passes the run when g1 ends: 2
+    await m.until(() => m.queue('suites').length === 1)
+    g1.go()
+    await m.until(() => m.ran('g3'))
+    const g4 = m.gate('g4') // the run has waited behind 2 gates: it goes before this one
+    await m.until(() => /CI runs that have waited .* go first/.test(g4.err()))
+    await sleep(500) // timing-ok: a negative window, it must not have started
+    expect(m.ran('g4')).toBe(false)
+    expect(m.ran('runC')).toBe(false) // g2 and g3 hold: they are never stopped
+    g2.go()
+    g3.go()
+    await m.until(() => m.ran('runC'))
+    expect(m.ran('g4')).toBe(false)
+    c.go()
+    await m.until(() => m.ran('g4'))
+    g4.go()
+    expect([await g1.done, await g2.done, await g3.done, await g4.done, await c.done]).toEqual([0, 0, 0, 0, 0])
+  })
+
+  it('a stream of gates cannot starve a queued CI run: it runs after 2 gates have passed it, before the rest of the stream', async () => {
+    const m = machine()
+    const g1 = m.gate('g1')
+    const g2 = m.gate('g2')
+    await m.until(() => m.ran('g1') && m.ran('g2'))
+    const c = m.ci('runC')
+    await m.until(() => m.queue('admit').length === 1)
+    const stream = ['g3', 'g4', 'g5', 'g6', 'g7', 'g8']
+    for (const n of stream) writeFileSync(join(m.cache, `${n}.go`), '') // each ends as soon as it runs
+    const rest: ReturnType<typeof m.gate>[] = []
+    for (const [i, n] of stream.entries()) {
+      rest.push(m.gate(n)) // one at a time: the order they queue in is the order they are listed in
+      await m.until(() => m.queue('suites').length === i + 1)
+    }
+    g1.go() // two slots free up one after the other: g3 and g4 pass the run
+    await m.until(() => m.ran('g3') && m.ran('g4'))
+    g2.go()
+    await m.until(() => m.ran('runC'))
+    const at = (t: string) => statSync(join(m.cache, `${t}.ran`)).mtimeMs
+    c.go()
+    await Promise.all([g1.done, g2.done, c.done, ...rest.map((r) => r.done)])
+    expect(stream.filter((n) => at(n) < at('runC'))).toEqual(['g3', 'g4'])
+  })
+
+  it('a class that is on lets a newcomer join when no waiter of the other class goes first', async () => {
     const m = machine()
     const a = m.ci('runA')
     await m.until(() => m.ran('runA'))
@@ -265,9 +313,10 @@ describe('gate and CI take turns', () => {
     expect(await run.done).toBe(0)
   })
 
-  // A scheduled run (the nightly, the hostile nightly: CI_NIGHTLY=1) leaves a free slot to a push run that is queued (locks.sh,
-  // ci_acquire_slot). It never makes a gate wait (ci_turn_ahead), or the three wait for each other: the scheduled run for the push
-  // run, the push run for the gate queued before it, the gate for the scheduled run queued before it.
+  // A scheduled run (the nightly, the hostile nightly: CI_NIGHTLY=1) starts only on an empty queue: it leaves the machine to a push run
+  // that is queued or holds a run slot (locks.sh, ci_acquire_slot), and to every gate that waits. It never makes a gate wait
+  // (ci_turn_ahead), or the three wait for each other: the scheduled run for the push run, the push run for the gates, the gate for the
+  // scheduled run.
   describe('a scheduled run and a push run', () => {
     it('a scheduled run, a gate and a push run queued in that order while a gate is on: no cycle, the gate and the push run go before the scheduled run', async () => {
       const m = machine()
@@ -342,7 +391,7 @@ describe('gate and CI take turns', () => {
       await m.until(() => /a push run is queued/.test(s.err()))
       expect(m.ran('runS')).toBe(false)
       await m.until(() => m.ran('runS'), 15_000)
-      expect(s.err()).toMatch(/went ahead of a queued push run after \d+ min \(CI_TURN_MAX_S\)/)
+      expect(s.err()).toMatch(/went ahead of a busy queue after \d+ min \(CI_TURN_MAX_S\): a push run is queued/)
       s.go()
       expect(await s.done).toBe(0)
     })
@@ -375,6 +424,65 @@ describe('gate and CI take turns', () => {
       await m.until(() => rows().length === 1) // the turn wait is closed when the push wait begins, not at the end of it
       expect(Number(rows()[0].split('\t')[3])).toBeLessThan(10)
       s.go()
+    })
+
+    // The queue is empty: no gate and no push run waits or holds (a gate that holds or waits, a push run that waits: the turn and the
+    // push check above). A push run that HOLDS a slot counts too: before, a scheduled run took the next run slot beside it.
+    it('a scheduled run waits while a push run holds a run slot, and goes when it has ended', async () => {
+      const m = machine()
+      const p = m.ci('runP')
+      await m.until(() => m.ran('runP'))
+      const s = m.ci('runS', { CI_NIGHTLY: '1' })
+      await m.until(() => /a push run is on/.test(s.err()))
+      await sleep(500) // timing-ok: a negative window, it must not have started
+      expect(m.ran('runS')).toBe(false) // a run slot is free, and it still waits
+      p.go()
+      expect(await p.done).toBe(0)
+      await m.until(() => m.ran('runS'))
+      s.go()
+      expect(await s.done).toBe(0)
+    })
+
+    it('a scheduled run that waits for a push run that holds goes ahead after CI_TURN_MAX_S, loudly', async () => {
+      const m = machine()
+      const p = m.ci('runP')
+      await m.until(() => m.ran('runP'))
+      const s = m.ci('runS', { CI_NIGHTLY: '1', CI_TURN_MAX_S: '1', CI_LOCK_TIMEOUT: '1' })
+      await m.until(() => m.ran('runS'), 15_000)
+      expect(s.err()).toMatch(/a push run is on/)
+      expect(s.err()).toMatch(/went ahead of a busy queue after \d+ min \(CI_TURN_MAX_S\): a push run is on/)
+      p.go()
+      s.go()
+      expect([await p.done, await s.done]).toEqual([0, 0])
+    })
+
+    it('scheduled runs do not make each other wait (the nightly and the hostile nightly overlap, as before)', async () => {
+      const m = machine()
+      const a = m.ci('runA', { CI_NIGHTLY: '1' })
+      await m.until(() => m.ran('runA'))
+      const b = m.ci('runB', { CI_HOSTILE: '1' })
+      await m.until(() => m.ran('runB'))
+      a.go()
+      b.go()
+      expect([await a.done, await b.done]).toEqual([0, 0])
+    })
+
+    it('a gate that queues after a scheduled run still goes before it: the scheduled run waits for every gate that is queued', async () => {
+      const m = machine()
+      const p = m.ci('runP')
+      await m.until(() => m.ran('runP'))
+      const s = m.ci('runS', { CI_NIGHTLY: '1' }) // queues first, behind the push run that holds
+      await m.until(() => /a push run is on/.test(s.err()))
+      const g = m.gate('g1') // queues after it, and waits for the push run that holds
+      await m.until(() => m.queue('suites').length === 1)
+      p.go()
+      await m.until(() => m.ran('g1')) // the scheduled run did not take the free machine under the gate
+      expect(m.ran('runS')).toBe(false)
+      expect(s.err()).toMatch(/gates that are queued go before this run|a gate holds the machine/)
+      g.go()
+      await m.until(() => m.ran('runS'))
+      s.go()
+      expect([await p.done, await g.done, await s.done]).toEqual([0, 0, 0])
     })
   })
 
@@ -479,8 +587,8 @@ describe('gate and CI take turns', () => {
     run.go()
   })
 
-  it('never both at once: gates and CI runs started together take turns', async () => {
-    const m = machine()
+  // nGates gates and nCi CI runs started together, each holding 0.3 s: the events of every hold in order ("+G", "-G", "+C", "-C")
+  const takeTurns = async (m: ReturnType<typeof machine>, nGates: number, nCi: number) => {
     const log = join(m.cache, 'events')
     writeFileSync(log, '')
     const mk = (cls: string, i: number) => {
@@ -511,21 +619,37 @@ echo +C >> "${log}"; sleep 0.3; echo -C >> "${log}"
       return new Promise<number | null>((r) => c.on('exit', r))
     }
     const all: Promise<number | null>[] = []
-    for (let i = 0; i < 5; i++) {
-      all.push(mk('G', i))
-      all.push(mk('C', i))
+    for (let i = 0; i < Math.max(nGates, nCi); i++) {
+      if (i < nGates) all.push(mk('G', i))
+      if (i < nCi) all.push(mk('C', i))
     }
-    expect(await Promise.all(all)).toEqual(Array(10).fill(0))
+    expect(await Promise.all(all)).toEqual(Array(nGates + nCi).fill(0))
+    const events = readFileSync(log, 'utf8').trim().split('\n')
     let g = 0
     let c = 0
-    for (const e of readFileSync(log, 'utf8').trim().split('\n')) {
+    for (const e of events) {
       if (e === '+G') g++
       if (e === '-G') g--
       if (e === '+C') c++
       if (e === '-C') c--
       expect(g > 0 && c > 0, `overlap at ${e}`).toBe(false)
     }
-    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(20)
+    return events
+  }
+
+  it('never both at once: gates and CI runs started together take turns', async () => {
+    const events = await takeTurns(machine(), 5, 5)
+    expect(events).toHaveLength(20)
+  })
+
+  it('4 gates and 4 CI runs never overlap, and every CI run runs: gates go first, but never past the starvation cap', async () => {
+    const events = await takeTurns(machine(), 4, 4)
+    expect(events.filter((e) => e === '+G')).toHaveLength(4)
+    expect(events.filter((e) => e === '+C')).toHaveLength(4)
+    // with a cap of 0 a CI run goes before every gate: the same four and four, and still never together
+    const eager = await takeTurns(machine({ CI_TURN_PASS_MAX: '0' }), 4, 4)
+    expect(eager.filter((e) => e === '+C')).toHaveLength(4)
+    expect(eager.filter((e) => e === '+G')).toHaveLength(4)
   })
 
   it('a gate that arrives while a gate is on joins it (gates share their own slots)', async () => {
@@ -845,6 +969,189 @@ echo +C >> "${log}"; sleep 0.2; echo -C >> "${log}"
         if (e === '-C') c--
         expect(g > 0 && c > 0, `overlap at ${e}`).toBe(false)
       }
+    })
+  })
+  // The starvation cap on its own: tickets written by hand (living pids), the clock handed in (CI_TURN_NOW), ci_turn_check called directly.
+  // No process waits and nothing sleeps. A ticket's name is the second it came: T0 is the CI run's, 1000 s later is the gate's.
+  describe('the starvation cap: a CI run waits behind gates until 2 of them have passed it or it has waited 1800 s', () => {
+    const T0 = 1_800_000_000
+    const stamp = (t: number) => `${t}.000000`
+    // a living waiter's ticket: kind ci (admit) or a gate's (suites: push, run or jump)
+    // line 7: what the ticket says of itself: a gate's "turn2" (unless old: a gate of the code before the cap), a scheduled run's "sched",
+    // a CI run's "caps N S"
+    const ticket = (
+      m: ReturnType<typeof machine>,
+      q: 'admit' | 'suites',
+      at: number,
+      kind: string,
+      extra = '',
+      old = false,
+    ) => {
+      const sleeper = spawn('sleep', ['300'])
+      kids.push(sleeper)
+      const start = spawnSync('bash', ['-c', `CI_NONCE=t; . "${LOCKS_SH}"; ci_proc_start ${sleeper.pid}`], {
+        encoding: 'utf8',
+      }).stdout.trim()
+      mkdirSync(join(m.cache, 'locks.queue', q), { recursive: true })
+      const file = join(m.cache, 'locks.queue', q, `${stamp(at)}.${sleeper.pid}.1`)
+      const jump = kind === 'jump' ? 'jump' : ''
+      const k = kind === 'jump' ? 'push' : kind
+      const l7 = extra || (q === 'suites' && !old ? 'turn2' : '')
+      writeFileSync(file, `${sleeper.pid}\n${start}\n${sleeper.pid}-x-1\n${kind}-ticket\n${jump}\n${k}\n${l7}`)
+      return file
+    }
+    const passes = (m: ReturnType<typeof machine>, ...at: number[]) => {
+      mkdirSync(join(m.cache, 'locks.queue'), { recursive: true })
+      writeFileSync(join(m.cache, 'locks.queue', 'gate-passes'), at.map((t) => `${stamp(t)}\n`).join(''))
+    }
+    // "<exit>:<what it says>": 1 = this class must wait
+    const check = (
+      m: ReturnType<typeof machine>,
+      cls: 'ci' | 'gate',
+      file: string,
+      now: number,
+      env: Record<string, string> = {},
+    ) => {
+      const jump = /\n(jump)\n/.test(readFileSync(file, 'utf8')) ? 'jump' : ''
+      const r = spawnSync(
+        'bash',
+        [
+          '-c',
+          `CI_NONCE=t CI_HELD=; . "${LOCKS_SH}"; ci_turn_check "${m.locks}" ${cls} "${file}" "${jump}"; echo "$?:$CI_TURN_BASE"`,
+        ],
+        { env: { ...m.env, CI_TURN_NOW: String(now), ...env }, encoding: 'utf8' },
+      )
+      return r.stdout.trim()
+    }
+
+    it('before the cap a queued gate goes before the CI run, and a CI run does not hold a gate back', () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci')
+      const g = ticket(m, 'suites', T0 + 10, 'push')
+      expect(check(m, 'ci', c, T0 + 100)).toMatch(/^1:gates that are queued go before this run \(pid \d+ /)
+      expect(check(m, 'gate', g, T0 + 100)).toBe('0:')
+      // the same, whichever of the two queued first
+      const g0 = ticket(m, 'suites', T0 - 50, 'push')
+      expect(check(m, 'ci', c, T0 + 100)).toMatch(/^1:gates that are queued/)
+      expect(check(m, 'gate', g0, T0 + 100)).toBe('0:')
+    })
+
+    it('by time: at CI_TURN_PASS_MAX_S (1800 s) the CI run goes next, and a gate waits for it', () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci')
+      const g = ticket(m, 'suites', T0 + 10, 'push')
+      expect(check(m, 'ci', c, T0 + 1799)).toMatch(/^1:/)
+      expect(check(m, 'gate', g, T0 + 1799)).toBe('0:')
+      expect(check(m, 'ci', c, T0 + 1800)).toBe('0:')
+      expect(check(m, 'gate', g, T0 + 1800)).toMatch(/^1:CI runs that have waited .* go first \(pid \d+ /)
+      // settable
+      expect(check(m, 'ci', c, T0 + 59, { CI_TURN_PASS_MAX_S: '60' })).toMatch(/^1:/)
+      expect(check(m, 'ci', c, T0 + 60, { CI_TURN_PASS_MAX_S: '60' })).toBe('0:')
+    })
+
+    it('by count: after 2 gates have passed it (CI_TURN_PASS_MAX) the CI run goes next; a pass from before it queued does not count', () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci')
+      const g = ticket(m, 'suites', T0 + 10, 'push')
+      passes(m, T0 - 5, T0 + 5) // one pass counts
+      expect(check(m, 'ci', c, T0 + 100)).toMatch(/^1:/)
+      expect(check(m, 'gate', g, T0 + 100)).toBe('0:')
+      passes(m, T0 - 5, T0 + 5, T0 + 6) // two count
+      expect(check(m, 'ci', c, T0 + 100)).toBe('0:')
+      expect(check(m, 'gate', g, T0 + 100)).toMatch(/^1:CI runs that have waited/)
+      passes(m, T0 + 5, T0 + 6)
+      expect(check(m, 'ci', c, T0 + 100, { CI_TURN_PASS_MAX: '3' })).toMatch(/^1:/) // settable
+      expect(check(m, 'ci', c, T0 + 100, { CI_TURN_PASS_MAX: '1' })).toBe('0:')
+    })
+
+    it('a checked --red-main jump gate still goes before any CI run, a scheduled run is never starved and never makes a gate wait', () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci')
+      const j = ticket(m, 'suites', T0 + 10, 'jump')
+      passes(m, T0 + 5, T0 + 6)
+      expect(check(m, 'gate', j, T0 + 5000)).toBe('0:') // before a starved run
+      expect(check(m, 'ci', c, T0 + 5000)).toMatch(/^1:gates that are queued go before this run \(pid \d+ /) // and it waits for the jump gate
+      const m2 = machine()
+      const s = ticket(m2, 'admit', T0, 'ci', 'sched')
+      const g = ticket(m2, 'suites', T0 + 10, 'push')
+      passes(m2, T0 + 5, T0 + 6)
+      expect(check(m2, 'ci', s, T0 + 5000)).toMatch(/^1:gates that are queued/) // never starved: it waits for every gate
+      expect(check(m2, 'gate', g, T0 + 5000)).toBe('0:') // and a gate never waits for it
+    })
+
+    it('with no record of passes yet nothing is said on stderr, and a cap of 0 starves a run at once', () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci')
+      const g = ticket(m, 'suites', T0 + 10, 'push')
+      const err = (cls: 'ci' | 'gate', f: string, env: Record<string, string> = {}) => {
+        const jump = ''
+        return spawnSync(
+          'bash',
+          ['-c', `CI_NONCE=t CI_HELD=; . "${LOCKS_SH}"; ci_turn_check "${m.locks}" ${cls} "${f}" "${jump}"`],
+          { env: { ...m.env, CI_TURN_NOW: String(T0 + 5), ...env }, encoding: 'utf8' },
+        ).stderr
+      }
+      expect(err('ci', c)).toBe('')
+      expect(err('gate', g)).toBe('')
+      expect(check(m, 'ci', c, T0 + 5, { CI_TURN_PASS_MAX: '0' })).toBe('0:')
+      expect(check(m, 'gate', g, T0 + 5, { CI_TURN_PASS_MAX: '0' })).toMatch(/^1:CI runs that have waited/)
+    })
+
+    it('a gate that takes its slot is one pass for every CI run that waits; the record holds nothing once none waits', () => {
+      const m = machine()
+      const file = join(m.cache, 'locks.queue', 'gate-passes')
+      const run = (now: number) =>
+        spawnSync('bash', ['-c', `CI_NONCE=t CI_HELD=; . "${LOCKS_SH}"; ci_turn_pass "${m.locks}"`], {
+          env: { ...m.env, CI_TURN_NOW: String(now) },
+          encoding: 'utf8',
+        })
+      run(T0 + 1) // nobody waits: nothing to count
+      expect(existsSync(file)).toBe(false)
+      ticket(m, 'admit', T0 + 10, 'ci')
+      run(T0 + 20)
+      run(T0 + 30)
+      expect(readFileSync(file, 'utf8').split('\n').filter(Boolean)).toEqual([stamp(T0 + 20), stamp(T0 + 30)])
+      rmSync(join(m.cache, 'locks.queue', 'admit'), { recursive: true })
+      run(T0 + 40) // the queue is empty again: the record goes
+      expect(existsSync(file)).toBe(false)
+    })
+
+    it('a CI ticket that is still being written (.part) counts as queued: the pass is not lost', () => {
+      const m = machine()
+      mkdirSync(join(m.cache, 'locks.queue', 'admit'), { recursive: true })
+      writeFileSync(join(m.cache, 'locks.queue', 'admit', `${stamp(T0)}.123.1.part`), '')
+      spawnSync('bash', ['-c', `CI_NONCE=t CI_HELD=; . "${LOCKS_SH}"; ci_turn_pass "${m.locks}"`], {
+        env: { ...m.env, CI_TURN_NOW: String(T0 + 5) },
+      })
+      expect(readFileSync(join(m.cache, 'locks.queue', 'gate-passes'), 'utf8')).toBe(`${stamp(T0 + 5)}\n`)
+    })
+
+    it("a CI run's own caps (line 7 of its ticket) decide, whatever the environment of the one that looks", () => {
+      const m = machine()
+      const c = ticket(m, 'admit', T0, 'ci', 'caps 1 100')
+      const g = ticket(m, 'suites', T0 + 10, 'push')
+      passes(m, T0 + 5)
+      // the gate's environment says 2 passes and 1800 s; the run asked for 1 and 100: both read the run's
+      expect(check(m, 'ci', c, T0 + 50, { CI_TURN_PASS_MAX: '2' })).toBe('0:')
+      expect(check(m, 'gate', g, T0 + 50, { CI_TURN_PASS_MAX: '2' })).toMatch(/^1:CI runs that have waited/)
+      passes(m)
+      expect(check(m, 'ci', c, T0 + 99)).toMatch(/^1:/)
+      expect(check(m, 'ci', c, T0 + 100, { CI_TURN_PASS_MAX_S: '1800' })).toBe('0:')
+      expect(check(m, 'gate', g, T0 + 100, { CI_TURN_PASS_MAX_S: '1800' })).toMatch(/^1:/)
+    })
+
+    it('a gate of the code before the cap (no turn2) is waited for only if it queued before the CI run, so neither waits for the other', () => {
+      const m = machine()
+      ticket(m, 'suites', T0 - 10, 'push', '', true)
+      const c = ticket(m, 'admit', T0, 'ci')
+      ticket(m, 'suites', T0 + 10, 'push', '', true)
+      const m2 = machine()
+      const c2 = ticket(m2, 'admit', T0, 'ci')
+      ticket(m2, 'suites', T0 + 10, 'push', '', true)
+      expect(check(m, 'ci', c, T0 + 100)).toMatch(
+        /^1:gates that are queued go before this run \(pid \d+ \(push-ticket\)\)$/,
+      ) // one: the older one
+      expect(check(m2, 'ci', c2, T0 + 100)).toBe('0:') // the older code's gate that came later waits for the run, as it always did
     })
   })
 })

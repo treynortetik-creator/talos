@@ -91,7 +91,7 @@ describe('bughunt: webhook intake', () => {
     expect(last, 'the 601st verified Slack delivery inside the hour').toBe(200)
   })
 
-  it('BH-H3: a passthrough work event undelivered for 61 min is gone from the relay, app replay buffer included', async () => {
+  it('BH-H3: a passthrough work event is held while the Mac has not taken it, and gone from the relay (app replay buffer included) after a week', async () => {
     r = await startBugRelay()
     const conn = await slackConnection(r) // default work.retention = 'passthrough'
     const body = slackDm(1, 'WORKONLY-quarterly-numbers')
@@ -102,14 +102,18 @@ describe('bughunt: webhook intake', () => {
     const store = runtimeOf(r.relay.services).store
     const onRelay = () => JSON.stringify(store.appEventsAfter(0, 1000)).includes('WORKONLY-quarterly-numbers')
     expect(onRelay(), 'sanity: the event reached the app buffer').toBe(true)
-    // No bridge is connected, so the event is never delivered. Spec 7.1: passthrough events not delivered within 1 h
-    // are dropped; the work-enable sheet promises "anything undelivered after an hour is dropped".
+    // No bridge is connected, so the event is never delivered. An hour asleep drops nothing; a week undelivered does.
     r.skew.ms += 61 * 60_000
     await tick(rt)
-    const hooksRows = r.relay.services.db.prepare('select count(*) as n from hooks_events').get() as { n: number }
-    expect(hooksRows.n, 'the hooks table did drop it').toBe(0)
-    // ...but the inbox.item frame (title + DM text) stays in core_events for BUFFER_DAYS and replays to every app.
-    expect(onRelay(), 'work message text still stored on the relay after the passthrough hour').toBe(false)
+    const db = r.relay.services.db
+    const count = () => (db.prepare('select count(*) as n from hooks_events').get() as { n: number }).n
+    expect(count(), 'still held after an hour').toBe(1)
+    expect(onRelay(), 'still in the app buffer after an hour').toBe(true)
+    r.skew.ms += 7 * 24 * 3600_000
+    await tick(rt)
+    expect(count(), 'the hooks table did drop it after a week').toBe(0)
+    // ...and the inbox.item frame (title + DM text), which would stay in core_events for BUFFER_DAYS, goes with it.
+    expect(onRelay(), 'work message text is off the relay after the week').toBe(false)
   })
 
   it('BH-H3b (re-check): a passthrough work event the Mac ACKED leaves nothing on the relay ("nothing is kept once it reaches your Mac")', async () => {

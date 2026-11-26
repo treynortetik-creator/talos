@@ -10,21 +10,21 @@ const APPS = 'APPS TEXT'
 
 describe('what the agent is told', () => {
   const cases: Array<[string, Parameters<typeof agentInstructions>[0], string]> = [
-    ['main', { worker: false, trust: false }, '165529901070cc13b75102e2dcc4a97179fcafe419469c37f544cc5bf6db83e7'],
+    ['main', { worker: false, trust: false }, 'fcbad0ff3579f86e61a9e42cb508a57b2f96d17fe6157776b4845db839090a69'],
     [
       'main with apps',
       { worker: false, trust: false, appInstructions: APPS },
-      '4c28752032c696305fdd98a15a87e3bbe052e8d63b2ea34829b0bb839f0ce7c6',
+      '3af2a26e619f018b18e3c548af47c9c2ca089096ab9e29f6fafabda2a7e9136a',
     ],
     [
       'main with trust',
       { worker: false, trust: true },
-      '273dde2b52a3c7e2aa9c7e39ba4bcf958fb05f411476c845eb9075f9d3f3f969',
+      '260c4edc39cf2fdf51bcbcc6e0fc56d9c6d4ac88c330b72799b71d34a31afe48',
     ],
     [
       'main with trust and apps',
       { worker: false, trust: true, appInstructions: APPS },
-      '18508dfb166e87735c7447c3cd2b7b48de4e88e95e14a84178d6c2f1dc5345b4',
+      '3cc04c356b11a2bb80a708b9af6d1a6cbbe460032ff1497bf51f59019d9c72a5',
     ],
     [
       'main with the self-map',
@@ -33,13 +33,13 @@ describe('what the agent is told', () => {
         trust: false,
         self: { bridgeDir: '/home/alex/talos-app', commit: 'abc1234', relayVersion: '9f8e7d6' },
       },
-      '2063e13942cdbdf9439a007fee788af38c835ee54db086fa1aac87cd1ba5e5c1',
+      'ee78194c090f72b9994a02abbef45b292525c8cd33c477d673204f7f61a4cb7e',
     ],
-    ['worker', { worker: true, trust: false }, '327e21ce266a89fc8f46b864d8b11580413ab517ee38a9b005ba3a1005d522e8'],
+    ['worker', { worker: true, trust: false }, '0a12afee7c6b0576325e088f86385409dcfd38490241c08b535188926fd350ff'],
     [
       'worker, trust and apps (neither reaches it)',
       { worker: true, trust: true, appInstructions: APPS },
-      '327e21ce266a89fc8f46b864d8b11580413ab517ee38a9b005ba3a1005d522e8',
+      '0a12afee7c6b0576325e088f86385409dcfd38490241c08b535188926fd350ff',
     ],
   ]
   for (const [name, opts, hash] of cases)

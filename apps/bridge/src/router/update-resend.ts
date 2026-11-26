@@ -152,6 +152,9 @@ export const UPDATE_RESEND_TEXT = {
   notFromHere: 'Open the card in the app to send it again.',
   gone: "Talos no longer holds that message, so it can't be sent again. Send it again yourself.",
   failed: 'Talos could not send it again. Send it again yourself.',
+  /** Some went and some did not: say which, by the lines the owner saw on the card. */
+  partial: (sent: number, missed: string[]) =>
+    `${sent > 0 ? `Sent ${sent} again. ` : 'Talos could not send it again. '}${missed.length === 1 ? 'This one did not go' : 'These did not go'}: ${missed.map((l) => `"${l}"`).join(', ')}. Send ${missed.length === 1 ? 'it' : 'them'} again yourself.`,
 } as const
 
 /** A card of this offer (the `config` kind, told apart by its payload, like the permission-mode card). */
@@ -241,30 +244,35 @@ export class UpdateResendCards {
     let sent = 0
     let gone = 0
     let failed = 0
-    for (const id of ids) {
+    const missed: string[] = [] // the card's own lines for what did not go
+    for (const [i, id] of ids.entries()) {
       const key = `update_resent:${id}`
-      if (ctx.store.kvGet(key) !== undefined) continue // once per message, whoever taps and however often
+      const claim = `update_resending:${id}`
+      // once per message, whoever taps and however often; a claim left by a crash also holds (it may have gone)
+      if (ctx.store.kvGet(key) !== undefined || ctx.store.kvGet(claim) !== undefined) continue
       const n = this.deps.held(id)
       if (!offerable(n) || n.meta.thread_id !== row.thread_id) {
         gone++
+        missed.push(shown[i] ?? '')
         continue
       }
-      ctx.store.kvSet(key, String(ctx.clock.now())) // before the send: a second tap or a crash never sends it twice
+      ctx.store.kvSet(claim, String(ctx.clock.now())) // before the send: a second tap or a crash never sends it twice
       try {
         await this.deps.route(updateCopy(n))
+        ctx.store.kvSet(key, String(ctx.clock.now())) // sent: only now, after it was queued
         sent++
       } catch (e) {
         failed++
+        missed.push(shown[i] ?? '')
         ctx.log.error('update resend failed', { error: (e as Error).message })
+      } finally {
+        ctx.store.kvDelete(claim)
       }
     }
     ctx.log.info('update resend tapped', { card: row.id, sent, gone, failed })
-    if (sent > 0) return this.end(row, true, UPDATE_RESEND_TEXT.sent(sent))
-    return this.end(
-      row,
-      false,
-      failed ? UPDATE_RESEND_TEXT.failed : gone ? UPDATE_RESEND_TEXT.gone : UPDATE_RESEND_TEXT.already,
-    )
+    if (sent > 0 && missed.length === 0) return this.end(row, true, UPDATE_RESEND_TEXT.sent(sent))
+    if (sent > 0 || failed > 0) return this.end(row, false, UPDATE_RESEND_TEXT.partial(sent, missed))
+    return this.end(row, false, gone ? UPDATE_RESEND_TEXT.gone : UPDATE_RESEND_TEXT.already)
   }
 
   private async end(row: LedgerRow, ok: boolean, text: string): Promise<void> {

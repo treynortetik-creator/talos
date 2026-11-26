@@ -9,7 +9,9 @@ import { t } from '@talos-app/testkit'
 import { Bridge } from '../../src/bridge.ts'
 import { loadEnv } from '../../src/config.ts'
 import { nullLogger } from '../../src/log.ts'
+import { visiblyWorking } from '../../src/schedules/run-limits.ts'
 import { RUN_TIMEOUT_MS, readChronosLimits, runTimeoutMs } from '../../src/schedules/service.ts'
+import { WorkerStore } from '../../src/worker/store.ts'
 import { eventually } from '../helpers.ts'
 import {
   ChronosBox,
@@ -349,6 +351,135 @@ describe('midnight, restarts, orphans, late', () => {
     },
     SCHED_START_MS + t(60_000),
   )
+
+  /** The Mac's session as the Talos mod reports it: a turn running (or not). `undefined` is no live report (a dead or absent session). */
+  const sessionIs = (x: SchedHarness, state: { busy?: boolean; stopped_at_mac?: boolean } | undefined) => {
+    ;(x.bridge.ctx.mod as unknown as { liveState: () => unknown }).liveState = () =>
+      state
+        ? { session_id: 's1', source: 'mod', capabilities: [], rate_limits: [], surfaces: [], at: '', ...state }
+        : undefined
+  }
+  const runOf = (x: SchedHarness, runId: string) =>
+    (readSidecar(x) as { runs: Record<string, { status?: string; summary?: string; late_note?: string }> }).runs[runId]
+
+  test(
+    'T16: past the time-out with the session visibly working it is running long, not failed; the finish then turns out normal',
+    async () => {
+      h = await startSched({ now: BEFORE_0730, jobs: [draft()] })
+      await h.advance(90_000)
+      const n = await nextRun(h)
+      const runId = n.meta.run_id as string
+      expect(await h.agent.start(runId)).toBe('GO')
+      sessionIs(h, { busy: true })
+      await h.advance(50 * 60_000) // well past the 40 minutes
+      await h.bridge.ctx.schedules?.idle()
+      expect(stateFiles(h as SchedHarness).includes('failed-daily-digest-2026-10-05')).toBe(false)
+      expect(runOf(h, runId)).toMatchObject({
+        status: 'running',
+        summary: 'Running long. The session is still working on it.',
+      })
+      await h.agent.done(runId, true, 'All done.')
+      await h.bridge.ctx.schedules?.idle()
+      expect((await snap(h)).schedules.find((j) => j.id === 'daily-digest')?.last_run?.status).toBe('ok')
+      expect(runOf(h, runId)?.summary).toBe('All done.')
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'T16: when the working stops (the session goes idle, is stopped at the Mac, or is not heard from) the run ends as failed',
+    async () => {
+      for (const gone of [{ busy: false }, { busy: true, stopped_at_mac: true }, undefined]) {
+        h = await startSched({ now: BEFORE_0730, jobs: [draft()] })
+        await h.advance(90_000)
+        const n = await nextRun(h)
+        const runId = n.meta.run_id as string
+        expect(await h.agent.start(runId)).toBe('GO')
+        sessionIs(h, { busy: true })
+        await h.advance(45 * 60_000)
+        await h.bridge.ctx.schedules?.idle()
+        expect(runOf(h, runId)?.status).toBe('running')
+        sessionIs(h, gone)
+        await h.advance(2 * 60_000)
+        await waitFor(() => stateFiles(h as SchedHarness).includes('failed-daily-digest-2026-10-05'), 10_000, 'failed-')
+        expect(runOf(h, runId)?.status).toBe('timed_out')
+        expect(runOf(h, runId)?.summary).toBeUndefined() // the "running long" line does not outlive the run that said it
+        await h.stop()
+        h = undefined as unknown as SchedHarness
+      }
+    },
+    SCHED_START_MS * 3 + t(120_000),
+  )
+
+  test(
+    'T16: a run a thread session claimed is not "running long" because MAIN is busy: it fails as before',
+    async () => {
+      h = await startSched({ now: BEFORE_0730, jobs: [draft()] })
+      await h.advance(90_000)
+      const n = await nextRun(h)
+      const runId = n.meta.run_id as string
+      expect(await h.agent.start(runId)).toBe('GO')
+      // the router handed the run to the trip thread's session, which claimed it (what a worker's schedule_run_start leaves)
+      const store = new WorkerStore(h.bridge.ctx.store.db)
+      store.addRoute({ message_id: runId, thread_id: 'trip', notification: n, woke_at: 0, deadline_at: 0, cold: false })
+      expect(store.claim(runId, 'worker:trip', 0)).toBe(true)
+      sessionIs(h, { busy: true }) // main is busy with something else
+      await h.advance(45 * 60_000)
+      await waitFor(() => stateFiles(h as SchedHarness).includes('failed-daily-digest-2026-10-05'), 10_000, 'failed-')
+      expect(runOf(h, runId)?.status).toBe('timed_out')
+      expect(runOf(h, runId)?.summary).toBeUndefined()
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'T16: a run ended as timed_out that the agent then finishes fine turns green; a late failure stays failed',
+    async () => {
+      h = await startSched({ now: BEFORE_0730, jobs: [draft()] })
+      await h.advance(90_000)
+      const n = await nextRun(h)
+      const runId = n.meta.run_id as string
+      expect(await h.agent.start(runId)).toBe('GO')
+      await h.advance(45 * 60_000)
+      await waitFor(() => stateFiles(h as SchedHarness).includes('failed-daily-digest-2026-10-05'), 10_000, 'failed-')
+      expect((await snap(h)).schedules.find((j) => j.id === 'daily-digest')?.last_run?.status).toBe('timed_out')
+      const lateLines = () =>
+        (h as SchedHarness).relay.frames.filter(
+          (r) =>
+            r.direction === 'from_bridge' &&
+            r.raw.type === 'reply' &&
+            (r.raw.message as { author?: string; text?: string }).author === 'system' &&
+            /finished after all, late\./.test((r.raw.message as { text?: string }).text ?? ''),
+        )
+      expect(lateLines()).toHaveLength(0) // the failure row was posted; nothing about a late finish yet
+      expect(await h.agent.done(runId, true, 'Finished after all.')).toBe('late: noted on the closed run')
+      await h.bridge.ctx.schedules?.idle()
+      await waitFor(() => lateLines().length === 1, 10_000, 'the late line')
+      const line = lateLines()[0]?.raw.message as { text: string } | undefined
+      expect(line?.text).toMatch(/^.+ finished after all, late.$/)
+      // never twice
+      await h.agent.done(runId, true, 'Finished after all.')
+      await h.bridge.ctx.schedules?.idle()
+      await sleep(t(300)) // timing-ok: negative window, from the second done answered: no second line
+      expect(lateLines()).toHaveLength(1)
+      expect((await snap(h)).schedules.find((j) => j.id === 'daily-digest')?.last_run?.status).toBe('ok')
+      expect(runOf(h, runId)).toMatchObject({
+        status: 'ok',
+        summary: 'Finished after all.',
+        late_note: 'Finished after all.',
+      })
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test('T16: visibly working means a current report that says busy and is not stopped at the Mac', () => {
+    expect(visiblyWorking({ busy: true })).toBe(true)
+    expect(visiblyWorking({ busy: true, stopped_at_mac: false })).toBe(true)
+    expect(visiblyWorking({ busy: false })).toBe(false)
+    expect(visiblyWorking({})).toBe(false)
+    expect(visiblyWorking({ busy: true, stopped_at_mac: true })).toBe(false)
+    expect(visiblyWorking(undefined)).toBe(false)
+  })
 
   test(
     'a run inside a longer timeout_min is left alone and can still finish ok (60/75)',

@@ -9,9 +9,10 @@ import {
   runsInSession,
   type ScheduleSnapshotT,
   type ScheduleT,
+  safeLine,
   visibleMetaText,
 } from '@talos-app/protocol'
-import { defaultThreadRef } from '../context.ts'
+import { defaultThreadRef, postSystemNotice } from '../context.ts'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
 import { WAKE_ENDED_TEXT } from '../heartbeat/prompt.ts'
 import { storeFile } from '../heartbeat/store.ts'
@@ -134,11 +135,47 @@ export function toolRunDoneQueued(
     if (!r.ok) {
       if (r.reason === 'late' && this.heartbeatRunEnded(a.runId)) return yes(WAKE_ENDED_TEXT)
       if (r.reason === 'late') {
+        const closed = this.sidecar.note(a.runId)
+        // A run we ended as timed_out that the agent then finished fine: it turns green (the failure row was already sent; the
+        // run shows ok with the summary). Any other late finish is only noted, as before.
+        const green = closed?.status === 'timed_out' && a.ok
         this.sidecar.setNote(
           a.runId,
-          { id: job.id, ds: this.sidecar.note(a.runId)?.ds ?? job.ds, late_note: clipUnits(a.summary, 280) },
+          {
+            id: job.id,
+            ds: closed?.ds ?? job.ds,
+            late_note: clipUnits(a.summary, 280),
+            ...(green
+              ? {
+                  status: 'ok' as const,
+                  summary: clipUnits(a.summary, 280),
+                  report: excerptOf(a.report ?? a.summary),
+                  finished_at: this.iso(),
+                  duration_s: Math.max(
+                    0,
+                    Math.round((this.now() - (closed ? Date.parse(closed.started_at) : this.now())) / 1000),
+                  ),
+                }
+              : {}),
+          },
           this.now(),
         )
+        if (green) {
+          // A failure row went out for this run and it finished after all: one plain line in the same place, once.
+          const failed = failKeys(job.id, a.runId, closed?.ds ?? job.ds, 'timed_out')[0] as string
+          const lateKey = `late|${job.id}|${a.runId}`
+          if (
+            this.sidecar.wasNotified(failed) &&
+            !this.sidecar.wasNotified(lateKey) &&
+            this.sidecar.markNotified(lateKey, this.now())
+          ) {
+            const name = this.lastGood?.schedules.find((s) => s.id === job.id)?.name ?? job.id
+            await postSystemNotice(this.ctx, `${safeLine(name)} finished after all, late.`, {
+              thread: this.threadOfJob(job.id),
+            }).catch((e) => this.log('late finish line not posted', { job: job.id, error: (e as Error).message }))
+          }
+          await this.refresh()
+        }
         return yes('late: noted on the closed run')
       }
       return yes('not yours: this run belongs to another session or is not running')

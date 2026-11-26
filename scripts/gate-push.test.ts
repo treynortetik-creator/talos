@@ -636,6 +636,45 @@ describe('the push lease', () => {
     expect(r.lease()).toBe('')
   })
 
+  // scripts/push-latency.ts reads this row: the lock wait, the gate's own run and the re-gates of a push, kept apart
+  const pushedRows = (r: ReturnType<typeof setup>) => {
+    const f = join(r.T, 'cache/logs/lock-waits.tsv')
+    return existsSync(f)
+      ? readFileSync(f, 'utf8')
+          .split('\n')
+          .filter((l) => l.endsWith('\tpushed'))
+          .map((l) => l.split('\t'))
+      : []
+  }
+
+  it('a push writes one pushed row to lock-waits.tsv: its sha, no requeues, the base it gated on, its gate seconds', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const base = r.ok(r.origin, 'rev-parse', 'main')
+    const p = r.gatePush()
+    expect(p.code, p.err).toBe(0)
+    const rows = pushedRows(r)
+    expect(rows).toHaveLength(1)
+    const row = rows[0] as string[]
+    expect(row[1]).toBe('push')
+    expect(row[2]).toBe(`pushed ${r.ok(r.origin, 'rev-parse', 'main')} requeues=0 races=0 gate=clone bases=${base}`)
+    expect(Number(row[3])).toBeGreaterThanOrEqual(0)
+    expect(row.slice(4)).toEqual(['got', 'pushed'])
+  })
+
+  it('a requeue is counted, and both the gates bases are in the pushed row', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const first = r.ok(r.origin, 'rev-parse', 'main')
+    const p = r.gatePush(moving(r))
+    expect(p.code, p.err).toBe(0)
+    const row = pushedRows(r)[0] as string[]
+    const second = r.ok(r.origin, 'rev-parse', 'main~1')
+    expect(row[2]).toBe(
+      `pushed ${r.ok(r.origin, 'rev-parse', 'main')} requeues=1 races=0 gate=clone bases=${first},${second}`,
+    )
+  })
+
   it('main moving during every gate: after two requeues it stops and says how to hand the work on', () => {
     const r = setup()
     r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })

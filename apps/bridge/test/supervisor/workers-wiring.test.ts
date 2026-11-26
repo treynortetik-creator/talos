@@ -2071,3 +2071,48 @@ describe('the extra lock’s check runs again right before the session starts', 
     expect(plan(false).launch.beforeStart).toBeUndefined()
   })
 })
+
+describe('a start that runs the cut turn again, through the planner (0.26)', () => {
+  onCaseExactTmp(
+    'the launch has the two variables, and its spec hash is the dry plan’s: the update check sees no change',
+    () => {
+      const root = tmp()
+      const userHome = join(root, 'home')
+      const agentDir = join(userHome, 'agent')
+      const talosHome = join(userHome, '.talos')
+      const trip = join(userHome, 'trip')
+      for (const d of [agentDir, talosHome, trip, join(userHome, '.claude')]) mkdirSync(d, { recursive: true })
+      const planner = workerPlanner({
+        threadFolders: () => [],
+        kitVendor: sealedRelease(),
+        talosHome,
+        userHome,
+        agentDir,
+        claudeDir: join(userHome, '.claude'),
+        resolveClaude: () => '/usr/bin/claude',
+        mainArgs: () => ['--permission-mode=default'],
+        managedDir: NO_MANAGED,
+      })
+      const plan = (o: { dry?: boolean; resumeTurn?: boolean } = {}) => {
+        const p = planner({
+          thread: { id: 'trip', cwd: trip, model: 'inherit', effort: null, parentCwd: null },
+          sessionId: '11111111-2222-3333-4444-555555555555',
+          resume: true,
+          nonce: 'ab'.repeat(16),
+          baseEnv: { PATH: '/usr/bin', HOME: userHome },
+          ...(o.dry ? { dry: true } : {}),
+          ...(o.resumeTurn ? { resumeTurn: true } : {}),
+        })
+        if ('refused' in p) throw new Error(p.refused.detail)
+        return p
+      }
+      const again = plan({ resumeTurn: true })
+      expect(again.launch.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBe('1')
+      expect(again.launch.env.CLAUDE_CODE_RESUME_REASON).toBe('user_resume')
+      const ordinary = plan()
+      expect(ordinary.launch.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBeUndefined()
+      expect(again.specHash).toBe(ordinary.specHash)
+      expect(plan({ dry: true }).specHash).toBe(again.specHash)
+    },
+  )
+})

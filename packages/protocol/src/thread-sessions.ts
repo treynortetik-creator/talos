@@ -780,6 +780,8 @@ export const HubPerm = z.looseObject({
   /** Claude Code's session id and working folder; only the folder is shown (on a main-session card, to say who asked). */
   session_id: z.string().max(100).optional(),
   cwd: z.string().max(1000).optional(),
+  /** The session's permission mode as Claude Code's hook input names it. Optional: an older hook sends none, and no line says why a card asked. */
+  permission_mode: z.string().max(30).optional(),
 })
 export type HubPermT = z.infer<typeof HubPerm>
 /**
@@ -875,6 +877,8 @@ export const HubPermResult = z.looseObject({
   id: z.string().min(1).max(64),
   decision: z.string().max(20),
   reason: z.string().max(300).optional(),
+  /** The owner's words with a `deny` (already cleaned, at most 300 characters; the hook cleans again). Never with anything else. */
+  note: z.string().max(400).optional(),
 })
 export const HubHubLine = z.discriminatedUnion('t', [
   HubWelcome,

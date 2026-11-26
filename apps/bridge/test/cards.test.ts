@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { bindingFrom, type CardT, ChannelMeta, editedHash, parseFrame, payloadHash } from '@talos-app/protocol'
-import { fakeClock } from '@talos-app/testkit'
+import { fakeClock, mkFrame } from '@talos-app/testkit'
 import {
   advanceSteps,
   eventually,
@@ -375,5 +375,126 @@ describe('cards', () => {
     const fake = { ...card, id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4V6' }
     const f = await pushCardResolvePastRelay(h, fake, card.payload_hash)
     expect(await errFor(f.id)).toBe('card_not_pending')
+  })
+})
+
+// L15: an in-app tap is timed like a notification's Approve. The 10-minute rule is judged at the relay's stamp (the moment the
+// relay took the tap), and the owner's device-signed `ts` may be at most twelve hours old on the Mac's clock. The card's own
+// deadline, the hash, the card state and replays are the ledger's and stay as they were.
+describe('an in-app tap made before the Mac slept', () => {
+  const HOUR = 3_600_000
+  /** The tap as the app signs it, delivered the way the relay does: stamped at `stampAgoMs` before now (a frame past the relay keeps it). */
+  async function tap(
+    card: { id: string },
+    hash: string,
+    o: { tsAgoMs: number; stampAgoMs: number; action?: 'primary' | 'kill'; tsAheadMs?: number },
+  ) {
+    const ts = new Date(Date.now() - o.tsAgoMs + (o.tsAheadMs ?? 0)).toISOString()
+    const signed = await h.app.sign({
+      ...mkFrame('card.resolve'),
+      card_id: card.id,
+      action: o.action ?? 'primary',
+      payload_hash: hash,
+      ts,
+    })
+    const stamped = { ...signed, relay: { seq: 1, received_at: new Date(Date.now() - o.stampAgoMs).toISOString() } }
+    h.relay.sendToBridge(stamped, { durable: true })
+    return String(stamped.id)
+  }
+
+  test('a tap three hours old that the relay took at once is run, and a replay or second tap runs nothing more', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    const first = await tap(card, card.payload_hash, { tsAgoMs: 3 * HOUR, stampAgoMs: 3 * HOUR - 1000 })
+    await h.waitNotes(1)
+    expect(h.notes[0]?.meta.card_action).toBe('primary')
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
+    expect(first).toBeTruthy()
+    // a second tap of the same card, and a Kill for a card already decided
+    const again = await tap(card, card.payload_hash, { tsAgoMs: 3 * HOUR, stampAgoMs: 3 * HOUR - 2000 })
+    expect(await errFor(again)).toBe('card_not_pending')
+    const kill = await tap(card, card.payload_hash, { tsAgoMs: 3 * HOUR, stampAgoMs: 3 * HOUR - 3000, action: 'kill' })
+    expect(await errFor(kill)).toBe('card_not_pending')
+    expect(h.notes).toHaveLength(1)
+  })
+
+  test('a tap the phone held for three hours before the relay took it is still expired, as before', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    const id = await tap(card, card.payload_hash, { tsAgoMs: 3 * HOUR, stampAgoMs: 0 })
+    expect(await errFor(id)).toBe('card_expired')
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('expired')
+  })
+
+  test('a tap thirteen hours old on the Mac clock is refused and the card stays pending; a fresh tap then works', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 48 * 3600 })
+    const id = await tap(card, card.payload_hash, { tsAgoMs: 13 * HOUR, stampAgoMs: 13 * HOUR - 1000 })
+    expect(await errFor(id)).toBe('stale')
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
+    expect(h.notes).toHaveLength(0)
+    await tap(card, card.payload_hash, { tsAgoMs: 1000, stampAgoMs: 500 })
+    await h.waitNotes(1)
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('resolved')
+  })
+
+  test('the card own deadline still wins: a tap made in time but read after the deadline is expired', async () => {
+    h = await startHarness()
+    const ledger = h.bridge.ctx.ledger
+    const card = await makeCard({ expires_in_s: 3600 })
+    const expires = Date.parse(card.expires_at)
+    const input = {
+      card_id: card.id,
+      action: 'primary' as const,
+      payload_hash: card.payload_hash,
+      ts: new Date(expires - 2 * HOUR).toISOString(),
+    }
+    const late = ledger.resolve(input, expires + 1000, { ageAtMs: expires - 2 * HOUR + 1000, maxTapAgeMs: 12 * HOUR })
+    expect(!late.ok && late.code).toBe('card_expired')
+    expect(ledger.get(card.id)?.state).toBe('expired')
+  })
+
+  test('a wrong hash and an unknown card are refused whatever the stamp says', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    const bad = await tap(card, `sha256:${'0'.repeat(64)}`, { tsAgoMs: 3 * HOUR, stampAgoMs: 3 * HOUR - 1000 })
+    expect(await errFor(bad)).toBe('card_hash_mismatch')
+    const unknown = await tap({ id: 'c_01JBF3V7Q8K2M4N6P8R0S2T4V6' }, card.payload_hash, {
+      tsAgoMs: 3 * HOUR,
+      stampAgoMs: 3 * HOUR - 1000,
+    })
+    expect(await errFor(unknown)).toBe('card_not_pending')
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
+  })
+
+  test('a phone clock ten minutes fast is refused as a clock problem and moves nothing', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    const id = await tap(card, card.payload_hash, { tsAgoMs: 0, stampAgoMs: 0, tsAheadMs: 10 * 60_000 })
+    expect(await errFor(id)).toBe('stale')
+    expect(h.bridge.ctx.ledger.get(card.id)?.state).toBe('pending')
+  })
+
+  test('a tap a minute in the Mac future (the Mac clock a little slow) is taken, dated no later than now', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    await tap(card, card.payload_hash, { tsAgoMs: 0, stampAgoMs: 0, tsAheadMs: 60_000 })
+    await h.waitNotes(1)
+    expect(Date.parse(h.bridge.ctx.ledger.get(card.id)?.resolution?.at as string)).toBeLessThanOrEqual(Date.now())
+  })
+
+  test('with no relay stamp the 10-minute rule is judged at the Mac clock, as before', async () => {
+    h = await startHarness()
+    const card = await makeCard({ expires_in_s: 24 * 3600 })
+    const old = new Date(Date.now() - HOUR).toISOString()
+    const signed = await h.app.sign({
+      ...mkFrame('card.resolve'),
+      card_id: card.id,
+      action: 'primary',
+      payload_hash: card.payload_hash,
+      ts: old,
+    })
+    h.relay.sendToBridge({ ...signed, relay: undefined }, { durable: false })
+    expect(await errFor(String(signed.id))).toBe('card_expired')
   })
 })

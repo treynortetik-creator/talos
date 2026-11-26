@@ -103,3 +103,22 @@ describe('the strip rule in the spec (worker-spec.ts WORKER_ENV_STRIP_RULES)', (
     expect(spec(jcs({ ...r, names: [...r.names, 'A_NEW_SECRET'] }))).not.toBe(now) // a release stripping a new name
   })
 })
+
+describe('the resume-turn variables never reach the hash (0.26)', () => {
+  const TURN = { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1', CLAUDE_CODE_RESUME_REASON: 'user_resume' }
+  const base = { argv: ['claude', '--resume', 'abc'], baseEnv: { PATH: '/usr/bin' }, files: {} }
+  it('a launch with them hashes the same as one without: no restart loop', () => {
+    const plain = { ...base, env: { PATH: '/usr/bin', TALOS_APP_HOME: '/t' } }
+    const again = { ...base, env: { ...plain.env, ...TURN } }
+    expect(launchSpec(again).env).toEqual({ TALOS_APP_HOME: '/t' })
+    expect(launchSpecHash(again)).toBe(launchSpecHash(plain))
+  })
+  it('other CLAUDE_CODE_ variables still count', () => {
+    const plain = { ...base, env: { PATH: '/usr/bin' } }
+    const other = { ...base, env: { PATH: '/usr/bin', CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: '1' } }
+    expect(launchSpecHash(other)).not.toBe(launchSpecHash(plain))
+  })
+  it('the list the Mac shares (and swift-parity checks) is still the nonce alone', () => {
+    expect([...LAUNCH_SPEC_EXCLUDED_ENV]).toEqual(['TALOS_APP_WORKER_NONCE'])
+  })
+})

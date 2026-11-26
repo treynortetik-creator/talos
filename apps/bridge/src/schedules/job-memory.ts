@@ -4,12 +4,14 @@
 //
 // Everything in it was written by an agent, and an agent may have quoted an email or a web page, so it is data. It is stored
 // with every hidden character already shown as ⟦U+XXXX⟧ (what is cut to the cap is what the next run reads), and it reaches a
-// prompt only inside the bridge's external-content wrapper. The file is bound to what it was written for: a hash of the job
-// text and an epoch (random, kept in the sidecar, moved by every wipe and by switching memory on). A READ with another binding
-// wipes the file (that is the offer of a run); a SAVE with another binding is refused and touches nothing, so a run that
-// finishes late can never write into a memory that is not the one it was given.
+// prompt only inside the bridge's external-content wrapper. The file is bound to the memory it was written for: an epoch
+// (random, kept in the sidecar, moved by every wipe and by switching memory on). Rewording the job does NOT move it: the notes
+// are kept. A binding is written as "<hash of the job text>.<epoch>" and only the epoch is compared, so a file written before
+// this (which was bound to the text too) still loads. A READ with another epoch wipes the file (that is the offer of a run);
+// a SAVE with another epoch is refused and touches nothing, so a run that finishes late can never write into a memory that
+// is not the one it was given.
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { visibleMetaText, wrapExternal } from '@talos-app/protocol'
 import { removeFile, writeFileAtomic, writeJsonAtomic } from '../fsutil.ts'
@@ -39,9 +41,14 @@ export type MemoryResult = { ds: string; ok: boolean; summary: string }
 export type JobMemoryData = { notepad: string; truncated: boolean; results: MemoryResult[] }
 type Stored = JobMemoryData & { v: 1; binding: string }
 
-/** What a file is bound to: the job text and the memory's epoch. Either one changing makes it another binding. */
+/** What a file is written with: the job text's hash and the memory's epoch. Only the epoch decides (`sameMemory`). */
 export const bindingOf = (prompt: string, epoch: string): string =>
   `${createHash('sha256').update(prompt).digest('hex')}.${epoch}`
+
+/** The epoch part of a binding: after the last dot (an epoch has none), or the whole string. */
+const epochOf = (binding: string): string => binding.slice(binding.lastIndexOf('.') + 1)
+/** Two bindings are the same memory when their epochs are: rewording a job (another text hash) keeps its notes. */
+const sameMemory = (stored: string, wanted: string): boolean => epochOf(stored) === epochOf(wanted)
 
 /** Hidden, control and direction characters become visible ⟦U+XXXX⟧; new lines are kept. */
 const showLines = (s: string): string => s.split('\n').map(visibleMetaText).join('\n')
@@ -175,7 +182,7 @@ export class JobMemory {
   read(id: string, binding: string): JobMemoryData | null {
     const f = this.load(id)
     if (!f) return null
-    if (f.binding !== binding) {
+    if (!sameMemory(f.binding, binding)) {
       this.wipe(id)
       return null
     }
@@ -195,7 +202,7 @@ export class JobMemory {
     try {
       if (!this.folder(true) || this.fileState(id) === 'refused') return { ok: false }
       const found = this.load(id)
-      if (found && found.binding !== binding) return { ok: false, stale: true }
+      if (found && !sameMemory(found.binding, binding)) return { ok: false, stale: true }
       const cur = found ?? { notepad: '', truncated: false, results: [] }
       let { notepad, truncated } = cur
       if (patch.notepad !== undefined) {
@@ -221,10 +228,27 @@ export class JobMemory {
     }
   }
 
-  /** Removes the job's memory. A link is removed itself, never what it points at; a link where the folder goes is left alone. */
-  wipe(id: string): void {
+  /** The one old copy a move to another thread leaves: <id>.old.json, beside the file, never read by a run. */
+  oldCopyPath(id: string): string {
+    return join(this.dir, `${id}.old.json`)
+  }
+
+  /**
+   * Removes the job's memory. A link is removed itself, never what it points at; a link where the folder goes is left alone.
+   * With `keepOldCopy` (a move to another thread) the file is first renamed to the one old copy, replacing an earlier one, so
+   * the notes are not lost but no run of the job reads them. Any other wipe also removes the old copy.
+   */
+  wipe(id: string, o: { keepOldCopy?: boolean } = {}): void {
     if (!ID.test(id)) return
     if (this.folder(false)) {
+      if (!o.keepOldCopy) removeFile(this.oldCopyPath(id))
+      else if (this.canWrite() && this.fileState(id) === 'file' && this.stateOf(this.oldCopyPath(id)) !== 'refused') {
+        try {
+          renameSync(this.path(id), this.oldCopyPath(id))
+        } catch {
+          // the file is removed below instead: a copy that cannot be kept never leaves the notes readable
+        }
+      }
       removeFile(this.path(id))
       this.removePack(id)
       this.clearRuns(id)

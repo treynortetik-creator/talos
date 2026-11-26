@@ -27,6 +27,7 @@ import {
   type WorkerEntryT,
 } from '@talos-app/protocol'
 import type { Proc } from '../../src/supervisor/bg-work.ts'
+import { RESUME_TURN_MAX_AGE_MS } from '../../src/supervisor/cut-turn.ts'
 import { LoginEnvCache } from '../../src/supervisor/login-env.ts'
 import { restored } from '../../src/supervisor/owed-pointer.ts'
 import { stripEscapes } from '../../src/supervisor/screen.ts'
@@ -201,18 +202,29 @@ function setup(
     }
     /** The process table the background-work look reads (none: an empty one, so nothing runs under any pane). */
     procTable?: () => Proc[] | null
+    /** The reap of what a cut session left running throws. */
+    reapFails?: boolean
   } = {},
 ) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), 'talos-workers-'))
   dirs.push(home)
   let t = 100
   let wall = Date.parse('2026-11-10T12:00:00.000Z')
+  let boot = 50_000_000 // ms since boot: a clock of its own, a step of the wall clock never moves it
   let pid = 5000
   let ids = 0
   const audit: Array<[string, Record<string, string> | undefined]> = []
   const posts: Array<[string, string]> = []
   const hosts = o.hosts ?? new Map<string, FakeHost>()
-  const plans: Array<{ sessionId: string; resume: boolean; nonce: string }> = []
+  const plans: Array<{
+    sessionId: string
+    resume: boolean
+    nonce: string
+    resumeTurn: boolean | undefined
+    reapsSoFar: number
+  }> = []
+  const reaps: string[] = []
+  const reapFroms: Array<number | undefined> = []
   let planNow = o.plan
   let envOff = false
   let procs = o.procTable ?? (() => [])
@@ -230,7 +242,13 @@ function setup(
     threads: () => o.threads ?? [TRIP],
     ...(o.maxLive ? { maxLive: o.maxLive } : {}),
     plan: (p) => {
-      plans.push({ sessionId: p.sessionId, resume: p.resume, nonce: p.nonce })
+      plans.push({
+        sessionId: p.sessionId,
+        resume: p.resume,
+        nonce: p.nonce,
+        resumeTurn: p.resumeTurn,
+        reapsSoFar: reaps.length,
+      })
       return (
         planNow?.(p) ?? {
           launch: {
@@ -252,6 +270,7 @@ function setup(
     newSessionId: () => `11111111-2222-3333-4444-${String(++ids).padStart(12, '0')}`,
     now: () => t,
     wallMs: () => wall,
+    bootMs: () => boot,
     audit: (e, f) => audit.push([e, f]),
     mainPanePid: () => 42,
     supervisorPid: 7,
@@ -279,10 +298,17 @@ function setup(
     }),
     procTable: () => procs(),
     procArgv: () => null,
+    reap: async (nonce, notBeforeMs) => {
+      if (o.reapFails) throw new Error('reap failed')
+      reaps.push(nonce)
+      reapFroms.push(notBeforeMs)
+      return undefined
+    },
   })
   const tick = async (s = 1) => {
     t += s
     wall += s * 1000
+    boot += s * 1000
     await m.tick()
     await new Promise((r) => setTimeout(r, 0)) // the login env read answers
     await m.noticesSettled()
@@ -302,6 +328,8 @@ function setup(
     home,
     hosts,
     plans,
+    reaps,
+    reapFroms,
     audit,
     events: () => audit.map(([e]) => e),
     tick,
@@ -310,6 +338,7 @@ function setup(
       wall += ms
     },
     wall: () => wall,
+    boot: () => boot,
     host: (id = 'trip') => hosts.get(id) as FakeHost,
     file: () => parseWorkersFile(readFileSync(workersJsonPath(home), 'utf8')),
     ready: (id = 'trip') =>
@@ -4018,5 +4047,996 @@ describe('restart on update (update-restart.ts)', () => {
     await comeBack(w.x, second)
     const [f, s2] = first === 'a' ? ['A', 'B'] : ['B', 'A']
     expect(lines(w.x)).toEqual([`Updated or instructions changed: restarted ${f}, ${s2}.`])
+  })
+})
+
+describe('a turn that was cut off is run again by the next start, once and only soon (0.26)', () => {
+  const SAVED = { saved: () => true }
+  const lastPlan = (x: ReturnType<typeof setup>) => x.plans[x.plans.length - 1]
+  /** In a turn: the pane drew just now. */
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  const crashMidTurn = async (x: ReturnType<typeof setup>) => {
+    await live(x)
+    await inTurn(x)
+    expect(x.m.state('trip')).toBe('busy')
+    x.host().exit(1)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+  }
+  const prior = (x: ReturnType<typeof setup>, over: Record<string, unknown>) =>
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'busy',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+            ...over,
+          },
+        },
+      }),
+    )
+  it('a crash in the middle of a turn: the next resume asks for the turn again', async () => {
+    const x = setup(SAVED)
+    await crashMidTurn(x)
+    await startAgain(x)
+    expect(lastPlan(x)).toMatchObject({ resume: true, resumeTurn: true })
+  })
+  it('an ordinary start, a start after a quiet park and a start after a crash between turns do not', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    await x.m.park('trip', 'idle')
+    x.host().exit(0)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    x.host().exit(1) // quiet: no turn was running
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('a turn that ended (Esc, or it finished) and then a crash: not run again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    await x.tick(WORKER_TIMING.busy_window_s + 2) // the pane went quiet: the turn is over
+    await x.tick()
+    expect(x.m.state('trip')).toBe('live')
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the owner stops it in the middle of a turn: never run again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    await x.m.stop('trip')
+    x.host().exit(0)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('off')
+    await startAgain(x)
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('a stop by the owner after a crash cleans the record: the later start does not run the turn', async () => {
+    const x = setup(SAVED)
+    await crashMidTurn(x)
+    await x.m.stop('trip')
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the turn is asked for once: the start after that one does not', async () => {
+    const x = setup(SAVED)
+    await crashMidTurn(x)
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+    x.host().exit(1) // quiet
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('a fresh start does not ask for it, and clears it', async () => {
+    const x = setup(SAVED)
+    await crashMidTurn(x)
+    await x.m.start('trip', { fresh: true })
+    x.ready()
+    await x.tick()
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('a direct restart, of a quiet session or of a busy one (its turn is stopped at once), does not ask for the turn again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await x.m.restart('trip') // quiet
+    x.host().exit(0)
+    await x.tick()
+    x.ready()
+    await x.tick()
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    await inTurn(x)
+    await x.m.restart('trip') // busy: the turn is stopped at once
+    x.host().exit(0)
+    await x.tick()
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy() // a restart to get going again is not a cut turn
+  })
+  it('a restart wake on a stuck session (a dialog on its screen) is at once, and not a cut turn either', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().screen = parseCapture(
+      readFileSync(
+        join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.319/needs-you-capture/01-trust-first.txt'),
+        'utf8',
+      ),
+    )
+    for (let i = 0; i < WORKER_TIMING.dialog_settle_s + 2; i++) await inTurn(x)
+    writeControl(x.home, {
+      v: 1,
+      thread_id: 'trip',
+      message_ids: [],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'control',
+      action: 'restart',
+    })
+    await x.tick()
+    expect(x.host().signals).toEqual(['SIGTERM']) // at once: the stuck branch
+    x.host().screen = null
+    x.host().exit(0)
+    await x.tick()
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('a restart wake that waits for the turn and then cuts it at the limit asks for it again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    x.host().output = x.wall()
+    writeControl(x.home, {
+      v: 1,
+      thread_id: 'trip',
+      message_ids: [],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'control',
+      action: 'restart',
+    })
+    await x.tick()
+    expect(x.m.state('trip')).toBe('stopping')
+    for (let i = 0; i < WORKER_TIMING.owner_stop_s + 2 && x.host().signals.length === 0; i++) {
+      x.host().output = x.wall()
+      await x.tick()
+    }
+    expect(x.host().signals).toEqual(['SIGTERM']) // the turn was cut
+    x.host().exit(0)
+    await x.tick()
+    expect(lastPlan(x)).toMatchObject({ resume: true, resumeTurn: true })
+  })
+  it('a session the last supervisor left mid-turn, found gone, asks for the turn again (turn_started_at too)', async () => {
+    for (const over of [{ state: 'busy' }, { state: 'live', turn_started_at: '2026-11-10T11:58:00.000Z' }]) {
+      const x = setup(SAVED)
+      prior(x, { ...over, last_active_at: '2026-11-10T11:58:30.000Z' })
+      await x.tick()
+      expect(x.m.state('trip')).toBe('parked')
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true, resumeTurn: true })
+    }
+  })
+  it('a session found gone while quiet does not', async () => {
+    const x = setup(SAVED)
+    prior(x, { state: 'live' })
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the record survives a supervisor restart between the cut and the start', async () => {
+    const x = setup(SAVED)
+    await crashMidTurn(x)
+    await x.tick(6) // published
+    const y = setup({ ...SAVED, home: x.home })
+    await y.tick()
+    await y.m.start('trip')
+    y.ready()
+    await y.tick()
+    expect(lastPlan(y)).toMatchObject({ resume: true, resumeTurn: true })
+  })
+  describe('plan mode', () => {
+    it('cut in plan mode (the footer said so during the turn): not run again', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      x.host().status = '⏸ plan mode on (shift+tab to cycle)'
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true })
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+    it('a session launched in plan mode is plan mode even when the footer cannot be read', async () => {
+      const x = setup({
+        ...SAVED,
+        plan: (p) => ({
+          launch: {
+            session: 't-trip',
+            argv: ['claude', '--permission-mode=plan'],
+            cwd: p.thread.cwd,
+            env: { TALOS_APP_WORKER_NONCE: p.nonce },
+          },
+          settingsJSON: '{}',
+          cwd: p.thread.cwd,
+        }),
+      })
+      await crashMidTurn(x)
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+    it('a footer that shows another mode is not plan mode', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      x.host().status = '⏵⏵ accept edits on (shift+tab to cycle)'
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+    it('left plan mode during the turn: the last footer counts', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      x.host().status = '⏸ plan mode on (shift+tab to cycle)'
+      await inTurn(x)
+      x.host().status = '? for shortcuts'
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+    it('a prompt on the screen in place of the footer keeps what was seen', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      x.host().status = '⏸ plan mode on (shift+tab to cycle)'
+      await inTurn(x)
+      x.host().screen = ['Do you want to proceed?', '1. Yes', '2. No']
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+  })
+  describe('the age gate (RESUME_TURN_MAX_AGE_MS)', () => {
+    it('is thirty minutes', () => expect(RESUME_TURN_MAX_AGE_MS).toBe(30 * 60 * 1000))
+    it('a start exactly at the limit still asks for the turn', async () => {
+      const x = setup(SAVED)
+      await crashMidTurn(x)
+      x.jumpWall(RESUME_TURN_MAX_AGE_MS)
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+    it('a start one millisecond past it does not', async () => {
+      const x = setup(SAVED)
+      await crashMidTurn(x)
+      x.jumpWall(RESUME_TURN_MAX_AGE_MS + 1)
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true })
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+    it('a session found gone is as old as its last activity, not as the moment this supervisor noticed', async () => {
+      const x = setup(SAVED)
+      prior(x, { state: 'busy', last_active_at: '2026-11-10T11:00:00.000Z' }) // an hour before the test clock
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true })
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+  })
+})
+
+describe('what a cut session left running is ended before its turn runs again (0.26)', () => {
+  const SAVED = { saved: () => true }
+  const NONCE = /^[0-9a-f]{32,}$/
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  it('a crash in the middle of a turn: the dead launch’s nonce is reaped once, before the next start', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    const nonce = x.plans[0]?.nonce as string
+    expect(nonce).toMatch(NONCE)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reaps).toEqual([nonce])
+    await startAgain(x)
+    expect(x.plans[1]).toMatchObject({ resumeTurn: true, reapsSoFar: 1 }) // reaped first
+    expect(x.reaps).toEqual([nonce])
+  })
+  it('a crash between turns, an idle exit and a park reap nothing', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    await x.m.park('trip', 'idle')
+    x.host().exit(0)
+    await x.tick()
+    expect(x.reaps).toEqual([])
+  })
+  it('the owner’s stop in the middle of a turn reaps nothing: it is not resumed, and background work is the owner’s call', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    await x.m.stop('trip')
+    x.host().exit(0)
+    await x.tick()
+    expect(x.reaps).toEqual([])
+  })
+  it('cut in plan mode: nothing runs again, so nothing is reaped', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    x.host().status = '⏸ plan mode on (shift+tab to cycle)'
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reaps).toEqual([])
+  })
+  it('a restart that stopped a running turn: reaped when the pane has gone, before the restart’s own start', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    const nonce = x.plans[0]?.nonce as string
+    await inTurn(x)
+    writeControl(x.home, {
+      v: 1,
+      thread_id: 'trip',
+      message_ids: [],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'control',
+      action: 'restart',
+    })
+    await x.tick()
+    for (let i = 0; i < WORKER_TIMING.owner_stop_s + 2 && x.host().signals.length === 0; i++) await inTurn(x) // waits, then cuts
+    expect(x.host().signals).toEqual(['SIGTERM'])
+    expect(x.reaps).toEqual([]) // the pane is still going down
+    x.host().exit(0)
+    await x.tick()
+    expect(x.reaps).toEqual([nonce])
+    expect(x.plans[1]).toMatchObject({ resumeTurn: true, reapsSoFar: 1 })
+  })
+  it('a session found gone after a supervisor restart mid-turn: the nonce its file still holds is reaped', async () => {
+    const x = setup(SAVED)
+    const nonce = 'cd'.repeat(16)
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'busy',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            turn_started_at: '2026-11-10T11:58:00.000Z',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+          },
+        },
+      }),
+    )
+    mkdirSync(workerDir(x.home, 'trip'), { recursive: true })
+    writeFileSync(join(workerDir(x.home, 'trip'), 'nonce'), nonce)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+    expect(x.reaps).toEqual([nonce])
+    expect(existsSync(join(workerDir(x.home, 'trip'), 'nonce'))).toBe(false) // the file is still released
+  })
+  it('a session found gone while quiet reaps nothing', async () => {
+    const x = setup(SAVED)
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'live',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+          },
+        },
+      }),
+    )
+    mkdirSync(workerDir(x.home, 'trip'), { recursive: true })
+    writeFileSync(join(workerDir(x.home, 'trip'), 'nonce'), 'cd'.repeat(16))
+    await x.tick()
+    expect(x.reaps).toEqual([])
+  })
+  it('a reap that fails changes nothing else: parked, said, and the next start still runs the turn', async () => {
+    const x = setup({ ...SAVED, reapFails: true })
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+    expect(x.events()).toContain('worker_reap_failed')
+    await startAgain(x)
+    expect(x.plans[1]).toMatchObject({ resumeTurn: true })
+  })
+  it('the nonce travels with the record: a supervisor restart between the crash and the start loses nothing', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    const nonce = x.plans[0]?.nonce as string
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick(6)
+    const rec = JSON.parse(readFileSync(workersJsonPath(x.home), 'utf8')).threads.trip
+    expect(rec.cut_turn_nonce).toBe(nonce)
+  })
+})
+
+describe('a turn that crashes its own session again is not run a second time in a row (review fix 1)', () => {
+  const SAVED = { saved: () => true }
+  const lastPlan = (x: ReturnType<typeof setup>) => x.plans[x.plans.length - 1]
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  const quiet = async (x: ReturnType<typeof setup>) => {
+    await x.tick(WORKER_TIMING.busy_window_s + 2)
+    await x.tick()
+  }
+  it('the re-run crashes the session before it ends: the next start does not run it again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true) // the one automatic re-run
+    await inTurn(x) // the re-run is working...
+    x.host().exit(1) // ...and kills the session again
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the re-run finishes, a new turn starts and crashes: that one is cut and runs again', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    await inTurn(x)
+    await quiet(x) // the re-run is over
+    await inTurn(x) // a new turn
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+  })
+  it('a session that crashed in a re-run and was found gone by the next supervisor is not cut either', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    await inTurn(x)
+    await x.tick(6) // published: the flag is in workers.json
+    const y = setup({ ...SAVED, home: x.home })
+    // y finds the pane gone (its own fake host has nothing running)
+    await y.tick()
+    await y.tick()
+    await y.m.start('trip')
+    y.ready()
+    await y.tick()
+    expect(lastPlan(y)?.resumeTurn).toBeFalsy()
+  })
+  it('a restart’s cut does not count as a new turn either: it is a re-run in a row', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.events().filter((e) => e === 'worker_turn_cut')).toHaveLength(1) // the second crash recorded nothing
+  })
+})
+
+describe('a cut time in the future, and an Esc the owner pressed (review fixes 5 and 6)', () => {
+  const SAVED = { saved: () => true }
+  const lastPlan = (x: ReturnType<typeof setup>) => x.plans[x.plans.length - 1]
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  const quiet = async (x: ReturnType<typeof setup>) => {
+    await x.tick(WORKER_TIMING.busy_window_s + 2)
+    await x.tick()
+  }
+  // the line Claude Code draws after Esc, as a real capture has it (real-2.1.318/after-esc.txt)
+  const ESC_LINE = readFileSync(
+    join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.318/after-esc.txt'),
+    'utf8',
+  )
+    .split('\n')
+    .find((l) => l.includes('Interrupted · What should Claude do instead?')) as string
+  it('the captured line is the one this test thinks it is', () => {
+    // the capture has a no-break space after the corner: whitespace is compared as one space
+    expect(ESC_LINE.replace(/\s+/g, ' ').trim()).toBe('⎿ Interrupted · What should Claude do instead?')
+  })
+  describe('the clock stepped back (a cut time in the future)', () => {
+    const crash = async (x: ReturnType<typeof setup>) => {
+      await live(x)
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+    }
+    it('a start a minute before the cut still asks for the turn', async () => {
+      const x = setup(SAVED)
+      await crash(x)
+      x.jumpWall(-60_000)
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+    it('a start more than a minute before it does not: the cut time cannot be trusted', async () => {
+      const x = setup(SAVED)
+      await crash(x)
+      x.jumpWall(-60_001)
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true })
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+  })
+  describe('Esc, then a crash within busy_window_s', () => {
+    it('the interrupt line shows after the turn began: the owner ended it, so no cut', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      await inTurn(x)
+      x.host().history = ESC_LINE // Esc: the line is drawn, and the pane stays busy for the window
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)).toMatchObject({ resume: true })
+      expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+    })
+    it('an interrupt line that was on the screen before the turn is an old Esc: a crash in this turn is a cut', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      x.host().history = ESC_LINE // already there when the turn begins
+      await x.tick()
+      await inTurn(x)
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+    it('Esc, then a new turn after the pane went quiet, then a crash: that new turn is cut', async () => {
+      const x = setup(SAVED)
+      await live(x)
+      await inTurn(x)
+      x.host().history = ESC_LINE
+      await inTurn(x)
+      await quiet(x)
+      await inTurn(x) // a new turn
+      x.host().exit(1)
+      await x.tick()
+      await startAgain(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    })
+  })
+})
+
+describe('the reap only ends what the cut turn started (review fixes 3 and 4)', () => {
+  const SAVED = { saved: () => true }
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const NONCE = 'cd'.repeat(16)
+  const gone = (x: ReturnType<typeof setup>, over: Record<string, unknown>) =>
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'busy',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+            ...over,
+          },
+        },
+      }),
+    )
+  it('a crash: the reap is bounded by the last quiet look before the turn began (nothing of an earlier turn is in it)', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await x.tick(5)
+    const quietAt = x.boot() // the last look before the turn: the pane was quiet (boot time, ms)
+    await inTurn(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reaps).toHaveLength(1)
+    expect(x.reapFroms).toEqual([quietAt])
+  })
+  it('the bound is kept in the record, so a supervisor restart loses nothing', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await x.tick(5)
+    const quietAt = x.boot()
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick(6)
+    const rec = JSON.parse(readFileSync(workersJsonPath(x.home), 'utf8')).threads.trip
+    expect(rec.cut_turn_from_boot).toBe(quietAt)
+  })
+  it('a turn the supervisor typed in: its own start time bounds the reap', async () => {
+    const x = setup(SAVED)
+    const started = '2026-11-10T11:58:00.000Z'
+    const nonce = NONCE
+    gone(x, { state: 'live', turn_started_at: started })
+    mkdirSync(workerDir(x.home, 'trip'), { recursive: true })
+    writeFileSync(join(workerDir(x.home, 'trip'), 'nonce'), nonce)
+    await x.tick()
+    expect(x.reaps).toEqual([nonce])
+    expect(x.reapFroms).toEqual([x.boot() - (x.wall() - Date.parse(started))]) // the wall start, put on the boot clock as of now
+  })
+  it('a turn whose start is not known at all reaps nothing: it cannot be told from an earlier turn’s', async () => {
+    const x = setup(SAVED)
+    gone(x, { state: 'busy' }) // owner-typed, and the last supervisor kept no start for it
+    mkdirSync(workerDir(x.home, 'trip'), { recursive: true })
+    writeFileSync(join(workerDir(x.home, 'trip'), 'nonce'), NONCE)
+    await x.tick()
+    expect(x.reaps).toEqual([])
+    expect(x.events()).toContain('worker_reap_skipped')
+  })
+  it('found gone after a restart that was waiting for the turn (parking, owner-typed turn): the cut it kept is reaped', async () => {
+    const x = setup(SAVED)
+    const from = 49_000_000 // boot ms
+    gone(x, {
+      state: 'parking',
+      cut_turn_session: '11111111-2222-3333-4444-999999999999',
+      cut_turn_at: '2026-11-10T11:58:30.000Z',
+      cut_turn_nonce: NONCE,
+      cut_turn_from_boot: from,
+    })
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+    expect(x.reaps).toEqual([NONCE])
+    expect(x.reapFroms).toEqual([from])
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+    expect(x.plans[x.plans.length - 1]).toMatchObject({ resumeTurn: true, reapsSoFar: 1 })
+  })
+  it('the owner’s stop of it (ending off) is not reaped, whatever record there was', async () => {
+    const x = setup(SAVED)
+    gone(x, {
+      state: 'stopping',
+      cut_turn_session: '11111111-2222-3333-4444-999999999999',
+      cut_turn_at: '2026-11-10T11:58:30.000Z',
+      cut_turn_nonce: NONCE,
+      cut_turn_from_boot: 49_000_000,
+      turn_wait_end: 'off',
+    })
+    await x.tick()
+    expect(x.reaps).toEqual([])
+  })
+})
+
+describe('the poison guard survives the pointer that starts the session, and does not stick (round 2, fixes 1 and 2)', () => {
+  const SAVED = { saved: () => true }
+  const lastPlan = (x: ReturnType<typeof setup>) => x.plans[x.plans.length - 1]
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const pointerWake = (x: ReturnType<typeof setup>) =>
+    writeWake(x.home, {
+      v: 1,
+      thread_id: 'trip',
+      message_ids: ['m_01HZZZZZZZZZZZZZZZZZZZZZZZ'],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'message',
+      action: 'pointer',
+    })
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  /** A cut turn, then a start for a pointer: the re-run is under way and the pointer is typed on the first live tick. */
+  const crashThenPointerStart = async (x: ReturnType<typeof setup>) => {
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+    pointerWake(x)
+    await x.tick(1)
+    expect(x.m.state('trip')).toBe('starting')
+    expect(lastPlan(x)).toMatchObject({ resume: true, resumeTurn: true })
+    x.ready()
+  }
+  it('crash mid-turn, a pointer wake starts with the re-run, the pointer is typed while the re-run works, crash again: no second re-run', async () => {
+    const x = setup(SAVED)
+    await crashThenPointerStart(x)
+    await inTurn(x) // live, and the re-run is drawing
+    await inTurn(x) // the pointer is typed in
+    expect(x.host().submitted).toEqual([WORKER_POINTER_TEXT])
+    expect(x.m.entry('trip')?.turn_started_at).toBeDefined() // the pointer began a turn
+    await inTurn(x)
+    x.host().exit(1) // the re-run (and the pointer) crash it again
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)).toMatchObject({ resume: true })
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the re-run and the pointer’s turn end, then a real turn crashes: that one is cut', async () => {
+    const x = setup(SAVED)
+    await crashThenPointerStart(x)
+    await inTurn(x)
+    await inTurn(x)
+    await x.tick(WORKER_TIMING.busy_window_s + 2) // quiet: both are over
+    await x.tick()
+    await inTurn(x) // a new turn
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+  })
+  it('the resume re-ran nothing (the pane is never busy): after a quiet window the guard is gone, and a real turn that crashes is cut', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x) // resumeTurn, but nothing re-runs
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+    await x.tick() // the first quiet look
+    await x.tick(WORKER_TIMING.busy_window_s + 2) // and one a window later
+    await x.tick()
+    await inTurn(x) // the owner's own turn
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+  })
+  it('a quiet look or two before the re-run draws does not drop the guard', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    await x.tick() // a quiet look: the re-run has not drawn yet
+    await inTurn(x) // now it does
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+})
+
+describe('the reap’s bound is on the boot clock, and holds through a prompt (round 2, fixes 3 and 4)', () => {
+  const SAVED = { saved: () => true }
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const TRUST = parseCapture(
+    readFileSync(
+      join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.319/needs-you-capture/01-trust-first.txt'),
+      'utf8',
+    ),
+  )
+  const ESC_LINE = readFileSync(
+    join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.318/after-esc.txt'),
+    'utf8',
+  )
+    .split('\n')
+    .find((l) => l.includes('Interrupted · What should Claude do instead?')) as string
+  it('a step of the wall clock (a host resume) during the turn does not move the bound', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await x.tick(5)
+    const quietAt = x.boot()
+    await inTurn(x)
+    x.jumpWall(3_600_000) // WSL's wall clock steps an hour
+    await inTurn(x)
+    x.jumpWall(-7_200_000) // and back past where it was
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reapFroms).toEqual([quietAt])
+  })
+  it('a turn that waits at a prompt keeps its start: tools started before the prompt are still in the bound', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await x.tick(5)
+    const quietAt = x.boot()
+    await inTurn(x)
+    await inTurn(x) // a tool is started here
+    x.host().screen = TRUST // a prompt: the pane goes quiet for as long as it takes to answer
+    for (let i = 0; i < WORKER_TIMING.busy_window_s + WORKER_TIMING.dialog_settle_s + 4; i++) await x.tick() // many quiet looks, the prompt flagged by the middle of them
+    x.host().screen = null // answered
+    await inTurn(x)
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reapFroms).toEqual([quietAt])
+  })
+  it('a turn that really ended (quiet, nothing waiting on the owner) starts a new bound with the next one', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    for (let i = 0; i < WORKER_TIMING.busy_window_s + WORKER_TIMING.dialog_settle_s + 4; i++) await x.tick() // quiet and nothing on the screen: it ended
+    await x.tick(5)
+    const quietAt = x.boot()
+    await inTurn(x) // the next turn
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reapFroms).toEqual([quietAt])
+  })
+  it('Esc ends the turn: the next one has a bound of its own', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().history = ESC_LINE
+    await inTurn(x)
+    await x.tick(WORKER_TIMING.busy_window_s + 2) // quiet after the Esc
+    const quietAt = x.boot()
+    await inTurn(x) // a new turn
+    x.host().exit(1)
+    await x.tick()
+    expect(x.reapFroms).toEqual([quietAt])
+  })
+  it('a turn the supervisor typed in, found gone: its own start is put on the boot clock, and the stored boot bound wins when there is one', async () => {
+    const x = setup(SAVED)
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'busy',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+            turn_from_boot: 49_500_000,
+          },
+        },
+      }),
+    )
+    mkdirSync(workerDir(x.home, 'trip'), { recursive: true })
+    writeFileSync(join(workerDir(x.home, 'trip'), 'nonce'), 'cd'.repeat(16))
+    await x.tick()
+    expect(x.reapFroms).toEqual([49_500_000])
+  })
+})
+
+describe('the Esc line is read at Claude’s own indent, and a new prompt clears it (round 2, fix 5)', () => {
+  const SAVED = { saved: () => true }
+  const lastPlan = (x: ReturnType<typeof setup>) => x.plans[x.plans.length - 1]
+  const inTurn = async (x: ReturnType<typeof setup>) => {
+    x.host().output = x.wall()
+    await x.tick()
+  }
+  const startAgain = async (x: ReturnType<typeof setup>) => {
+    await x.m.start('trip')
+    x.ready()
+    await x.tick()
+  }
+  const ESC_LINE = readFileSync(
+    join(import.meta.dir, '../../../desktop/Tests/Fixtures/real-2.1.318/after-esc.txt'),
+    'utf8',
+  )
+    .split('\n')
+    .find((l) => l.includes('Interrupted · What should Claude do instead?')) as string
+  const HINT = '⏸ manual mode on · esc to interrupt'
+  const crashed = async (x: ReturnType<typeof setup>) => {
+    x.host().exit(1)
+    await x.tick()
+    await startAgain(x)
+  }
+  it('the real line, at the indent Claude draws it, is the one that counts (a sanity check on the capture)', () => {
+    expect(ESC_LINE.startsWith('  ⎿')).toBe(true)
+  })
+  it('tool output that prints the line (deeper indent, a prefix, or more text after it) is not an Esc: the crash is a cut', async () => {
+    for (const printed of [
+      `   ${ESC_LINE}`, // nested deeper: a tool's output block
+      `  ⎿  echo "${ESC_LINE.trim()}"`, // a command that echoes it
+      `  ⏺ ${ESC_LINE.trim()}`, // Claude quoting it
+      `${ESC_LINE} (that is what it printed)`, // more text after
+    ]) {
+      const x = setup(SAVED)
+      await live(x)
+      await inTurn(x)
+      x.host().history = printed
+      await inTurn(x)
+      await crashed(x)
+      expect(lastPlan(x)?.resumeTurn).toBe(true)
+    }
+  })
+  it('Esc, then a new prompt inside the busy window (a fresh "esc to interrupt"), then a crash: the new turn is cut', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    x.host().status = HINT
+    await inTurn(x) // a turn is running
+    x.host().history = ESC_LINE // Esc
+    x.host().status = '⏸ manual mode on'
+    await inTurn(x) // the pane is still busy for the window
+    x.host().status = HINT // a new prompt is submitted: the spinner is back
+    await inTurn(x)
+    await crashed(x)
+    expect(lastPlan(x)?.resumeTurn).toBe(true)
+  })
+  it('Esc with no new spinner after it still means the owner ended the turn: no cut', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    x.host().status = HINT
+    await inTurn(x)
+    x.host().history = ESC_LINE
+    x.host().status = '⏸ manual mode on'
+    await inTurn(x)
+    await inTurn(x)
+    await crashed(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+  it('the spinner and the Esc line in the same look: the Esc counts (it came after the turn began)', async () => {
+    const x = setup(SAVED)
+    await live(x)
+    await inTurn(x)
+    x.host().history = ESC_LINE
+    x.host().status = HINT // the footer has not caught up yet
+    await inTurn(x)
+    await crashed(x)
+    expect(lastPlan(x)?.resumeTurn).toBeFalsy()
   })
 })

@@ -34,35 +34,139 @@ const fill = (l: HandoffLedger, count: number, when: number) => {
   for (let i = 0; i < count; i++) expect(l.record(row({ at: when + i }), { timezone: ZONE }).ok).toBe(true)
 }
 
-describe("the daily budget is a calendar day in the owner's timezone", () => {
-  test("the day's budget, used before midnight, is free again after it, and the refusal says when", () => {
+describe("the daily count is a warning in the owner's timezone, never a block", () => {
+  const warned = (v: ReturnType<HandoffLedger['record']>) => (v.ok ? (v.warn ?? '') : 'REFUSED')
+
+  test('the 21st hand-off of the day is recorded with a warning; after local midnight there is none', () => {
     const l = new HandoffLedger(new Database(':memory:'))
     fill(l, HANDOFF_DAILY_LIMIT, at('2026-11-04T01:00:00Z')) // 20:00 on the 3rd, local
-    const refused = l.record(row({ at: at('2026-11-04T04:30:00Z') }), { timezone: ZONE }) // 23:30 local
-    expect(refused.ok).toBe(false)
-    expect(refused.ok ? '' : refused.why).toContain('resets at midnight (Etc/GMT+5), in 30 min')
-    // ten minutes past local midnight: a rolling 24 hours would still be full
-    expect(l.record(row({ at: at('2026-11-04T05:10:00Z') }), { timezone: ZONE }).ok).toBe(true)
+    const over = l.record(row({ at: at('2026-11-04T04:30:00Z') }), { timezone: ZONE }) // 23:30 local
+    expect(over.ok).toBe(true)
+    expect(warned(over)).toContain('hand-off 21 today')
+    // ten minutes past local midnight: a new day, no warning
+    expect(warned(l.record(row({ at: at('2026-11-04T05:10:00Z') }), { timezone: ZONE }))).toBe('')
   })
 
   test('the same instant is a different day in another zone', () => {
     const l = new HandoffLedger(new Database(':memory:'))
     fill(l, HANDOFF_DAILY_LIMIT, at('2026-11-04T01:00:00Z'))
-    // in UTC they are today's, so at 04:30Z the day is spent
-    expect(l.record(row({ at: at('2026-11-04T04:30:00Z') }), { timezone: 'UTC' }).ok).toBe(false)
+    expect(warned(l.record(row({ at: at('2026-11-04T04:30:00Z') }), { timezone: 'UTC' }))).toContain('hand-off 21')
+    expect(warned(l.record(row({ at: at('2026-11-04T04:31:00Z') }), { timezone: ZONE }))).toContain('hand-off 22')
   })
 
   test('rows dated in the future do not count and do not stretch the window', () => {
     const l = new HandoffLedger(new Database(':memory:'))
     fill(l, HANDOFF_DAILY_LIMIT, at('2026-11-05T12:00:00Z'))
-    expect(l.record(row({ at: at('2026-11-04T12:00:00Z') }), { timezone: ZONE }).ok).toBe(true)
+    expect(warned(l.record(row({ at: at('2026-11-04T12:00:00Z') }), { timezone: ZONE }))).toBe('')
   })
 
-  test('each direction has its own budget', () => {
+  test('each direction has its own count', () => {
     const l = new HandoffLedger(new Database(':memory:'))
     fill(l, HANDOFF_DAILY_LIMIT, at('2026-11-04T08:00:00Z'))
-    expect(l.record(row({ at: at('2026-11-04T09:00:00Z') }), { timezone: ZONE }).ok).toBe(false)
-    expect(l.record(row({ at: at('2026-11-04T09:00:00Z'), dir: 'to_lead' }), { timezone: ZONE }).ok).toBe(true)
+    expect(warned(l.record(row({ at: at('2026-11-04T09:00:00Z') }), { timezone: ZONE }))).toContain('hand-off 21')
+    expect(warned(l.record(row({ at: at('2026-11-04T09:00:00Z'), dir: 'to_lead' }), { timezone: ZONE }))).toBe('')
+  })
+})
+
+describe('numbered jobs', () => {
+  const T0 = at('2026-11-04T08:00:00Z')
+  const task = (l: HandoffLedger, when: number) => l.record(row({ dir: 'to_lead', at: when }), { timezone: ZONE })
+  const answer = (l: HandoffLedger, when: number, num?: number) =>
+    l.record(row({ dir: 'to_main', type: 'RESULT', at: when, ...(num === undefined ? {} : { num }) }), {
+      timezone: ZONE,
+    })
+  const openNums = (db: Database) =>
+    (db.query('SELECT num FROM handoffs WHERE open = 1 ORDER BY num').all() as Array<{ num: number }>).map((r) => r.num)
+
+  test('each TASK for a lead gets the next number; another lead counts on its own', () => {
+    const l = new HandoffLedger(new Database(':memory:'))
+    const nums = [task(l, T0), task(l, T0 + 1)].map((v) => (v.ok ? v.row.num : -1))
+    expect(nums).toEqual([1, 2])
+    const other = l.record(row({ dir: 'to_lead', lead: 'garden', at: T0 + 2 }), { timezone: ZONE })
+    expect(other.ok && other.row.num).toBe(1)
+  })
+
+  test('an answer with a number closes that job only; without one it closes the oldest', () => {
+    const db = new Database(':memory:')
+    const l = new HandoffLedger(db)
+    for (let i = 0; i < 3; i++) task(l, T0 + i)
+    expect(answer(l, T0 + 10, 2).ok).toBe(true)
+    expect(openNums(db)).toEqual([1, 3])
+    expect(answer(l, T0 + 11).ok).toBe(true) // no number: the oldest still open, job 1
+    expect(openNums(db)).toEqual([3])
+    const twice = answer(l, T0 + 12, 2)
+    expect(twice.ok ? '' : twice.why).toContain('Job 2 is not open')
+    expect(openNums(db)).toEqual([3])
+  })
+
+  test('a late answer is always taken, however old the job is', () => {
+    const db = new Database(':memory:')
+    const l = new HandoffLedger(db)
+    task(l, T0)
+    const later = T0 + 40 * 24 * 3600_000 // forty days on
+    expect(answer(l, later, 1).ok).toBe(true)
+    expect(openNums(db)).toEqual([])
+    // and without a number, after another new TASK was handed over two days later (it used to close the first one for good)
+    const l2 = new HandoffLedger(new Database(':memory:'))
+    task(l2, T0)
+    task(l2, T0 + 2 * 24 * 3600_000)
+    expect(answer(l2, T0 + 2 * 24 * 3600_000 + 1).ok).toBe(true)
+  })
+
+  test('an answer with no number takes the oldest job under a day first; a number always wins', () => {
+    const db = new Database(':memory:')
+    const l = new HandoffLedger(db)
+    task(l, T0) // job 1, abandoned
+    const day2 = T0 + 30 * 3600_000
+    task(l, day2) // job 2
+    task(l, day2 + 1) // job 3
+    expect(answer(l, day2 + 10).ok).toBe(true) // no number: job 2, not the abandoned job 1
+    expect(openNums(db)).toEqual([1, 3])
+    expect(answer(l, day2 + 11, 1).ok).toBe(true) // a number names the old one and wins
+    expect(openNums(db)).toEqual([3])
+    expect(answer(l, day2 + 12).ok).toBe(true)
+    expect(openNums(db)).toEqual([])
+  })
+
+  test('with only jobs over a day old, an answer with no number still takes the oldest', () => {
+    const db = new Database(':memory:')
+    const l = new HandoffLedger(db)
+    task(l, T0)
+    task(l, T0 + 1)
+    expect(answer(l, T0 + 3 * 24 * 3600_000).ok).toBe(true)
+    expect(openNums(db)).toEqual([2])
+  })
+
+  test('a TASK older than a day does not count against the open limit but can still be answered', () => {
+    const db = new Database(':memory:')
+    const l = new HandoffLedger(db)
+    for (let i = 0; i < 3; i++) task(l, T0 + i)
+    const day2 = T0 + 25 * 3600_000
+    expect(task(l, day2).ok).toBe(true)
+    expect(answer(l, day2 + 1, 1).ok).toBe(true)
+  })
+
+  test('a TASK right after a RESULT is not refused', () => {
+    const l = new HandoffLedger(new Database(':memory:'))
+    task(l, T0)
+    answer(l, T0 + 1000)
+    expect(task(l, T0 + 2000).ok).toBe(true)
+  })
+
+  test('a file from before numbers loads; its open TASK is answered without one', () => {
+    const db = new Database(':memory:')
+    db.exec(
+      'CREATE TABLE handoffs (id TEXT PRIMARY KEY, lead TEXT NOT NULL, dir TEXT NOT NULL, type TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, open INTEGER NOT NULL DEFAULT 0, delivered_at INTEGER, posted_at INTEGER)',
+    )
+    db.query(
+      "INSERT INTO handoffs(id, lead, dir, type, text, at, open) VALUES ('h_old', 'trip', 'to_lead', 'TASK', 'x', ?, 1)",
+    ).run(T0)
+    const l = new HandoffLedger(db)
+    expect(answer(l, T0 + 5, 1).ok).toBe(false) // it has no number
+    const v = answer(l, T0 + 6)
+    expect(v.ok && v.row.num).toBeUndefined()
+    expect(openNums(db)).toEqual([])
+    expect(task(l, T0 + 7).ok).toBe(true)
   })
 })
 
@@ -79,13 +183,35 @@ describe('the ledger lives in the file', () => {
     const open = b.record(row({ dir: 'to_lead', at: at('2026-11-04T10:00:00Z') }), { timezone: ZONE })
     expect(open.ok ? '' : open.why).toContain('3 open TASKs')
     const spent = b.record(row({ at: at('2026-11-04T10:00:00Z') }), { timezone: ZONE })
-    expect(spent.ok ? '' : spent.why).toContain('Hand-off budget used')
+    expect(spent.ok && spent.warn).toContain('hand-off 21 today')
+  })
+})
+
+describe('a hand-off stamped before it waited for the lock', () => {
+  // Two processes stamp `at` with their own clocks, then wait for the write lock. The one stamped a millisecond earlier can
+  // write second: it must still see the row already written that day, even though that row's time is later than its own.
+  test('a row written first with a later time still counts', () => {
+    const l = new HandoffLedger(new Database(':memory:'))
+    const T = at('2026-11-04T12:00:00Z')
+    fill(l, HANDOFF_DAILY_LIMIT - 1, T - 60_000)
+    const first = l.record(row({ at: T + 1 }), { timezone: ZONE })
+    expect(first.ok ? (first.warn ?? '') : 'REFUSED').toBe('')
+    const second = l.record(row({ at: T }), { timezone: ZONE })
+    expect(second.ok ? (second.warn ?? 'no warning') : 'REFUSED').toContain(`hand-off ${HANDOFF_DAILY_LIMIT + 1} today`)
+  })
+
+  test('a row of the next local day still does not count', () => {
+    const l = new HandoffLedger(new Database(':memory:'))
+    fill(l, HANDOFF_DAILY_LIMIT, at('2026-11-05T05:00:00Z')) // local midnight of the 5th exactly
+    const v = l.record(row({ at: at('2026-11-05T04:59:59Z') }), { timezone: ZONE }) // a second before it, still the 4th
+    expect(v.ok ? (v.warn ?? '') : 'REFUSED').toBe('')
   })
 })
 
 describe('two processes asking for the last slot', () => {
+  // timing-ok: the waits are the old test's own (three processes start, then race); only its name and what it asserts changed
   test(
-    'exactly one gets it',
+    'all three are recorded, and the count they see is one after another',
     async () => {
       const path = fileDb()
       const seed = new Database(path)
@@ -112,7 +238,7 @@ describe('two processes asking for the last slot', () => {
       while (Date.now() < at - 2) await Bun.sleep(1)
       while (Date.now() < at) {}
       const v = l.record({ id, lead: 'trip', dir: 'to_main', type: 'TASK', text: 'x', at: Date.now() }, { timezone: 'UTC' })
-      console.log(JSON.stringify({ ok: v.ok }))`
+      console.log(JSON.stringify({ ok: v.ok, warn: v.ok ? (v.warn ?? '') : '' }))`
       const ids = ['h_race_a', 'h_race_b', 'h_race_c']
       const runs = ids.map((id) => {
         const p = Bun.spawn(['bun', '-e', code, path, id], { stdout: 'pipe', stderr: 'pipe' })
@@ -131,12 +257,16 @@ describe('two processes asking for the last slot', () => {
       for (const [stdout, stderr, code] of out)
         expect({ code, last: stdout.trim().split('\n').pop(), stderr }).toMatchObject({
           code: 0,
-          last: expect.stringMatching(/^\{"ok":(true|false)\}$/),
+          last: expect.stringMatching(/^\{"ok":(true|false),/),
         })
-      const oks = out.map(([stdout]) => JSON.parse(stdout.trim().split('\n').pop() ?? '{}').ok)
-      expect(oks.filter(Boolean)).toHaveLength(1)
+      const done = out.map(
+        ([stdout]) => JSON.parse(stdout.trim().split('\n').pop() ?? '{}') as { ok: boolean; warn: string },
+      )
+      expect(done.every((d) => d.ok)).toBe(true)
+      // the transaction is taken one at a time: 19 rows seen (no warning), then 20 (hand-off 21), then 21 (hand-off 22)
+      expect(done.map((d) => d.warn.match(/hand-off (\d+) today/)?.[1] ?? '').sort()).toEqual(['', '21', '22'])
       const check = new Database(path)
-      expect((check.query('SELECT COUNT(*) AS n FROM handoffs').get() as { n: number }).n).toBe(HANDOFF_DAILY_LIMIT)
+      expect((check.query('SELECT COUNT(*) AS n FROM handoffs').get() as { n: number }).n).toBe(HANDOFF_DAILY_LIMIT + 2)
     },
     t(30_000),
   ) // a hang cap: three processes start, then race (longer on a slow machine: TALOS_TEST_TIME_FACTOR)

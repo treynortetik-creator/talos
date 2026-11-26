@@ -17,6 +17,7 @@ import {
   type WorkerStateT,
 } from '@talos-app/protocol'
 import { workersJsonPath } from '../worker/files.ts'
+import { CutTurns } from './cut-turn-wiring.ts'
 import { detectPrompt } from './dialog-reader.ts'
 import { auditPointerLook } from './enter-check.ts'
 import { NOTHING_OWED, owe, persisted, restored, typeOwedPointer, wakeTooOld } from './owed-pointer.ts'
@@ -24,7 +25,8 @@ import { liveScreen, type Screen } from './screen.ts'
 import { UpdateRestarts } from './update-restart.ts'
 import { USAGE_LIMIT_KIND } from './usage-limit.ts'
 import { WakeReader } from './wake-reader.ts'
-import { declinedTrustText, forgetDeclined, newOfferState, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
+import { blankWorker } from './worker-blank.ts'
+import { declinedTrustText, forgetDeclined, type OfferTarget, WorkerDialogs } from './worker-dialogs.ts'
 import { activeNow, monoOf, NEW_BUSY_WATCH, noteScreen, seedLastActive } from './worker-idle.ts'
 import {
   folderMoved,
@@ -33,14 +35,13 @@ import {
   lastFolder,
   launchCheck,
   launchedRecord,
-  NO_CHANGE_PENDING,
   refusedSubCheck,
   stuck,
   subFenceProblem,
   unread,
   wantedFolder,
 } from './worker-launch.ts'
-import { newNoticeRuntime, promptName, stateAfterSignin, WorkerNotices } from './worker-notices.ts'
+import { promptName, stateAfterSignin, WorkerNotices } from './worker-notices.ts'
 import { offerTargetOf } from './worker-offer-target.ts'
 import { type CeilingAxis, folderKey, subThreadCheck } from './worker-policy.ts'
 import { WorkerSlots } from './worker-slots.ts'
@@ -53,6 +54,7 @@ import {
   crashLooping,
   legalMove,
   newNonce,
+  readNonce,
   readReady,
   releaseWorkerFiles,
   restartAfter,
@@ -75,17 +77,7 @@ export class WorkerManager {
   private adoptPending: Map<string, WorkerEntryT> | null = null
   private needsPublished = '' // `needs_you` as last published (worker-status.ts needsYouSignature)
   /** This supervisor's own fields per thread, as the last supervisor's workers.json had them (read once, at adoption). */
-  private rawPrev: Record<
-    string,
-    {
-      pointer_owed_until?: unknown
-      enter_owed?: unknown
-      turn_wait_until?: unknown
-      turn_wait_end?: unknown
-      turn_wait_why?: unknown
-      turn_wait_after?: unknown
-    }
-  > = {}
+  private rawPrev: Record<string, Record<string, unknown>> = {}
   /** A good thread list was read at least once: until then nothing is stopped for not being dedicated. */
   private haveList = false
   /** The last workers.json was there but unreadable: nothing starts and nothing is written over it (the owner looks first). */
@@ -95,9 +87,13 @@ export class WorkerManager {
   private readonly wakes: WakeReader
   readonly slots: WorkerSlots
   private readonly updates = new UpdateRestarts(this) // restart-on-update (update-restart.ts)
+  private readonly cuts: CutTurns
   private readonly dialogs: WorkerDialogs
 
   constructor(readonly d: WorkerDeps) {
+    this.cuts = new CutTurns(d, () => {
+      this.dirty = true
+    })
     this.slots = new WorkerSlots({
       workers: () => this.workers.values(),
       get: (id) => this.workers.get(id),
@@ -290,10 +286,13 @@ export class WorkerManager {
       for (const [id, e] of Object.entries(prev?.threads ?? {})) {
         if (this.workers.has(id)) continue
         const resting = e.state === 'off' || e.state === 'parked' || e.state === 'failed'
-        this.workers.set(id, this.blank(id, resting ? { ...e, pane_pid: 0 } : e))
+        this.workers.set(id, blankWorker(id, resting ? { ...e, pane_pid: 0 } : e))
         // this supervisor's own fields (the owed pointer) are not in the shared schema: read from the raw file
         const w0 = this.workers.get(id)
-        if (w0) w0.owed = restored(rawThreads[id] ?? {})
+        if (w0) {
+          w0.owed = restored(rawThreads[id] ?? {})
+          this.cuts.restore(w0, rawThreads[id] ?? {}) // and the cut turn it kept (cut-turn-wiring.ts)
+        }
         if (!resting) this.adoptPending.set(id, e)
       }
     }
@@ -350,6 +349,7 @@ export class WorkerManager {
         continue
       }
       // not there (or another process in its pane): what it was doing is over; its session id is kept for a resume
+      const goneNonce = readNonce(this.d.home, id) // before its files go: what its children inherited
       releaseWorkerFiles(this.d.home, id)
       if (p.kind === 'running') await host.close() // a pane whose pid is not the one recorded is not ours to keep
       // by the state machine's own moves: starting/live/busy -> parking -> parked, stopping -> parked
@@ -362,6 +362,7 @@ export class WorkerManager {
       w.entry = status.adoptedGone(w.entry, e) // mid-turn or on its way out: interrupted (the Mac's WorkerAdopt)
       this.paneGone(w)
       this.dirty = true
+      await this.cuts.gone(w, e, ownerStop, goneNonce) // a turn cut mid-way is recorded, a cut it kept is reaped
       if (ownerStop) this.move(w, 'off')
       this.d.audit('worker_adopt_parked', { thread: id, found: p.kind })
       // a restart the last supervisor was waiting to run once this session ended: the session has ended, so it is asked for now,
@@ -387,33 +388,10 @@ export class WorkerManager {
     return true
   }
 
-  private blank(id: string, entry: WorkerEntryT): WorkerRuntime {
-    return {
-      id,
-      entry,
-      host: null,
-      startedAt: null,
-      parkAt: null,
-      killed: false,
-      afterPark: null,
-      endAs: null,
-      baseEnv: null,
-      owed: NOTHING_OWED,
-      notes: newNoticeRuntime(),
-      offer: newOfferState(),
-      idle: { lastActiveMs: 0, activeMono: 0, body: null },
-      busyWatch: NEW_BUSY_WATCH,
-      rows: null,
-      held: null,
-      turnWait: null,
-      launchChange: NO_CHANGE_PENDING,
-    }
-  }
-
   private worker(t: WorkerThread): WorkerRuntime {
     let w = this.workers.get(t.id)
     if (!w) {
-      w = this.blank(t.id, {
+      w = blankWorker(t.id, {
         state: 'off',
         session_id: null,
         previous_ids: [],
@@ -523,8 +501,9 @@ export class WorkerManager {
     // a model or effort the sub-thread set that is not valid was read as not set (its parent's is used): said once per start
     for (const [key, value] of Object.entries(t.sub?.unreadable ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)))
       this.d.audit('thread_session_sub', { thread: w.id, setting: key, unreadable: value, taken: 'not set' })
+    const resumeTurn = this.cuts.resumeTurn(w, sessionId, resume) // the cut turn, run again: only by a resume of it, only soon
     const nonce = newNonce()
-    const plan = this.d.plan({ thread: t, sessionId, resume, nonce, baseEnv })
+    const plan = this.d.plan({ thread: t, sessionId, resume, ...(resumeTurn ? { resumeTurn } : {}), nonce, baseEnv })
     if ('refused' in plan) {
       this.notices.startRefused(w.id, w.notes, plan.refused)
       return this.fail(w, plan.refused.code, plan.refused.detail, plan.refused.axis)
@@ -558,6 +537,7 @@ export class WorkerManager {
     w.killed = false
     w.endAs = null
     w.baseEnv = baseEnv
+    w.nonce = nonce
     // a new pane starts a new watch of the screen: the last pane's text is not what this one is compared with
     w.idle = { lastActiveMs: this.d.wallMs(), activeMono: this.d.now(), body: null }
     w.busyWatch = NEW_BUSY_WATCH
@@ -574,6 +554,7 @@ export class WorkerManager {
       started_at: new Date(this.d.wallMs()).toISOString(),
       error: null,
     }
+    this.cuts.started(w, resumeTurn, plan.launch.argv) // any start uses the cut turn up: asked for once, or never
     this.d.audit('worker_start', { thread: w.id, pid: String(pid), session: sessionId, resume: resume ? 'yes' : 'no' })
     this.slots.afterStart(w) // a start over the limit says so (one line, kept for retry)
     // a server the owner listed that the session started without is said, never a silent difference
@@ -592,7 +573,10 @@ export class WorkerManager {
     if (!w) return
     const s = w.entry.state
     // the owner's stop always wins, whatever was asked before (Fable R1-2): Main is told to wake an off session
-    if (endAs === 'off' && why === 'owner' && s !== 'off') [w.entry, this.dirty] = [status.ownerStopped(w.entry), true]
+    if (endAs === 'off' && why === 'owner' && s !== 'off') {
+      ;[w.entry, this.dirty] = [status.ownerStopped(w.entry), true]
+      w.cut = null // the owner stopped it: a turn cut earlier is never run again
+    }
     if (s === 'parked' || s === 'off' || s === 'failed') {
       if (endAs === 'off' && s !== 'off') this.move(w, 'off')
       return
@@ -605,6 +589,7 @@ export class WorkerManager {
       if (endAs === 'off') w.endAs = 'off'
       return
     } else if (!this.move(w, endAs === 'off' ? 'stopping' : 'parking')) return
+    this.cuts.atRestart(w, s, why, endAs) // a restart that ran out of waiting on a working turn: run again after it
     w.endAs = endAs
     w.parkAt = this.d.now()
     w.entry = status.withStopped(w.entry, why, w.afterPark !== null && endAs !== 'off')
@@ -615,6 +600,7 @@ export class WorkerManager {
 
   private async onExit(w: WorkerRuntime, pid: number, exit: PtyExit): Promise<void> {
     if (w.entry.pane_pid !== pid) return // an exit of an earlier start
+    const exiting = this.cuts.exiting(w) // before its files go, and before withTurnLost forgets the turn
     releaseWorkerFiles(this.d.home, w.id)
     const wasEnding = w.entry.state === 'parking' || w.entry.state === 'stopping'
     const wall = new Date(this.d.wallMs()).toISOString()
@@ -628,9 +614,14 @@ export class WorkerManager {
     if (!wasEnding && w.entry.state !== 'starting')
       w.entry = status.withStopped(w.entry, 'crash', false, { overwrite: true })
     this.paneGone(w)
+    // an exit nobody asked for, in the middle of a turn, is a cut turn; a start that failed and the owner's "No, exit" are not
+    // (midTurn first: declinedTrustText reads and clears the owner's "No", which only the exit's own check below may do)
+    if (!wasEnding && exiting.midTurn && w.entry.state !== 'starting' && !declinedTrustText(w.offer))
+      this.cuts.crashed(w, exiting)
     // what the session left in its group (MCP servers) ends with it: kill-session alone is a SIGHUP some ignore
     w.host?.signal('SIGKILL')
     await w.host?.close()
+    await this.cuts.reapCut(w) // its tools, which left the group: before anything runs the turn again
     if (wasEnding) {
       // a stop ends off; a park, or a stop asked for while it was parking, ends parked (parked -> off is the stop's last step)
       this.move(w, w.entry.state === 'stopping' && w.endAs !== 'parked' ? 'off' : 'parked')
@@ -762,6 +753,7 @@ export class WorkerManager {
         if (rows) w.idle = noteScreen(w.idle, rows, this.d.wallMs(), this.d.now())
         const busy = await this.slots.isBusy(w)
         this.move(w, busy ? 'busy' : 'live')
+        this.cuts.lookedAt(w, busy) // where the turn began, a new turn, the re-run guard
         if (status.turnLook(w, busy, new Date(this.d.wallMs()).toISOString())) this.dirty = true
         // a transcript seen once means the session had a turn: the next start resumes it (session_not_saved never misfires)
         if (
@@ -824,6 +816,7 @@ export class WorkerManager {
     const rows = await host.visibleRows()
     w.rows = rows
     if (rows === null) return null
+    this.cuts.rowsSeen(w, rows) // the permission mode, a fresh spinner, one more Esc line
     const still = this.notices.still(w.notes, rows)
     const seen: Screen = still ? liveScreen(rows) : { kind: 'none' }
     const target = this.offerTarget(w)
@@ -889,7 +882,10 @@ export class WorkerManager {
       // the file says done (turn begun), or flagged, the moment that is known; a flag keeps the turn, as the Mac does
       onEnter: (s) => {
         w.owed = s
-        if (!s.pending) status.pointerEntered(w, new Date(nowMs).toISOString(), this.d.wallMs())
+        if (!s.pending) {
+          status.pointerEntered(w, new Date(nowMs).toISOString(), this.d.wallMs())
+          this.cuts.pointerEntered(w)
+        }
         this.publish()
       },
     })

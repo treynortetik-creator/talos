@@ -108,7 +108,7 @@ export const schedulePropose: ToolRecord = {
       memory: {
         type: 'boolean',
         description:
-          "Let the job remember between runs (off unless set): each run is shown its last 3 results and a notepad of up to 2 KB it can rewrite. Only for a job that runs in the session. Changing the job's text clears it.",
+          "Let the job remember between runs (off unless set): each run is shown its last 3 results and a notepad of up to 2 KB it can rewrite. Only for a job that runs in the session. Changing the job's text keeps it; moving the job to another thread clears it.",
       },
       supersedes: { type: 'string', description: 'Card id this one replaces.' },
     },

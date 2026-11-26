@@ -12,10 +12,13 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   type CardT,
   cardExpiryMs,
+  cleanDenyNote,
   EXPLAIN_FAILED_TEXT,
   type ExplainShown,
   explainChip,
   explainShown,
+  PERMISSION_ASKED_WHY_TEXT,
+  PERMISSION_DENY_NOTE_MAX,
   PERMISSION_MAYBE_ANSWERED,
   PERMISSION_MAYBE_ANSWERED_MS,
   PERMISSION_TOO_LONG_BODY,
@@ -27,6 +30,7 @@ import { enterApproval } from '../../lib/approvalOpen.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconAlert } from '../../ui/icons.tsx'
 import { Button } from '../../ui/index.ts'
+import { Textarea } from '../../ui/textarea.tsx'
 import { useVisualViewport } from './useVisualViewport.ts'
 import { formatClock, revealHidden } from './util.ts'
 
@@ -48,6 +52,8 @@ type Props = {
   timeZone: string
   onAllow: () => void
   onDeny: () => void
+  /** Deny with the owner's cleaned words (undefined: nothing left to say, a plain Deny). Offered only on a card with `deny_note`. */
+  onDenyWithNote?: ((note: string | undefined) => void) | undefined
 }
 
 /** The placeholder an older bridge put in a too-long card's body (before 2026-11-13). */
@@ -119,6 +125,7 @@ export function PermissionCardLive(props: Props) {
           {revealHidden(reason)}
         </p>
       ) : null}
+      <AskedWhy card={card} />
       {maybeAnswered ? <p className="mt-2 text-sm text-text-2">{PERMISSION_MAYBE_ANSWERED}</p> : null}
       {error && !open ? (
         <p role="alert" className="mt-2 text-sm text-danger">
@@ -146,6 +153,7 @@ export function PermissionCardLive(props: Props) {
           </>
         ) : null}
       </div>
+      {card.deny_note && props.onDenyWithNote ? <DenyNote busy={busy} onSend={props.onDenyWithNote} /> : null}
       <p className="mt-2 font-mono text-xs text-text-2" data-testid="card-expiry">
         Expires {formatClock(new Date(cardExpiryMs(card)).toISOString(), timeZone)} if untouched
       </p>
@@ -153,6 +161,59 @@ export function PermissionCardLive(props: Props) {
         <ApprovalSheet {...props} summaryValue={summary?.value} onClose={() => setOpen(false)} />
       ) : null}
     </article>
+  )
+}
+
+/** One muted line on why Claude Code asked, only when the bridge proved the reason (`asked_why`); nothing when it is not known. */
+function AskedWhy({ card }: { card: CardT }) {
+  const text = card.asked_why ? PERMISSION_ASKED_WHY_TEXT[card.asked_why] : undefined
+  if (!text) return null
+  return (
+    <p data-testid="permission-asked-why" className="mt-2 text-sm text-text-2">
+      {text}
+    </p>
+  )
+}
+
+/**
+ * "Deny with a note": a small link under the buttons (plain Deny stays one tap). It opens a box for a few words, which go to the agent
+ * in the hook's deny answer so it learns what to do instead. Only on a card the hook raised (`deny_note`): a channel-relay verdict has
+ * no room for words. The box holds at most PERMISSION_DENY_NOTE_MAX characters; what is sent is the cleaned text, or a plain Deny
+ * when nothing is left.
+ */
+function DenyNote({ busy, onSend }: { busy: boolean; onSend: (note: string | undefined) => void }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  if (!open)
+    return (
+      <div className="mt-2">
+        <Button variant="ghost" disabled={busy} onClick={() => setOpen(true)}>
+          Deny with a note
+        </Button>
+      </div>
+    )
+  return (
+    <div className="mt-2" data-testid="deny-note">
+      <Textarea
+        aria-label="Note for Claude"
+        placeholder="Tell Claude what to do instead (optional)"
+        className="min-h-16 text-sm"
+        value={text}
+        disabled={busy}
+        onChange={(e) => setText([...e.target.value].slice(0, PERMISSION_DENY_NOTE_MAX).join(''))} // by code points: maxLength counts UTF-16 units and would stop 300 emoji at 150
+      />
+      <p data-testid="deny-note-count" className="mt-1 text-right font-mono text-xs text-text-2">
+        {[...text].length}/{PERMISSION_DENY_NOTE_MAX}
+      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <Button variant="danger" disabled={busy} onClick={() => onSend(cleanDenyNote(text))}>
+          Send deny
+        </Button>
+        <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -230,6 +291,7 @@ function ApprovalSheet({
   error,
   onAllow,
   onDeny,
+  onDenyWithNote,
   onClose,
   summaryValue,
   now,
@@ -283,6 +345,7 @@ function ApprovalSheet({
                 {revealHidden(card.warning)}
               </p>
             ) : null}
+            <AskedWhy card={card} />
             <ExplainBlock shown={shown} />
             <p className="mt-2 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">The call</p>
             <pre
@@ -300,6 +363,7 @@ function ApprovalSheet({
                 {error}
               </p>
             ) : null}
+            {card.deny_note && onDenyWithNote ? <DenyNote busy={busy} onSend={onDenyWithNote} /> : null}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Button variant={mismatch ? 'primary' : 'danger'} disabled={busy} onClick={onDeny}>
                 {card.kill_label}

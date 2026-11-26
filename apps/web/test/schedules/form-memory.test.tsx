@@ -177,8 +177,9 @@ describe('the box for a command job', () => {
     render(<MemoryToggle checked={false} background restricted={false} command onChange={() => {}} />)
     const text = screen.getByRole('checkbox', { name: /Remember between runs/ }).closest('label')?.textContent ?? ''
     expect(text).toMatch(/as files/)
-    expect(text).toMatch(/Changing the command clears them/)
-    expect(text).not.toMatch(/Changing the job's text/)
+    expect(text).toMatch(/They stay when you change the command/)
+    expect(text).toMatch(/Moving the job to another thread clears them/)
+    expect(text).not.toMatch(/change the job's text/)
     expect(text).toMatch(/TALOS_MEMORY_DIR/)
     expect(text).toMatch(/unattended/)
   })

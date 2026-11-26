@@ -219,7 +219,7 @@ struct AgentFolderCreateGuiTests {
     await w.flow.create()
     #expect(w.model.configured && w.disk != nil, "the setup is made")
     #expect(w.started.count == 0)
-    #expect(w.doneText?.contains("/login") == true && w.doneText?.contains("Start your agent") == true)
+    #expect(w.doneText?.contains("Sign in to Claude again") == true && w.doneText?.contains("Start your agent") == true)
   }
 
   @Test func theAppQuittingMidStepLeavesARelaunchWithNothingToUndo() async throws {
@@ -379,7 +379,7 @@ struct AgentFolderAdoptGuiTests {
     w.flow.path = dir
     await w.flow.adopt()
     await w.flow.confirm()
-    #expect(w.model.configured && w.started.count == 0 && w.doneText?.contains("/login") == true)
+    #expect(w.model.configured && w.started.count == 0 && w.doneText?.contains("Sign in to Claude again") == true)
   }
 
   @Test func theAppQuittingAfterTheFolderIsConnectedButBeforeDesktopJsonFinishesOnRelaunch() async throws {
@@ -523,7 +523,7 @@ struct AgentFolderChooseGuiTests {
     write(w.agent("have") + "/.mcp.json", w.talosMcp)
     w.flow.path = w.agent("have")
     await w.flow.choose()
-    #expect(w.model.configured && w.started.count == 0 && w.doneText?.contains("/login") == true)
+    #expect(w.model.configured && w.started.count == 0 && w.doneText?.contains("Sign in to Claude again") == true)
   }
 
   @Test func aTrailingSlashOnTheCurrentFolderIsTheSameFolder() async throws {

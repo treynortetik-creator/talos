@@ -1,15 +1,30 @@
 import AxeBuilder from '@axe-core/playwright'
+import type { Page } from '@playwright/test'
 import { expect, test } from '../helpers/fixtures.ts'
 import { agentReply, openSignedIn } from '../helpers/util.ts'
 
+// What each page draws once it has what it needs: axe reads the page after that, not after a fixed pause.
 const PAGES = [
-  { name: 'home', path: '/' },
-  { name: 'thread', path: '/t/general' },
-  { name: 'threads', path: '/threads' },
-  { name: 'settings', path: '/settings/account' },
-  { name: 'notifications', path: '/settings/notifications' },
-  { name: 'appearance', path: '/settings/appearance' },
+  { name: 'home', path: '/', ready: (page: Page) => page.getByRole('tablist', { name: 'Home' }) },
+  { name: 'thread', path: '/t/general', ready: (page: Page) => page.getByTestId('thread-screen') },
+  { name: 'threads', path: '/threads', ready: (page: Page) => page.getByTestId('thread-row-general') },
+  { name: 'settings', path: '/settings/account', ready: (page: Page) => page.getByTestId('settings-body') },
+  { name: 'notifications', path: '/settings/notifications', ready: (page: Page) => page.getByTestId('settings-body') },
+  { name: 'appearance', path: '/settings/appearance', ready: (page: Page) => page.getByTestId('settings-body') },
 ] as const
+
+/** The page has drawn its content: no "Loading…" left, the fonts are in and no animation or transition is still running. */
+async function settled(page: Page) {
+  await expect(page.locator('#main').getByText('Loading…')).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        await document.fonts.ready
+        return document.getAnimations().filter((a) => a.playState === 'running').length
+      }),
+    )
+    .toBe(0)
+}
 
 for (const scheme of ['light', 'dark'] as const) {
   for (const p of PAGES) {
@@ -22,7 +37,8 @@ for (const scheme of ['light', 'dark'] as const) {
         )
         await expect(page.getByTestId('msg-agent')).toBeVisible()
       }
-      await page.waitForTimeout(400)
+      await expect(p.ready(page)).toBeVisible()
+      await settled(page)
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
         .analyze()
@@ -35,7 +51,8 @@ for (const scheme of ['light', 'dark'] as const) {
 test('axe: the enroll and login pages', async ({ page, harness }) => {
   for (const path of ['/login', `/enroll#${harness.armEnroll().code}`]) {
     await page.goto(`${harness.url}${path}`)
-    await page.waitForTimeout(300)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    await settled(page)
     const results = await new AxeBuilder({ page }).analyze()
     expect(
       results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical').map((v) => v.id),

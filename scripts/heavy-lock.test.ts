@@ -968,7 +968,7 @@ describe('heavy lock queue order by kind: only a jump goes before CI', () => {
     const done = new Promise<number | null>((r) => w.on('exit', (code) => r(code)))
     await m.until(() => m.tickets().filter((t) => !t.endsWith('.part')).length === 1)
     const lines = readFileSync(join(m.queue, m.tickets()[0]), 'utf8').split('\n')
-    expect(lines.slice(3)).toEqual(['multi: sh -c exit 0 jump ci ', '', 'run', ''])
+    expect(lines.slice(3)).toEqual(['multi: sh -c exit 0 jump ci ', '', 'run', 'turn2', ''])
     a.go()
     expect([await a.done, await done]).toEqual([0, 0])
   })

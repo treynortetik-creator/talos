@@ -178,7 +178,10 @@ describe('a mismatch', () => {
     const client = setup({ cards: [c] })
     renderWith(<LiveCard id={c.id} />, client)
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }))
-    expect(client.sent.at(-1)).toMatchObject({ type: 'card.resolve', action: 'kill', card_id: c.id })
+    // the resolve is signed before it is sent, so it lands a moment after the click
+    await waitFor(() =>
+      expect(client.sent.at(-1)).toMatchObject({ type: 'card.resolve', action: 'kill', card_id: c.id }),
+    )
   })
 })
 

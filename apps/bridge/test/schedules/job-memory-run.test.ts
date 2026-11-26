@@ -139,12 +139,12 @@ describe('a finished run keeps its result and its notepad', () => {
 })
 
 describe('a run that finishes late writes nothing into a memory that is not the one it was given', () => {
-  test('text edited away and back (two wipes), a newer run saved: the older run cannot overwrite the newer memory', () => {
+  test('thread moved away and back (two wipes), a newer run saved: the older run cannot overwrite the newer memory', () => {
     const { sidecar, offer, done, apply, notepadOf } = rig()
     sidecar.setMemory('a-job', true)
     const old = offer('a-job')
-    apply('a-job', update({ prompt: 'Something else.\n' }))
-    apply('a-job', update({ prompt: P })) // the same text again: the hash alone would match
+    apply('a-job', update({ thread_id: 'inbox' }))
+    apply('a-job', update({ thread_id: null })) // the same thread again: the text hash alone would match
     const newer = offer('a-job')
     expect(done('a-job', newer.runId, 'newer notes')).toMatch(/Notepad saved/)
     expect(done('a-job', old.runId, 'older notes')).toMatch(/nothing was kept/)
@@ -182,9 +182,18 @@ describe('a run that finishes late writes nothing into a memory that is not the 
     const { sidecar, mem, offer, done, apply } = rig()
     sidecar.setMemory('a-job', true)
     const inflight = offer('a-job')
-    apply('a-job', update({ prompt: 'Something else.\n' }))
+    apply('a-job', update({ thread_id: 'inbox' }))
     done('a-job', inflight.runId, 'notes')
     expect(existsSync(mem.path('a-job'))).toBe(false)
+  })
+
+  test('a run in flight when the text was reworded saves into the same memory', () => {
+    const { sidecar, offer, done, apply, notepadOf } = rig()
+    sidecar.setMemory('a-job', true)
+    const inflight = offer('a-job')
+    apply('a-job', update({ prompt: 'Something else.\n' }))
+    expect(done('a-job', inflight.runId, 'notes from the run')).toMatch(/Notepad saved/)
+    expect(notepadOf('a-job', 'Something else.\n') ?? '').toContain('notes from the run')
   })
 })
 
@@ -197,12 +206,21 @@ describe('what a card changes', () => {
   }
   const kept = (x: ReturnType<typeof rig>) => (x.notepadOf('a-job') ?? '').includes('my notes')
 
-  test('changing the text wipes; so does adopting a file edited on disk and switching memory either way', () => {
-    for (const c of [update({ prompt: 'New.\n' }), adopt(), update({ memory: false }), update({ memory: true })]) {
+  test('switching memory off wipes it; switching it to on while it is on is not a switch', () => {
+    const x = withNotes()
+    x.apply('a-job', update({ memory: true }))
+    expect(kept(x)).toBe(true)
+    x.apply('a-job', update({ memory: false }))
+    expect(existsSync(x.mem.path('a-job'))).toBe(false)
+  })
+
+  test('rewording the text, or adopting a file reworded on disk, keeps it', () => {
+    for (const c of [update({ prompt: 'New.\n' }), adopt()]) {
       const x = withNotes()
       expect(kept(x)).toBe(true)
       x.apply('a-job', c)
-      expect(existsSync(x.mem.path('a-job'))).toBe(false)
+      expect(existsSync(x.mem.path('a-job'))).toBe(true)
+      expect(x.notepadOf('a-job', 'New.\n') ?? '').toContain('my notes')
     }
   })
 
@@ -216,6 +234,7 @@ describe('what a card changes', () => {
     const x = withNotes()
     x.apply('a-job', update({ thread_id: 'inbox' }))
     expect(kept(x)).toBe(false)
+    expect(existsSync(x.mem.oldCopyPath('a-job'))).toBe(true) // one old copy is kept, and no run reads it
     expect(x.sidecar.threadOf('a-job')).toBe('inbox')
     expect(x.sidecar.memoryOf('a-job')).toBe(true) // memory stays on
   })

@@ -370,6 +370,14 @@ Two kinds of prompt never reach the channel relay: Claude Code's own built-in on
 path" prompt shows even in bypass mode and is blocked by Claude Code itself after about 2 minutes), and every prompt of a thread's
 own session (a thread session is not a channel). Claude Code does run `PermissionRequest` hooks for both.
 
+**Deny with a note.** On a hook card the owner can tap "Deny with a note" and add a few words. They travel in the signed `note` of
+the `kill` `card.resolve` (at most 300 code points after cleaning, `cleanDenyNote`), the bridge adds `note` to the hub's
+`perm_result` for a `deny`, and the hook puts them in its deny `message` ("Denied from the Talos app. The owner says: ..."), so the
+agent learns what to do instead. No note, or an older hook, bridge or app: the message is exactly "Denied from the Talos app.". A
+channel-relay card takes no note (the channel verdict is `{request_id, behavior}` and has no room for words), so its card has no
+`deny_note` flag and the app offers none. The note is owner text going into the agent's context: it is cleaned by the bridge and
+again by the hook (one line, no control, bidi or zero-width characters), and it is never written to a log.
+
 - **The hook** is `kit/hooks/permission-relay.py`, registered on `PermissionRequest` (every tool, `timeout: 3600`) by the kit's
   settings template, so `settings-merge.py` adds it to an older agent folder. A thread session gets the same hook in its own
   `--settings` file (`WorkerSpec.withPermissionHook`, marked `TALOS_APP_PERM_HOOK_SOURCE=worker`). Its source is never a path guessed inside the agent folder, whose layout
@@ -930,7 +938,8 @@ or start any of them today.
 
 ### C7.1 The model
 
-- A thread is a **label on messages**, not a session (SPEC 1). It decides where a message shows, and what pushes.
+- A thread is a **label on messages** (SPEC 1); Main answers it unless the thread has its own session (`threadSessionMode`,
+  `packages/protocol/src/thread-sessions.ts`). It decides where a message shows, and what pushes.
 - Kinds: `fixed` (owner config), `agent` (made by the agent, ≤20 live, `apps/bridge/src/tools/threads.ts:6`), `system`
   (`inbox`). Notify levels: `all` · `needs_you` · `off`.
 

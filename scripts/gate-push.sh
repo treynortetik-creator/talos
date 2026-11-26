@@ -356,6 +356,7 @@ gate_and_stamp() { # gate_and_stamp <base> <full|cheap> <sha>: gates the tree of
   [ "$(git rev-parse HEAD)" = "$sha" ] || refuse "HEAD moved while the gate ran (a commit made meanwhile was not gated): run it again"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || refuse "tracked files changed while the gate ran: commit or stash them, then run it again"
   [ "$mode" = cheap ] || printf '%s\n' "$((SECONDS - t0))" >"$GATE_TIME" # a full touched gate's time sizes the next lease
+  if [ "$mode" != cheap ]; then GATE_SECS=$((GATE_SECS + SECONDS - t0)); GATE_BASES="${GATE_BASES:+$GATE_BASES,}$base"; fi # for push_log
   # the plan the stamp carries: one that could not be made is no stamp, and no push (the hook would compare against nothing)
   plan="$(plan_of "$base")" && [ -n "$plan" ] || refuse "the gate passed, but its plan could not be printed for the stamp: nothing is pushed"
   {
@@ -489,6 +490,14 @@ pass_log() { # pass_log <pass|pass-words|refused|excused> <sha> <commits> <detai
   mkdir -p "$(dirname "$PASS_LOG")" 2>/dev/null || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$MACHINE" "$1" "$2" "$3" "$(printf '%s' "$4" | tr '\t\n' '  ')" \
     >>"$PASS_LOG" 2>/dev/null || true
+}
+GATE_SECS=0 GATE_BASES="" # the seconds all this run's full gates took (heavy-lock wait included) and the base each ran on
+push_log() { # push_log <sha> <requeues> <races>: one row in lock-waits.tsv when a push lands, for scripts/push-latency.ts (lock wait, gate, re-gates apart)
+  local f="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}/logs/lock-waits.tsv"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+  # gate=<folder>: the label of this checkout's own lock rows (gate.sh: gate (<folder>)), so another builder's gate on the same base is not counted
+  printf '%s\tpush\tpushed %s requeues=%s races=%s gate=%s bases=%s\t%s\tgot\tpushed\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" \
+    "$(basename "$PWD" | tr -c 'A-Za-z0-9._\n-' '_')" "$GATE_BASES" "$GATE_SECS" >>"$f" 2>/dev/null || true
 }
 rebase_clean() { # rebase_clean <old> <new>, after the rebase onto <new>: 0 when the pass applies; prints why, either way
   local old="$1" new="$2" mine theirs pats f rc left n words
@@ -891,6 +900,7 @@ while :; do
     else
       say "pushed $sha${EXCUSED:+; $(excused_line)}"
     fi
+    push_log "$sha" "$requeues" "$races"
     [ -z "$EXCUSED" ] || pass_log excused "$sha" "${EXCUSED_MAIN:0:7}" "$(printf '%s' "$EXCUSED" | tr '\t' ' ' | paste -sd';' -)"
     handoff_done
     exit 0

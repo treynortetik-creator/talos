@@ -66,8 +66,9 @@ export function rememberRun(
 
 /**
  * After a card is applied: the Talos-only fields (the result thread, the memory switch) go to the sidecar, and what the job
- * remembered is wiped when the change makes it stale: new job text, an adopted file, memory switched either way, a new or removed
- * job, or a different result thread (a notepad written for one thread's session must not reach another's). A new job's entry
+ * remembered is wiped when the change makes it stale: memory switched either way, a new or removed job, or a different result
+ * thread (a notepad written for one thread's session must not reach another's; one old copy of it is kept). Rewording the job,
+ * or adopting a file that was reworded on disk, keeps the notes. A new job's entry
  * REPLACES whatever the sidecar held for that id, so a leftover memory switch never carries over. Returns why each part could not
  * be saved ('' when it was), so the card can say which.
  */
@@ -95,8 +96,10 @@ export function applyTalosFields(
     return out
   }
   const threadMoved = split.threadId.set && split.threadId.value !== sidecar.threadOf(id)
-  const edited = change.op === 'update' && (change.set.prompt !== undefined || change.set.memory !== undefined)
-  if (change.op === 'adopt' || edited || threadMoved) mem.wipe(id)
+  const switched =
+    change.op === 'update' && change.set.memory !== undefined && change.set.memory !== sidecar.memoryOf(id)
+  if (threadMoved) mem.wipe(id, { keepOldCopy: true })
+  else if (switched) mem.wipe(id)
   if (split.threadId.set && !sidecar.setThread(id, split.threadId.value)) out.thread = notLive
   if (split.memory?.set && sidecar.memoryOf(id) !== split.memory.value && !sidecar.setMemory(id, split.memory.value))
     out.memory = notLive

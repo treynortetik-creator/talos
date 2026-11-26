@@ -36,9 +36,45 @@ ci_browser_env() {
   unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
   export NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1
 }
+# The browser install. `playwright install` first runs a cleanup of the shared cache that reads the browsers.json of every project
+# that ever used it (.links), and one of those links pointed into ~/Desktop, where a read blocks for ever in the kernel (0% CPU, no
+# output, __dirlock held): twice it held the CI turn for 20-30 minutes. So: nothing is installed when every build is already there;
+# an install runs with the cleanup off (PLAYWRIGHT_SKIP_BROWSER_GC) and in a group that is stopped at CI_PW_INSTALL_LIMIT (300 s);
+# and a __dirlock older than that, with no install running, is cleared. The limit is a perl in front, as ci_git_net has: only
+# the group it made is stopped (TERM, then KILL after 5 s), never a process by name.
+PW_GROUP_LIMIT='$t=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV} $SIG{ALRM}=sub{kill "TERM",-$p; sleep 5; kill "KILL",-$p; exit 142}; alarm $t; waitpid($p,0); exit($? & 127 ? 128+($? & 127) : $? >> 8)'
+pw_locations() { # the build folders `playwright install chromium webkit` would fill, as Playwright itself says (--dry-run: no lock, no cleanup)
+  perl -e "$PW_GROUP_LIMIT" 60 pnpm exec playwright install --dry-run chromium webkit < /dev/null 2>/dev/null | sed -n 's/^ *Install location: *//p'
+}
+pw_builds_ready() { # every one of those folders has Playwright's own complete marker; no folder named at all is not ready
+  local dir n=0
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [ -f "$dir/INSTALLATION_COMPLETE" ] || return 1
+    n=$((n + 1))
+  done < <(pw_locations)
+  [ "$n" -gt 0 ]
+}
+pw_install() { # run holding the playwright-install mutex
+  local lim="${CI_PW_INSTALL_LIMIT:-300}" dir lock rc
+  case "$lim" in '' | *[!0-9]* | 0) lim=300 ;; esac
+  dir="$(pw_locations | head -1)"
+  lock="$(dirname "$dir")/__dirlock"
+  if [ -n "$dir" ] && [ -e "$lock" ] \
+    && perl -e 'my @s = stat($ARGV[0]) or exit 1; exit(time - $s[9] > $ARGV[1] ? 0 : 1)' "$lock" "$lim" \
+    && ! grep -Eq '(playwright[^ ]*|cli\.js) install( |$)' <<< "$(ps -Ao command)"; then # not ps | grep -q: pipefail and its SIGPIPE
+    echo "ci-local: stale __dirlock ($lock), older than ${lim}s with no playwright install running: removed"
+    rmdir "$lock" 2>/dev/null || rm -rf "$lock"
+  fi
+  PLAYWRIGHT_SKIP_BROWSER_GC=1 perl -e "$PW_GROUP_LIMIT" "$lim" pnpm exec playwright install chromium webkit < /dev/null
+  rc=$?
+  [ "$rc" != 142 ] || echo "ci-local: playwright install stopped after ${lim}s with no end (a hung read of the shared cache? CI_PW_INSTALL_LIMIT is the limit); its process group was stopped"
+  return $rc
+}
 browser_ready() { # browser_ready <log>: the browsers installed, the proxy gone, the suites told not to build (both browser jobs)
   # E2E_SKIP_BUILD and SKIP_BUILD: setup already built what they serve. The e2e config reads E2E_WORKERS.
-  run "$1" ci_mutex "$LOCKS" playwright-install pnpm exec playwright install chromium webkit && # one shared browser cache
+  { run "$1" pw_builds_ready && echo "playwright install skipped: every build is already in the shared cache" >> "$1" ||
+    run "$1" ci_mutex "$LOCKS" playwright-install pw_install; } && # one shared browser cache
   ci_browser_env && # after the install, which may need a proxy to download a browser
   export SKIP_BUILD=1 E2E_SKIP_BUILD=1 E2E_WORKERS="${E2E_WORKERS:-$(ci_e2e_workers "$CI_CPUS" "${CI_MEM_GB:-0}")}"
 }

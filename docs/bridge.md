@@ -720,8 +720,8 @@ list `custom-themes/1`. Everything else is refused by name or by the closed list
 ### Cards
 
 `card` writes the binding to the Mac ledger before `card.create` goes out. On `card.resolve` the bridge checks, in this
-order: the card exists, it is pending, it has not expired, the frame is at most 10 minutes old (an approval that sat on
-the relay while the Mac was offline is **expired**, not run), `payload_hash` equals the ledger hash, edits are allowed
+order: the card exists, it is pending, it has not expired, the frame is at most 10 minutes old when the relay took it (an approval the phone itself held for longer is **expired**,
+not run; one that waited at the relay while the Mac slept still runs, up to 12 hours after the phone signed it, on the Mac's clock), `payload_hash` equals the ledger hash, edits are allowed
 for the card (`allow_edit`, editable fields, body only for email/message/publish) and `edited_hash` matches. Only then
 the card becomes `resolved`, `approved/<card_id>.json` holds the binding as approved, and the agent is told. Any failure
 sends `card.update` with a reason and an `error`, and the agent hears nothing.

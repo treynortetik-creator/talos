@@ -361,8 +361,15 @@ export class HubServer {
    * answered `none`, which leaves the prompt at the Mac. One request per connection; the connection closing closes the card.
    */
   private async onPerm(c: Conn, msg: HubPermT) {
-    const answer = (decision: 'allow' | 'deny' | 'none', reason: string) => {
-      this.write(c, { t: 'perm_result', id: msg.id, decision, reason: reason.slice(0, 120) })
+    const answer = (decision: 'allow' | 'deny' | 'none', reason: string, note?: string) => {
+      // the owner's note goes with a deny only; an older hook ignores the extra key
+      this.write(c, {
+        t: 'perm_result',
+        id: msg.id,
+        decision,
+        reason: reason.slice(0, 120),
+        ...(decision === 'deny' && note ? { note } : {}),
+      })
       c.sock.end()
     }
     if (c.perm || c.thread) return // one request per connection, and a worker's own connection never carries one
@@ -378,10 +385,11 @@ export class HubServer {
         tool_input: msg.tool_input,
         ...(msg.pid !== undefined ? { pid: msg.pid } : {}),
         ...(msg.cwd !== undefined ? { cwd: msg.cwd } : {}),
+        ...(msg.permission_mode !== undefined ? { mode: msg.permission_mode } : {}),
       },
       ac.signal,
     )
-    if (!ac.signal.aborted) answer(r.decision, r.reason)
+    if (!ac.signal.aborted) answer(r.decision, r.reason, r.note)
   }
 
   /**

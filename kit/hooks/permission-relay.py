@@ -15,8 +15,7 @@ prompt (then it answers nothing and the relay card is the only one), where the c
 THE ONE RULE. This hook never decides anything itself. It prints a decision ONLY when the bridge answers, for this request id,
 exactly "allow" or "deny", which the bridge sends only after your signed answer to the card. Everything else prints nothing and
 exits 0: no bridge, no socket, a refusal, a slow bridge, a garbled or unknown answer, an input too big to send, bad input from
-Claude Code, an error of any kind. No output means Claude Code's own prompt stays, and its own default applies. It can never
-allow on its own and never denies by failing.
+Claude Code, an error of any kind. No output means Claude Code's own prompt stays, and its own default applies. It can never allow on its own and never denies by failing.
 
 TIME. It waits until it is answered or the prompt is over. Claude Code stops the hook (SIGTERM) when the prompt is answered at the
 Mac. It does NOT stop it when its own countdown blocks the call (dangerous-rm prompt, 2 minutes; observed on 2.1.318), so the hook
@@ -31,8 +30,7 @@ gets a decision. It stays silent in an unattended `claude -p` run (CLAUDE_CODE_S
 in a thread session it runs only from the copy registered in that session's own settings (TALOS_APP_PERM_HOOK_SOURCE=worker), so
 the agent folder's copy of the same hook never raises a second card.
 A test sets TALOS_TEST_SANDBOX to its temp folder, and the hook then never connects to a hub outside it.
-Kill switch: permission-relay.off in the hook state folder, or TALOS_PERMISSION_RELAY_OFF=1.
-Python 3.9, standard library only. Test: scripts/test-permission-relay.sh
+Kill switch: permission-relay.off in the hook state folder, or TALOS_PERMISSION_RELAY_OFF=1. Python 3.9, standard library only. Test: scripts/test-permission-relay.sh
 """
 import hashlib
 import json
@@ -55,7 +53,7 @@ try:
 except SystemExit:
     raise
 except Exception:
-    pass
+    C = None                     # no helper: no Deny note, no permission mode, the old deny message (the hook runs without it)
 if os.environ.get("TALOS_PERMISSION_RELAY_OFF") == "1":
     sys.exit(0)
 
@@ -96,6 +94,7 @@ def build_request(call, req_id):
     sid = call.get("session_id")
     if isinstance(sid, str) and 0 < len(sid) <= 100:
         req["session_id"] = sid
+    req.update(C.request_extras(call) if C else {})     # the session's permission mode, for "why it asked"
     thread = os.environ.get("TALOS_APP_WORKER_THREAD")
     if thread:
         nonce = os.environ.get("TALOS_APP_WORKER_NONCE", "")
@@ -204,7 +203,7 @@ class Watcher:
 
 
 def ask_bridge(req, deadline, parent, watcher):
-    """The bridge's answer for this request: 'allow', 'deny', or None for anything else."""
+    """The bridge's answer for this request: 'allow', 'deny', or None for anything else. With a deny, the owner's cleaned note (if any) is left in req["_notes"]."""
     line = (json.dumps(req, ensure_ascii=True) + "\n").encode("ascii")
     if len(line) > MAX_LINE_BYTES:
         return None
@@ -236,7 +235,7 @@ def ask_bridge(req, deadline, parent, watcher):
             return None                   # not the live bridge (or no way to tell): the tool input is never sent
         sock.sendall(line)
         buf = b""
-        while b"\n" not in buf and len(buf) < 4096:
+        while b"\n" not in buf and len(buf) < 16384:     # room for a deny with the owner's 400-character note (~5 KB as escapes)
             left = deadline - time.monotonic()
             if left <= 0:
                 return None
@@ -263,6 +262,7 @@ def ask_bridge(req, deadline, parent, watcher):
     if not isinstance(msg, dict) or msg.get("t") != "perm_result" or msg.get("id") != req["id"]:
         return None
     d = msg.get("decision")
+    req["_notes"] = C.deny_notes(msg) if d == "deny" and C else []      # only with a deny; beside an allow it is never read
     return d if d in ("allow", "deny") else None
 
 
@@ -986,7 +986,7 @@ def main():
         if decision == "allow":
             out = {"behavior": "allow"}
         elif decision == "deny":
-            out = {"behavior": "deny", "message": "Denied from the Talos app."}
+            out = {"behavior": "deny", "message": C.deny_message(req.get("_notes", [])) if C else "Denied from the Talos app."}   # + the owner's note, if any
         else:
             return
         sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": out}}) + "\n")

@@ -3,7 +3,7 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../helpers/fixtures.ts'
 import type { Harness } from '../helpers/harness.ts'
-import { openSignedIn } from '../helpers/util.ts'
+import { openSignedIn, waitUntil } from '../helpers/util.ts'
 import { probeView, relayAcceptsAppRequests } from './probe.ts'
 
 const frameOf = (page: Page, title = 'Evil (app)') => page.frameLocator(`iframe[title="${title}"]`)
@@ -60,7 +60,8 @@ async function tapOutsideAfterQuiet(page: Page, harness: Harness, testId = 'app-
   expect(before).toBeGreaterThan(0)
   expect(requests(harness).map((r) => r.raw.user_gesture)).not.toContain(true)
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-  await page.waitForTimeout(2500)
+  // The view probes every second: two more probes after the tap are the view's chance to use a gesture the tap might have given it.
+  await waitUntil(() => requests(harness).length >= before + 2, 'two probes from the view after the tap')
   return before
 }
 

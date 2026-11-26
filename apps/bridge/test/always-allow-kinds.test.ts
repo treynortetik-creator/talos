@@ -119,7 +119,7 @@ describe('after a grant, the next card of that kind passes without a card', () =
 })
 
 describe("the agent's card cannot carry the bridge's own payload marks", () => {
-  test.each(['action_rule', 'permission_mode', 'update_resend', 'screen_allow'])(
+  test.each(['action_rule', 'permission_mode', 'update_resend', 'screen_allow', 'peer_address'])(
     'a payload with %s is refused, and no card is made',
     async (key) => {
       h = await start()
@@ -388,6 +388,7 @@ describe('always:true is refused BEFORE the ledger moves, on every card that doe
     ['a permission-mode card', 'config', { payload: { permission_mode: { mode: 'bypass' } } }],
     ['an update-resend card', 'config', { payload: { update_resend: { message_id: 'm_x' } } }],
     ['a screen-allow card', 'config', { payload: { screen_allow: { bundle_id: 'com.example.app' } } }],
+    ['a peer-address card', 'config', { payload: { peer_address: { peer: 'work', url: 'https://a.example.com/x' } } }],
     ['a rule-ask card with no kind', 'generic', { payload: { action_rule: { rule: 'r', key: 'k', kind: null } } }],
     ['an app_action card', 'app_action', {}],
   ]

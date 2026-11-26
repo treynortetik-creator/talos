@@ -61,13 +61,51 @@ describe('the file', () => {
     mem.wipe('never-had-one')
   })
 
-  test('a file made for other text is not read: the job was edited since, so it is wiped', () => {
+  test('a file made for other text is still read: rewording the job keeps its notes (only the epoch decides)', () => {
     const { mem } = mk()
     mem.save('daily-digest', H, { notepad: 'old facts', result: result(1) })
-    expect(mem.read('daily-digest', bindingOf('Summarise last week.\n', 'e1'))).toBeNull()
+    expect(mem.read('daily-digest', bindingOf('Summarise last week.\n', 'e1'))?.notepad).toBe('old facts')
+    expect(existsSync(mem.path('daily-digest'))).toBe(true)
+    // a save for the reworded text goes into the same file
+    expect(mem.save('daily-digest', bindingOf('Summarise last week.\n', 'e1'), { notepad: 'newer facts' }).ok).toBe(
+      true,
+    )
+    expect(mem.read('daily-digest', H)?.notepad).toBe('newer facts')
+  })
+
+  test('a file made for another epoch is not read: it is wiped, and the old epoch coming back does not bring it back', () => {
+    const { mem } = mk()
+    mem.save('daily-digest', H, { notepad: 'old facts', result: result(1) })
+    expect(mem.read('daily-digest', bindingOf('Summarise yesterday.\n', 'e2'))).toBeNull()
     expect(existsSync(mem.path('daily-digest'))).toBe(false)
-    // and the old text coming back later does not bring the old notepad back
     expect(mem.read('daily-digest', H)).toBeNull()
+  })
+
+  test('a move wipe keeps one old copy, replaced by the next one; any other wipe removes it', () => {
+    const { mem } = mk()
+    mem.save('daily-digest', H, { notepad: 'first' })
+    mem.wipe('daily-digest', { keepOldCopy: true })
+    expect(existsSync(mem.path('daily-digest'))).toBe(false)
+    expect(JSON.parse(readFileSync(mem.oldCopyPath('daily-digest'), 'utf8')).notepad).toBe('first')
+    mem.save('daily-digest', H, { notepad: 'second' })
+    mem.wipe('daily-digest', { keepOldCopy: true })
+    expect(JSON.parse(readFileSync(mem.oldCopyPath('daily-digest'), 'utf8')).notepad).toBe('second')
+    // a move with nothing to keep leaves the copy that is there
+    mem.wipe('daily-digest', { keepOldCopy: true })
+    expect(JSON.parse(readFileSync(mem.oldCopyPath('daily-digest'), 'utf8')).notepad).toBe('second')
+    mem.wipe('daily-digest')
+    expect(existsSync(mem.oldCopyPath('daily-digest'))).toBe(false)
+  })
+
+  test('an old copy that is a link is not followed: the notes are removed instead', () => {
+    const { home, mem } = mk()
+    mem.save('daily-digest', H, { notepad: 'x' })
+    const target = join(home, 'target.txt')
+    writeFileSync(target, 'keep me')
+    symlinkSync(target, mem.oldCopyPath('daily-digest'))
+    mem.wipe('daily-digest', { keepOldCopy: true })
+    expect(existsSync(mem.path('daily-digest'))).toBe(false)
+    expect(readFileSync(target, 'utf8')).toBe('keep me')
   })
 
   test('a file that is not JSON, or not ours, reads as no memory', () => {
@@ -309,7 +347,9 @@ describe('every wipe is announced, so the epoch can move', () => {
     mem.save('a-job', H, { notepad: 'x' })
     expect(mem.read('a-job', H)).not.toBeNull()
     expect(wiped).toEqual([])
-    expect(mem.read('a-job', bindingOf('Other text.\n', 'e1'))).toBeNull()
+    expect(mem.read('a-job', bindingOf('Other text.\n', 'e1'))).not.toBeNull() // reworded, same memory
+    expect(wiped).toEqual([])
+    expect(mem.read('a-job', bindingOf('Other text.\n', 'e2'))).toBeNull()
     expect(wiped).toEqual(['a-job'])
   })
 

@@ -115,10 +115,14 @@ test('a card whose body changed after hashing renders the altered state with no 
 })
 
 test('/card/:id scrolls to the card and highlights it', async ({ page }) => {
+  // Reduced motion makes the scroll one jump made when the card mounts. The smooth one is an animation the browser runs on its own
+  // schedule: WebKit on a loaded runner left it unfinished for over 5 s. The highlight lasts 1.2 s from the same moment, so it is
+  // read first and the jump is checked after (it is already done when the highlight shows).
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await open(page, `/card/${IDS.low}`, { seed: 'full' })
   const article = card(page, IDS.low)
-  await expect(article).toBeInViewport()
   await expect(article).toHaveClass(/ring-2/)
+  await expect(article).toBeInViewport()
   await expect(article).not.toHaveClass(/ring-2/, { timeout: 4000 })
 })
 

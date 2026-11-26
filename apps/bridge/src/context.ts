@@ -35,7 +35,7 @@ import type {
 /** kv key holding the ids the agent was told about and has not touched (D39). */
 const UNANSWERED_KEY = 'unanswered_v1'
 /** A pending id older than this is not reported: the owner has long since moved on or asked again. */
-export const UNANSWERED_MAX_AGE_MS = 24 * 3600_000
+export const UNANSWERED_MAX_AGE_MS = 14 * 24 * 3600_000
 const UNANSWERED_MAX_ENTRIES = 500
 
 type Pending = { thread: string; at: number; run: string; pid: number }
@@ -211,7 +211,7 @@ export class SeenTracker {
 
   /**
    * Entries an EARLIER process left behind, grouped by thread, newest-first not guaranteed. Removes them from the store
-   * (at most once), together with anything over 24 h old. Entries of this run, and of another process that is still alive
+   * (at most once), together with anything over 14 days old. Entries of this run, and of another process that is still alive
    * (a thread's own worker session, a superseded bridge), stay.
    */
   takeUnansweredFromEarlierRuns(isAlive: (pid: number) => boolean = pidAlive): Map<string, string[]> {
@@ -343,6 +343,8 @@ export type BridgeContext = {
   undoCards?: import('./undo/card.ts').UndoCards
   /** The offer to send a turn an update cut off again (router/update-resend.ts): the live main bridge only. */
   updateResend?: import('./router/update-resend.ts').UpdateResendCards
+  /** Linked agents (peer/address-ask.ts): the ask that holds waiting messages when an agent's address changes. Live main bridge only. */
+  peerAddressAsk?: import('./peer/address-ask.ts').PeerAddressAsk
   /** A message's undo point on its receipt and history rows (undo/marks.ts): the live main bridge only. */
   undoMarks?: import('./undo/marks.ts').UndoMarks
   /** Pushes a channel notification into the Claude session. A no-op in headless mode. */
@@ -428,13 +430,17 @@ export async function postSystemNotice(
  */
 export async function reportUnansweredFromEarlierRuns(ctx: BridgeContext): Promise<void> {
   if (ctx.mode !== 'live' || ctx.worker) return
-  for (const [thread, ids] of ctx.seen.takeUnansweredFromEarlierRuns()) {
-    const many = ids.length > 1
-    const text = `${many ? `${ids.length} messages` : 'A message'} you sent may not have been answered: the session on ${say({ mac: 'your Mac', linux: 'your computer' })} stopped while ${many ? 'they were' : 'it was'} being handled. Send ${many ? 'them' : 'it'} again if ${many ? 'they still matter' : 'it still matters'}.`
-    try {
-      await postSystemNotice(ctx, text, { toAgent: true, thread: threadRef(ctx, thread) })
-    } catch (e) {
-      ctx.log.warn('unanswered notice not posted', { error: (e as Error).message })
-    }
+  const byThread = ctx.seen.takeUnansweredFromEarlierRuns()
+  if (byThread.size === 0) return
+  const total = [...byThread.values()].reduce((n, ids) => n + ids.length, 0)
+  const many = total > 1
+  // One line however many threads: in that thread when it is only one, else in the default thread.
+  const thread = byThread.size === 1 ? ([...byThread.keys()][0] as string) : defaultThreadRef(ctx).id
+  const where = byThread.size > 1 ? ` in ${byThread.size} threads` : ''
+  const text = `${many ? `${total} messages` : 'A message'}${where} you sent may not have been answered: the session on ${say({ mac: 'your Mac', linux: 'your computer' })} stopped while ${many ? 'they were' : 'it was'} being handled. Send ${many ? 'them' : 'it'} again if ${many ? 'they still matter' : 'it still matters'}.`
+  try {
+    await postSystemNotice(ctx, text, { toAgent: true, thread: threadRef(ctx, thread) })
+  } catch (e) {
+    ctx.log.warn('unanswered notice not posted', { error: (e as Error).message })
   }
 }

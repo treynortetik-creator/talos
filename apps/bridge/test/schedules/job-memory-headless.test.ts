@@ -254,16 +254,16 @@ describe('the pack is kept in step', () => {
     expect(r.hasPack('a-job')).toBe(false)
   })
 
-  test('edited job text: the old memory is wiped and the pack is bound to the new text', () => {
+  test('edited job text: the memory is kept and the pack is bound to the new text', () => {
     const r = rig()
     r.sidecar.setMemory('a-job', true)
     r.sync(r.jobs(['a-job', 'notes']))
     r.mem.save('a-job', bindingOf(P, r.sidecar.memoryEpoch('a-job') as string), { notepad: 'old' })
     const NEW = 'Something else entirely.\n'
     r.sync([{ id: 'a-job', sha: sha(NEW), kind: 'notes' }])
-    expect(r.fileOf('a-job')).toBeNull()
+    expect(r.fileOf('a-job')).not.toBeNull()
     expect(r.packOf('a-job')).toMatchObject({ prompt_sha256: sha(NEW) })
-    expect(r.packOf('a-job').text as string).not.toContain('old')
+    expect(r.packOf('a-job').text as string).toContain('old')
   })
 
   test('a bridge that may not write (not the live one) writes and deletes nothing', () => {

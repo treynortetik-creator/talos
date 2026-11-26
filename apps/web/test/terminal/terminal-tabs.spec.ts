@@ -186,19 +186,21 @@ test.describe('in the Mac app', () => {
       await page.getByRole('tab', { name: /Work/ }).click()
       await expect(page.getByTestId('terminal-panel')).toBeVisible()
       const dir = process.env.TALOS_SHOTS
-      const settle = async () => {
-        await page.mouse.move(1, 700) // off the strip: no hover tint in the picture
-        await page.waitForTimeout(300) // the tabs' colour transition (140 ms) has finished
+      // Only a picture needs the page at rest: off the strip (no hover tint) and the tabs' colour transition (140 ms) done.
+      const shot = async (name: string) => {
+        if (!dir) return
+        await page.mouse.move(1, 700)
+        await expect
+          .poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length))
+          .toBe(0)
+        await page.screenshot({ path: `${dir}/terminal-tabs-${info.project.name}-${theme}-${name}.png` })
       }
-      await settle()
-      if (dir) await page.screenshot({ path: `${dir}/terminal-tabs-${info.project.name}-${theme}-resume.png` })
+      await shot('resume')
       await page.getByRole('tab', { name: /Broken/ }).click()
       await expect(page.getByTestId('terminal-panel')).toContainText('failed')
-      await settle()
-      if (dir) await page.screenshot({ path: `${dir}/terminal-tabs-${info.project.name}-${theme}-failed.png` })
+      await shot('failed')
       await page.getByRole('tab', { name: /OC Test/ }).click()
-      await settle()
-      if (dir) await page.screenshot({ path: `${dir}/terminal-tabs-${info.project.name}-${theme}-live.png` })
+      await shot('live')
     })
   }
 })

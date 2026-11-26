@@ -12,6 +12,7 @@ import type {
   WorkerFailureT,
 } from '@talos-app/protocol'
 import type { Proc } from './bg-work.ts'
+import type { CutTurn } from './cut-turn.ts'
 import type { LoginEnvCache } from './login-env.ts'
 import type { OwedState, PointerPane } from './owed-pointer.ts'
 import type { TurnWait } from './worker-cap.ts'
@@ -127,6 +128,8 @@ export type WorkerDeps = {
     thread: WorkerThread
     sessionId: string
     resume: boolean
+    /** This resume runs the turn that was cut off again (cut-turn.ts); given only when true. */
+    resumeTurn?: boolean
     nonce: string
     baseEnv: Record<string, string>
     /** The update check's plan: the same launch and spec hash, nothing written (workers-wiring.ts). */
@@ -189,6 +192,10 @@ export type WorkerDeps = {
   /** The process table for the background-work look, and one process's argv (bg-work.ts reads /proc when none is given). */
   procTable?(): Proc[] | null
   procArgv?(pid: number): string[] | null
+  /** Milliseconds since boot (proc-reap.ts bootMsNow when none is given); null where there is none. A test gives a clock of its own. */
+  bootMs?(): number | null
+  /** Ends what a launch left running, found by its nonce (proc-reap.ts reapLaunch when none is given). Tests give a recorder. */
+  reap?(nonce: string, notBeforeBootMs?: number): Promise<{ found: number; killed: number[] } | undefined>
 }
 
 /** One thread session as the manager keeps it (worker-slots.ts reads and moves it too). */
@@ -225,6 +232,30 @@ export type WorkerRuntime = {
   turnSeenBusy?: boolean
   /** When (wall ms) the Enter that began the running turn went in: output in that same second is the line's own echo. */
   turnTypedAtMs?: number
+  /** The nonce this start was launched with (the one the session's children inherit): what proc-reap.ts finds them by. */
+  nonce?: string
+  /** The turn that was cut off in this conversation, for the next start to run again (cut-turn.ts). */
+  cut?: CutTurn | null
+  /** The footer last said plan mode (or the launch put it there): a turn cut now is not run again. */
+  planSeen?: boolean
+  /**
+   * This launch runs a cut turn again and no new turn has begun since: 'running' until the pane is seen busy, 'ran' until it is
+   * quiet again. A session that dies in this state records no cut (at most one automatic re-run in a row).
+   */
+  resumedTurn?: 'running' | 'ran'
+  /** Monotonic s since which the pane has been quiet while resumedTurn is 'running' (it ends the guard after the busy window). */
+  resumedQuietSince?: number
+  /** The pane's "Interrupted" lines at the last look, whether one appeared since this turn began, and whether it was busy then. */
+  interruptsSeen?: number
+  turnInterrupted?: boolean
+  /** Claude's "esc to interrupt" spinner was on the pane at the last look. */
+  hintShown?: boolean
+  wasBusy?: boolean
+  /** Boot ms (never the wall clock) of the last quiet look, and of where the running turn began (the last quiet look before it went busy). */
+  quietAtBoot?: number
+  /** Monotonic s since which the pane has been quiet (a quiet that lasts, with nothing waiting on the owner, ends the turn). */
+  quietSince?: number
+  turnFromBoot?: number
   /** The rows of this tick's look at the pane (null when it could not be read). */
   rows: string[] | null
   /**

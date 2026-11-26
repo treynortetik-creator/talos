@@ -237,15 +237,14 @@ describe('a lead answers main', () => {
   )
 
   test(
-    'nothing replies to a RESULT: a second RESULT needs a new TASK',
+    'a second answer needs a new TASK: the first one closed the job',
     async () => {
       const hub = await desk()
       await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'One thing.' })
       expect((await say(worker as Bridge, { thread_id: 'trip', type: 'RESULT', text: 'Done.' })).isError).toBeFalsy()
       const again = await say(worker as Bridge, { thread_id: 'trip', type: 'BLOCK', text: 'Also stuck.' })
       expect(again.isError).toBe(true)
-      expect(text(again)).toContain('nothing replies to a RESULT')
-      aged(hub, 11 * MIN)
+      expect(text(again)).toContain('There is no open TASK to answer')
       await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'Another thing.' })
       expect((await say(worker as Bridge, { thread_id: 'trip', type: 'BLOCK', text: 'Stuck.' })).isError).toBeFalsy()
     },
@@ -255,7 +254,7 @@ describe('a lead answers main', () => {
 
 describe('the budget', () => {
   test(
-    "the TASK past the day's budget (20, Pantheon 2026-11-15) is refused",
+    "the TASK past the day's budget (20) goes through with a warning, on both sides",
     async () => {
       const hub = await desk()
       for (let i = 1; i <= HANDOFF_DAILY_LIMIT; i++) {
@@ -269,12 +268,14 @@ describe('the budget', () => {
         aged(hub, 11 * MIN, 'RESULT')
       }
       expect(HANDOFF_DAILY_LIMIT).toBe(20)
-      const sixth = await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'One more.' })
-      expect(sixth.isError).toBe(true)
-      expect(text(sixth)).toContain('Hand-off budget used')
-      // and the lead's own side is spent too
+      const next = await say(hub.bridge, { thread_id: 'trip', type: 'TASK', text: 'One more.' })
+      expect(next.isError).toBeFalsy()
+      expect(text(next)).toContain('That is hand-off 21 today')
+      // and the lead's own side is over too: 20 RESULTs were sent, this is the 21st
       const lead = await say(worker as Bridge, { thread_id: 'trip', type: 'TASK', text: 'Out of my lane.' })
-      expect(text(lead)).toContain('Hand-off budget used')
+      expect(lead.isError).toBeFalsy()
+      expect(text(lead)).toContain('That is hand-off 21 today')
+      expect(hub.bridge.ctx.store.db.query('SELECT COUNT(*) AS n FROM handoffs').get()).toEqual({ n: 42 })
     },
     HARNESS_START_MS + t(30_000),
   )
@@ -663,20 +664,34 @@ describe('a lead that answers with a hand-off did answer', () => {
   )
 })
 
-describe('nothing replies to a RESULT, main side', () => {
+describe('a TASK right after a RESULT, main side', () => {
   test(
-    "a TASK within 10 minutes of the lead's RESULT is refused in plain words; after that it is fine",
+    "a TASK straight after the lead's RESULT is accepted: there is no ten minute wait",
     async () => {
       const hub = await desk()
       await task(hub, 'Job 1.')
       await say(worker as Bridge, { thread_id: 'trip', type: 'RESULT', text: 'Done.' })
-      const again = await task(hub, 'Thanks, one more tweak.')
+      expect((await task(hub, 'Thanks, one more tweak.')).isError).toBeFalsy()
+    },
+    HARNESS_START_MS + t(30_000),
+  )
+
+  test(
+    'a lead answers one numbered job with task, and only that job closes',
+    async () => {
+      const hub = await desk()
+      const one = await task(hub, 'Job 1.')
+      expect(text(one)).toContain('job 1')
+      await task(hub, 'Job 2.')
+      const answer = await say(worker as Bridge, { thread_id: 'trip', type: 'RESULT', text: 'Job 2 done.', task: 2 })
+      expect(answer.isError).toBeFalsy()
+      expect(text(answer)).toContain('answers job 2')
+      expect(hub.bridge.ctx.store.db.query('SELECT num FROM handoffs WHERE open = 1 ORDER BY num').all()).toEqual([
+        { num: 1 },
+      ])
+      const again = await say(worker as Bridge, { thread_id: 'trip', type: 'RESULT', text: 'Again.', task: 2 })
       expect(again.isError).toBe(true)
-      expect(text(again)).toBe('That looks like a reply to its RESULT; send a new TASK only for new work.')
-      aged(hub, 9 * MIN)
-      expect((await task(hub, 'Still too soon.')).isError).toBe(true)
-      aged(hub, 2 * MIN)
-      expect((await task(hub, 'Genuinely new work.')).isError).toBeFalsy()
+      expect(text(again)).toContain('Job 2 is not open')
     },
     HARNESS_START_MS + t(30_000),
   )

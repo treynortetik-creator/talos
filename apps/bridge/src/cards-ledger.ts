@@ -90,7 +90,10 @@ export type ResolveOutcome =
     }
   | {
       ok: false
-      code: Extract<ErrorCodeT, 'card_not_pending' | 'card_expired' | 'card_hash_mismatch' | 'card_edit_forbidden'>
+      code: Extract<
+        ErrorCodeT,
+        'card_not_pending' | 'card_expired' | 'card_hash_mismatch' | 'card_edit_forbidden' | 'stale'
+      >
       reason: string
       row?: LedgerRow
       /** The card just became `expired` because of this attempt; the caller notifies the agent and the app. */
@@ -286,7 +289,7 @@ export class CardLedger {
   resolve(
     input: ResolveInput,
     nowMs: number,
-    opts: { ageAtMs?: number; frameId?: string; by?: string } = {},
+    opts: { ageAtMs?: number; maxTapAgeMs?: number; frameId?: string; by?: string } = {},
   ): ResolveOutcome {
     const row = this.get(input.card_id)
     if (!row) return { ok: false, code: 'card_not_pending', reason: 'unknown_card' }
@@ -296,8 +299,13 @@ export class CardLedger {
       const newlyExpired = this.expire(row.id)
       return { ok: false, code: 'card_expired', reason: 'expired', row: this.get(row.id) as LedgerRow, newlyExpired }
     }
-    // The 10-minute rule judges how long the frame waited. A notification Approve passes the moment the relay took the tap
-    // (`ageAtMs`), so a tap queued for a sleeping Mac still runs; the card's own expiry above is always judged at `nowMs`.
+    // The longest a tap may wait, on this Mac's own clock, from the time the owner's device signed it (`maxTapAgeMs`). The
+    // relay's stamp below is unsigned and cannot stretch it. Past it the card stays pending: nothing is expired or run.
+    if (opts.maxTapAgeMs !== undefined && nowMs - Date.parse(input.ts) > opts.maxTapAgeMs)
+      return { ok: false, code: 'stale', reason: 'tap_too_old', row }
+    // The 10-minute rule judges how long the frame waited. A tap (a notification Approve, or a card.resolve from the app)
+    // passes the moment the relay took it (`ageAtMs`), so a tap queued for a sleeping Mac still runs; the card's own expiry
+    // above is always judged at `nowMs`.
     if ((opts.ageAtMs ?? nowMs) - Date.parse(input.ts) > MAX_RESOLVE_AGE_MS) {
       const newlyExpired = this.expire(row.id)
       return {

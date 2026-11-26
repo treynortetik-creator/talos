@@ -18,7 +18,7 @@ import { say } from '../owner-words.ts'
 import { RelayHttpError } from '../relay-http.ts'
 import { assertFrameFits, RelayRejectedError } from '../transport.ts'
 import { synthesize } from '../tts.ts'
-import { fail, needStr, ok, postThreadArg, str, ToolError, threadProps } from './common.ts'
+import { ALWAYS_LOAD, fail, needStr, ok, postThreadArg, str, ToolError, threadProps } from './common.ts'
 import { OWN_THREAD, type ToolRecord } from './define.ts'
 
 const MAX_FILES = 10
@@ -99,6 +99,7 @@ const filesFrom = (v: unknown): string[] => {
 
 export const reply: ToolRecord = {
   name: 'reply',
+  _meta: ALWAYS_LOAD,
   group: 'core',
   headless: true,
   ...OWN_THREAD,

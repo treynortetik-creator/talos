@@ -84,7 +84,7 @@ mind. `pnpm test` runs `scripts/size-budget.test.ts`, which warns on these limit
 
 ## Rules for every change
 
-Simple base rules. Every agent, every PR.
+Every agent, every PR.
 
 1. **Use the smallest tool that works.** If a setting, skill, hook or theme does the job, write no code.
 2. **Prefer a new feature in its own new files.** Keep changes to shared core files to the hook point the feature needs. Once
@@ -96,7 +96,8 @@ Simple base rules. Every agent, every PR.
 5. **Mind the size limits above.** Prefer splitting to growing.
 6. **A review finding's test goes in the test file for that behavior**, named for the behavior. Do not name tests or files after
    a review, a PR number or a work package.
-7. **No plan or ticket labels in code or comments.** Say what the code does and why, in plain words.
+7. **No plan or ticket labels in code, comments or docs.** Say what the code does, in plain words. Rewrite a changed
+   fact; don't append a dated note.
 8. **Once modules exist:** with every module removed, the core must still build and pass its tests.
 
 ## Safety rules that are easy to break

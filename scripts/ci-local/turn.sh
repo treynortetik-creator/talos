@@ -5,9 +5,16 @@
 #   gate  a hold of one of the gate slots, K+1..N, of the suites mutex (anything heavy-lock.sh runs)
 # A new run and a new gate hold each ask first, under one short lock (locks/mutex-turn) that is kept through the caller's own take
 # of its slot, so the look and the take are one step. The answer is no while a living holder of the other class exists (its owner
-# is checked as every lock's is: a holder whose process is gone counts for nothing) and while a waiter of the other class that came
-# earlier is queued (CI runs wait in locks.queue/admit, gates in locks.queue/suites; a `jump` gate goes before CI waiters). Nobody
-# is stopped, and a run that was admitted is never held up: its own holds and cleanup never ask.
+# is checked as every lock's is: a holder whose process is gone counts for nothing) and while a waiter of the other class that goes
+# first is queued (CI runs wait in locks.queue/admit, gates in locks.queue/suites). A waiting gate goes
+# BEFORE a waiting CI run (a gate's wait behind the previous push's CI run was most of the time a push took); a CI run goes first only
+# once it is starved: it has waited behind CI_TURN_PASS_MAX gates (2, counted in locks.queue/gate-passes) or CI_TURN_PASS_MAX_S seconds
+# (1800), whichever comes first (ci_turn_starved); a `jump` gate goes before every CI waiter, starved or not, and a scheduled run (the
+# nightly) is never starved and never makes a gate wait. Nobody is stopped, and a run that was admitted is never held up: its own holds
+# and cleanup never ask.
+# Line 7 of a ticket: a CI run's (locks.queue/admit) is "sched" (a scheduled run) or "caps N S" (its starvation caps, ci_turn_caps); a gate's
+# (locks.queue/suites) is "turn2", which says its waiter knows the cap: a CI run defers only to such gates, and to gates of the older code that
+# queued before it (else each would wait for the other until a cap).
 # A run that waits ONLY for a part on another machine does not hold the turn (ci_fold_wait: the fold loops of check and browser mark
 # it, per job, in the run's record; the run is idle while every job of it that has not ended is marked): a waiting gate may go. A job
 # that goes back to heavy work (a take-back) first takes the turn again (ci_fold_resume): it waits while a gate holds the machine,
@@ -37,12 +44,14 @@ ci_turn_enter() { # ci_turn_enter <locks dir>: take locks/mutex-turn, asking for
   return 1
 }
 ci_turn_leave() { [ -z "$CI_TURN_HELD" ] || ci_lock_release "$CI_TURN_DIR"; CI_TURN_HELD=""; return 0; }
-ci_turn_holders() { # ci_turn_holders <locks dir> <ci|gate>: "pid N (what, since T)" for each living holder of that class, one a line
+ci_turn_holders() { # ci_turn_holders <locks dir> <ci|gate> [nosched]: "pid N (what, since T)" for each living holder of that class, one a line
+  # (nosched: the CI runs a scheduled run holds - the file `sched` in its slot - are left out)
   local locks="$1" l k o cache n nci
   cache="$(dirname "$locks")"
   if [ "$2" = ci ]; then
     for l in "$locks"/slot-[0-9]*; do
       case "${l##*/slot-}" in '' | *[!0-9]*) continue ;; esac
+      [ -z "${3:-}" ] || [ ! -e "$l/sched" ] || continue
       o="$(ci_owner "$l")"
       { [ -n "$o" ] && ci_owner_alive "$o"; } || continue
       ci_turn_run_idle "$cache" "$o" && continue # it waits only for a part on another machine: no heavy step of its own is going
@@ -61,24 +70,82 @@ ci_turn_holders() { # ci_turn_holders <locks dir> <ci|gate>: "pid N (what, since
     done
   fi
 }
-ci_turn_ahead() { # ci_turn_ahead <locks dir> <ci|gate> <my ticket> <my jump>: the waiters of the OTHER class that go before this
-  # ticket (a jump gate goes before every CI waiter; a gate waiter that jumps goes before every CI run), "pid N (what)", one a line
-  local locks="$1" mine="${3##*/}" t q name
-  [ -n "$mine" ] || mine="~" # no ticket: everybody else is ahead
+ci_turn_now() { printf '%s' "${CI_TURN_NOW:-$(date +%s)}"; } # seconds; CI_TURN_NOW is the tests' clock
+ci_turn_ticket_time() { # ci_turn_ticket_time <ticket>: the time in its name (<%017.6f time>.<pid>.<random>); fails for any other name
+  local n="${1##*/}"
+  n="${n%.*}" n="${n%.*}"
+  case "$n" in '' | .* | *[!0-9.]*) return 1 ;; esac
+  printf '%s' "$n"
+}
+ci_turn_num() { # ci_turn_num <value> <default>: the value when it is a whole number, else the default
+  case "$1" in '' | *[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+}
+ci_turn_caps() { # ci_turn_caps <CI ticket>: "<gates> <seconds>", the starvation caps of that run. Line 7 of its ticket says what it asked
+  # for ("caps N S", written by ci_acquire_slot from CI_TURN_PASS_MAX and CI_TURN_PASS_MAX_S), so a gate and the run read the same numbers,
+  # whatever each one's environment; a ticket with none (an older ci-local.sh, a hand-made one) takes the reader's own, then 2 and 1800.
+  local l7 a b c
+  l7="$(sed -n 7p "$1" 2>/dev/null)"
+  case "$l7" in
+    "caps "[0-9]*" "[0-9]*) read -r a b c <<CAPS
+$l7
+CAPS
+      case "$b$c" in *[!0-9]*) ;; *) printf '%s %s' "$b" "$c"; return 0 ;; esac ;;
+  esac
+  printf '%s %s' "$(ci_turn_num "${CI_TURN_PASS_MAX:-}" 2)" "$(ci_turn_num "${CI_TURN_PASS_MAX_S:-}" 1800)"
+}
+ci_turn_starved() { # ci_turn_starved <locks dir> <CI ticket>: 0 when that CI run has waited behind its cap of gates (CI_TURN_PASS_MAX, 2), or
+  # for its cap of seconds (CI_TURN_PASS_MAX_S, 1800; ci_turn_caps): from then on it goes before every gate that waits (but never before one
+  # that holds, nor a `jump` gate). A gate is a pass when it took its slot while this ticket was queued (ci_turn_pass). A scheduled run is
+  # never starved, and a ticket with no time in its name is not either: both wait for their own cap, CI_TURN_MAX_S.
+  local ts nmax smax n
+  ci_ticket_sched "$2" && return 1
+  ts="$(ci_turn_ticket_time "$2")" || return 1
+  read -r nmax smax <<CAPS
+$(ci_turn_caps "$2")
+CAPS
+  [ $(($(ci_turn_now) - 10#${ts%%.*})) -lt "$smax" ] || return 0
+  n="$(awk -v t="$ts" '$1 + 0 >= t + 0 { n++ } END { print n + 0 }' "$1.queue/gate-passes" 2>/dev/null)" # no record yet: awk prints nothing
+  [ "${n:-0}" -ge "$nmax" ]
+}
+ci_turn_pass() { # ci_turn_pass <locks dir>: a gate has taken its slot (the turn lock is held): one pass for every CI run that is queued
+  # (one line of the time in <locks>.queue/gate-passes). Lines older than the oldest queued CI ticket count for nobody and go; with no CI
+  # run queued there is nothing to count, and the file goes. A ticket still being written (.part) is queued too: its time is already its own.
+  local f="$1.queue/gate-passes" t n old="" now
+  for t in "$1.queue/admit"/*; do
+    [ -f "$t" ] || continue
+    case "$t" in *.part) [ -z "$(find "$t" -mmin +1 2>/dev/null)" ] || continue ;; esac # a .part older than a minute is a writer that died
+    n="$(ci_turn_ticket_time "${t%.part}")" || continue
+    if [ -z "$old" ] || [[ "$n" < "$old" ]]; then old="$n"; fi
+  done
+  if [ -z "$old" ]; then rm -f "$f"; return 0; fi
+  now="$(LC_ALL=C perl -MTime::HiRes=time -e 'printf "%017.6f", $ARGV[0] ne "" ? $ARGV[0] : time' "${CI_TURN_NOW:-}")"
+  { [ ! -f "$f" ] || awk -v o="$old" '$1 + 0 >= o + 0' "$f"; printf '%s\n' "$now"; } > "$f.new" 2>/dev/null && mv -f "$f.new" "$f" 2>/dev/null
+  return 0
+}
+ci_turn_ahead() { # ci_turn_ahead <locks dir> <ci|gate> <my ticket> <my jump>: the waiters of the OTHER class that go before this,
+  # "pid N (what)", one a line. For a CI run: every gate that waits (a gate goes before a waiting CI run), unless the run is starved
+  # (ci_turn_starved): then only a `jump` gate. For a gate: only the CI runs that are starved; a `jump` gate goes before every CI waiter.
+  local locks="$1" t q starved="" mine="${3##*/}"
+  [ -n "$mine" ] || mine="~" # no ticket: every gate of the old code is ahead
   if [ "$2" = gate ]; then q="$locks.queue/admit"; else q="$locks.queue/suites"; fi
   [ -d "$q" ] || return 0
   [ "$2" != gate ] || [ "$4" != jump ] || return 0
+  if [ "$2" = ci ] && ci_turn_starved "$locks" "$3"; then starved=1; fi
   while IFS= read -r t; do
     [ -n "$t" ] && [ "$t" != "$3" ] || continue
-    name="${t##*/}"
     if [ "$2" = ci ]; then
       [ "$(ci_ticket_kind "$t")" != ci ] || continue
-      [ "$(ci_ticket_kind "$t")" = jump ] || [[ "$name" < "$mine" ]] || continue
+      if [ "$(ci_ticket_kind "$t")" != jump ]; then
+        [ -z "$starved" ] || continue
+        # a gate of the old code (no "turn2" on line 7 of its ticket) never makes a record of the passes and waits for CI queued before
+        # it: this run defers to it only if it was queued first, as before, or each would wait for the other until a cap
+        [ "$(sed -n 7p "$t")" = turn2 ] || [[ "${t##*/}" < "$mine" ]] || continue
+      fi
     else
-      [[ "$name" < "$mine" ]] || continue
       # a scheduled run (the nightly, the hostile nightly) never makes a gate wait: it leaves a free slot to a push run that is queued
-      # (ci_acquire_slot), and that run waits for the gates queued before it, so a gate that waited for the scheduled run would close a cycle
+      # (ci_acquire_slot), and that run is starved only by gates, so a gate that waited for the scheduled run would close a cycle
       ! ci_ticket_sched "$t" || continue
+      ci_turn_starved "$locks" "$t" || continue
     fi
     printf 'pid %s (%s)\n' "$(sed -n 1p "$t")" "$(sed -n 4p "$t" | cut -c1-70)"
   done <<ORDER
@@ -93,8 +160,8 @@ ci_turn_check() { # ci_turn_check <locks dir> <ci|gate> <my ticket> <my jump>: s
   a="$(ci_turn_ahead "$locks" "$2" "$3" "$4" | ci_turn_join)"
   if [ -n "$h" ] && [ "$2" = gate ]; then CI_TURN_BASE="CI runs hold the machine ($h), and nothing is stopped: this gate goes when they have finished"
   elif [ -n "$h" ]; then CI_TURN_BASE="a gate holds the machine ($h), and nothing is stopped: this run starts when it has finished"
-  elif [ -n "$a" ] && [ "$2" = gate ]; then CI_TURN_BASE="CI runs queued before this gate go first ($a)"
-  elif [ -n "$a" ]; then CI_TURN_BASE="gates queued before this run go first ($a)"
+  elif [ -n "$a" ] && [ "$2" = gate ]; then CI_TURN_BASE="CI runs that have waited behind enough gates or long enough go first ($a)"
+  elif [ -n "$a" ]; then CI_TURN_BASE="gates that are queued go before this run ($a)"
   else CI_TURN_BASE=""; CI_TURN_SAYS=""; return 0; fi
   return 1
 }
@@ -165,7 +232,7 @@ ci_turn_status() { # ci_turn_status <locks dir>: for heavy-lock.sh status
     case "$t" in *.part) continue ;; esac
     [ -f "$t" ] || continue
     ci_owner_alive "$(sed -n 1,3p "$t")" || continue
-    w="$w${w:+; }pid $(sed -n 1p "$t") ($(sed -n 4p "$t"))"
+    w="$w${w:+; }pid $(sed -n 1p "$t") ($(sed -n 4p "$t")$(! ci_turn_starved "$locks" "$t" || echo ', starved: goes next'))"
   done
   [ -z "$w" ] || echo "  CI runs waiting for their turn: $w"
   return 0
@@ -242,6 +309,15 @@ ci_push_queued() { # ci_push_queued <queue dir> <my ticket>: 0 when a living CI 
 $(ci_queue_order "$1" "$2")
 ORDER
   return 1
+}
+ci_sched_yield() { # ci_sched_yield <locks dir> <my ticket>: 0 (CI_SCHED_SAYS says why) while a push run is queued or holds a run slot: a scheduled
+  # run starts only on an empty queue (the gates, held or queued, it has already waited for: ci_turn_check). A run that waits only for a
+  # part on another machine does not hold (ci_turn_holders), nor does another scheduled run (the nightly and the hostile one overlap).
+  local h
+  if ci_push_queued "$1.queue/admit" "$2"; then CI_SCHED_SAYS="a push run is queued"; return 0; fi
+  h="$(ci_turn_holders "$1" ci nosched | ci_turn_join)"
+  [ -n "$h" ] || return 1
+  CI_SCHED_SAYS="a push run is on ($h)"
 }
 # A part (a run with CI_STATUS_PREFIX=ci-part: check on Titan, a bridge shard) that queues for a lock on its own machine says so, so
 # the run that folds it does not count that time against its wait (jobs-check.sh, part_lockwait; docs/CI-MACHINES.md, "A part queued

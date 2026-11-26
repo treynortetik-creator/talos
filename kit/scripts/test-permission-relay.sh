@@ -56,6 +56,7 @@ def send(o): c.sendall((json.dumps(o) + "\n").encode())
 rid = req.get("id")
 if mode == "allow": send({"t": "perm_result", "id": rid, "decision": "allow"})
 elif mode == "deny": send({"t": "perm_result", "id": rid, "decision": "deny", "reason": "owner"})
+elif mode == "note": send({"t": "perm_result", "id": rid, "decision": os.environ.get("DECISION", "deny"), "reason": "owner", "note": json.loads(os.environ["NOTE_JSON"])})
 elif mode == "none": send({"t": "perm_result", "id": rid, "decision": "none", "reason": "relay_off"})
 elif mode == "wrongid": send({"t": "perm_result", "id": "someone-else", "decision": "allow"})
 elif mode == "noid": send({"t": "perm_result", "decision": "allow"})
@@ -106,6 +107,115 @@ for mode in none wrongid noid wrongtype upper padded bool newer refused garbage 
   { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -z "$ERR" ]; } && ok "hub answer '$mode': no output, exit 0 (the prompt stays at the Mac)" || no "hub answer '$mode' produced output or an error" "rc=$RC out=$OUT err=$ERR"
 done
 
+
+# ---- deny with a note (Wave 0, 0.8): the owner's words reach the model in the deny message, and nothing can break the JSON ----------
+# The fake hub answers from NOTE_JSON (a JSON literal: any value, any bytes) and DECISION (default deny). A hub that sends no
+# note, an older one, is every test above: the message there is exactly "Denied from the Talos app."
+note_case(){ # $1 = label, $2 = NOTE_JSON, $3 = DECISION; sets OUT, RC, ERR after one run
+  NOTE_JSON="$2" DECISION="${3:-deny}" start_hub note "$SB/rec-note"; run_hook "$CALL"; wait "$HUBPID" 2>/dev/null; HUBPID=""
+}
+msg_of(){ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["hookSpecificOutput"]["decision"].get("message", "<none>"), end="")' "$1" 2>/dev/null; }
+OLD_MSG="Denied from the Talos app."
+
+note_case plain '"use the staging bucket instead"'
+{ [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest deny" ] && [ "$(msg_of "$OUT")" = "$OLD_MSG The owner says: use the staging bucket instead" ] && [ -z "$ERR" ]; } && ok "a deny with a note: the message says what the owner said, after the old words" || no "note not in the deny message" "rc=$RC out=$OUT err=$ERR"
+
+note_case none-note '"x"' none
+{ [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "a note beside decision 'none': still no output" || no "none + note printed" "$OUT"
+note_case allow-note '"sneaky"' allow
+{ [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ] && [ "$(msg_of "$OUT")" = "<none>" ]; } && ok "a note beside an allow is ignored: allow, no message" || no "allow carried a note" "$OUT"
+
+for pair in "null|null" "number|42" "list|[\"a\"]" "object|{\"a\":1}" "empty|\"\"" "blank|\"  \\n\\t \"" "invisible-only|\"\\u200b\\u202e\\u0000\""; do
+  label="${pair%%|*}"; val="${pair#*|}"
+  note_case "$label" "$val"
+  { [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest deny" ] && [ "$(msg_of "$OUT")" = "$OLD_MSG" ]; } && ok "a '$label' note: the old message, unchanged" || no "'$label' note changed the message" "$OUT"
+done
+
+# hostile text: quotes, a backslash, line breaks, U+2028/2029, NUL, a bidi override, a zero-width space, an emoji, a lone surrogate
+HOSTILE_NOTE='"say \"hi\" \\ then\nrm -rf \/\r\nx y z\u0000‮​ 😀 日本 \ud800 done"'
+note_case hostile "$HOSTILE_NOTE"
+python3 - "$OUT" <<'PY' && ok "a hostile note: one line of valid JSON, no control, bidi or zero-width character, no line break in the message" || no "hostile note broke the output" "$OUT"
+import json, sys, unicodedata
+out = sys.argv[1]
+assert "\n" not in out.rstrip("\n") and "\r" not in out, repr(out)           # one line on stdout
+d = json.loads(out)["hookSpecificOutput"]["decision"]
+assert d["behavior"] == "deny", d
+m = d["message"]
+assert m.startswith("Denied from the Talos app. The owner says: "), m
+body = m[len("Denied from the Talos app. The owner says: "):]
+assert body == 'say "hi" \\ then rm -rf / x y z \U0001F600 日本 done', repr(body)
+assert all(unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") for c in m), repr(m)
+PY
+
+# a note longer than the cap (the hub itself sends at most 400 characters; the hook caps at 300 regardless): the emoji are 12 bytes each
+# as escapes, so this also proves the reply line may be longer than the old 4096-byte read
+BIG_NOTE="$(python3 -c 'import json; print(json.dumps("\U0001F600" * 400))')"
+note_case long "$BIG_NOTE"
+python3 - "$OUT" <<'PY' && ok "a 400-character note is cut to 300 characters by the hook, whole characters only" || no "long note not capped" "${OUT:0:200}"
+import json, sys
+m = json.loads(sys.argv[1])["hookSpecificOutput"]["decision"]["message"]
+body = m[len("Denied from the Talos app. The owner says: "):]
+assert body == "\U0001F600" * 300, len(body)
+PY
+BIGGER="$(python3 -c 'import json; print(json.dumps("\U0001F600" * 2000))')"
+note_case huge "$BIGGER"
+{ [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "a reply line far past any cap is dropped like a garbled one: no output (the prompt stays at the Mac)" || no "an enormous reply produced output" "${OUT:0:100}"
+
+# the shape Claude Code gives this hook: CALL above is the kit harness's PermissionRequest payload (hook_event_name, permission_mode,
+# tool_name, tool_input, permission_suggestions, session_id, cwd). A note changes nothing about what the hook sends to the hub.
+note_case request-line '"x"'
+python3 - "$SB/rec-note" <<'PY' && ok "the request line the hook sends is the same with or without a note (the note only comes back)" || no "request line changed"
+import json, sys
+r = json.loads(open(sys.argv[1]).read())
+assert {"cwd", "id", "pid", "session_id", "t", "tool_input", "tool_name"} <= set(r), sorted(r)
+PY
+
+# ---- why a card asked (Wave 0, 0.9): the hook passes on the session's permission mode, as Claude Code's input names it -----------------
+# CALL above is this harness's PermissionRequest payload (hook_event_name, permission_mode, tool_name, tool_input, ...). It is a
+# fixture written to Claude Code's documented hook input, NOT a capture of a live run (no Claude login on the test machines); the
+# bridge acts on the mode only when it is exactly "bypassPermissions", so a Claude Code that sends none (or another name) simply
+# gets no "why it asked" line.
+mode_case(){ # $1 = label, $2 = the CALL json to send; leaves the request line in $SB/rec-mode
+  start_hub deny "$SB/rec-mode"; run_hook "$2"; wait "$HUBPID" 2>/dev/null; HUBPID=""
+}
+mode_case with-mode "$CALL"
+python3 - "$SB/rec-mode" <<'PY' && ok "the request carries the session's permission_mode (the harness payload's bypassPermissions) for the bridge to read" || no "permission_mode not forwarded: $(cat "$SB/rec-mode")"
+import json, sys
+r = json.loads(open(sys.argv[1]).read())
+assert r["permission_mode"] == "bypassPermissions", r
+PY
+for variant in 'absent|' 'number|5' 'list|["bypassPermissions"]' 'null|null' 'empty|""' 'too-long|"'"$(printf 'b%.0s' $(seq 1 31))"'"'; do
+  label="${variant%%|*}"; val="${variant#*|}"
+  if [ -z "$val" ]; then CALL2="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d.pop("permission_mode"); print(json.dumps(d))' "$CALL")"
+  else CALL2="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["permission_mode"]=json.loads(sys.argv[2]); print(json.dumps(d))' "$CALL" "$val")"; fi
+  mode_case "$label" "$CALL2"
+  python3 - "$SB/rec-mode" <<'PY' && ok "a '$label' permission_mode is not forwarded (and the request is still sent)" || no "'$label' permission_mode was forwarded or the request was lost: $(cat "$SB/rec-mode" 2>/dev/null)"
+import json, sys
+r = json.loads(open(sys.argv[1]).read())
+assert "permission_mode" not in r and r["t"] == "perm" and r["tool_name"] == "Bash", r
+PY
+done
+
+# ---- the note and the mode come from the helper _talos_common.py; a hook with no helper beside it still works, as it did ----------------
+# (a thread session's copy of the hook is written next to that one file; the hook is at its size limit, so this code lives there)
+mkdir -p "$SB/nohelper"; cp "$HOOK" "$SB/nohelper/permission-relay.py"
+HOOK_SAVED="$HOOK"; HOOK="$SB/nohelper/permission-relay.py"
+note_case nohelper '"use the staging bucket instead"'
+{ [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest deny" ] && [ "$(msg_of "$OUT")" = "$OLD_MSG" ] && [ -z "$ERR" ]; } && ok "no helper beside the hook: a deny with a note prints the old message, nothing else changes" || no "helper-less hook misbehaved" "rc=$RC out=$OUT err=$ERR"
+python3 - "$SB/rec-note" <<'PY' && ok "no helper: the request is sent without permission_mode (no line on the card), everything else as before" || no "helper-less request wrong: $(cat "$SB/rec-note")"
+import json, sys
+r = json.loads(open(sys.argv[1]).read())
+assert "permission_mode" not in r and r["t"] == "perm" and r["tool_name"] == "Bash" and "_notes" not in r, r
+PY
+note_case nohelper-allow '"x"' allow
+{ [ "$RC" = 0 ] && [ "$(decision_of "$OUT")" = "PermissionRequest allow" ]; } && ok "no helper: an allow still comes out as allow" || no "helper-less allow wrong" "$OUT"
+HOOK="$HOOK_SAVED"
+# and the request line never carries the hook's own scratch field
+note_case scratch '"x"'
+python3 - "$SB/rec-note" <<'PY' && ok "the request line carries no _notes scratch field" || no "scratch field leaked: $(cat "$SB/rec-note")"
+import json, sys
+assert "_notes" not in json.loads(open(sys.argv[1]).read())
+PY
 # ---- unreachable bridge ----------------------------------------------------------------------------------------------------
 rm -f "$TH/hub.sock"
 run_hook "$CALL"; { [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -z "$ERR" ]; } && ok "no socket: no output, exit 0, no traceback" || no "no-socket case wrong" "rc=$RC out=$OUT err=$ERR"

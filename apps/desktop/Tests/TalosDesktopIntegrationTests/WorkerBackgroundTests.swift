@@ -209,7 +209,9 @@ struct WorkerBackgroundTests {
     #expect(r.wait(5) { tree(pid).kids.contains("zsh") }, "precondition: \(tree(pid))")
     started.append(task(under: pid))
     kill(pid, SIGKILL)  // claude itself dies
-    #expect(r.wait(10) { r.state("trip") == "parked" }, "\(r.why("trip"))")
+    // the park line, not the state: the state is a snapshot, and on a busy machine it can already have moved on when the poll looks
+    // (CI saw "live" with a second start, never "parked"); the line is the record that the crash was seen and what it was
+    #expect(r.wait(10) { !parkLines(log, "trip").isEmpty }, "\(r.why("trip"))")
     let line = try #require(parkLines(log, "trip").first)
     #expect(line.contains("why=crash idle_s=") && line.hasSuffix(" bg=unknown"), "\(line)")
     #expect(parkLines(log, "trip").count == 1, "\(parkLines(log, "trip"))")
