@@ -404,7 +404,10 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
 
       <div className="shrink-0 border-t border-line bg-surface p-3" data-testid="action-bar">
         <div className="mx-auto flex max-w-[760px] flex-wrap items-center gap-2">
-          <Button disabled={!canWrite || busy || s.today === 'held' || off} onClick={() => setRunAsk(true)}>
+          <Button
+            disabled={!canWrite || busy || s.today === 'held' || off}
+            onClick={() => (ask && !ask.needsSheet ? void run('default') : setRunAsk(true))}
+          >
             Run now
           </Button>
           {!off ? (
@@ -499,7 +502,7 @@ function Detail({ s, embedded = false }: { s: ScheduleT; embedded?: boolean }) {
           }}
         />
       ) : null}
-      <Notice text={notice} onClose={() => setNotice(null)} />
+      <Notice text={notice} onClose={() => setNotice(null)} aboveBar />
     </div>
   )
 }

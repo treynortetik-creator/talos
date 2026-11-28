@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { AlwaysAllowList } from './always-allow.ts'
 import { HttpsUrl, IntegrationId, IsoTs, ThreadId } from './ids.ts'
 import { cardKindFacts, Thread } from './models.ts'
+import { NyxUrl } from './nyx.ts'
 import { PEER_MAX, PeerConfig, type PeerConfigT } from './peer.ts'
 import { STOCK_THEME_IDS, type Theme, validateTheme } from './theme.ts'
 import { DedicatedConfig } from './thread-sessions.ts'
@@ -31,6 +32,14 @@ const CustomTheme = z.unknown().transform((v, ctx): Theme => {
   return z.NEVER
 })
 
+/**
+ * The default of `auto_continue_at_limit`, in one place. On matches what Claude Code does with no setting (it reads a missing key as
+ * on), so a user who never touches it keeps today's behaviour. Flip this one constant to change the default everywhere.
+ */
+export const AUTO_CONTINUE_AT_LIMIT_DEFAULT = true
+/** The one default for message text in notifications (the owner's ruling: on): the Mac setting for browsers and the iPhone app's Turn on tap both read it from here. */
+export const PUSH_TEXT_DEFAULT = true
+
 export const AgentConfig = z.object({
   version: z.literal(1),
   rev: z.number().int().nonnegative(), // bumped on every write; optimistic concurrency
@@ -47,7 +56,18 @@ export const AgentConfig = z.object({
   notifications: z.object({
     master: z.boolean().default(true),
     show_thread_names: z.enum(['fixed_only', 'all', 'none']).default('fixed_only'),
+    /** A browser reply push carries a one-line preview of the reply (on by default; off gives the fixed text). Browsers only. */
+    web_message_text: z.boolean().default(PUSH_TEXT_DEFAULT),
   }),
+  /**
+   * Where the owner's Nyx lives, the memory service Talos links out to. Absent = not connected, the public default (no address is
+   * ever shipped). Set by the owner in the app's Memory screen; the agent cannot write it. Talos keeps only the address (https
+   * only) and holds no Nyx credentials. An address that is not an https URL reads as not connected.
+   */
+  memory: z
+    .object({ nyx_url: NyxUrl.optional().catch(undefined) })
+    .default({})
+    .catch({}),
   work: z.object({
     label: z.string().max(40).default('Work systems'),
     ask_note: z.string().max(120).default('Ask your IT team before connecting these.'),
@@ -112,6 +132,13 @@ export const AgentConfig = z.object({
   always_allow: AlwaysAllowList.default([]).catch([]),
   /** Option C (docs/OPTION-C.md): the master switch and limits for per-thread sessions. Absent = off. */
   dedicated: DedicatedConfig.optional().catch(undefined),
+  /**
+   * "Continue at the usage limit": when a session hits a claude.ai usage limit, Claude Code itself waits for the reset and goes on
+   * with the task (its own `autoContinueAtUsageLimit` setting, which only ever waits: it never picks usage credits, an upgrade or
+   * a plan change). Talos writes this value into each thread session's settings at its start, `true` or `false`, never leaving the
+   * key out. Absent or anything but a boolean reads as AUTO_CONTINUE_AT_LIMIT_DEFAULT. Changed from the app or by the agent, no card.
+   */
+  auto_continue_at_limit: z.boolean().default(AUTO_CONTINUE_AT_LIMIT_DEFAULT).catch(AUTO_CONTINUE_AT_LIMIT_DEFAULT),
   /**
    * The theme the owner applied, the same on every device: a stock id (`talos`, `paper`, `hearth`, `iris`, `harbor`) or a whole custom theme
    * the agent drafted and the owner tapped Apply on. Absent, or any other value (a custom theme that fails validation), means

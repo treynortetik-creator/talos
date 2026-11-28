@@ -1,5 +1,5 @@
 // Search lives in the thread list: a magnifier beside + and the pencil turns that row into a search box, and the results
-// replace the threads right there (the same search the /search screen runs). Esc or the cross puts the list back. There is
+// replace the threads right there (the same search the /search screen runs). Esc (a second one, after the first clears the text) or the cross puts the list back. There is
 // no "Threads" label and no bottom "Search" row on desktop, and the phone menu has the same row with no current-thread card.
 import { expect, type Page, test } from '@playwright/test'
 import { isPhoneWidth, openPhoneMenu } from '../helpers/phone.ts'
@@ -33,15 +33,18 @@ test('the magnifier turns the row into a search box and the results take the thr
   await expect(page).toHaveURL(/\/t\/general\?m=/)
 })
 
-test('Escape and the cross both restore the thread list', async ({ page }) => {
+test('Escape (twice, with text) and the cross both restore the thread list', async ({ page }) => {
   await page.goto('/t/general')
   const nav = await scope(page)
   for (const how of ['Escape', 'cross'] as const) {
     await nav.getByRole('button', { name: 'Search threads' }).click()
     await nav.getByRole('searchbox', { name: 'Search all threads' }).fill('fake')
     await expect(nav.getByTestId('hit-row').first()).toBeVisible()
-    if (how === 'Escape') await page.keyboard.press('Escape')
-    else await nav.getByRole('button', { name: 'Close search' }).click()
+    if (how === 'Escape') {
+      await page.keyboard.press('Escape') // with text, the first Esc only clears the box (ui/keys.ts)
+      await expect(nav.getByRole('searchbox', { name: 'Search all threads' })).toHaveValue('')
+      await page.keyboard.press('Escape') // on the empty box, the second puts the list back
+    } else await nav.getByRole('button', { name: 'Close search' }).click()
     await expect(nav.getByRole('searchbox')).toHaveCount(0)
     await expect(nav.getByTestId('hit-row')).toHaveCount(0)
     await expect(nav.getByRole('link', { name: 'Inbox' })).toBeVisible()
@@ -98,8 +101,11 @@ test('closing the search puts focus on the magnifier, not on the page (Escape an
   for (const how of ['Escape', 'cross'] as const) {
     await nav.getByRole('button', { name: 'Search threads' }).click()
     await nav.getByRole('searchbox', { name: 'Search all threads' }).fill('fake')
-    if (how === 'Escape') await page.keyboard.press('Escape')
-    else await nav.getByRole('button', { name: 'Close search' }).click()
+    if (how === 'Escape') {
+      await page.keyboard.press('Escape') // with text, the first Esc only clears the box (ui/keys.ts)
+      await expect(nav.getByRole('searchbox', { name: 'Search all threads' })).toHaveValue('')
+      await page.keyboard.press('Escape') // on the empty box, the second puts the list back
+    } else await nav.getByRole('button', { name: 'Close search' }).click()
     await expect(nav.getByRole('searchbox')).toHaveCount(0)
     await expect(nav.getByRole('button', { name: 'Search threads' })).toBeFocused()
   }

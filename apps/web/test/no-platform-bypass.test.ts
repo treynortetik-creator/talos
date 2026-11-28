@@ -1,5 +1,6 @@
 // Builder rule 9 as a test (Biome has no per-file restricted-member rule): nothing outside lib/platform.ts may touch
 // PushManager, navigator.share or window.open.
+// gate-reads: apps/web/src/*.ts apps/web/src/*.tsx
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'

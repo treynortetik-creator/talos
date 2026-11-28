@@ -481,7 +481,9 @@ If the Mac is offline, the relay answers `error{ref, code:'mac_offline'}` at onc
   form can show each error under its field.
 - **Freshness.** `schedule.run_now` and `schedule.control` are refused with `stale` when
   `|bridge_now − ts| > 2 min`. Reads and `schedule.patch` use the SPEC 3.5 window. Seen-ids follow SPEC 3.5 on the
-  bridge.
+  bridge. A `schedule.patch` the owner marks `form_save` (a Save in his own form, a create or an update) is applied at once, with no card, only when
+  it is no older than 10 minutes (`MAX_RESOLVE_AGE_MS`, the limit a tap on a card has); an older one keeps its card. The Mac answers it with
+  `ack{applied:true}` or an error.
 - **New ErrorCodes** (`errors.ts`): `scheduler_unavailable`, `schedule_invalid`, `schedule_conflict`,
   `schedule_not_found`, `schedule_read_only`, `already_running`, `headless_blocked`, `held`, `not_owner`, `stale`.
 - **Channel kinds** (`channel-meta.ts`): add `schedule_run` and `schedule_held`.
@@ -519,7 +521,7 @@ There's no new step-up purpose, so the relay auth module is untouched. Limit: S8
 | report excerpt                                                        | 4 KiB, plain text, control chars stripped                                                                                | bridge                    |
 | `schedules.list` / `get`                                              | 12/min per socket                                                                                                        | relay                     |
 | `schedule.patch`                                                      | 30/hour                                                                                                                  | relay                     |
-| `schedule.run_now`                                                    | 20/hour total, 1 per job per 2 min                                                                                       | relay / bridge            |
+| `schedule.run_now`                                                    | 20/hour total                                                                                                            | relay / bridge            |
 | `schedule.control`                                                    | 60/hour, of which `retry_headless` 6/hour                                                                                | relay                     |
 | `schedule_propose` (agent)                                            | 10/hour, ≤ 20 pending schedule cards                                                                                     | bridge                    |
 | job memory notepad                                                    | 2,048 bytes; a longer one is cut and the next prompt says so                                                             | bridge                    |

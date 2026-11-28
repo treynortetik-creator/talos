@@ -1,7 +1,14 @@
-// The create / edit form (docs/SCHEDULES.md S5.4). Edit sends only the fields the owner touched; "Review change" sends
-// `schedule.patch`, which writes nothing: the bridge answers with an approval card shown in place through CardView.
-import { EDIT_LIMITS, runsInSession, ScheduleChange, type ScheduleDetailT, type ScheduleT } from '@talos-app/protocol'
-import { useState } from 'react'
+// The create / edit form (docs/SCHEDULES.md S5.4). Edit sends only the fields the owner touched; "Save" sends
+// `schedule.patch` with `form_save`: a current Mac applies it at once, with no card; an older one draws an approval card.
+import {
+  EDIT_LIMITS,
+  runsInSession,
+  SCHEDULE_FULL_WARNING,
+  ScheduleChange,
+  type ScheduleDetailT,
+  type ScheduleT,
+} from '@talos-app/protocol'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { placeWords, useHost } from '../../lib/hostWords.ts'
@@ -23,7 +30,7 @@ import {
   type WhenKind,
 } from './logic.ts'
 import { MemoryToggle } from './MemoryToggle.tsx'
-import { ProposalCard, proposeError } from './Proposal.tsx'
+import { ProposalCard, proposeError, useCardFor } from './Proposal.tsx'
 import { CAPS, FIELD, Field } from './shared.tsx'
 
 const KINDS: Array<{ id: WhenKind; label: string }> = [
@@ -50,6 +57,17 @@ type Props =
   | { mode: 'create'; schedule?: undefined; detail?: undefined; onCancel?: () => void; onDone?: () => void }
   | { mode: 'edit'; schedule: ScheduleT; detail: ScheduleDetailT; onCancel: () => void; onDone: () => void }
 
+/**
+ * What the review screen says above the card of an older Mac, whose card waits for a tap (a current Mac saves at once and shows no card).
+ */
+function ReviewNote({ clientRef }: { clientRef: string }) {
+  const card = useCardFor(clientRef)
+  if (card?.state !== 'pending') return null
+  return (
+    <p className="m-0 text-sm text-text-2">This is exactly what will be saved. Nothing is written until you approve.</p>
+  )
+}
+
 export function ScheduleForm(p: Props) {
   const client = useTalosClient()
   const nav = useNavigate()
@@ -60,9 +78,12 @@ export function ScheduleForm(p: Props) {
   // Off a Mac there is no background timer yet: a job runs in a Talos thread or not at all (the bridge refuses the rest)
   const host = useHost()
   const offMac = host === 'windows' || host === 'linux'
-  // the form starts from the revision it was opened on and never silently re-bases
+  // The form starts from ONE read of the job and never silently re-bases: the detail's job and its prompt, the same read, so the
+  // revision Save sends and the values the owner saw cannot come from different moments (the list row is newer or older
+  // than the detail, and a Save must not carry the list's revision over the detail's old words).
+  const [opened] = useState(() => (p.mode === 'edit' ? p.detail.schedule : null))
   const [original] = useState(() =>
-    p.mode === 'edit' ? formFromSchedule(p.schedule, p.detail.prompt) : blankForm(null),
+    opened && p.mode === 'edit' ? formFromSchedule(opened, p.detail.prompt) : blankForm(null),
   )
   // a job made to run in the background (or with only listed tools, which also runs by itself), opened off a Mac: its only
   // choices are a Talos thread and full permissions, shown as a change to save
@@ -75,7 +96,15 @@ export function ScheduleForm(p: Props) {
   const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [slow, setSlow] = useState(false)
-  const [review, setReview] = useState<{ ref: string; thread: string } | null>(null)
+  const [review, setReview] = useState<{ ref: string; thread: string; saved?: true } | null>(null)
+  // The revision of that same read: another tab or an approved agent card may change the job while the form is open, and Save
+  // must then be refused by the Mac, never carry the new revision over that edit.
+  const openedEtag = opened?.etag ?? null
+  // A create keeps its first id while the form lives (until the name changes): pressing Save again after a lost answer must never
+  // become "name-2" because the refreshed list now holds the first job.
+  const createId = useRef<{ name: string; id: string } | null>(null)
+  const sending = useRef(false)
+  const reviewCard = useCardFor(review?.ref ?? null)
   const up = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((x) => ({ ...x, [k]: v }))
   const bytes = utf8Len(f.prompt)
   const overCap = bytes > PROMPT_CAP_BYTES
@@ -85,6 +114,7 @@ export function ScheduleForm(p: Props) {
   const cancel = () => (p.onCancel ? p.onCancel() : nav('/schedules'))
 
   const submit = async () => {
+    if (sending.current) return // two quick taps are one Save
     setFormError(null)
     const errs: Record<string, string> = {}
     if (f.name.trim() === '') errs.name = 'Give the job a name.'
@@ -114,26 +144,29 @@ export function ScheduleForm(p: Props) {
     setErrors({})
 
     const taken = new Set(snap?.schedules.map((x) => x.id) ?? [])
-    const thread = (p.mode === 'edit' ? p.schedule.thread_id : f.threadId) ?? defaultThread
+    const thread = (opened ? opened.thread_id : f.threadId) ?? defaultThread
     let change: ReturnType<typeof ScheduleChange.safeParse>
     if (p.mode === 'create') {
-      const draft = draftFromForm(f, slug(f.name, taken))
+      const kept = createId.current?.name === f.name ? createId.current.id : slug(f.name, taken)
+      createId.current = { name: f.name, id: kept }
+      const draft = draftFromForm(f, kept)
       if (!draft) return setErrors({ when: 'Check the schedule.' })
       change = ScheduleChange.safeParse({ op: 'create', draft })
     } else {
       const set = touchedSet(original, f)
       if (Object.keys(set).length === 0) return setFormError('Nothing changed.')
-      change = ScheduleChange.safeParse({ op: 'update', id: p.schedule.id, base_etag: p.schedule.etag, set })
+      change = ScheduleChange.safeParse({ op: 'update', id: p.schedule.id, base_etag: openedEtag as string, set })
     }
     if (!change.success) {
       const next: Record<string, string> = {}
       for (const i of change.error.issues) next[fieldOfPath(i.path.join('.'))] = i.message
       return setErrors(next)
     }
+    sending.current = true
     setBusy(true)
     try {
-      const { clientRef } = await client.schedules.proposeScheduleChange(change.data, thread)
-      setReview({ ref: clientRef, thread })
+      const { clientRef, saved } = await client.schedules.proposeScheduleChange(change.data, thread, { formSave: true })
+      setReview({ ref: clientRef, thread, ...(saved ? { saved } : {}) })
     } catch (e) {
       const pe = proposeError(e)
       if (pe.clientRef) {
@@ -142,11 +175,18 @@ export function ScheduleForm(p: Props) {
         setReview({ ref: pe.clientRef, thread })
         return
       }
-      setFormError(pe.message)
+      // a create that finds its job already there: the first Save went through
+      const alreadyThere = p.mode === 'create' && (e as { code?: string } | null)?.code === 'schedule_conflict'
+      setFormError(
+        alreadyThere
+          ? 'A job with that name is already there. If your first Save went through, it is in Schedules: check Schedules before you save again.'
+          : pe.message,
+      )
       const next: Record<string, string> = {}
       for (const fe of pe.fields) next[fieldOfPath(fe.path)] = fe.message
       setErrors(next)
     } finally {
+      sending.current = false
       setBusy(false)
     }
   }
@@ -164,25 +204,44 @@ export function ScheduleForm(p: Props) {
             <IconBack />
           </button>
           <h1 className="m-0 flex-1 font-display text-xl font-semibold">
-            {p.mode === 'create' ? 'New scheduled job' : `Edit ${p.schedule.name}`}
+            {p.mode === 'create' ? 'New scheduled job' : `Edit ${opened?.name}`}
           </h1>
         </header>
       </div>
       <ScrollRegion label="Job form" className="min-h-0 flex-1 overflow-y-auto">
         {review ? (
           <div className="space-y-3 p-4">
-            <p className="m-0 text-sm text-text-2">
-              This is exactly what will be saved. Nothing is written until you approve.
-            </p>
-            <ProposalCard
-              clientRef={review.ref}
-              threadId={review.thread}
-              slow={slow}
-              onReviewAgain={() => setReview(null)}
-              onDecided={() => {}}
-            />
+            {review.saved ? (
+              <p role="status" data-testid="saved-line" className="m-0 text-md font-medium">
+                Saved.
+              </p>
+            ) : slow && !reviewCard ? (
+              <p role="status" data-testid="slow-save" className="m-0 text-md">
+                {placeWords(
+                  "Your Mac didn't answer, so this may or may not be saved. Check Schedules before you save again.",
+                  host,
+                )}
+              </p>
+            ) : (
+              <>
+                <ReviewNote clientRef={review.ref} />
+                <ProposalCard
+                  clientRef={review.ref}
+                  threadId={review.thread}
+                  slow={slow}
+                  onReviewAgain={() => setReview(null)}
+                  onDecided={() => {}}
+                />
+              </>
+            )}
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setReview(null)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setReview(null)
+                  setSlow(false)
+                }}
+              >
                 Back to the form
               </Button>
               <Button variant="ghost" onClick={() => (p.onDone ? p.onDone() : nav('/schedules'))}>
@@ -372,7 +431,7 @@ export function ScheduleForm(p: Props) {
               ) : null}
             </fieldset>
 
-            <fieldset className="m-0 space-y-2 border-0 p-0">
+            <fieldset className="m-0 space-y-2 border-0 p-0 pb-4">
               <legend className={cn(CAPS, 'mb-1 text-text-2')}>Permissions</legend>
               <div className="flex flex-col gap-2">
                 {(offMac
@@ -413,9 +472,7 @@ export function ScheduleForm(p: Props) {
                   )}
                 </Field>
               ) : (
-                <p className="m-0 text-sm text-text-2">
-                  {placeWords('Runs unattended with full permissions: it can do anything you can on this Mac.', host)}
-                </p>
+                <p className="m-0 text-sm text-text-2">{placeWords(SCHEDULE_FULL_WARNING, host)}</p>
               )}
             </fieldset>
 
@@ -441,7 +498,7 @@ export function ScheduleForm(p: Props) {
               checked={f.memory}
               background={!runsInSession({ runner: f.runner, permissions: f.permissions })}
               restricted={f.permissions === 'restricted'}
-              command={p.mode === 'edit' && p.schedule.kind === 'command'}
+              command={opened?.kind === 'command'}
               onChange={(on) => up('memory', on)}
             />
 
@@ -470,13 +527,18 @@ export function ScheduleForm(p: Props) {
 
             {formError ? (
               <p role="alert" className="text-sm text-danger">
-                {formError}
+                {placeWords(formError, host)}
               </p>
             ) : null}
             <div className="flex gap-2 pb-4">
               <Button type="submit" disabled={busy || !macOnline}>
-                Review change
+                Save
               </Button>
+              {busy ? (
+                <span role="status" className="self-center text-sm text-text-2">
+                  Sending your change…
+                </span>
+              ) : null}
               <Button type="button" variant="ghost" onClick={cancel}>
                 Cancel
               </Button>

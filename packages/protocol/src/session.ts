@@ -159,7 +159,16 @@ export const SessionInventory = z.strictObject({
       z.strictObject({ name: z.string().max(64), tools: z.number().int(), status: z.enum(['connected', 'unknown']) }),
     )
     .max(100),
-  plugins: z.array(z.strictObject({ name: z.string().max(80), enabled: z.boolean() })).max(200),
+  plugins: z
+    .array(
+      z.strictObject({
+        name: z.string().max(80),
+        enabled: z.boolean(),
+        /** Set by the bridge, never the mod: an enabled plugin with a PermissionRequest or PreToolUse hook (the Settings list warns). */
+        approves_tool_calls: z.boolean().optional(),
+      }),
+    )
+    .max(200),
   codex: z
     .strictObject({ installed: z.boolean(), version: z.string().max(24).optional(), logged_in: z.boolean().optional() })
     .optional(),

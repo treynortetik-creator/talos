@@ -206,9 +206,9 @@ test.describe('in the Mac app', () => {
 })
 
 test.describe('in a browser', () => {
-  test('/terminal goes to Home and nothing is posted', async ({ page }) => {
+  test('/terminal is the remote view: its cards, and no agent tabs', async ({ page }) => {
     await page.goto('/terminal')
-    await expect(page).toHaveURL(/\/$/)
+    await expect(page.getByTestId('terminal-card').first()).toBeVisible()
     await expect(page.getByRole('tablist', { name: 'Agents' })).toHaveCount(0)
   })
 })

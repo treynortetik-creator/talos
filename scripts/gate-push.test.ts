@@ -1510,16 +1510,35 @@ describe('--red-main: a fix for a red main goes first, once per machine per red,
     expect(slugOf(`https://a${at}b${at}github.com/owner/repo.git`)).toBe('')
   })
 
-  it('a Linux-only red (report-ci/linux, which does not gate) counts: it goes first and says so, and the jump is recorded', () => {
+  it('a report-only red (report-ci/*, which does not gate) is never main red: --red-main is refused, and no jump is made', () => {
     const r = setup()
     r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
     const t = tip(r)
-    const red: Array<[string, string]> = [...GREEN.slice(0, 2), ['report-ci/linux', 'failure']]
+    for (const ctx of ['report-ci/linux', 'report-ci/check', 'report-ci/fast']) {
+      const reportRed: Array<[string, string]> = [...GREEN.slice(0, 2), [ctx, 'failure']]
+      const p = r.gatePush(statuses(r, { [t]: reportRed }), ['--red-main'])
+      expect(p.code, ctx).not.toBe(0)
+      expect(p.err).toContain(
+        `--red-main: main is not red: its newest finished CI run (${t.slice(0, 7)}) has no failed status`,
+      )
+    }
+    expect(r.ok(r.clone, 'ls-remote', 'origin', `refs/locks/red-main/cyclops/${t}`)).toBe('')
+    expect(r.calls().some((c) => c.startsWith('jump '))).toBe(false)
+  })
+
+  it('a gating red beside a report-only red is red, and names only the gating context', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const t = tip(r)
+    const red: Array<[string, string]> = [
+      ['local-ci/check', 'failure'],
+      GREEN[1] as [string, string],
+      ['report-ci/linux', 'failure'],
+    ]
     const p = r.gatePush(statuses(r, { [t]: red }), ['--red-main'])
     expect(p.code, p.err).toBe(0)
-    expect(p.err).toContain(`red-main: cyclops goes first for red ${t.slice(0, 7)} (report-ci/linux)`)
-    expect(r.ok(r.clone, 'ls-remote', 'origin', `refs/locks/red-main/cyclops/${t}`)).toContain(t)
-    // its gate goes ahead of queued CI for the heavy lock: CI runs waiting behind it judge the commits it fixes
+    expect(p.err).toContain(`red-main: cyclops goes first for red ${t.slice(0, 7)} (local-ci/check)`)
+    expect(p.err).not.toContain('report-ci/linux')
     expect(
       r.calls().some((c) => c.startsWith('jump ')),
       r.calls().join('\n'),
@@ -2407,5 +2426,157 @@ describe('failures already red on main: excused when main names them failing and
       expect(p.err).not.toContain('EXCUSED')
       expect(r.ok(r.origin, 'rev-parse', 'main')).toBe(before)
     }
+  })
+})
+
+describe('the whole bridge suite a gate passed is written down for CI to reuse (scripts/ci-local/jobs-check.sh, reuse_gate_step)', () => {
+  /** bun under the gate: `run` (the whole bridge suite) writes itself down, passes, or fails with BUN_OUT printed */
+  const stubBun = (r: ReturnType<typeof setup>) =>
+    fakeTool(
+      join(r.T, 'bin'),
+      'bun',
+      '#!/bin/sh\ncase "$1" in\n  --version) echo 1.4.4 ;;\n  -e) echo 3.51.0 ;;\n  run | test) echo "bun $* CI=$CI" >> "$CALLS"; [ -n "$BUN_OUT" ] && { printf \'%s\\n\' "$BUN_OUT"; exit 1; } ;;\nesac\nexit 0\n',
+    )
+  const results = (r: ReturnType<typeof setup>) => join(r.T, 'cache/gate-results')
+  /** the record of `step` for a commit, as key -> values (a key repeats: env.NAME); null when there is none */
+  const record = (r: ReturnType<typeof setup>, step: string, sha: string) => {
+    const f = join(results(r), sha, step)
+    if (!existsSync(f)) return null
+    const m = new Map<string, string[]>()
+    for (const line of readFileSync(f, 'utf8').split('\n').filter(Boolean)) {
+      const i = line.indexOf('=')
+      const k = i < 0 ? line : line.slice(0, i)
+      m.set(k, [...(m.get(k) ?? []), i < 0 ? '' : line.slice(i + 1)])
+    }
+    return m
+  }
+  const one = (m: Map<string, string[]>, k: string) => m.get(k)?.[0]
+  const BRIDGE = { 'apps/bridge/src/mine.ts': 'export const x = 1\n' } // anything under apps/bridge/ runs the whole bridge suite
+
+  it('the pushed commit, its tree, the step and its command, the gate that ran it, and the knobs that change what a test does', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, BRIDGE)
+    const p = r.gatePush({ TALOS_TEST_TIME_FACTOR: '3', TALOS_FUZZ_MS: '1' })
+    expect(p.code, p.err).toBe(0)
+    const sha = r.ok(r.origin, 'rev-parse', 'main')
+    expect(sha).toBe(r.ok(r.clone, 'rev-parse', 'HEAD'))
+    const b = record(r, 'bun-all', sha)
+    expect(b, p.err).not.toBeNull()
+    if (!b) return
+    expect(b.has('talos-gate-result v1')).toBe(true)
+    expect(one(b, 'step')).toBe('bun-all')
+    expect(one(b, 'cmd')).toBe('bun run scripts/test-parallel.ts')
+    expect(one(b, 'sha')).toBe(sha)
+    expect(one(b, 'tree')).toBe(r.ok(r.clone, 'rev-parse', `${sha}^{tree}`))
+    expect(one(b, 'gate')).toMatch(/^\d{8}T\d{6}Z-\d+$/)
+    expect(Number(one(b, 'at'))).toBeGreaterThan(Date.now() / 1000 - 600)
+    expect(one(b, 'uid')).toBe(String(process.getuid?.()))
+    expect(one(b, 'machine')).toBeTruthy()
+    expect(one(b, 'time_factor')).toBe('3')
+    expect(one(b, 'ci')).toBe('true')
+    // the suite ran as CI runs it: with CI=true (bun refuses a committed .only and a missing snapshot only under it)
+    expect(r.calls().some((c) => c.startsWith('bun run scripts/test-parallel.ts') && c.endsWith('CI=true'))).toBe(true)
+    expect(one(b, 'bun')).toBe('1.4.4')
+    expect(b.has('end')).toBe(true) // the last line: a record without it is partial
+    // a knob is in it hashed, never as its value (it may be a secret)
+    expect(one(b, 'env.TALOS_FUZZ_MS')).toBe(createHash('sha256').update('1').digest('hex'))
+    expect(readFileSync(join(results(r), sha, 'bun-all'), 'utf8')).not.toMatch(/=1$/m)
+    expect(p.err).toContain(`recorded for CI: bun-all at ${sha.slice(0, 7)}`)
+  })
+
+  it('a change that runs only a touched set records nothing: that is not a whole suite', () => {
+    const r = setup()
+    r.change(r.clone, { 'apps/web/src/b.ts': 'y\n' })
+    const p = r.gatePush()
+    expect(p.code, p.err).toBe(0)
+    expect(existsSync(results(r))).toBe(false)
+  })
+
+  it('a bridge suite that fails records nothing', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, BRIDGE)
+    const p = r.gatePush({ BUN_OUT: 'bun: red' })
+    expect(p.code, p.err).toBe(1)
+    expect(existsSync(results(r))).toBe(false)
+  })
+
+  it('a work tree that is not exactly the commit (an untracked file the tests could read) records nothing, and says so', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, BRIDGE)
+    writeFileSync(join(r.clone, 'untracked.txt'), 'x\n')
+    const p = r.gatePush()
+    expect(p.code, p.err).toBe(0)
+    expect(existsSync(results(r))).toBe(false)
+    expect(p.err).toContain('not recorded for CI (bun-all): the work tree is not exactly the commit')
+  })
+
+  it('an earlier pass of the same commit does not outlive a later red, or a later untidy tree: the gate removes it first', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, BRIDGE)
+    const base = r.ok(r.clone, 'rev-parse', 'origin/main')
+    const sha = r.ok(r.clone, 'rev-parse', 'HEAD')
+    const gate = (e: Record<string, string> = {}) =>
+      spawnSync('bash', ['scripts/gate.sh', '--base', base], {
+        cwd: r.clone,
+        env: { ...r.env, ...e },
+        encoding: 'utf8',
+      })
+    expect(gate().status).toBe(0)
+    expect(record(r, 'bun-all', sha)).not.toBeNull()
+    expect(gate({ BUN_OUT: 'bun: red' }).status).toBe(1)
+    expect(record(r, 'bun-all', sha)).toBeNull()
+    expect(gate().status).toBe(0)
+    expect(record(r, 'bun-all', sha)).not.toBeNull()
+    writeFileSync(join(r.clone, 'untracked.txt'), 'x\n')
+    expect(gate().status).toBe(0)
+    expect(record(r, 'bun-all', sha)).toBeNull()
+  })
+
+  it('a file git was told to leave out of its look (assume-unchanged), or a sparse checkout, is not exactly the commit: nothing is recorded', () => {
+    for (const how of ['assume-unchanged', 'skip-worktree', 'sparse']) {
+      const r = setup()
+      stubBun(r)
+      r.change(r.clone, BRIDGE)
+      if (how === 'sparse') r.ok(r.clone, 'config', 'core.sparseCheckout', 'true')
+      else r.ok(r.clone, 'update-index', `--${how}`, 'apps/web/src/a.ts')
+      const p = r.gatePush()
+      expect(p.code, `${how}: ${p.err}`).toBe(0)
+      expect(existsSync(results(r)), how).toBe(false)
+      expect(p.err).toContain('not recorded for CI (bun-all): the work tree is not exactly the commit')
+    }
+  })
+
+  it('a pass only by an excuse (the failing test is red on main already) is not recorded', () => {
+    const r = setup()
+    stubBun(r)
+    r.change(r.clone, { 'apps/bridge/test/old.test.ts': "it('x', () => {})\n" })
+    r.ok(r.clone, 'push', '-q', '--no-verify', 'origin', 'HEAD:main')
+    r.change(r.clone, BRIDGE)
+    r.ok(r.clone, 'fetch', '-q', 'origin')
+    const tip = r.ok(r.clone, 'rev-parse', 'origin/main')
+    const statuses = join(r.T, 'statuses')
+    mkdirSync(statuses, { recursive: true })
+    writeFileSync(join(statuses, tip), 'local-ci/check\tfailure\tfailed on ci-runner\n')
+    mkdirSync(join(r.T, 'cache/logs'), { recursive: true })
+    const red = [
+      '\ntest/old.test.ts: exit 1',
+      'bun test v1.3.11',
+      '(fail) old > is red [10.00ms]',
+      '\n 3 pass\n 1 fail',
+      '\n 40 pass\n 1 fail',
+      'Ran 41 tests across 1 files. [9.00s]',
+      'test-parallel: FAILED (1 of 9):',
+      '- test/old.test.ts',
+    ].join('\n')
+    writeFileSync(join(r.T, 'cache/logs', `${tip.slice(0, 7)}-check.log`), `${red}\n`)
+    const p = r.gatePush({ GATE_PUSH_TEST_STATUSES: statuses, BUN_OUT: red })
+    expect(p.code, p.err).toBe(0)
+    expect(p.err).toContain('gate: tests (the whole bridge suite) failed, EXCUSED')
+    expect(existsSync(results(r))).toBe(false)
+    expect(p.err).toContain('not recorded for CI (bun-all): the step passed with an excused failure')
   })
 })

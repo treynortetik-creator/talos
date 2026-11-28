@@ -34,6 +34,7 @@ import { createSocketMemoryFolders } from './socketMemoryFolders.ts'
 import { createSocketSchedules, NO_ANSWER_MS } from './socketSchedules.ts'
 import { createSocketSearch } from './socketSearch.ts'
 import { createSocketSpeak } from './socketSpeak.ts'
+import { createSocketTerm } from './socketTerm.ts'
 
 export { MAX_MESSAGE_CHARS, MAX_UPLOAD_BYTES } from './socket-constants.ts'
 export type { OutboxEntry, SocketClient, SocketClientOptions } from './socket-types.ts'
@@ -143,6 +144,7 @@ export function createSocketClient(opts: SocketClientOptions): SocketClient {
     agentsMd,
     memoryFolders,
     bugs,
+    term: createSocketTerm(c),
     store,
     meta,
     api,

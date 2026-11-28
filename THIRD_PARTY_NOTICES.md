@@ -89,6 +89,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### T3 Code licence (MIT)
+
+```text
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### Claude Code plugins licence (Apache-2.0)
 
 ```text
@@ -414,7 +440,6 @@ copyright line are kept once; every package's own copyright line is listed with 
 
 ### Licence text 1 (MIT)
 
-- `@babel/runtime` 7.29.10: Copyright (c) 2014-present Sebastian McKenzie and other contributors
 - `@capacitor/core` 8.5.3: Copyright (c) 2017-present Drifty Co.
 - `@capacitor/ios` 8.5.3: Copyright (c) 2017-present Drifty Co.
 - `@floating-ui/core` 1.8.0: Copyright (c) 2021-present Floating UI contributors
@@ -449,18 +474,9 @@ copyright line are kept once; every package's own copyright line is listed with 
 - `@radix-ui/react-use-size` 1.1.5: Copyright (c) 2022 WorkOS
 - `@radix-ui/react-visually-hidden` 1.2.13: Copyright (c) 2022 WorkOS
 - `@simplewebauthn/browser` 14.0.0: Copyright (c) 2020 Matthew Miller
-- `3d-force-graph` 1.80.0: Copyright (c) 2017 Vasco Asturiano
-- `accessor-fn` 1.5.3: Copyright (c) 2017 Vasco Asturiano
 - `aria-hidden` 1.2.6: Copyright (c) 2017 Anton Korzunov
 - `clsx` 2.1.1: Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
-- `d3-binarytree` 1.0.2: Copyright (c) 2017 Vasco Asturiano
-- `d3-force-3d` 3.0.6: Copyright (c) 2017 Vasco Asturiano
-- `d3-octree` 1.1.0: Copyright (c) 2017 Vasco Asturiano
-- `data-bind-mapper` 1.0.3: Copyright (c) 2024 Vasco Asturiano
-- `float-tooltip` 1.8.0: Copyright (c) 2022 Vasco Asturiano
 - `get-nonce` 1.0.1: Copyright (c) 2020 Anton Korzunov
-- `kapsule` 1.16.3: Copyright (c) 2017 Vasco Asturiano
-- `polished` 4.3.1: Copyright (c) 2016-Present Brian Hough and Maximilian Stoiber
 - `react` 19.3.1: Copyright (c) Meta Platforms, Inc. and affiliates.
 - `react-dom` 19.3.1: Copyright (c) Meta Platforms, Inc. and affiliates.
 - `react-remove-scroll` 2.7.2: Copyright (c) 2017 Anton Korzunov
@@ -469,8 +485,6 @@ copyright line are kept once; every package's own copyright line is listed with 
 - `scheduler` 0.28.0: Copyright (c) Meta Platforms, Inc. and affiliates.
 - `tailwind-merge` 3.7.0: Copyright (c) 2021 Dany Castillo
 - `tailwindcss` 4.3.3: Copyright (c) Tailwind Labs, Inc.
-- `three-forcegraph` 1.43.6: Copyright (c) 2017 Vasco Asturiano
-- `three-render-objects` 1.44.1: Copyright (c) 2018 Vasco Asturiano
 - `use-callback-ref` 1.3.3: Copyright (c) 2017 Anton Korzunov
 - `use-sidecar` 1.1.3: Copyright (c) 2017 Anton Korzunov
 - `zod` 4.6.7: Copyright (c) 2025 Colin McDonnell
@@ -479,26 +493,25 @@ copyright line are kept once; every package's own copyright line is listed with 
 ```text
 MIT License
 
-Copyright (c) 2014-present Sebastian McKenzie and other contributors
+Copyright (c) 2017-present Drifty Co.
 
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ### Licence text 2 (MIT)
@@ -534,14 +547,21 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### Licence text 3 (MIT)
 
-- `@tweenjs/tween.js` 25.0.0: Copyright (c) 2010-2012 Tween.js authors.
+- `@xterm/addon-fit` 0.10.0: Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+- `@xterm/xterm` 5.5.0: Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js); Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com); Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+- `error-stack-parser` 2.1.4: Copyright (c) 2017 Eric Wendelin and other contributors
+- `linkify-it` 6.1.0: Copyright (c) 2015 Vitaly Puzrin.
+- `markdown-it` 15.0.3: Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.
+- `punycode.js` 2.3.1: Copyright Mathias Bynens <https://mathiasbynens.be/>
+- `stackframe` 1.3.4: Copyright (c) 2017 Eric Wendelin and other contributors
+- `uc.micro` 3.0.0: Copyright Mathias Bynens <https://mathiasbynens.be/>
+- `workbox-core` 7.4.1: Copyright 2018 Google LLC
+- `workbox-precaching` 7.4.1: Copyright 2018 Google LLC
+- `workbox-routing` 7.4.1: Copyright 2018 Google LLC
+- `workbox-strategies` 7.4.1: Copyright 2018 Google LLC
 
 ```text
-The MIT License
-
-Copyright (c) 2010-2012 Tween.js authors.
-
-Easing equations Copyright (c) 2001 Robert Penner http://robertpenner.com/easing/
+Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -968,69 +988,7 @@ THE SOFTWARE.
    limitations under the License.
 ```
 
-### Licence text 6 (ISC)
-
-- `d3-array` 3.2.5: Copyright 2010-2026 Mike Bostock
-- `d3-color` 3.1.1: Copyright 2010-2026 Mike Bostock
-- `d3-dispatch` 3.0.2: Copyright 2010-2026 Mike Bostock
-- `d3-interpolate` 3.0.2: Copyright 2010-2026 Mike Bostock
-- `d3-quadtree` 3.0.2: Copyright 2010-2026 Mike Bostock
-- `d3-scale` 4.0.3: Copyright 2010-2026 Mike Bostock
-- `d3-selection` 3.0.1: Copyright 2010-2026 Mike Bostock
-- `d3-timer` 3.0.2: Copyright 2010-2026 Mike Bostock
-
-```text
-Copyright 2010-2026 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-```
-
-### Licence text 7 (ISC)
-
-- `d3-scale-chromatic` 3.1.1: Copyright 2010-2026 Mike Bostock; Copyright 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University
-
-```text
-Copyright 2010-2026 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-Apache-Style Software License for ColorBrewer software and ColorBrewer Color Schemes
-
-Copyright 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use
-this file except in compliance with the License. You may obtain a copy of the
-License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software distributed
-under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-CONDITIONS OF ANY KIND, either express or implied. See the License for the
-specific language governing permissions and limitations under the License.
-```
-
-### Licence text 8 (BSD-2-Clause)
+### Licence text 6 (BSD-2-Clause)
 
 - `entities` 8.1.0: Copyright (c) Felix Böhm
 
@@ -1048,43 +1006,7 @@ THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRE
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Licence text 9 (MIT)
-
-- `error-stack-parser` 2.1.4: Copyright (c) 2017 Eric Wendelin and other contributors
-- `linkify-it` 6.1.0: Copyright (c) 2015 Vitaly Puzrin.
-- `markdown-it` 15.0.3: Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.
-- `punycode.js` 2.3.1: Copyright Mathias Bynens <https://mathiasbynens.be/>
-- `stackframe` 1.3.4: Copyright (c) 2017 Eric Wendelin and other contributors
-- `tinycolor2` 1.6.0: Copyright (c), Brian Grinstead, http://briangrinstead.com
-- `uc.micro` 3.0.0: Copyright Mathias Bynens <https://mathiasbynens.be/>
-- `workbox-core` 7.4.1: Copyright 2018 Google LLC
-- `workbox-precaching` 7.4.1: Copyright 2018 Google LLC
-- `workbox-routing` 7.4.1: Copyright 2018 Google LLC
-- `workbox-strategies` 7.4.1: Copyright 2018 Google LLC
-
-```text
-Copyright (c) 2017 Eric Wendelin and other contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Licence text 10 (ISC)
+### Licence text 7 (ISC)
 
 - `idb` 8.0.4: Copyright (c) 2016, Jake Archibald <jaffathecake@gmail.com>
 
@@ -1097,61 +1019,7 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Licence text 11 (MIT)
-
-- `lodash-es` 4.18.1: Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
-
-```text
-Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
-
-Based on Underscore.js, copyright Jeremy Ashkenas,
-DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
-
-This software consists of voluntary contributions made by many
-individuals. For exact contribution history, see the revision history
-available at https://github.com/lodash/lodash
-
-The following license applies to all parts of this software except as
-documented below:
-
-====
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-====
-
-Copyright and related rights for sample code are waived via CC0. Sample
-code is defined as all source code displayed within the prose of the
-documentation.
-
-CC0: http://creativecommons.org/publicdomain/zero/1.0/
-
-====
-
-Files located in the node_modules and vendor directories are externally
-maintained libraries used by this software which have their own
-licenses; we recommend you read them, as their terms may differ from the
-terms above.
-```
-
-### Licence text 12 (ISC)
+### Licence text 8 (ISC)
 
 - `lucide-react` 1.56.0: Copyright (c) 2026 Lucide Icons and Contributors; Copyright (c) 2013-present Cole Bemis
 
@@ -1201,7 +1069,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Licence text 13 (MIT)
+### Licence text 9 (MIT)
 
 - `mdurl` 2.1.0: Copyright (c) 2015 Vitaly Puzrin, Alex Kocharin.; Copyright Joyent, Inc. and other Node contributors. All rights reserved.
 
@@ -1253,87 +1121,15 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 ```
 
-### Licence text 14 (BSD-3-Clause)
+### Licence text 10 (MIT)
 
-- `ngraph.events` 1.4.0: Copyright (c) 2013-2025 Andrei Kashcha
-- `ngraph.graph` 20.1.2: Copyright (c) 2013 - 2026, Andrei Kashcha
-- `ngraph.random` 1.2.0: Copyright (c) 2013-2025, Andrei Kashcha
-
-```text
-Copyright (c) 2013-2025 Andrei Kashcha
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-  Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-  Redistributions in binary form must reproduce the above copyright notice, this
-  list of conditions and the following disclaimer in the documentation and/or
-  other materials provided with the distribution.
-
-  Neither the name of the Andrei Kashcha nor the names of its
-  contributors may be used to endorse or promote products derived from
-  this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
-### Licence text 15 (BSD-3-Clause)
-
-- `ngraph.forcelayout` 3.3.1: Copyright (c) 2013 - 2022, Andrei Kashcha
-
-```text
-Copyright (c) 2013 - 2022, Andrei Kashcha
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice, this
-  list of conditions and the following disclaimer in the documentation and/or
-  other materials provided with the distribution.
-
-* Neither the name of the Andrei Kashcha nor the names of its
-  contributors may be used to endorse or promote products derived from
-  this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
-### Licence text 16 (MIT)
-
-- `ngraph.merge` 1.0.0: Copyright (c) 2013-2019 Andrei Kashcha
-- `preact` 11.2.0: Copyright (c) 2015-present Jason Miller
 - `temml` 0.14.0: Copyright (c) 2020 Ron Kok
 - `ulid` 3.0.2: Copyright (c) 2017 Alizain Feerasta
 
 ```text
 The MIT License (MIT)
 
-Copyright (c) 2013-2019 Andrei Kashcha
+Copyright (c) 2020 Ron Kok
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1354,35 +1150,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Licence text 17 (MIT)
-
-- `three` 0.184.0: Copyright © 2010-2026 three.js authors
-
-```text
-The MIT License
-
-Copyright © 2010-2026 three.js authors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
-
-### Licence text 18 (0BSD)
+### Licence text 11 (0BSD)
 
 - `tslib` 2.8.1: Copyright (c) Microsoft Corporation.
 
@@ -1433,9 +1201,13 @@ PERFORMANCE OF THIS SOFTWARE.
 
 ## Adapted code
 
-`packages/protocol/src/untrusted.ts` adapts the marker folding, special-token list and sanitizing approach of
-OpenClaw's `src/security/external-content.ts` (MIT, Copyright (c) 2026 OpenClaw Foundation). That file is no longer
-vendored; the MIT notice is kept below under "Sources no longer vendored".
+| Path                                 | Upstream                                                                                                                  | Licence                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `packages/protocol/src/untrusted.ts` | OpenClaw `src/security/external-content.ts` (marker folding, special-token list, sanitizing approach); no longer vendored | MIT, Copyright (c) 2026 OpenClaw Foundation |
+| `apps/web/src/lib/markdownChunks.ts` | github.com/pingdotgg/t3code `packages/shared/src/markdownChunks.ts` @ `a22a4f9b`                                          | MIT, Copyright (c) 2026 T3 Tools Inc.       |
+| `apps/web/src/lib/announce.ts`       | github.com/pingdotgg/t3code `apps/web/src/lib/announce.ts` @ `a22a4f9b`                                                   | MIT, Copyright (c) 2026 T3 Tools Inc.       |
+
+The OpenClaw MIT notice is kept below under "Sources no longer vendored". The T3 licence text is under "T3 Code licence (MIT)".
 
 ## Dependencies and generated scaffolding
 

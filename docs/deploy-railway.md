@@ -3,8 +3,12 @@
 The walkthrough for the whole setup, in plain words, is [`SETUP.md`](SETUP.md). This page is the short reference for the
 Railway side.
 
-- **One service**, built from `apps/relay/Dockerfile` (`railway.json` selects it). One replica, **sleep off**: the Mac's
-  connection must stay up. Health check `/healthz`; restart on failure.
+- **Services are configured in the Railway dashboard.** The repository has no Railway settings file; set the values in
+  "Dashboard settings" below by hand on the service. A new service cannot read a `railway.json` any more, so nothing sets
+  them for you: without the Dockerfile path the build does not find the image, and without the watch paths every push
+  redeploys.
+- **One service**, built from `apps/relay/Dockerfile`. One replica, **sleep off**: the Mac's connection must stay up. Health
+  check `/healthz`; restart on failure.
 - **Which release it is.** A relay built from a release image (`--build-arg TALOS_RELEASE=0.1.8`, which the Dockerfile turns into the
   `TALOS_RELEASE` variable) says so: `/healthz`, `/api/me` and the health report's `relay` carry `release` (a plain `X.Y.Z`, read once
   at start; anything else is ignored and logged once). `version`, the commit, is unchanged. A relay that deploys from `main` sets
@@ -72,9 +76,10 @@ Railway side.
   That line is what keeps the relays check quiet; there is no script that bypasses `green`. Deploy by hand through the service's GitHub
   source (deploy that commit from the service in Railway), never with `railway up`: an upload by the CLI probably creates no GitHub
   deployment, so the check cannot see it.
-- **Deploys only for relay changes.** `railway.json` `build.watchPatterns` lists what the image is built from (the relay,
-  the web app, `packages/`, the workspace manifests and lockfile); a push touching nothing there does not redeploy.
-  `apps/relay/test/deploy-watch.test.ts` fails if the Dockerfile copies something no pattern covers.
+- **Deploys only for relay changes.** The service's watch paths (the list under "Dashboard settings") name what the image
+  is built from (the relay, the web app, `packages/`, the workspace manifests and lockfile); a push touching nothing there
+  does not redeploy. `apps/relay/test/deploy-watch.test.ts` fails if the Dockerfile copies something that list does not
+  cover.
 - **Daily backups** of the volume: switch them on in the volume's **Backups** tab. They hold the passkey registration, the
   device list and the integration connections. They are useless without `DATA_KEY`, which you must keep separately.
 - **Domain.** Use the generated `*.up.railway.app` address. **Moving to a custom domain later voids every passkey and
@@ -90,3 +95,43 @@ Railway side.
   plan's included credit is shared with your other projects, so check the usage page.
 - **Building the image yourself.** From the repository root: `docker build -f apps/relay/Dockerfile -t talos-relay .`. The
   container runs as a non-root user, listens on `PORT` (default 8080) and expects the volume at `/data`.
+
+## Dashboard settings
+
+Set these on the relay service in the Railway dashboard (Settings). Services are configured in the Railway dashboard:
+nothing in the repository sets them.
+
+| Setting (dashboard)         | Value                                           |
+| --------------------------- | ----------------------------------------------- |
+| Build, Builder              | Dockerfile                                      |
+| Build, Dockerfile path      | `apps/relay/Dockerfile` (or the variable below) |
+| Build, Watch paths          | the list below, one per line                    |
+| Deploy, Replicas            | 1                                               |
+| Deploy, Healthcheck path    | `/healthz`                                      |
+| Deploy, Healthcheck timeout | 60 seconds                                      |
+| Deploy, Restart policy      | On failure, at most 10 retries                  |
+| Deploy, Serverless (sleep)  | Off                                             |
+| Volume                      | mounted at `/data` (see above)                  |
+
+The Dockerfile path can also be given as the service variable `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile`, which a
+command-line deploy (`railway up`) needs.
+
+Watch paths (`apps/relay/test/deploy-watch.test.ts` reads this block and checks it against the Dockerfile's `COPY` lines):
+
+```watch-paths
+/apps/relay/**
+/apps/web/**
+/packages/**
+/package.json
+/pnpm-lock.yaml
+/pnpm-workspace.yaml
+/tsconfig.base.json
+/apps/bridge/package.json
+/e2e/package.json
+/scripts/version.mjs
+/.dockerignore
+```
+
+Railway's Config as Code (`railway.json`) is deprecated, with a hard cutoff on 2027-01-01
+([Railway: Config as Code](https://docs.railway.com/reference/config-as-code)); this repository no longer ships one. Moving
+these settings into Railway's Infrastructure as Code file (`.railway/railway.ts`) is a later roadmap item.

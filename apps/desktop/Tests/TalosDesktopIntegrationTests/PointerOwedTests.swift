@@ -66,13 +66,15 @@ extension WorkerRig {
     #expect(tmuxCmd(["send-keys", "-t", "=t-trip:"] + Array(repeating: "BSpace", count: n)).ok)
   }
 
-  /// A tmux client on the thread's session, as the Terminals window is while the owner looks at it. Control mode needs no terminal.
+  /// A tmux client on the thread's session with a tty (`script`), as the Terminals window is while the owner looks at it. Not a
+  /// control-mode client: the remote terminal view is one, and `listClientsActivity` skips those (a view is not the owner at the
+  /// keyboard), so a control client here would no longer stand for "someone who can type is attached".
   func attachClient() throws -> Process {
     #expect(Rig.pinWindowSize(socket: socket, session: "t-trip"), "control: the window is pinned to its size")
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: Rig.tmuxPath!)
-    p.arguments = ["-L", socket, "-f", Rig.tmuxConf, "-C", "attach-session", "-t", "=t-trip:"]
-    p.environment = env
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+    p.arguments = ["-q", "/dev/null", Rig.tmuxPath!, "-L", socket, "-f", Rig.tmuxConf, "attach-session", "-t", "=t-trip:"]
+    p.environment = env.merging(["TERM": "xterm-256color"]) { _, new in new }
     p.standardInput = Pipe()  // held open for as long as the client lives
     p.standardOutput = FileHandle.nullDevice
     p.standardError = FileHandle.nullDevice

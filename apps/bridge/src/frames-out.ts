@@ -59,6 +59,20 @@ export const errorFrame = (
     : {}),
 })
 
+/** The last lines of a quiet pane, for the app only (protocol quiet-lines.ts): ephemeral, never queued or stored. `lines` are already sanitized. */
+export const quietLinesFrame = (
+  now: number,
+  messageId: string,
+  threadId: string,
+  lines: string[],
+): Of<'quiet.lines'> => ({
+  ...env(now),
+  type: 'quiet.lines',
+  message_id: messageId,
+  thread_id: threadId,
+  lines,
+})
+
 export const receiptFrame = (
   now: number,
   messageId: string,

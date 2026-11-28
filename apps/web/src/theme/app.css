@@ -129,10 +129,12 @@ a {
 .prose-talos {
   overflow-wrap: anywhere;
 }
-.prose-talos > :first-child {
+.prose-talos > :first-child,
+.prose-talos > [data-md-chunk]:first-child > :first-child {
   margin-top: 0;
 }
-.prose-talos > :last-child {
+.prose-talos > :last-child,
+.prose-talos > [data-md-chunk]:last-child > :last-child {
   margin-bottom: 0;
 }
 .prose-talos p,

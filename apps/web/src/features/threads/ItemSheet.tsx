@@ -67,7 +67,7 @@ export function ItemSheet({ item, onClose }: { item: InboxItemT | null; onClose:
               <Button
                 variant="outline"
                 onClick={() => {
-                  prefillComposer('inbox', `re: ${item.title}`)
+                  prefillComposer('inbox', `re: ${item.title}`, 'append')
                   onClose()
                 }}
               >

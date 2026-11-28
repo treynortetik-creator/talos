@@ -119,10 +119,10 @@ and saves one screenshot per route x theme at 2x.
 node scripts/verify/capture.mjs web --worktree . --label after --sha <short-sha> \
   --routes wordmark,home --route-list "$TMPDIR/routes.md"
 # options: --viewport desktop|phone (1280x800 | 390x844)  --engine chromium|webkit  --scheme light|dark
-#          --themes talos,paper  --path /memory/graph --route-name graph (an ad hoc route)  --font-targets body,wordmark
+#          --themes talos,paper  --path /memory --route-name nyx (an ad hoc route)  --font-targets body,wordmark
 ```
 
-- Routes known by name live in `scripts/verify/routes.mjs` (`home`, `wordmark`, `settings-appearance`, `clio-graph`, `clio-graph-note`).
+- Routes known by name live in `scripts/verify/routes.mjs` (`home`, `wordmark`, `settings-appearance`, `nyx`).
   A change on a screen no route covers: add a route there (`path`, `ready`, optional `act`, `expect`) in the same commit; or use `--path`.
 - A route's `ready` waits for the screen to really draw, never a bare sleep. `act` is what the owner does (a real mouse click at the
   note's screen position). `expect` is the claim; for a `before` run a failing claim is the proof the bug existed.
@@ -210,7 +210,7 @@ Verified: none - docs only
 - Exit 1 in an `after` run: read `index.md`, fix the code, run again. A third failed round: stop and report (the review cap).
 - A `before` run that shows no bug means your test of the bug is wrong, or the bug is not on this route. Find out which before going on.
 - Every process you start is stopped by pid before you report; the scripts leave none (they say so if they cannot).
-- Measured on the Mac that wrote this: a web capture of 3 themes takes 3 to 8 s including the build; a clio graph route 6 to 8 s; the bridge route about 3 s; a simulator capture 7 to 17 s once the device is booted. Phone-width wordmark captures show the page, not the wordmark (the phone header shows the thread name).
+- Measured on the Mac that wrote this: a web capture of 3 themes takes 3 to 8 s including the build; the bridge route about 3 s; a simulator capture 7 to 17 s once the device is booted. Phone-width wordmark captures show the page, not the wordmark (the phone header shows the thread name).
 
 ## Changelog
 

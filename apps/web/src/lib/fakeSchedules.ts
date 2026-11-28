@@ -56,6 +56,8 @@ export type FakeSchedulesClient = SchedulesClient & {
   ): void
   /** Replace how the Mac answers `heartbeat.test`. The default passes every enabled source with nothing found. */
   setHeartbeatTest(fn: FakeHeartbeatTest | null): void
+  /** Whether the fake Mac applies a Save from the schedule form at once (a current Mac) or draws a card to approve (an older one, the default). */
+  setSavesInForm(on: boolean): void
   readonly sentCount: { list: number; heartbeatTest: number }
 }
 
@@ -83,6 +85,7 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
   let details = seed.details
   let reports: Record<string, string> = {}
   let hbTest: FakeHeartbeatTest | null = null
+  let savesInForm = false
   const sentCount = { list: 0, heartbeatTest: 0 }
   const offline = () => {
     if (!d.macOnline()) throw new TalosClientError('mac_offline', 'Your Mac is offline.')
@@ -105,6 +108,9 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
       snapshot = next
       if (nextDetails) details = nextDetails
       if (nextReports) reports = nextReports
+    },
+    setSavesInForm(on) {
+      savesInForm = on
     },
     setHeartbeatTest(fn) {
       hbTest = fn
@@ -141,8 +147,13 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
         report: runId ? (reports[runId] ?? 'Fake report: the job ran and posted its result.') : null,
       }
     },
-    async proposeScheduleChange(change: ScheduleChangeT, threadId) {
-      const f = await d.sign({ type: 'schedule.patch', change, thread_id: threadId })
+    async proposeScheduleChange(change: ScheduleChangeT, threadId, opts) {
+      const f = await d.sign({
+        type: 'schedule.patch',
+        change,
+        thread_id: threadId,
+        ...(opts?.formSave === true ? { form_save: true } : {}),
+      })
       offline()
       const base = change.op === 'create' ? null : job(change.id)
       const detail = base ? details[base.id] : undefined
@@ -173,9 +184,14 @@ export function createFakeSchedules(d: FakeSchedulesDeps): FakeSchedulesClient {
         )
       } catch (e) {
         // the change was drawn against another revision than the one on the Mac (review F4)
-        if (e instanceof ScheduleCardBindingError) throw new TalosClientError('schedule_conflict', e.message)
+        // the real bridge's own check says this first, in these words (service-cards.ts prepareCard)
+        if (e instanceof ScheduleCardBindingError)
+          throw new TalosClientError('schedule_conflict', 'The job changed on your Mac. Reload it and try again.')
         throw e
       }
+      // "Save in my own schedule form": the Mac applies a create or an update at once, so there is no card at all
+      const direct = savesInForm && opts?.formSave === true && (change.op === 'create' || change.op === 'update')
+      if (direct) return { clientRef: String(f.id), saved: true }
       d.addCard(card)
       return { clientRef: String(f.id) }
     },

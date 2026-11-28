@@ -52,6 +52,37 @@ describe('compareLaunch', () => {
   })
 })
 
+describe('compact_window in the launch', () => {
+  const rec = { cwd: '/home/alex/trip', model: 'inherit' }
+  it('a set value against a record without one is a change, named; the same value is none', () => {
+    expect(compareLaunch(rec, { ...SIG, compactWindow: 400000 })).toMatchObject({
+      kind: 'restart',
+      changed: ['compact_window'],
+    })
+    expect(compareLaunch({ ...rec, compact_window: 400000 }, { ...SIG, compactWindow: 400000 })).toEqual({
+      kind: 'none',
+    })
+    expect(compareLaunch({ ...rec, compact_window: 400000 }, { ...SIG, compactWindow: 300000 })).toMatchObject({
+      changed: ['compact_window'],
+    })
+  })
+  it('turned off after a launch with it is a change; never set and never recorded is none', () => {
+    expect(compareLaunch({ ...rec, compact_window: 400000 }, SIG)).toMatchObject({ changed: ['compact_window'] })
+    expect(compareLaunch(rec, { ...SIG, compactWindow: null })).toEqual({ kind: 'none' })
+  })
+  it('wantedLaunch and launchedRecord carry it, and a record of it matches the thread it was made from', () => {
+    const t: WorkerThread = { ...TRIP, compactWindow: 400000 }
+    expect(wantedLaunch(t, () => '/home/alex/trip').compactWindow).toBe(400000)
+    expect(wantedLaunch(TRIP, () => '/home/alex/trip').compactWindow ?? null).toBeNull()
+    expect(launchedRecord(t, '/home/alex/trip')?.compact_window).toBe(400000)
+    expect(launchedRecord(TRIP, '/home/alex/trip')).not.toHaveProperty('compact_window')
+  })
+  it('an old record, or one with a value this build cannot read, reads as none', () => {
+    expect(WorkerLaunched.parse(rec).compact_window).toBeUndefined()
+    expect(WorkerLaunched.parse({ ...rec, compact_window: 5 }).compact_window).toBeUndefined()
+  })
+})
+
 describe('observeChange (the settle wait)', () => {
   const change = compareLaunch({ cwd: '/home/alex/trip', model: 'opus' }, SIG)
   const settle = WORKER_TIMING.launch_change_settle_s
@@ -147,5 +178,40 @@ describe('the record and the wanted launch', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('the enabled-plugin set is part of the launch', () => {
+  const launched = { cwd: '/home/alex/trip', model: 'inherit' }
+  it('a plugin turned on or off while the session runs is a restart (after its turn), naming plugins', () => {
+    expect(compareLaunch({ ...launched, plugins: ['a@m'] }, { ...SIG, plugins: ['a@m', 'b@m'] })).toEqual({
+      kind: 'restart',
+      wanted: { ...SIG, plugins: ['a@m', 'b@m'] },
+      changed: ['plugins'],
+    })
+  })
+  it('the set is compared as a set', () => {
+    expect(compareLaunch({ ...launched, plugins: ['b@m', 'a@m'] }, { ...SIG, plugins: ['a@m', 'b@m'] })).toEqual({
+      kind: 'none',
+    })
+  })
+  it('an entry an older build wrote (no set recorded), or a thread whose set is not known now, is never a change', () => {
+    expect(compareLaunch(launched, { ...SIG, plugins: ['a@m'] })).toEqual({ kind: 'none' })
+    expect(compareLaunch({ ...launched, plugins: ['a@m'] }, SIG)).toEqual({ kind: 'none' })
+  })
+  it('a start records the set, and the record reads back as the same launch', () => {
+    const t: WorkerThread = { ...TRIP, plugins: ['b@m', 'a@m'] }
+    const r = launchedRecord(t, '/home/alex/trip')
+    expect(r?.plugins).toEqual(['b@m', 'a@m'])
+    expect(wantedLaunch(t, () => '/home/alex/trip').plugins).toEqual(['a@m', 'b@m'])
+    expect(
+      compareLaunch(
+        r,
+        wantedLaunch(t, () => '/home/alex/trip'),
+      ),
+    ).toEqual({ kind: 'none' })
+  })
+  it('a set that is not a list of names reads as not recorded', () => {
+    expect(WorkerLaunched.parse({ cwd: '/a', model: 'inherit', plugins: 'nope' }).plugins).toBeUndefined()
   })
 })

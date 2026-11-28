@@ -24,8 +24,7 @@ export const pageReload = { reload: () => location.reload() }
  * failed", which looks exactly like a chunk a deploy replaced. Reloading then would beat the navigation the owner asked for
  * (and use up the one automatic reload). `beforeunload` comes before the cancel; the Navigation API covers browsers that
  * start a navigation without it. A same-document change (the router's own replaceState) is not leaving. `pageshow` clears
- * it for a page restored from the back-forward cache. A leave that never
- * completes keeps it set, and a real stale chunk then shows the manual Reload screen.
+ * it for a page restored from the back-forward cache, and a failed or refused navigation (`navigateerror`) clears it too.
  */
 export const leaving = { now: false }
 if (typeof window !== 'undefined') {
@@ -42,6 +41,10 @@ if (typeof window !== 'undefined') {
     const n = e as Event & { destination?: { sameDocument?: boolean }; downloadRequest?: string | null }
     // A download keeps the page where it is.
     if (!n.destination?.sameDocument && n.downloadRequest == null) leave()
+  })
+  // A navigation that failed or was refused did not leave, so a real stale chunk afterwards still reloads.
+  navigation?.addEventListener('navigateerror', () => {
+    leaving.now = false
   })
 }
 

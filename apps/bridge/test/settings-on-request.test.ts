@@ -301,6 +301,17 @@ describe("someone who isn't the owner: never a change, at most a card he can say
     expect(cfg(h).trust_mode).toBeUndefined()
     expect(configCards(h)).toHaveLength(0)
   })
+
+  test("Nyx's address is the owner's: refused by name even when he asks, and no card is made", async () => {
+    h = await start()
+    await ownerSays(h, 'general', 'connect my Nyx at nyx.example.com')
+    const r = await propose(h, [{ path: 'memory.nyx_url', value: 'https://nyx.example.com' }])
+    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/can't be changed by you/)
+    expect(text(r)).toContain('memory.nyx_url')
+    expect(cfg(h).memory?.nyx_url).toBeUndefined()
+    expect(configCards(h)).toHaveLength(0)
+  })
 })
 
 describe('Lock Talos settings', () => {

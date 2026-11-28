@@ -14,7 +14,7 @@ import { openDatabase } from './db.ts'
 import { HealthWatch } from './health.ts'
 import { Hub } from './hub.ts'
 import { closeBridgeNotOnKey } from './hub-bridge-conn.ts'
-import { createLogger } from './log.ts'
+import { createLogger, logHashKeyFor } from './log.ts'
 import { FileMediaStore } from './media.ts'
 import { pagesBytes, sweepPages } from './pages-store.ts'
 import { CorePush, createWebPushTransport, NoopTransport } from './push.ts'
@@ -89,7 +89,7 @@ const RECONCILE_MS = 300_000
 export function createRelayServices(opts: CreateOptions): RelayServices {
   const { env } = opts
   const clock = opts.clock ?? systemClock
-  const log = opts.log ?? createLogger(env.LOG_LEVEL)
+  const log = opts.log ?? createLogger(env.LOG_LEVEL, { hashKey: logHashKeyFor(env.DATA_KEY, env.RELAY_LOG_HASH_KEY) })
   const db = opts.db ?? openDatabase(env.DATA_DIR)
   const crypto = createCryptoService(env.DATA_KEY)
   const store = new Store(db, crypto, clock)
@@ -108,7 +108,7 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
           privateKey: env.VAPID_PRIVATE_KEY,
           subject: env.VAPID_SUBJECT,
         })
-      : new NoopTransport())
+      : new NoopTransport({ keep: false }))
   const apnsConfig = opts.apns === undefined ? apnsConfigFromEnv(env, log.child({ mod: 'apns' })) : null
   const apns: ApnsSender | null =
     opts.apns !== undefined
@@ -129,7 +129,6 @@ export function createRelayServices(opts: CreateOptions): RelayServices {
     log: log.child({ mod: 'push' }),
     transport,
     config: () => hub.agentConfig(),
-    anyVisible: () => hub.anyVisible(),
     ntfy: env.ALERT_NTFY_URL
       ? createNtfySink({
           url: env.ALERT_NTFY_URL,

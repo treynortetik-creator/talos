@@ -27,7 +27,7 @@ export function useTellAgent() {
   const threadDefault = useTalos((s) => s.config?.default_thread ?? 'general')
   return (text: string, threadId?: string | null) => {
     const t = threadId ?? threadDefault
-    prefillComposer(t, text)
+    prefillComposer(t, text, 'append')
     nav(`/t/${t}`)
   }
 }

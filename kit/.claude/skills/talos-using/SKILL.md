@@ -141,7 +141,7 @@ He sees a card with the name, the time and what it will do. `schedules_list` sho
 
 ## A setting: `config_propose`
 
-Only when he asked for the change in his own words. This example is the main agent's. A thread's own session may change only low fields of its own thread (`name`, `topic`, `icon`, `color`, `notify`, `idle_park_min`, `effort`), and any field of its own sub-threads except `parent`; it changes no global setting. One call with a `reason` and one to six `changes`, each a `path` and a `value`:
+Only when he asked for the change in his own words. This example is the main agent's. A thread's own session may change only low fields of its own thread (`name`, `topic`, `icon`, `color`, `notify`, `idle_park_min`, `effort`, `compact_window`, set through a settings card), and any field of its own sub-threads except `parent`; it changes no global setting. One call with a `reason` and one to six `changes`, each a `path` and a `value`:
 
 ```
 config_propose  thread_id: "general"   reason: "You asked for spoken replies."

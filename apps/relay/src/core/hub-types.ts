@@ -15,6 +15,8 @@ export interface Conn {
   send(text: string): void
   close(code: number, reason?: string): void
   terminate(): void
+  /** Bytes queued on the socket and not yet written (the real socket knows; a fake may not). The terminal stream reads it. */
+  bufferedAmount?(): number
 }
 
 export const CATCHUP_PAGE = 200
@@ -38,6 +40,7 @@ export const CONSUMABLE = new Set<string>([
   'thread.session.control',
   'agent.recover',
   'undo.request',
+  'plugin.add.request',
 ])
 
 /** What an UNPINNED app socket may receive and send: enough to finish pairing and nothing of the owner's data. */
@@ -71,6 +74,8 @@ export type AppConn = {
   helloSeq: number
   /** The hello listed WIDE_FEATURES_FEATURE: this app reads up to FEATURES_MAX features, so it gets the bridge's whole list. */
   wideFeatures: boolean
+  /** The hello listed QUIET_LINES_FEATURE: this app is sent a `quiet.lines` frame (ephemeral; an older app never sees one). */
+  quietLines: boolean
 }
 export type BridgeConn = {
   id: string

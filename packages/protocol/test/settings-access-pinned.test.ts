@@ -68,6 +68,7 @@ describe('phone path: checkConfigPatch result for every field', () => {
     ['dev.note_lookup', false, PLAIN],
     ['dev.unlisted_key', 1, refused('dev.unlisted_key')],
     ['os_sandbox', true, PLAIN],
+    ['auto_continue_at_limit', false, PLAIN],
     ['settings_lock', false, PLAIN],
     ['dedicated', {}, PLAIN],
     ['theme', 'paper', PLAIN],
@@ -126,6 +127,7 @@ describe('phone path: the exported lists', () => {
       'timezone',
       'quiet_window',
       'notifications',
+      'memory.nyx_url',
       'voice_notes',
       'work.enabled',
       'work.thread',
@@ -140,6 +142,7 @@ describe('phone path: the exported lists', () => {
       'dev.thread_fence',
       'dev.note_lookup',
       'os_sandbox',
+      'auto_continue_at_limit',
       'settings_lock',
       'dedicated',
       'theme',
@@ -154,16 +157,9 @@ describe('phone path: the exported lists', () => {
 
 describe('agent path: config_propose result for every field', () => {
   const ALLOWED_LIST =
-    'agent.name, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, os_sandbox, settings_lock, dedicated, theme'
+    'agent.name, owner.display_name, threads.<id>.<field>, default_thread, timezone, quiet_window, notifications.master, notifications.show_thread_names, voice_notes.reply_with_voice, voice_notes.driving_until, work.thread, work.label, work.ask_note, session_models, memory_browser, media_keep_days, always_allow, dev.thread_fence, dev.note_lookup, os_sandbox, auto_continue_at_limit, settings_lock, dedicated, theme'
   // owner ruling 2026-11-14: the agent changes the rest when he asks; these stay the owner's
-  const NAMED = new Set([
-    'permission_relay',
-    'work.enabled',
-    'work.thread',
-    'work.retention',
-    'trust_mode',
-    'bug_webhook_url',
-  ])
+  const NAMED = new Set(['permission_relay', 'work.enabled', 'work.retention', 'trust_mode', 'bug_webhook_url'])
   const named = (p: string) => NAMED.has(p)
   const refusal = (p: string) =>
     named(p)
@@ -191,6 +187,7 @@ describe('agent path: config_propose result for every field', () => {
     ['dev.thread_fence', false, true],
     ['dev.note_lookup', false, true],
     ['os_sandbox', true, false],
+    ['auto_continue_at_limit', false, true],
     ['settings_lock', true, false],
   ]
   it.each(allowed)('%s is allowed', (path, value, old) => {
@@ -198,6 +195,16 @@ describe('agent path: config_propose result for every field', () => {
       ok: true,
       changes: [{ path, old, new: value }],
     })
+  })
+
+  it('work.thread (where work alerts land) is the one work row beyond the words the agent may set, and it must be a real thread', () => {
+    const ok = resolveConfigChanges([{ path: 'work.thread', value: 'general' }], config)
+    expect(ok.ok).toBe(true)
+    const unknown = resolveConfigChanges([{ path: 'work.thread', value: 'nowhere' }], config)
+    expect(unknown.ok).toBe(false)
+    // Trust mode, the unlock rule and what is connected are still the owner's
+    for (const path of ['trust_mode', 'permission_relay', 'work.enabled', 'work.retention'])
+      expect(resolveConfigChanges([{ path, value: 'anything' }], config)).toEqual({ ok: false, error: refusal(path) })
   })
 
   const notAllowed = [
@@ -209,7 +216,6 @@ describe('agent path: config_propose result for every field', () => {
     'notifications',
     'work',
     'work.enabled',
-    'work.thread',
     'work.retention',
     'voice_notes',
     'permission_relay',
@@ -255,6 +261,7 @@ describe('agent path: config_propose result for every field', () => {
       'notifications.show_thread_names',
       'voice_notes.reply_with_voice',
       'voice_notes.driving_until',
+      'work.thread',
       'work.label',
       'work.ask_note',
       'session_models',
@@ -264,6 +271,7 @@ describe('agent path: config_propose result for every field', () => {
       'dev.thread_fence',
       'dev.note_lookup',
       'os_sandbox',
+      'auto_continue_at_limit',
       'settings_lock',
       'dedicated',
       'theme',

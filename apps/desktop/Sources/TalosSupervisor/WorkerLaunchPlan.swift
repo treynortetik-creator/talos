@@ -25,7 +25,7 @@ extension WorkerManager {
   func specInputs(
     _ id: String, _ s: ThreadSessionSettings, cwd: String, parent: String?, hook: WorkerHook.Installed, main: MainOwnSettings.Ceiling,
     plan: WorkerMcp.Plan?, mcpConfigPath: String?, sessionId: String, resume: Bool, nonce: String, base: [String: String],
-    threadFence: Bool, osSandbox: OsSandbox.Pieces? = nil
+    threadFence: Bool, osSandbox: OsSandbox.Pieces? = nil, resumeCutTurn: Bool = false
   ) -> WorkerSpec.Inputs {
     let claudeDir = WorkerMcp.claudeDir(home: options.home, env: base)
     var i = WorkerSpec.Inputs(
@@ -40,6 +40,8 @@ extension WorkerManager {
       mainDefaultMode: main.defaultMode, parentCwd: parent, otherFolders: threadFolders ?? [])
     i.threadFence = threadFence
     i.osSandbox = osSandbox
+    i.resumeCutTurn = resumeCutTurn
+    i.compactWindow = s.compactWindow
     return i
   }
 

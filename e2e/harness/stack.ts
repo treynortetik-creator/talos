@@ -12,7 +12,14 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { type AgentDriverOptions, FakeClaude } from '@talos-app/testkit'
+import {
+  type AgentDriverOptions,
+  bridgeChildEnv,
+  FakeClaude,
+  isolatedBridgeEnv,
+  t,
+  waitForChildGone,
+} from '@talos-app/testkit'
 import { clockEnv, worldOffsetMs } from './clock.ts'
 import { BRIDGE_CLI, BRIDGE_DIR, BRIDGE_SERVER, RELAY_DIST, STUBS_DIR, WEB_DIST } from './paths.ts'
 import { reservePort } from './port.ts'
@@ -69,12 +76,23 @@ export class Cli {
   private t0 = Date.now()
   private child: ChildProcessWithoutNullStreams
   private home: string
+  private closed: Promise<void>
+  private isClosed = false
   constructor(home: string, args: string[], extraEnv: Record<string, string> = {}) {
     this.home = home
-    const [cmd, cmdArgs] = onPty(['bun', 'run', BRIDGE_CLI, ...args])
+    const argv = ['bun', 'run', BRIDGE_CLI, ...args]
+    const childEnv = bridgeChildEnv(argv, { TALOS_APP_HOME: home, ...extraEnv })
+    const [cmd, cmdArgs] = onPty(argv)
     this.child = spawn(cmd, cmdArgs, {
       cwd: BRIDGE_DIR,
-      env: { ...process.env, TALOS_APP_HOME: home, ...extraEnv },
+      env: childEnv.env,
+    })
+    this.closed = new Promise<void>((done) => {
+      this.child.on('close', () => {
+        this.isClosed = true
+        childEnv.cleanup()
+        done()
+      })
     })
     this.child.stdout.on('data', (d) => {
       this.out += d.toString()
@@ -117,6 +135,14 @@ export class Cli {
   kill(): void {
     this.child.kill()
   }
+  /** Ends the command if it still runs and waits until it has closed (bounded): the folder it writes into may then be removed. */
+  async stopAndWait(): Promise<void> {
+    if (this.isClosed) return // closed already: nothing left to wait for, and nothing to signal
+    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill()
+    await Promise.race([this.closed, new Promise<void>((r) => setTimeout(r, t(10_000)))])
+    // not closed in time: wait on the process object (it is SIGKILLed only while it has not exited), never on its pid number
+    if (!this.isClosed) await waitForChildGone(this.child)
+  }
 }
 
 /** A throwaway VAPID key pair in the shape `web-push generate-vapid-keys` prints (base64url, uncompressed public key). */
@@ -145,9 +171,11 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
   const origin = `http://localhost:${port}`
 
   // Mac side, step 1: `talos-app init` creates the key, config and bridge.env, and prints BRIDGE_PUBKEY.
-  const init = spawnSync('bun', ['run', BRIDGE_CLI, 'init', '--relay-url', origin], {
+  const initArgv = ['bun', 'run', BRIDGE_CLI, 'init', '--relay-url', origin]
+  const init = spawnSync(initArgv[0] as string, initArgv.slice(1), {
     cwd: BRIDGE_DIR,
-    env: { ...process.env, TALOS_APP_HOME: home, ...clockEnv(worldOffset) },
+    // this run's folder is its test root: HOME, the inbox and the Claude folder are inside it, never the real ones
+    env: bridgeChildEnv(initArgv, { TALOS_APP_HOME: home, TALOS_TEST_ROOT: root, ...clockEnv(worldOffset) }).env,
     encoding: 'utf8',
   })
   const pubkey = /BRIDGE_PUBKEY=([A-Za-z0-9_-]{43})/.exec(init.stdout)?.[1]
@@ -218,6 +246,8 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
   }
 
   const bridgeEnv = (extra: Record<string, string> = {}): Record<string, string> => ({
+    // HOME, the inbox, the Claude folder and Chronos discovery are all inside this run's own root, removed with it at teardown
+    ...isolatedBridgeEnv(root),
     TALOS_APP_HOME: home,
     TALOS_APP_RELAY_URL: origin,
     TALOS_APP_BRIDGE: '1',
@@ -230,6 +260,8 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
   })
 
   let claude: FakeClaude | null = null
+  const extraBridges: FakeClaude[] = []
+  const clis: Cli[] = []
   const stack = {
     root,
     dataDir,
@@ -305,6 +337,7 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
         env: { ...bridgeEnv(), TALOS_APP_HOME: home2 },
       })
       await c.start()
+      extraBridges.push(c) // stack.stop() stops it too if the test did not
       return { claude: c, home: home2 }
     },
     /**
@@ -356,7 +389,9 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
     },
     /** `talos-app <args>` on the Mac. */
     cli(args: string[]): Cli {
-      return new Cli(home, args, bridgeEnv())
+      const c = new Cli(home, args, bridgeEnv())
+      clis.push(c)
+      return c
     },
     /** How many app WebSockets the relay holds open right now (one per signed-in tab). */
     appSocketCount(): number {
@@ -387,6 +422,10 @@ export async function startStack(opts: { tts?: boolean; env?: Record<string, str
       } catch {
         // already gone
       }
+      // every other child still running writes into root: each is stopped, and waited for until it has really exited, before the
+      // folder goes (a child still writing made rmSync fail with ENOTEMPTY)
+      for (const c of extraBridges.splice(0)) await c.stop().catch(() => {})
+      for (const c of clis.splice(0)) await c.stopAndWait().catch(() => {})
       if (relayUp) await relay.stop()
       relayUp = false
       if (!process.env.E2E_KEEP) rmSync(root, { recursive: true, force: true })

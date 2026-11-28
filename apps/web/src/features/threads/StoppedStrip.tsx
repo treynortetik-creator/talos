@@ -6,6 +6,8 @@
 import { type AttachmentRefT, ownValue } from '@talos-app/protocol'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { create } from 'zustand'
+import { announce } from '../../lib/announce.ts'
+import { ANNOUNCE, SOURCE, sendResultWords, stopped } from '../../lib/announceText.ts'
 import { type TalosClient, useTalos, useTalosClient } from '../../lib/client.ts'
 import { Button } from '../../ui/index.ts'
 import { type UndoTarget, undoTarget } from './stopUndo.ts'
@@ -122,6 +124,11 @@ export function StoppedStrip({ threadId }: { threadId: string }) {
     if (offer && m && owners.length > m.count && last?.id !== m.id) clearStopped()
   }, [offer, owners.length, last?.id])
 
+  // The strip appears already filled, which a screen reader skips: the announcer says it instead (so the strip has no live role).
+  useEffect(() => {
+    if (offer?.kind === 'stopped' && !offer.failed) announce(stopped(agent, offer.target !== null), SOURCE.stop)
+  }, [offer, agent])
+
   if (!offer) return null
   if (offer.kind === 'error') {
     return (
@@ -137,12 +144,13 @@ export function StoppedStrip({ threadId }: { threadId: string }) {
     const had = root.current?.contains(document.activeElement) === true
     try {
       const attachments: AttachmentRefT[] = target.attachments
-      await client.sendMessage({
+      const sent = await client.sendMessage({
         threadId,
         text: target.text,
         attachments,
         ...(target.replyTo ? { replyTo: target.replyTo } : {}),
       })
+      announce(sendResultWords(sent.state, ANNOUNCE.messageSentAgain), SOURCE.stop)
       if (useStopped.getState().offer === offer) clearStopped()
     } catch {
       // Nothing was sent: keep the strip, say so, and offer no second try (the message is still in the thread).
@@ -161,7 +169,7 @@ export function StoppedStrip({ threadId }: { threadId: string }) {
     )
   }
   return (
-    <div key="stopped" ref={root} role="status" data-testid="stopped-strip" className={box}>
+    <div key="stopped" ref={root} data-testid="stopped-strip" className={box}>
       <span className="min-w-0 flex-1">{target ? `Stopped ${agent}. Your message is kept.` : `Stopped ${agent}.`}</span>
       {target && (
         <Button ref={undoButton} variant="outline" onClick={() => void undo()}>

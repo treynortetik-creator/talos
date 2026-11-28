@@ -7,6 +7,7 @@ import { Link } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { formatDuration, timeLabel } from '../../lib/format.ts'
 import { Button, cn, Input } from '../../ui/index.ts'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { FrameOverlay, SandboxedFrame } from '../../ui/SandboxedFrame.tsx'
 import { pageFrameUrl, pageShareLabel } from '../pages/pagesData.ts'
 import { audioLineText, useAudioLine } from '../threads/AudioLines.tsx'
@@ -257,6 +258,7 @@ function Filters({
         aria-label={SENT_TEXT.search}
         value={s.nameInput}
         onChange={(e) => s.setNameInput(e.target.value)}
+        onKeyDown={searchBoxKeys({ value: s.nameInput, onClear: () => s.setNameInput('') })}
         data-testid="sent-files-search"
       />
       <Chips label="Kind" chips={KIND_CHIPS} value={s.filters.kind} onPick={(kind) => s.set({ kind, type: 'all' })} />

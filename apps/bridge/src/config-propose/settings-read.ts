@@ -5,6 +5,7 @@ import { AGENT_PATH_FORMS, type AgentConfigPath, ConfigCardPayload, readConfigPa
 import type { BridgeContext } from '../context.ts'
 import { isPeerAddressCard } from '../peer/address-ask.ts'
 import { isPermissionModeCard } from '../permission-mode.ts'
+import { isSessionErrorCard } from '../router/session-error-cards.ts'
 import { isUpdateResendCard } from '../router/update-resend.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 
@@ -45,6 +46,7 @@ export function settingsReadText(ctx: BridgeContext, scope?: string): string {
         !isScreenAllowCard(r.binding) &&
         !isPermissionModeCard(r.binding) &&
         !isUpdateResendCard(r.binding) &&
+        !isSessionErrorCard(r.binding) &&
         !isPeerAddressCard(r.binding),
     )
     .filter((r) => scope === undefined || r.thread_id === scope)

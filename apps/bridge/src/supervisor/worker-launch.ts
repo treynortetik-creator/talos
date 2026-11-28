@@ -4,7 +4,7 @@
 // session through the normal park after its turn: a new folder starts a fresh conversation there, the rest resume the same one.
 // Pure but for the folder's realpath; workers.ts acts on what this decides.
 import { realpathSync } from 'node:fs'
-import { WORKER_TIMING, WorkerLaunched, type WorkerLaunchedT } from '@talos-app/protocol'
+import { ThreadSessionOptsStrict, WORKER_TIMING, WorkerLaunched, type WorkerLaunchedT } from '@talos-app/protocol'
 import { osSandboxRecheck, SWITCH_UNREADABLE_NOTE } from '../guards/os-sandbox.ts'
 import { subThreadFence, subThreadTarget } from './worker-policy.ts'
 import type { UnreadOpt, WorkerRuntime, WorkerThread } from './worker-types.ts'
@@ -13,16 +13,43 @@ import type { UnreadOpt, WorkerRuntime, WorkerThread } from './worker-types.ts'
  * What a launch is made from. The list is sorted (compared as a set); null is no list, which differs from an empty one. A cwd of
  * null is a folder that cannot be known now (not resolvable, or session_opts that cannot be read): never compared.
  */
-export type LaunchSig = { cwd: string | null; model: string; effort: string | null; mcpAllow: string[] | null }
+export type LaunchSig = {
+  cwd: string | null
+  model: string
+  effort: string | null
+  mcpAllow: string[] | null
+  compactWindow?: number | null
+  /** The plugins switched on for the session (sorted); null or absent: not known now, so never compared. */
+  plugins?: string[] | null
+}
 
 export type LaunchChange =
   | { kind: 'none' }
-  | { kind: 'restart'; wanted: LaunchSig; changed: Array<'model' | 'effort' | 'mcp_allow'> }
+  | {
+      kind: 'restart'
+      wanted: LaunchSig
+      changed: Array<'model' | 'effort' | 'mcp_allow' | 'compact_window' | 'plugins'>
+    }
   | { kind: 'fresh'; wanted: LaunchSig }
 
 /** A change waiting out its settle time (monotonic seconds). */
 export type LaunchDebounce = { pending: LaunchChange | null; since: number }
 export const NO_CHANGE_PENDING: LaunchDebounce = { pending: null, since: 0 }
+
+const LAUNCH_FIELDS = ['cwd', 'model', 'effort'] as const
+
+/**
+ * Which launch fields of a thread's session_opts cannot be read (each falls back to its default when read): the whole object when
+ * it is not one. A field that is absent is not unread: its default is what the owner chose.
+ */
+export function unreadOpts(raw: unknown, isObject: boolean): { optsUnread?: UnreadOpt[] } {
+  if (!isObject) return { optsUnread: ['session_opts'] }
+  const o = (raw ?? {}) as Record<string, unknown>
+  const bad = LAUNCH_FIELDS.filter(
+    (k) => o[k] !== undefined && !ThreadSessionOptsStrict.shape[k].safeParse(o[k]).success,
+  )
+  return bad.length > 0 ? { optsUnread: bad } : {}
+}
 
 /**
  * The folder a thread's session would start in now, resolved as the planner resolves it; null when it cannot be resolved (a mount
@@ -50,6 +77,8 @@ export function wantedLaunch(t: WorkerThread, real: (cwd: string) => string | nu
     model: t.model,
     effort: t.effort ?? null,
     mcpAllow: sorted(t.mcpAllow),
+    compactWindow: t.compactWindow ?? null,
+    plugins: t.plugins === undefined ? null : sorted(t.plugins),
   }
 }
 
@@ -65,10 +94,15 @@ export function compareLaunch(
 ): LaunchChange {
   if (!launched) return { kind: 'none' }
   if (wanted.cwd !== null && launched.cwd !== wanted.cwd) return { kind: 'fresh', wanted }
-  const changed: Array<'model' | 'effort' | 'mcp_allow'> = []
+  const changed: Array<'model' | 'effort' | 'mcp_allow' | 'compact_window' | 'plugins'> = []
   if (!unread(t, 'model') && launched.model !== wanted.model) changed.push('model')
   if (!unread(t, 'effort') && (launched.effort ?? null) !== wanted.effort) changed.push('effort')
   if (!sameList(sorted(launched.mcp_allow), wanted.mcpAllow)) changed.push('mcp_allow')
+  // an unreadable value is unset on both sides (the schema), so it never differs for good
+  if ((launched.compact_window ?? null) !== (wanted.compactWindow ?? null)) changed.push('compact_window')
+  // the plugins switched on: compared only when both the record and the config reading have one (an older entry, or a read that failed, is no change)
+  if (launched.plugins !== undefined && wanted.plugins != null && !sameList(sorted(launched.plugins), wanted.plugins))
+    changed.push('plugins')
   return changed.length === 0 ? { kind: 'none' } : { kind: 'restart', wanted, changed }
 }
 
@@ -108,6 +142,8 @@ export function launchedRecord(
     model: t.model,
     ...(t.effort ? { effort: t.effort } : {}),
     ...(t.mcpAllow !== undefined ? { mcp_allow: [...t.mcpAllow] } : {}),
+    ...(t.compactWindow !== undefined ? { compact_window: t.compactWindow } : {}),
+    ...(t.plugins !== undefined ? { plugins: [...t.plugins] } : {}),
     // the launch's spec hash, for restart-on-update (launch-spec.ts); none when the plan gave none
     ...(hashes.specHash !== undefined ? { spec_hash: hashes.specHash } : {}),
     ...(hashes.instructionsHash !== undefined ? { instructions_hash: hashes.instructionsHash } : {}),

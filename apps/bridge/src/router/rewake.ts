@@ -3,6 +3,7 @@
 // supervisor resumes the session and types the pointer; a second death, or a session the owner stopped, goes to main at once.
 import { type ErrorCodeT, supervisorFresh, type WorkersFileT } from '@talos-app/protocol'
 import type { BridgeContext } from '../context.ts'
+import { isKeptWake } from '../wake-me/drop.ts'
 import { ownersOwn } from '../worker/busy-line.ts'
 import type { RouteRow, WorkerStore } from '../worker/store.ts'
 import { goneRows } from './reasons.ts'
@@ -77,9 +78,11 @@ export class GoneWatch {
     const seenBefore = stale && this.staleBeat === file?.supervisor.heartbeat_at
     this.staleBeat = stale ? (file?.supervisor.heartbeat_at ?? null) : null
     const waiting = store.allUnclaimed()
+    // a wake held for its own session is not a dead session's message: it is kept until the session can read it (wake-me/drop.ts)
+    const heldWakes = new Set(waiting.filter((r) => isKeptWake(ctx, r)).map((r) => r.message_id))
     return [
       ...goneRows(file, now, waiting, this.reach, seenBefore),
       ...rewakeDead(ctx, store, file, waiting, (t) => this.wake(t, 'message'), this.reach),
-    ]
+    ].filter(([row]) => !heldWakes.has(row.message_id))
   }
 }

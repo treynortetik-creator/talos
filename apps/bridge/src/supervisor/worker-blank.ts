@@ -8,9 +8,11 @@ import { newNoticeRuntime } from './worker-notices.ts'
 import type { WorkerRuntime } from './worker-types.ts'
 
 export function blankWorker(id: string, entry: WorkerEntryT): WorkerRuntime {
+  // pane text of an earlier supervisor is never carried (workers.json `quiet_lines`): this one writes its own from what it sees
+  const { quiet_lines: _stale, ...rest } = entry
   return {
     id,
-    entry,
+    entry: rest as WorkerEntryT,
     host: null,
     startedAt: null,
     parkAt: null,

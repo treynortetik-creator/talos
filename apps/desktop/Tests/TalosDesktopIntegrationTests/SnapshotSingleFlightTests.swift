@@ -127,15 +127,19 @@ struct SnapshotSingleFlightTests {
     m.startTicking()
     var seen = 0
     var torn = 0
+    var sources: Set<Substring> = []
+    // Reads run until the source has flipped 300 times (a bound of 3 s so a stalled tick fails and does not hang).
     let until = Date().addingTimeInterval(3)
-    while Date() < until {
+    while Date() < until, flips.n < 300 {
       let o = m.options
       guard o.agentDir.hasPrefix("/a") else { continue }  // before the first tick it is the rig's own
       seen += 1
       let k = o.agentDir.suffix(1)
+      sources.insert(o.agentDir.suffix(2))
       if !o.claudePath.hasSuffix(k) || !(o.permissionFlag ?? "").hasSuffix(k) { torn += 1 }
     }
     #expect(seen > 0, "no tick ran")
+    #expect(sources == ["a1", "a2"], "reads saw only \(sources): the launch source never switched, so a half-written read could not show")
     #expect(torn == 0, "\(torn) of \(seen) reads saw a half-written launch source")
   }
 

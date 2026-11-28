@@ -19,6 +19,7 @@ import { NoopTransport } from '../../src/core/push.ts'
 import { runtimeOf } from '../../src/core/runtime.ts'
 import { loadEnv } from '../../src/env.ts'
 import { type RunningRelay, startRelay } from '../../src/index.ts'
+import type { Logger } from '../../src/services.ts'
 import { TEST_DATA_KEY } from '../helpers/fake-services.ts'
 
 export const ORIGIN = 'https://relay.example.com'
@@ -44,7 +45,9 @@ export type RealRelay = {
   stop(): Promise<void>
 }
 
-export async function startRealRelay(opts: { env?: Record<string, string>; clock?: Clock } = {}): Promise<RealRelay> {
+export async function startRealRelay(
+  opts: { env?: Record<string, string>; clock?: Clock; log?: Logger } = {},
+): Promise<RealRelay> {
   resetAuthImplementation() // the real auth module installs itself in register()
   const dir = mkdtempSync(join(tmpdir(), 'talos-real-'))
   const bridgeKey = await generateBridgeKey()
@@ -59,7 +62,14 @@ export async function startRealRelay(opts: { env?: Record<string, string>; clock
     ...opts.env,
   })
   const transport = new NoopTransport()
-  const relay = await startRelay({ env, host: '127.0.0.1', port: 0, clock: opts.clock ?? realClock, transport })
+  const relay = await startRelay({
+    env,
+    host: '127.0.0.1',
+    port: 0,
+    clock: opts.clock ?? realClock,
+    transport,
+    ...(opts.log ? { log: opts.log } : {}),
+  })
   const auth = authState(relay.services)
   const wsBase = `ws://127.0.0.1:${relay.port}`
   const httpBase = `http://127.0.0.1:${relay.port}`

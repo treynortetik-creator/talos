@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { bridgeChildEnv } from '@talos-app/testkit'
 import { runInstallGuards, withGuardsSettings } from '../src/guards/install.ts'
 import { buildGuardConfig, denyRules, guardDecision } from '../src/guards/rules.ts'
 import { DEFAULT_ASK_RULES } from '../src/permission/ask-rules.ts'
@@ -1126,18 +1127,21 @@ describe('guard-hook process', () => {
   test('answers a PreToolUse call with a deny, and fails closed on garbage', async () => {
     runInstallGuards(install, [], { out: () => {}, err: () => {} })
     const run = async (stdin: string) => {
-      const p = Bun.spawn(
-        [
-          process.execPath,
-          join(import.meta.dir, '..', 'src', 'cli.ts'),
-          'guard-hook',
-          '--config',
-          rulesPath(),
-          '--sha',
-          sha(),
-        ],
-        { stdin: new Response(stdin), stdout: 'pipe', stderr: 'pipe' },
-      )
+      const argv = [
+        process.execPath,
+        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        'guard-hook',
+        '--config',
+        rulesPath(),
+        '--sha',
+        sha(),
+      ]
+      const p = Bun.spawn(argv, {
+        stdin: new Response(stdin),
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: bridgeChildEnv(argv, { TALOS_TEST_ROOT: root, HOME: userHome }).env,
+      })
       return { out: await new Response(p.stdout).text(), code: await p.exited }
     }
     const denied = await run(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'claude plugin install x' } }))
@@ -1168,10 +1172,19 @@ describe('guard-hook process', () => {
     const rules = rulesPath()
     const original = readFileSync(rules, 'utf8')
     const ask = async (extra: string[]) => {
-      const p = Bun.spawn(
-        [process.execPath, join(import.meta.dir, '..', 'src', 'cli.ts'), 'guard-hook', '--config', rules, ...extra],
-        { stdin: new Response(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } })), stdout: 'pipe' },
-      )
+      const argv = [
+        process.execPath,
+        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        'guard-hook',
+        '--config',
+        rules,
+        ...extra,
+      ]
+      const p = Bun.spawn(argv, {
+        stdin: new Response(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } })),
+        stdout: 'pipe',
+        env: bridgeChildEnv(argv, { TALOS_TEST_ROOT: root, HOME: userHome }).env,
+      })
       const out = await new Response(p.stdout).text()
       await p.exited
       return out.trim() ? JSON.parse(out).hookSpecificOutput.permissionDecision : 'allow'

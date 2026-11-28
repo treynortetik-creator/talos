@@ -78,6 +78,9 @@ public enum OsSandbox {
     public var trustedBridge: TrustedBridge?
     /// Main's launch arguments (`--add-dir` refuses the start); empty for a thread session.
     public var launchArgs: [String] = []
+    /// The folders besides the session's own that a session can write (nil: the shared temp folders). A kit inside one is never credited; a test
+    /// whose kit sits in a temp folder names none.
+    public var writableRoots: [String]?
     public init(
       talosHome: String, userHome: String, folder: String, claudeDir: String, gitConfigCount: Int = 0, loadsProject: Bool = true,
       ownerExcludes: [String] = []
@@ -96,8 +99,18 @@ public enum OsSandbox {
   public struct TrustedBridge: Equatable, Sendable {
     public var bun: String
     public var bridgeDir: String
-    public init(bun: String, bridgeDir: String) { self.bun = bun; self.bridgeDir = bridgeDir }
-    var asTrusted: OsSandboxFolder.Trusted { .init(bun: bun, bridgeDir: bridgeDir) }
+    /// Other buns Talos may be started by (every one the fixed list and the guards' hook name that is not this one, never one in a temp folder):
+    /// fenced and write-protected too.
+    public var extraBuns: [String] = []
+    /// `bun` is in a shared temp folder (or the Talos home): the record and its denies stay, but a `talos-app` server entry is refused.
+    public var bunInTemp = false
+    public init(bun: String, bridgeDir: String, extraBuns: [String] = [], bunInTemp: Bool = false) {
+      self.bun = bun
+      self.bridgeDir = bridgeDir
+      self.extraBuns = extraBuns
+      self.bunInTemp = bunInTemp
+    }
+    var asTrusted: OsSandboxFolder.Trusted { .init(bun: bun, bridgeDir: bridgeDir, extraBuns: extraBuns, bunInTemp: bunInTemp) }
   }
 
   public struct Pieces: Equatable, @unchecked Sendable {
@@ -184,7 +197,7 @@ public enum OsSandbox {
         // nothing is added to what Claude Code lets a session write by default (its folder and tmp): the Talos home is NOT writable from a
         // session. The agent's Talos work goes through the talos-app MCP server, which runs outside the sandbox.
         "allowWrite": [String](),
-        "denyWrite": try under(denyWriteNames) + OsSandboxFolder.denyWrite(folder, userHome: i.userHome, kitDir: i.kitDir, clone: i.trustedBridge?.asTrusted.clone).flatMap(forms),
+        "denyWrite": try under(denyWriteNames) + OsSandboxFolder.denyWrite(folder, userHome: i.userHome, kitDir: i.kitDir, trusted: i.trustedBridge?.asTrusted).flatMap(forms),
         "denyRead": try under(denyReadNames),
       ] as [String: Any],
     ]
@@ -397,7 +410,7 @@ public enum OsSandbox {
     do {
       let folder = try resolveReal(i.folder, "the session's folder")
       if let why = OsSandboxFolder.launchArgsProblem(i.launchArgs) { return .refused(why) }
-      if let problem = OsSandboxFolder.launchProblem(folder, claudeDir: i.claudeDir, loadsProject: i.loadsProject, kitDir: kitDir, userHome: i.userHome, talosHome: i.talosHome, trusted: i.trustedBridge?.asTrusted) {
+      if let problem = OsSandboxFolder.launchProblem(folder, claudeDir: i.claudeDir, loadsProject: i.loadsProject, kitDir: kitDir, userHome: i.userHome, talosHome: i.talosHome, trusted: i.trustedBridge?.asTrusted, writableRoots: i.writableRoots) {
         return .refused(problem)
       }
       var withKit = i

@@ -1,3 +1,4 @@
+// gate-reads: apps/web/src/*.ts apps/web/src/*.tsx
 import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { buildConfig, relayOrigin } from '../capacitor.config'

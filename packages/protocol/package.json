@@ -10,7 +10,7 @@
     "./fixtures/*": "./fixtures/*"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../../scripts/typecheck.mjs",
     "test": "vitest run",
     "test:browser": "playwright test -c playwright.config.ts",
     "gen:fixtures": "node scripts/gen-fixtures.ts"

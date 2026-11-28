@@ -5,6 +5,7 @@ import { rateLimit } from './auth/contract.ts'
 import { routes as authRoutes } from './auth/index.ts'
 import { globalBodyCap } from './core/body-guard.ts'
 import { routes as coreRoutes } from './core/index.ts'
+import { scrubError } from './core/log.ts'
 import { isClientHangup, recorderOf } from './core/problems.ts'
 import { routes as hookRoutes } from './hooks/index.ts'
 import { assertRouteTable } from './route-table.ts'
@@ -30,7 +31,7 @@ export function buildApp(services: RelayServices): Hono<AppEnv> {
       services.log.debug({ err: (err as Error).message }, 'client hung up mid-request')
       return c.text('Internal Server Error', 500)
     }
-    console.error(err)
+    console.error(scrubError(err))
     recorderOf(services).record(err)
     return c.text('Internal Server Error', 500)
   })

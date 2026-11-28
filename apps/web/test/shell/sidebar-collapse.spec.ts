@@ -103,12 +103,17 @@ test.describe('desktop sidebar', () => {
     await expect(rail.getByRole('link', { name: /Needs you/ })).toHaveAccessibleName(/Needs you.*1 need you/)
     // Tab walks toggle -> rows, in order, all focusable
     await toggle(page).focus()
+    // (Tab until Settings, the last row, so a new row such as Terminal does not push it out of reach of a fixed count)
     const seen: string[] = []
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 20 && seen.at(-1) !== '/settings'; i++) {
       await page.keyboard.press('Tab')
       seen.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? ''))
     }
     expect(seen).toEqual(expect.arrayContaining(['/', '/t/inbox', '/schedules', '/settings']))
+    const at = (href: string) => seen.indexOf(href)
+    expect(at('/') < at('/t/inbox') && at('/t/inbox') < at('/schedules') && at('/schedules') < at('/settings')).toBe(
+      true,
+    )
     // folded rows do not carry the manage-threads controls
     await expect(page.getByTestId('edit-threads')).toHaveCount(0)
     const axe = await new AxeBuilder({ page }).include('[aria-label="Sidebar"]').analyze()

@@ -347,7 +347,6 @@ def build(verbose=False):
     return {
         "version": 1,
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "repo": REPO,
         "notes": notes,
         "alias": alias,
         "title": tit,

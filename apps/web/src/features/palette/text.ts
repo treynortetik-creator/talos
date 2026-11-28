@@ -6,6 +6,7 @@ export const PALETTE_TEXT = {
   nothing: 'Nothing matches.',
   nothingNeeds: 'Nothing needs you right now.',
   searchHint: 'in all messages',
+  memoryHint: 'Memory',
   close: 'Close',
   commands: 'Commands',
   needsGroup: 'Needs you',

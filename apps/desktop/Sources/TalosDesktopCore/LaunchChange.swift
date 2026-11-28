@@ -17,7 +17,9 @@ public enum LaunchChange: Equatable, Sendable {
     public var model: String
     public var effort: String?
     public var mcpAllow: [String]?
-    public init(cwd: String?, model: String, effort: String?, mcpAllow: [String]?) {
+    public var compactWindow: Int?
+    public init(cwd: String?, model: String, effort: String?, mcpAllow: [String]?, compactWindow: Int? = nil) {
+      self.compactWindow = compactWindow
       self.cwd = cwd
       self.model = model
       self.effort = effort
@@ -43,6 +45,7 @@ public enum LaunchChange: Equatable, Sendable {
     if !isUnread("model"), l.model != wanted.model { changed.append("model") }
     if !isUnread("effort"), l.effort != wanted.effort { changed.append("effort") }
     if l.mcp_allow?.sorted() != wanted.mcpAllow { changed.append("mcp_allow") }
+    if l.compact_window != wanted.compactWindow { changed.append("compact_window") }
     return changed.isEmpty ? .none : .restart(wanted: wanted, changed: changed)
   }
 

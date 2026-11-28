@@ -194,6 +194,11 @@ public struct WorkerSpec: Equatable, Sendable {
     /// The opt-in OS sandbox (`OsSandbox`), built by the supervisor for this start when config.json says `os_sandbox: true`: its block and
     /// environment go into the settings. nil: the switch is off and the launch is as before.
     public var osSandbox: OsSandbox.Pieces?
+    /// This start is a `--resume` that resumes the turn the last launch had cut (`CutTurn`): Claude Code is asked to continue it. Ignored
+    /// for a start that is not `--resume`.
+    public var resumeCutTurn = false
+    /// The thread's compact point in tokens (`compactWindowEnv`); nil: not set.
+    public var compactWindow: Int?
 
     public init(
       threadId: String, claudePath: String, baseEnv: [String: String], talosHome: String, agentDir: String,
@@ -225,6 +230,14 @@ public struct WorkerSpec: Equatable, Sendable {
       self.mainArgs = mainArgs
       self.mainDefaultMode = mainDefaultMode
     }
+  }
+
+  /// A thread's compact point as the variable Claude Code reads (it outranks the autoCompactWindow setting): plain digits, nothing for unset
+  /// or for a value outside the range (apps/bridge/src/supervisor/compact-window.ts is the same rule). The name is in `ClaudeEnvScrub.keep`.
+  public static let compactWindowRange = 100_000...1_000_000
+  public static func compactWindowEnv(_ n: Int?) -> [String: String] {
+    guard let n, compactWindowRange.contains(n) else { return [:] }
+    return ["CLAUDE_CODE_AUTO_COMPACT_WINDOW": String(n)]
   }
 
   public static func settingsPath(talosHome: String, threadId: String) -> String {
@@ -261,9 +274,12 @@ public struct WorkerSpec: Equatable, Sendable {
     if i.permissionHook.stateBytes != nil { env[WorkerHook.threadStateEnv] = "1" }
     env["TALOS_APP_HOME"] = i.talosHome
     env["TALOS_APP_WORKER_NONCE"] = i.nonce
+    // the only CLAUDE_CODE_ names a session is given (everything inherited was scrubbed above): a resume of a cut turn, nothing else
+    if i.resume, i.resumeCutTurn { env.merge(CutTurn.resumeEnv) { _, new in new } }
     // a Telegram or iMessage plugin that starts anyway finds no token here and exits before it touches anything
     env["TELEGRAM_STATE_DIR"] = noChannel
     env["IMESSAGE_STATE_DIR"] = noChannel
+    for (k, v) in compactWindowEnv(i.compactWindow) { env[k] = v }
     // with a list, claude.ai connectors are not fetched (the setting below says the same; some versions read only one of them)
     if i.mcp != nil { env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false" }
 
@@ -316,6 +332,9 @@ public struct WorkerSpec: Equatable, Sendable {
     for key in i.mcp?.disabledPlugins ?? [] where !InstructionFiles.isPlugin(key: key) { plugins[key] = false }
     var settings = InstructionFiles.merged(["enabledPlugins": plugins])
     if let e = i.effort { settings["effortLevel"] = e }
+    // the compact point rides in the settings env too: the owner's user settings env would otherwise win over the one in the process env
+    let compact = compactWindowEnv(i.compactWindow)
+    if !compact.isEmpty { settings["env"] = compact }
     // no auto mode (a subagent's or a setting's `auto` would let a classifier answer the prompts this hook raises), and no inline
     // shell from skills or custom commands, which runs with no prompt at all (Hestia's third review, F2 and F3)
     settings["disableAutoMode"] = "disable"
@@ -415,6 +434,7 @@ public struct WorkerSpec: Equatable, Sendable {
       "hooks": [["type": "command", "timeout": 3600, "command": WorkerHook.command(hook, for: session)]]
     ])
     hooks["PermissionRequest"] = entries
+    WorkerPreTool.add(to: &hooks, session: session)  // the PreToolUse record the permission hook looks its call up by (pretool-hook.ts)
     out["hooks"] = hooks
     return out
   }
@@ -446,9 +466,20 @@ public struct WorkerSpec: Equatable, Sendable {
         throw BuildError.forbiddenEnv(k)
       }
     }
+    // the cut-turn names come as the pair, with exactly these values, and only on a `--resume` (CutTurn.resumeEnv)
+    let resumeNames = CutTurn.resumeEnv.keys.filter { env[$0] != nil }
+    if !resumeNames.isEmpty {
+      for (k, v) in CutTurn.resumeEnv where env[k] != v { throw BuildError.forbiddenEnv(k) }
+      if !args.contains("--resume") { throw BuildError.forbiddenEnv(resumeNames.sorted()[0]) }
+    }
     // the state dirs may only ever be the empty folder: the plugins read a token from there
     let empty = env["TALOS_APP_HOME"].map { Self.noChannelDir(talosHome: $0) }
     for k in ["TELEGRAM_STATE_DIR", "IMESSAGE_STATE_DIR"] where env[k] != empty { throw BuildError.forbiddenEnv(k) }
+    // the settings env may carry the compact point, and only with the value the process env has
+    if let senv = (try? JSONSerialization.jsonObject(with: Data(settingsJSON.utf8)) as? [String: Any])?["env"] as? [String: Any] {
+      for (k, v) in senv where k == "CLAUDE_CODE_AUTO_COMPACT_WINDOW" && (v as? String) != env[k] { throw BuildError.forbiddenEnv(k) }
+      for k in senv.keys where k != "CLAUDE_CODE_AUTO_COMPACT_WINDOW" && ClaudeEnvScrub.isInherited(k) { throw BuildError.forbiddenEnv(k) }
+    }
     guard env["TALOS_APP_WORKER_THREAD"] == threadId else { throw BuildError.forbiddenEnv("TALOS_APP_WORKER_THREAD") }
     guard settingsJSON.contains("\"\(Self.telegramPlugin)\":false"), settingsJSON.contains("\"\(Self.imessagePlugin)\":false")
     else { throw BuildError.forbiddenEnv("enabledPlugins") }

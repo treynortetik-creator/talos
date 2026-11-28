@@ -26,6 +26,8 @@ export type BridgeOptions = {
   scheduleWatchFn?: (path: string, onChange: () => void) => { close(): void }
   /** MCP apps test seam: Keychain runner, direct connector, switch, tick. Production passes nothing. */
   apps?: Partial<AppServiceDeps>
+  /** Terminal view test seams: where a pane comes from, or no service at all. Production passes nothing. */
+  term?: import('./term/wiring.ts').TermWiringOptions
   /** Linked agents test seam: the key store, the fetch to the other inbox and the clock of the sender loop. Production passes nothing. */
   peers?: import('./peer/service.ts').PeerServiceOptions
   /** Tests: swap the read-aloud synthesis or its timing. */

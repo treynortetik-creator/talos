@@ -237,6 +237,7 @@ describe('gate.sh picks the suites from the changed paths', () => {
       const e: Record<string, string | undefined> = { ...env, PATH: `${bin}:${env.PATH}` }
       delete e.GATE_CORES
       delete e.TALOS_TEST_TIME_FACTOR
+      e.GATE_LOAD = '0' // an idle machine: the real load never enters a test
       const out = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', r.base], {
         cwd: r.T,
         env: e,
@@ -248,6 +249,93 @@ describe('gate.sh picks the suites from the changed paths', () => {
     expect(factor('4', 10)).toBe('1') // a base M5: 4 performance cores beside 6 efficiency ones, 10 in all: a fast machine
     expect(factor('12')).toBe('1') // a big Mac keeps factor 1
     expect(factor(null)).toBe('1') // no performance levels: nproc's 8
+  })
+
+  // The factor follows the load measured at the start (scripts/talos-machine.sh, talos_time_factor): max(core floor, clamp(ceil(load /
+  // cores), 1, 4)), the load being the larger of the 1- and 5-minute averages. GATE_LOAD stands in for the reading: no test loads
+  // the machine.
+  describe('the time factor follows the load', () => {
+    let made: ReturnType<typeof repo> | undefined
+    const rr = () => (made ??= repo())
+    const plan = (cores: number, load: string | undefined, set?: string) => {
+      const e: Record<string, string | undefined> = { ...env, GATE_CORES: String(cores) }
+      if (load === undefined) delete e.GATE_LOAD
+      else e.GATE_LOAD = load
+      delete e.TALOS_TEST_TIME_FACTOR
+      if (set !== undefined) e.TALOS_TEST_TIME_FACTOR = set
+      const out = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', rr().base], {
+        cwd: rr().T,
+        env: e,
+        encoding: 'utf8',
+      })
+      return { factor: /time factor: ([0-9.]+) /.exec(out.stderr)?.[1], err: out.stderr }
+    }
+    it.each([
+      // [cores, load, factor, why]
+      [18, '0', '1', 'idle'],
+      [18, '17.9', '1', 'under one per core'],
+      [18, '18', '1', 'exactly one per core'],
+      [18, '18.1', '2', 'just over one per core'],
+      [18, '36', '2', 'two per core'],
+      [18, '40', '3', 'the 11-25 loads on this Mac (40 to 140) at 18 cores'],
+      [18, '72', '4', 'four per core'],
+      [18, '140', '4', 'capped at 4'],
+      [18, '5 40', '3', 'a quiet minute inside a loaded five: the larger counts'],
+      [18, '40 5', '3', 'a loaded minute: the larger counts'],
+      [4, '0', '3', 'the core floor alone, 4 cores'],
+      [2, '1', '3', 'the core floor, 2 cores: never lower than before'],
+      [4, '12', '3', 'at the floor already'],
+      [4, '13', '4', 'above the floor'],
+      [4, '400', '4', 'capped at 4 even on a small machine'],
+      [8, '0', '1', '8 cores idle: as before'],
+    ])('%i cores, load %s: factor %s (%s)', (cores, load, want) => {
+      const p = plan(cores, load)
+      expect(p.factor, p.err).toBe(want)
+    })
+    it('the load unreadable (no number): the core floor alone, said so', () => {
+      for (const bad of ['abc', '{ }', '-', '1,5']) {
+        const wide = plan(18, bad)
+        expect(wide.factor, bad).toBe('1')
+        expect(wide.err).toContain('load unreadable')
+        expect(plan(4, bad).factor, bad).toBe('3')
+      }
+    })
+    it('an explicit TALOS_TEST_TIME_FACTOR wins, higher or lower, whatever the load', () => {
+      const low = plan(2, '500', '1')
+      expect(low.factor).toBe('1')
+      expect(low.err).toContain('already set')
+      expect(plan(18, '0', '5').factor).toBe('5')
+    })
+    it('says the factor and its reason in the gate line', () => {
+      const p = plan(18, '40')
+      expect(p.err).toMatch(/time factor: 3 \(test budgets x3; load 40 on 18 cores/)
+    })
+    it('reads the machine when GATE_LOAD is not set: sysctl vm.loadavg, the first two figures', () => {
+      const bin = join(rr().T, 'loadbin')
+      mkdirSync(bin, { recursive: true })
+      const run = (sysctlOut: string | null) => {
+        const s = join(bin, 'sysctl')
+        writeFileSync(
+          s,
+          sysctlOut === null
+            ? '#!/bin/sh\nexit 1\n'
+            : `#!/bin/sh\n[ "$2" = vm.loadavg ] && echo '${sysctlOut}' && exit 0\nexit 1\n`,
+        )
+        chmodSync(s, 0o755)
+        const e: Record<string, string | undefined> = { ...env, PATH: `${bin}:${env.PATH}`, GATE_CORES: '18' }
+        delete e.GATE_LOAD
+        delete e.TALOS_TEST_TIME_FACTOR
+        const out = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', rr().base], {
+          cwd: rr().T,
+          env: e,
+          encoding: 'utf8',
+        })
+        return /time factor: ([0-9.]+) /.exec(out.stderr)?.[1]
+      }
+      expect(run('{ 41.20 12.00 5.00 }')).toBe('3') // macOS
+      expect(run('{ 1.20 40.00 5.00 }')).toBe('3') // the 5-minute figure
+      expect(run('{ 1.20 2.00 50.00 }')).toBe('1') // the 15-minute figure is not read
+    })
   })
 
   it('the gate runs from a sub-folder too (its scripts are named from the top)', () => {
@@ -606,6 +694,107 @@ describe('gate.sh picks the suites from the changed paths', () => {
     const other = repo()
     other.commit({ 'apps/bridge/src/memory/x.ts': 'x\n' })
     expect(other.plan()).not.toContain('e2e') // not every bridge change
+  })
+
+  it('an e2e spec with a `// gate-reads:` line runs when a changed or deleted file matches it, in the e2e list and no other', () => {
+    const r = repo()
+    r.put(
+      'e2e/tests/schedules.spec.ts',
+      '// gate-reads: apps/bridge/src/schedules/* apps/relay/src/core/schedules.ts\ntest\n',
+    )
+    r.put(
+      'e2e/tests/02-chat.spec.ts',
+      "// gate-reads: apps/web/src/features/chat/*\nconst s = '// gate-reads: apps/bridge/src/*'\n",
+    )
+    r.put('apps/bridge/src/schedules/service.ts')
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'marks')
+    const marked = r.git('rev-parse', 'HEAD')
+    const planOf = (base: string) => {
+      const p = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', base], { cwd: r.T, env, encoding: 'utf8' })
+      expect(p.stderr).not.toContain('plan-check:') // the second count agreed
+      expect(p.status, p.stderr).toBe(0)
+      return p.stdout.trim().split('\n')
+    }
+    // a bridge file under the folder: the whole bridge suite (as before) and now the spec, once, relative to e2e/
+    r.commit({ 'apps/bridge/src/schedules/service.ts': 'y\n', 'apps/bridge/src/schedules/more.ts': 'y\n' })
+    expect(planOf(marked)).toEqual([...CHECKS, 'bun-all', 'e2e', '\ttests/schedules.spec.ts'])
+    // a file outside every pattern (and a line that is only text inside a string) plans no spec
+    const before = r.git('rev-parse', 'HEAD')
+    r.commit({ 'apps/bridge/src/schedulesx/a.ts': 'y\n', 'apps/bridge/src/other.ts': 'y\n' })
+    expect(planOf(before)).toEqual([...CHECKS, 'bun-all'])
+    // another app's file, named exactly: that spec, beside the file's own Vitest run
+    const relay = r.git('rev-parse', 'HEAD')
+    r.commit({ 'apps/relay/src/core/schedules.ts': 'y\n' })
+    expect(planOf(relay)).toEqual([
+      ...CHECKS,
+      'vitest',
+      '\tapps/relay/src/core/schedules.ts',
+      'e2e',
+      '\ttests/schedules.spec.ts',
+      'old-client', // a relay source file, as before
+    ])
+    // a deleted file that matches runs it too
+    const del = r.git('rev-parse', 'HEAD')
+    r.git('rm', '-q', 'apps/bridge/src/schedules/service.ts')
+    r.git('commit', '-qm', 'rm')
+    expect(planOf(del)).toEqual([...CHECKS, 'bun-all', 'e2e', '\ttests/schedules.spec.ts'])
+    // the spec's own line says nothing about itself: a mark on the spec file alone plans just that spec, once
+    const own = r.git('rev-parse', 'HEAD')
+    r.commit({ 'e2e/tests/schedules.spec.ts': '// gate-reads: apps/bridge/src/schedules/*\nchanged\n' })
+    expect(planOf(own)).toEqual([...CHECKS, 'e2e', '\ttests/schedules.spec.ts'])
+  })
+
+  it('a mark in a Vitest test and a mark in an e2e spec stay in their own lists', () => {
+    const r = repo()
+    r.put('scripts/scan.test.ts', '// gate-reads: apps/bridge/src/schedules/*\nconst all = 1\n')
+    r.put('e2e/tests/journeys/revoke.spec.ts', '// gate-reads: apps/bridge/src/schedules/*\ntest\n')
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'marks')
+    const marked = r.git('rev-parse', 'HEAD')
+    r.commit({ 'apps/bridge/src/schedules/a.ts': 'y\n' })
+    const p = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', marked], { cwd: r.T, env, encoding: 'utf8' })
+    expect(p.stderr).not.toContain('plan-check:')
+    expect(p.stdout.trim().split('\n')).toEqual([
+      ...CHECKS,
+      'vitest',
+      '\tscripts/scan.test.ts',
+      'bun-all',
+      'e2e',
+      '\ttests/journeys/revoke.spec.ts',
+    ])
+  })
+
+  it('every `// gate-reads:` pattern in the real e2e specs matches a file that is there (a renamed folder would leave a mark that reads nothing)', () => {
+    const root = join(here, '..')
+    const tracked = spawnSync('git', ['ls-files', '-z'], {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+    }).stdout.split('\0')
+    const specs = tracked.filter((f) => /^e2e\/tests\/.*\.spec\.ts$/.test(f))
+    expect(specs.length).toBeGreaterThan(0)
+    const glob = (p: string) =>
+      new RegExp(
+        `^${p
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*')
+          .replace(/\?/g, '.')}$`,
+        's',
+      )
+    for (const spec of specs) {
+      const marks = readFileSync(join(root, spec), 'utf8')
+        .split('\n')
+        .filter((l) => l.startsWith('// gate-reads:'))
+        .flatMap((l) => l.slice('// gate-reads:'.length).split(/[ \t]+/))
+        .filter((p) => p !== '')
+      for (const p of marks) {
+        expect(
+          tracked.some((f) => glob(p).test(f)),
+          `${spec}: ${p}`,
+        ).toBe(true)
+      }
+    }
   })
 
   /** A repo whose tests read some words and assets, and the commit to measure from. */

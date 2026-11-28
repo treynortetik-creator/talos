@@ -239,8 +239,12 @@ export class TmuxCommands {
   killSession(): string[] {
     return [...this.base, 'kill-session', '-t', this.sessionTarget]
   }
+  /**
+   * The activity time of each client at a keyboard; a control-mode client (the remote terminal view's) prints an empty
+   * row, so watching the pane is never read as the owner being at the keyboard (startup keys, restarts, idle parking).
+   */
   listClientsActivity(): string[] {
-    return [...this.base, 'list-clients', '-t', this.sessionTarget, '-F', '#{client_activity}']
+    return [...this.base, 'list-clients', '-t', this.sessionTarget, '-F', '#{?client_control_mode,,#{client_activity}}']
   }
   setOption(key: string, value: string): string[] {
     return [...this.base, 'set-option', '-t', `${this.sessionTarget}:`, `@${key}`, literalArg(value)]
@@ -307,13 +311,13 @@ export function parseCapture(out: string): string[] {
   return rows
 }
 
-/** One time (seconds since 1970) per attached client; empty when nobody is attached. Null when any row cannot be read. */
+/** One time (seconds since 1970) per attached client that can type; empty when nobody is. Null when any row cannot be read. */
 export function parseClientActivity(out: string): number[] | null {
   const rows = out.split('\n').map((r) => r.trim())
-  if (rows[rows.length - 1] === '') rows.pop()
   const times: number[] = []
   for (const r of rows) {
-    if (r === '' || !Number.isFinite(Number(r))) return null
+    if (r === '') continue // a control-mode client (the terminal view's): not someone at the keyboard
+    if (!Number.isFinite(Number(r))) return null
     times.push(Number(r))
   }
   return times

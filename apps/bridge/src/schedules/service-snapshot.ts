@@ -174,7 +174,10 @@ export async function noticesFor(this: ScheduleService, snap: ScheduleSnapshotT)
     const r = s.last_run
     // `ds` is a run key (a date, or a slot like 2026-10-05T0945): its DATE is what ages out, never the whole string
     if (r && FAILURE_STATUSES.has(r.status) && dateOfRunKey(r.ds) >= cutoff) {
-      const keys = failKeys(s.id, r.run_id, r.ds, r.status)
+      // While Main's repair of this job is waiting, a failed rerun is a new failure: it is told by its run id alone, because the
+      // day's key was marked by the failure that woke Main.
+      const all = failKeys(s.id, r.run_id, r.ds, r.status)
+      const keys = r.run_id && this.sidecar.waitingRepairOf(s.id) ? all.slice(0, 1) : all
       if (!keys.some((k) => this.sidecar.wasNotified(k))) await this.reportFailure(s, r.status, r.ds, keys)
     }
     if (s.today === 'missed') {
@@ -196,8 +199,14 @@ export function markAll(this: ScheduleService, keys: string[]): boolean {
 
 export async function reportFailure(this: ScheduleService, s: ScheduleT, status: string, ds: string, keys: string[]) {
   if (!this.markAll(keys)) return
-  await this.postFailure(s.id, s.name, status, ds)
-  this.pendingAlerts.push({ kind: 'job_failed', key: `${s.id}:${ds}`.slice(0, 80) })
+  await this.jobFailed({
+    id: s.id,
+    name: s.name,
+    status,
+    ds,
+    runId: status === 'missed' ? undefined : s.last_run?.run_id,
+    row: true,
+  })
 }
 
 /** How long a "paused because its thread is archived" mark may sit before it is renewed, so the sidecar's 8-day prune never drops it. */
@@ -252,12 +261,20 @@ export function missedWhy(this: ScheduleService, jobId: string, day: string | un
 }
 
 /** A `system` row in the job's own thread (pin-notice path). */
-export async function postFailure(this: ScheduleService, jobId: string, name: string, status: string, ds?: string) {
+export async function postFailure(
+  this: ScheduleService,
+  jobId: string,
+  name: string,
+  status: string,
+  ds?: string,
+  /** Main was woken to fix it (service-repair.ts): the row says so instead of sending the owner to Schedules. */
+  repairing = false,
+) {
   const why = FAILURE_WORDS[status] ?? status
   const text =
     status === 'missed'
       ? `Scheduled job "${safeLine(name)}" was missed: ${this.missedWhy(jobId, ds)}. Open Schedules.`
-      : `Scheduled job "${safeLine(name)}" didn't finish: ${why}. Open Schedules.`
+      : `Scheduled job "${safeLine(name)}" didn't finish: ${why}. ${repairing ? 'Main is looking into it.' : 'Open Schedules.'}`
   await postSystemNotice(this.ctx, text, { thread: this.threadOfJob(jobId) })
 }
 

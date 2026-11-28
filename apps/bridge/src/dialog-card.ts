@@ -347,6 +347,8 @@ export class DialogCards {
     if (main && MAIN_DIALOG_KINDS.has(main.kind)) found.push([this.ctx.config.config.default_thread, main, true])
     for (const [thread, d, isMain] of found) {
       if (this.rec(d.id) || !this.ctx.config.thread(thread)) continue
+      // an open AskUserQuestion is already mirrored by the hook's question cards (permission/question.ts): no second card for it
+      if (d.kind === 'agent_question' && this.ctx.questions?.pendingFor(thread)) continue
       this.mint(thread, d, isMain, false).catch((e) =>
         this.ctx.log.warn('dialog card not made', { thread, error: (e as Error).message }),
       )

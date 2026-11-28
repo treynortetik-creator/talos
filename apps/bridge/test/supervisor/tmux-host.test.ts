@@ -75,6 +75,9 @@ describe('tmux commands', () => {
     expect(parseClientActivity('')).toEqual([])
     expect(parseClientActivity('1700000000\n1700000001\n')).toEqual([1700000000, 1700000001])
     expect(parseClientActivity('17x\n')).toBeNull()
+    // a control-mode client (the terminal view's) prints an empty row: it is not someone at the keyboard, so it is not a client
+    expect(parseClientActivity('\n')).toEqual([])
+    expect(parseClientActivity('\n1700000000\n\n')).toEqual([1700000000])
     expect(saysGone(1, "can't find session: =agent", false)).toBe(true)
     expect(saysGone(1, "can't find session: =agent", true)).toBe(false)
     expect(saysGone(1, 'some other error', false)).toBe(false)
@@ -83,6 +86,8 @@ describe('tmux commands', () => {
     const c = new TmuxCommands('tmux', '/c.conf', 't-trip', 'talos').withPane('%7')
     expect(c.capturePane()).toEqual(['tmux', '-L', 'talos', '-f', '/c.conf', 'capture-pane', '-p', '-J', '-t', '%7'])
     expect(c.killSession()).toContain('=t-trip')
+    // only a client that can type counts as the owner being there: a control-mode one (the terminal view's) prints nothing
+    expect(c.listClientsActivity().at(-1)).toBe('#{?client_control_mode,,#{client_activity}}')
     expect(c.withPane('not-a-pane').paneTarget).toBe('=t-trip:')
   })
 })

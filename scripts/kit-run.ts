@@ -3,8 +3,20 @@
 // leaves them running and the pipes never close, so the runner would wait forever and report nothing. So the script runs in its own
 // process group, a timeout kills the whole group, and the result is read from 'exit' with whatever output arrived by then.
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+
+/**
+ * The kit scripts the kit lane (scripts/kit-tests.test.ts) must run and pass: every test-*.sh, and self-test.sh, the kit's own
+ * install-then-check gate. self-test.sh is listed by name, not found by the folder scan, so deleting or renaming it fails the lane
+ * (bash cannot open it) instead of quietly dropping it.
+ */
+export const LANE_REQUIRED_EXTRA = ['self-test.sh']
+
+export function kitLaneScripts(kitScriptsDir: string): string[] {
+  const tests = readdirSync(kitScriptsDir).filter((f) => /^test-.*\.sh$/.test(f))
+  return [...new Set([...LANE_REQUIRED_EXTRA, ...tests])].sort()
+}
 
 export type RunResult = { code: number | null; out: string; timedOut: boolean }
 

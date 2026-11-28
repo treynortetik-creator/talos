@@ -432,7 +432,6 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
       } as Logger,
       authority: () => w.fake.url,
     })
-    let visible = false
     const cfg: AgentConfigT = { ...DEFAULT_AGENT_CONFIG, ...over }
     const push = new CorePush({
       store: w.r.runtime.store,
@@ -448,11 +447,10 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
       } as Logger,
       transport: web,
       config: () => cfg,
-      anyVisible: () => visible,
       apns: sender,
     })
     for (const e of webEndpoints) w.r.runtime.store.putSub({ endpoint: e, keys: { p256dh: 'a', auth: 'b' } })
-    return { w, push, web, setVisible: (v: boolean) => (visible = v), sender }
+    return { w, push, web, sender }
   }
 
   it('the quiet window holds the phone back, the same as web push; system alarms go through', async () => {
@@ -477,8 +475,8 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
     expect(w.fake.requests[0]?.body.aps).toMatchObject({ alert: { title: 'Talos' } })
   })
 
-  it('master off, thread off, and a visible app each hold the phone back', async () => {
-    const off = await rig({ notifications: { master: false, show_thread_names: 'fixed_only' } })
+  it('master off and thread off each hold the phone back', async () => {
+    const off = await rig({ notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true } })
     await off.push.notify({ template: 'reply', thread_id: 'general' })
     expect(off.w.fake.requests).toHaveLength(0)
     await off.w.r.stop()
@@ -493,17 +491,6 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
     await thr.w.fake.close()
     relay = null
     fake = null
-
-    const vis = await rig()
-    vis.setVisible(true)
-    await vis.push.notify({ template: 'reply', thread_id: 'general' })
-    expect(vis.w.fake.requests).toHaveLength(0)
-    // an approval is the exception: a window nobody is reading must not swallow it (D24); see approval-priority.test.ts
-    await vis.push.notify({ template: 'needs_you', thread_id: 'general' })
-    expect(vis.w.fake.requests).toHaveLength(1)
-    vis.setVisible(false)
-    await vis.push.notify({ template: 'reply', thread_id: 'general' })
-    expect(vis.w.fake.requests).toHaveLength(2)
   })
 
   it('off mid-work: the owner turns the master switch off between two pushes; the second never leaves', async () => {
@@ -523,7 +510,6 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
       } as Logger,
       transport: new NoopTransport(),
       config: () => cfg,
-      anyVisible: () => false,
       apns: createApnsSender({
         config: { keyId: 'KEYID12345', teamId: 'TEAMID1234', keyP8: key.p8, bundleId: 'com.example.talos' },
         clock: w.clock,
@@ -541,7 +527,7 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
     })
     void push
     await live.notify({ template: 'reply', thread_id: 'general' })
-    cfg.notifications = { master: false, show_thread_names: 'fixed_only' }
+    cfg.notifications = { master: false, show_thread_names: 'fixed_only', web_message_text: true }
     await live.notify({ template: 'reply', thread_id: 'general' })
     expect(w.fake.requests).toHaveLength(1)
   })
@@ -586,7 +572,6 @@ describe('rules and dedupe (CorePush over the relay store and a real sender)', (
       } as Logger,
       transport: web,
       config: () => DEFAULT_AGENT_CONFIG,
-      anyVisible: () => false,
       apns: null,
     })
     await push.notify({ template: 'reply', thread_id: 'general' })

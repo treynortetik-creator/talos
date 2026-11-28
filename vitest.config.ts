@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // TALOS_TEST_TIME_FACTOR (scripts/gate.sh: 3 on a machine with 4 cores or fewer; default 1) scales every project's test and hook
 // budget: a slow machine runs the same tests, it only needs longer for each (packages/testkit/src/time-factor.ts)
@@ -8,6 +8,11 @@ const F = (() => {
 })()
 const TEST_MS = 30_000 * F
 const HOOK_MS = 10_000 * F
+
+// Off the push lanes (owner, 11-25: Windows and Linux are back-burner, Mac first): the WSL distro's tests run only with
+// TALOS_LINUX_LANE=1, which Titan's Linux check, Hestia's linux job, the nightly and every --full run set (scripts/ci-local/jobs-check.sh).
+// The gate and Lemnos's check, which never set it, leave them out; vitest related over a changed distro file says "no affected tests".
+const OFF_PUSH_LANE = process.env.TALOS_LINUX_LANE === '1' ? [] : ['**/windows-distro.test.ts']
 
 // Spec 2 names `vitest.workspace.ts`; Vitest 3.2+ replaced workspace files with `test.projects`
 // (see "Spec calls made" in the WP0 PR). The bridge is excluded: it runs under `bun test`.
@@ -50,6 +55,8 @@ export default defineConfig({
         test: {
           name: 'relay',
           root: 'apps/relay',
+          // no inherited session variables, no real Chronos, a fake claude first on PATH: as apps/bridge/test/preload.ts does for bun
+          setupFiles: ['../bridge/test-contract/vitest-setup.ts'],
           testTimeout: TEST_MS,
           hookTimeout: HOOK_MS,
           include: ['test/**/*.test.ts'],
@@ -84,6 +91,7 @@ export default defineConfig({
           testTimeout: TEST_MS,
           hookTimeout: HOOK_MS,
           include: ['**/*.test.ts'],
+          exclude: [...configDefaults.exclude, ...OFF_PUSH_LANE],
           // the shared heavy lock's variables never reach a test (scripts/test-env-clean.ts)
           setupFiles: ['./test-env-clean.ts'],
         },

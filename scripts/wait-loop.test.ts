@@ -1,5 +1,6 @@
 // The wait-for-a-file loop a stub uses (scripts/wait-loop.ts) ends on the file, on its folder going, and on a cap; and no test
 // stub in scripts/ has a loop that waits for ever.
+// gate-reads: scripts/*.test.ts scripts/*-test.sh scripts/*-tests.sh apps/bridge/test/*
 import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync,

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
 import { MAX_FRAME_BYTES, WS_CLOSE } from '@talos-app/protocol'
 import { WebSocketServer } from 'ws'
+import { installConsoleScrub, logHashKeyFor, scrubError } from './core/log.ts'
 import { fileFatalProblem, installFatalHandlers } from './core/problems.ts'
 import { type CreateOptions, createRelayServices, runtimeOf } from './core/runtime.ts'
 import { loadEnv, type RelayEnv } from './env.ts'
@@ -128,6 +129,7 @@ export async function startRelay(
 
 async function main(): Promise<void> {
   const env = loadEnv()
+  installConsoleScrub(console, logHashKeyFor(env.DATA_KEY, env.RELAY_LOG_HASH_KEY)) // whatever a dependency prints is scrubbed too, hashed with the logger's key
   const webDir = process.env.TALOS_WEB_DIR
   installFatalHandlers({ dataDir: env.DATA_DIR })
   const relay = await startRelay({ env, ...(webDir ? { webDir } : {}) })
@@ -151,7 +153,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => {
-    console.error(e instanceof Error ? e.message : e)
+    console.error(scrubError(e))
     process.exit(1)
   })
 }

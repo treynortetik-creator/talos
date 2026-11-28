@@ -9,15 +9,11 @@ import { workerEnvStripRulesText } from './worker-spec.ts'
 /**
  * Never in the spec (one list, as the procedure asks): the values that differ on every launch. The nonce (its variable; its
  * file is written by the start itself, never one of `files`) and the session id, which rides in argv as the value of a session
- * flag (`--resume`, `-r`, `--session-id`, or their `=` forms) and is dropped with the flag.
+ * flag (`--resume`, `-r`, `--session-id`, or their `=` forms) and is dropped with the flag. And the two names a start sets only to
+ * resume a cut turn: that start is the same launch as an ordinary one (the Mac sets them; kept in step with LaunchSpecHash.swift).
  */
-export const LAUNCH_SPEC_EXCLUDED_ENV = ['TALOS_APP_WORKER_NONCE'] as const
-/**
- * Also never in the spec, on this platform only (the Mac does not set them yet, so the list the two share and swift-parity
- * checks stays the nonce alone): what makes a resume run the cut turn again (worker-spec.ts RESUME_TURN_ENV). Set for one
- * start, never for the next: in the hash they would restart the session once more for nothing.
- */
-export const LAUNCH_SPEC_EXCLUDED_ENV_LINUX = [
+export const LAUNCH_SPEC_EXCLUDED_ENV = [
+  'TALOS_APP_WORKER_NONCE',
   'CLAUDE_CODE_RESUME_INTERRUPTED_TURN',
   'CLAUDE_CODE_RESUME_REASON',
 ] as const
@@ -69,12 +65,7 @@ export const instructionsDigest = (bytes: string | Uint8Array): string => `sha25
 export function launchSpec(i: LaunchSpecInputs, digests: Readonly<Record<string, string>> = {}): LaunchSpecT {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(i.env))
-    if (
-      i.baseEnv[k] !== v &&
-      !(LAUNCH_SPEC_EXCLUDED_ENV as readonly string[]).includes(k) &&
-      !(LAUNCH_SPEC_EXCLUDED_ENV_LINUX as readonly string[]).includes(k)
-    )
-      env[k] = v
+    if (i.baseEnv[k] !== v && !(LAUNCH_SPEC_EXCLUDED_ENV as readonly string[]).includes(k)) env[k] = v
   const files: Record<string, string> = {}
   for (const [name, bytes] of Object.entries(i.files))
     if (bytes !== null && bytes !== undefined) files[name] = sha(bytes)

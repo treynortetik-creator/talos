@@ -27,20 +27,26 @@ enum OsSandboxLaunch {
     return value
   }
 
-  /// The bun and the bridge folder Talos itself recorded, where a session cannot write: the pins in the installed guards' hook
+  /// The bun(s) and the bridge folder Talos itself recorded, where a session cannot write: the pins in the installed guards' hook
   /// (`<home>/guards/settings.json`, protected from sessions: `<bun> <clone>/apps/bridge/src/cli.ts guard-hook ...`, kept current by the guards refresh) and the
-  /// bun from the fixed list the refresh uses. By real path. nil when the guards are not installed, or when either sits in the Talos home,
-  /// a session's folder or a temp folder (the same refusal the refresh makes): a `talos-app` server entry is then refused, not trusted.
-  static func recordedBridge(talosHome: String, home: String, unsafe: [String], tmpRoots: [String] = GuardsRefresh.tmpRoots) -> OsSandbox.TrustedBridge? {
+  /// buns from the fixed list the refresh uses. By real path. nil when the guards are not installed, or when the CLONE sits in the Talos home or a
+  /// temp folder (a place a session can write): a `talos-app` server entry is then refused, not trusted. The session's own folder never decides
+  /// this: a folder that holds or sits inside the clone must still get the record, or the clone fence (OsSandboxFolder.cloneFenceProblem) and the
+  /// write blocks would be dropped for exactly that folder. The first executable bun is the record's bun; the others (not in a temp folder) are
+  /// `extraBuns`; the record's bun in a temp folder or the Talos home sets `bunInTemp` (a `talos-app` entry that runs it is refused).
+  static func recordedBridge(talosHome: String, home: String, tmpRoots: [String] = GuardsRefresh.tmpRoots) -> OsSandbox.TrustedBridge? {
     guard let data = FileManager.default.contents(atPath: GuardsSettings.path(talosHome: talosHome)), let pins = GuardsRefresh.pins(settings: data),
       let cli = Supervisor.realPath(pins.cli)
     else { return nil }
     let candidates = GuardsRefresh.bunCandidates(home: home) + [pins.bun]
-    guard let bun = candidates.lazy.compactMap({ Supervisor.realPath($0) }).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+    var buns: [String] = []
+    for b in candidates.compactMap({ Supervisor.realPath($0) }) where FileManager.default.isExecutableFile(atPath: b) && !buns.contains(b) { buns.append(b) }
+    guard let bun = buns.first else { return nil }
     let bridge = ((cli as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
-    let roots = (unsafe + tmpRoots).map { Supervisor.realPath($0) ?? $0 }
-    if GuardsRefresh.isUnder(bridge, roots) || GuardsRefresh.isUnder(bun, roots) { return nil }
-    return .init(bun: bun, bridgeDir: bridge)
+    let clone = ((bridge as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+    let roots = ([talosHome] + tmpRoots).map { Supervisor.realPath($0) ?? $0 }
+    if GuardsRefresh.isUnder(clone, roots) || GuardsRefresh.isUnder(bridge, roots) { return nil }
+    return .init(bun: bun, bridgeDir: bridge, extraBuns: buns.dropFirst().filter { !GuardsRefresh.isUnder($0, roots) }, bunInTemp: GuardsRefresh.isUnder(bun, roots))
   }
 
   /// TESTS ONLY: one hook per Talos home, run right after a real (not dry) start's first check for that home, before anything else: where a test
@@ -62,17 +68,19 @@ enum OsSandboxLaunch {
 
   /// The sandbox for one start: the preflight, the folder checks, the pieces and the excludes file (nothing written when `dry`). `env` is the
   /// environment the session starts in (the login environment): its own `GIT_CONFIG_COUNT` is kept, ours added after, and the kit release is
-  /// found from it, never from this app's own environment.
+  /// found from it, never from this app's own environment. `agentDir` is the agent folder Main runs in; it no longer decides the recorded bridge
+  /// (the folder checks and the clone fence use the record whatever folder holds the clone). `tmpRoots` is for tests.
   static func prepare(
     talosHome: String, home: String, folder: String, claudeDir: String, env: [String: String], loadsProject: Bool, dry: Bool, launchArgs: [String] = [], agentDir: String? = nil,
-    audit: (String, [String: String]) -> Void
+    writableRoots: [String]? = nil, tmpRoots: [String] = GuardsRefresh.tmpRoots, audit: (String, [String: String]) -> Void
   ) -> OsSandbox.Prepared {
     var input = OsSandbox.Input(
       talosHome: talosHome, userHome: home, folder: folder, claudeDir: claudeDir, gitConfigCount: Int(env["GIT_CONFIG_COUNT"] ?? "") ?? 0,
       loadsProject: loadsProject,
       ownerExcludes: OsSandbox.ownerExcludes(userHome: home, configured: configuredExcludes(home: home, audit: dry ? { _, _ in } : audit)))
     input.launchArgs = launchArgs
-    input.trustedBridge = recordedBridge(talosHome: talosHome, home: home, unsafe: [talosHome, folder] + (agentDir.map { [$0] } ?? []))
+    input.writableRoots = writableRoots
+    input.trustedBridge = recordedBridge(talosHome: talosHome, home: home, tmpRoots: tmpRoots)
     let r = OsSandbox.prepare(input, dry: dry, kitDir: OsSandbox.kitDir(userHome: home, env: env))
     if case .refused(let why) = r, !dry { audit("os_sandbox_refused", ["why": why]) }
     if !dry { runAfterFirstCheck(home: talosHome) }

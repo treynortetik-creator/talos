@@ -6,11 +6,14 @@
 // a thread is turned on (`writeSwitchOnFirstUse`): until then routing, and the Mac app, read it as off, and no thread is on its
 // own session (`clearUnswitchedSessions`), so nothing starts that the owner did not turn on.
 import { z } from 'zod'
+import { CompactWindowRead, CompactWindowStrict } from './compact-window.ts'
 import { WorkerDialog } from './dialog-files.ts'
+import { HubPermOver, HubPermToolUse } from './hub-perm-over.ts'
 import { IsoTs, ThreadId } from './ids.ts'
 import { SpecHash } from './spec-hash.ts'
 import { clipUnits } from './untrusted.ts'
 import { PendingWakes } from './wake-me.ts'
+import { WorkerLimitWait } from './worker-limit-wait.ts'
 import { WORKERS_UNREADABLE_KEY } from './workers-unreadable.ts'
 
 // ---- the per-thread switch (OPTION-C 9.1) -----------------------------------------------------------------------
@@ -64,6 +67,7 @@ export const ThreadSessionOptsStrict = z.object({
   model: WorkerModel.default('inherit'),
   effort: WorkerEffort.optional(),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN),
+  compact_window: CompactWindowStrict,
   mcp_allow: McpAllowList.optional(),
   /** Mac-only (`THREAD_SESSION_OPT_ROWS`): the thread's session may run `errors list` and `errors show`. */
   ops_read: z.boolean().optional(),
@@ -78,6 +82,7 @@ export const ThreadSessionOpts = z.object({
   model: WorkerModel.default('inherit').catch('inherit'),
   effort: WorkerEffort.optional().catch(undefined),
   idle_park_min: z.number().int().min(5).max(720).default(DEFAULT_IDLE_PARK_MIN).catch(DEFAULT_IDLE_PARK_MIN),
+  compact_window: CompactWindowRead,
   mcp_allow: McpAllowRead,
   /** A value this build cannot read is absent (off), never on. */
   ops_read: z.boolean().optional().catch(undefined),
@@ -303,11 +308,6 @@ export function checkWorkerCwd(
 
 // ---- names and constants both sides use ----------------------------------------------------------------------------
 
-/** The worker's tmux session on the supervisor's private socket (`tmux -L talos`). Thread ids are tmux-safe. */
-export const workerTmuxName = (threadId: string) => `t-${threadId}`
-/** The worker's `--name` (shown in `claude agents`, the target of cross-session `SendMessage` from main). */
-export const workerSessionName = (threadId: string) => `talos-${threadId}`
-
 /** The one line the supervisor types into a worker. Fixed text: message content never reaches the keyboard. */
 export const WORKER_POINTER_TEXT = 'Talos: new message in this thread. Call read_inbound.'
 
@@ -373,6 +373,7 @@ export const WorkerLaunched = z.object({
   model: WorkerModel.default('inherit'),
   effort: WorkerEffort.optional().catch(undefined),
   mcp_allow: McpAllowRead,
+  compact_window: CompactWindowRead,
   /**
    * The launch spec's hash (spec-hash.ts) when this session was launched; missing on an entry an older supervisor wrote, which
    * is restarted once on update. A value that is not a hash reads as missing.
@@ -380,13 +381,10 @@ export const WorkerLaunched = z.object({
   spec_hash: SpecHash.optional().catch(undefined),
   /** The spec hash an update restart was last tried for, written BEFORE the try: never tried twice for the same spec. */
   update_tried_hash: SpecHash.optional().catch(undefined),
-  /**
-   * The digest of the instructions the start handed a session outside the agent folder (the system prompt, its delimiter token
-   * replaced), so the update check can tell an instruction edit alone from any other change. Absent in the agent folder (that
-   * folder's files are loaded by the session itself and never hashed) and from an older supervisor. A value that is not a hash
-   * reads as missing.
-   */
+  /** The digest of the instructions handed a session outside the agent folder (so an instruction edit alone is told apart); absent in the agent folder and from an older supervisor. */
   instructions_hash: SpecHash.optional().catch(undefined),
+  /** The plugins that were switched on (`<name>@<marketplace>`) at this launch: a change restarts the session after its turn. Absent from an older supervisor; not a list reads as missing. */
+  plugins: z.array(z.string().max(120)).max(200).optional().catch(undefined),
 })
 export type WorkerLaunchedT = z.infer<typeof WorkerLaunched>
 
@@ -528,6 +526,8 @@ export const WorkerEntry = z.object({
     .default(null),
   /** The worker's last real activity, saved by the Mac so a relaunched app carries the idle clock on. The bridge only tolerates it. A value that is not a time reads as none. */
   last_active_at: IsoTs.optional().catch(undefined),
+  /** The last lines above the input box once the pane has been quiet a while (quiet-lines.ts): the bridge shows them in the app only. */
+  quiet_lines: z.array(z.string().max(400)).max(12).optional().catch(undefined),
   /** A known dialog on the pane right now (dialog-files.ts); a value that does not fit reads as none. */
   dialog: WorkerDialog.optional().catch(undefined),
   /** What the running session was started with. The Mac writes it; the bridge only tolerates it. A value that does not fit reads as none. */
@@ -544,6 +544,8 @@ export const WorkerEntry = z.object({
   turn_started_at: IsoTs.nullish().catch(undefined),
   /** Why the session cannot take the owner's message right now (see WorkerPointerHold). A value that does not fit reads as none. */
   pointer_hold: WorkerPointerHold.nullish().catch(undefined),
+  /** Claude Code's own wait at a usage limit, first seen on the pane (worker-limit-wait.ts). A value that does not fit reads as none. */
+  limit_wait: WorkerLimitWait.nullish().catch(undefined),
 })
 export type WorkerEntryT = z.infer<typeof WorkerEntry>
 
@@ -636,41 +638,8 @@ export function supervisorFresh(file: WorkersFileT | null, now: number): boolean
   return Number.isFinite(at) && now - at < SUPERVISOR_STALE_MS
 }
 
-// ---- the wake file (hub writes `workers/<thread>/wake`, supervisor consumes) ------------------------------------------
-
-/**
- * Message ids only: the supervisor never sees content. `action` says what the supervisor should do: type the pointer
- * (starting or resuming the worker first when it is not live), or run a control. A pointer wake carries at least one id.
- */
-export const WakeFile = z
-  .object({
-    v: z.literal(1),
-    thread_id: ThreadId,
-    message_ids: z
-      .array(z.string().regex(/^[a-z]{1,3}_[0-9A-HJKMNP-TV-Z]{26}$/))
-      .max(50)
-      .default([]),
-    at: IsoTs,
-    /** Why the worker is woken: an owner message, a card action for a card it raised, or a control. */
-    reason: z.enum(['message', 'card_action', 'control', 'governor']).default('message'),
-    action: z.enum(['pointer', 'park', 'restart', 'fresh', 'resume']).default('pointer'),
-    /**
-     * Who asked for a control: the owner's button or the main session's `thread_session` tool. For the log only; nothing acts
-     * on it. Optional and added late: a supervisor that predates it ignores the key (zod strips unknown keys; the Mac's
-     * Decodable reads named keys only), and a value this build does not know reads as none, never a dropped wake.
-     */
-    by: z.enum(['owner', 'main']).optional().catch(undefined),
-    /**
-     * Ignored. An early build of the reader-side checks numbered wakes; nothing writes or reads it now (wake-decision.ts says why).
-     * Still tolerated so a file written then parses: a value that is not a positive safe integer reads as none, never a failed wake.
-     */
-    counter: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().catch(undefined),
-  })
-  .refine((w) => w.action !== 'pointer' || w.message_ids.length > 0, {
-    path: ['message_ids'],
-    message: 'a pointer wake names at least one message',
-  })
-export type WakeFileT = z.infer<typeof WakeFile>
+// The wake file's schema lives in wake-file.ts (moved out to keep this file under 1,000 lines); re-exported for its readers.
+export { WakeFile, type WakeFileT } from './wake-file.ts'
 
 /**
  * Files under `$TALOS_APP_HOME/workers/<thread>/`: `wake` and `control` (hub writes, supervisor consumes and deletes), `nonce` (the
@@ -769,20 +738,30 @@ export const HubRpc = z.strictObject({
  * process group (the same proof as `hello`), and the card goes to that thread; without it the request is the main session's
  * and the card goes to the default thread. Loose on purpose: a newer hook's extra fields never break an older hub.
  */
-export const HubPerm = z.looseObject({
-  t: z.literal('perm'),
-  id: z.string().min(1).max(64),
-  thread_id: ThreadId.optional(),
-  pid: z.number().int().positive().optional(),
-  nonce: z.string().min(16).max(64).optional(),
-  tool_name: z.string().min(1).max(4096),
-  tool_input: z.unknown().optional(),
-  /** Claude Code's session id and working folder; only the folder is shown (on a main-session card, to say who asked). */
-  session_id: z.string().max(100).optional(),
-  cwd: z.string().max(1000).optional(),
-  /** The session's permission mode as Claude Code's hook input names it. Optional: an older hook sends none, and no line says why a card asked. */
-  permission_mode: z.string().max(30).optional(),
-})
+export const HubPerm = z
+  .looseObject({
+    t: z.literal('perm'),
+    id: z.string().min(1).max(64),
+    thread_id: ThreadId.optional(),
+    pid: z.number().int().positive().optional(),
+    nonce: z.string().min(16).max(64).optional(),
+    tool_name: z.string().min(1).max(4096),
+    tool_input: z.unknown().optional(),
+    /** Claude Code's session id and working folder; only the folder is shown (on a main-session card, to say who asked). */
+    session_id: z.string().max(100).optional(),
+    cwd: z.string().max(1000).optional(),
+    /** The session's permission mode as Claude Code's hook input names it. Optional: an older hook sends none, and no line says why a card asked. */
+    permission_mode: z.string().max(30).optional(),
+    /**
+     * The rule Claude Code offered for "Allow for this session", already kept down to what the card may show (the hook's own checks;
+     * the bridge checks again with `cleanSessionRules`). Only the words on the card come from it: the hook prints its own stored copy. Optional.
+     */
+    suggest: z
+      .object({ rules: z.array(z.object({ tool: z.string().max(640), content: z.string().max(1600) })).max(3) })
+      .optional()
+      .catch(undefined),
+  })
+  .extend(HubPermToolUse)
 export type HubPermT = z.infer<typeof HubPerm>
 /**
  * hook → hub: the kit's action rules (kit/hooks/action-rules.py, audit item 28). An "ask first" rule's approval is the owner's
@@ -835,6 +814,7 @@ export const HubWorkerLine = z.discriminatedUnion('t', [
   HubMod,
   HubRpc,
   HubPerm,
+  HubPermOver,
   HubAskRule,
   HubRuleTake,
   HubRuleNotice,
@@ -879,6 +859,12 @@ export const HubPermResult = z.looseObject({
   reason: z.string().max(300).optional(),
   /** The owner's words with a `deny` (already cleaned, at most 300 characters; the hook cleans again). Never with anything else. */
   note: z.string().max(400).optional(),
+  /** With an `allow` only: the owner's signed tap chose "Allow for this session". The hook then prints its own stored rule; nothing here names one. */
+  session: z.literal(true).optional().catch(undefined),
+  /** With `session`: the hash the owner signed (permission.ts `sessionRulesHash`). The hook compares it with its own stored rules. */
+  session_hash: z.string().max(100).optional().catch(undefined),
+  /** With `decision: "answer"` only (an open AskUserQuestion): answer by the question's position ("0", "1"); the hook maps it to its own text. An older hook reads `answer` as none. */
+  answers: z.record(z.string().max(1000), z.string().max(600)).optional().catch(undefined),
 })
 export const HubHubLine = z.discriminatedUnion('t', [
   HubWelcome,

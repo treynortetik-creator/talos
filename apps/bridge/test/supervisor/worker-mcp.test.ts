@@ -22,9 +22,11 @@ import { dirname, join } from 'node:path'
 import { usageRecorderCommand, WORKER_MCP_APP, workerUsagePath } from '@talos-app/protocol'
 import {
   claudeJsonHome,
+  enabledPluginKeys,
   isChannelPlugin,
   mcpCatalog,
   planWorkerMcp,
+  pluginServers,
   visibleMcpNames,
   type WorkerMcpPlan,
   WorkerMcpWriteError,
@@ -190,6 +192,10 @@ class Tree {
     })
     this.write(join(zoom, '.mcp.json'), {
       mcpServers: { 'zoom-mcp': zoomServer ?? { command: `${ph('CLAUDE_PLUGIN_ROOT')}/bin/zoom` } },
+    })
+    // notes-plugin has a server of its own, which is not on any list the tests use: a plugin WITH servers not on the list is off (one with none stays on)
+    this.write(join(this.claudeDir, 'plugins', 'cache', 'market', 'notes', '1.0.0', '.mcp.json'), {
+      mcpServers: { notes: { command: `${ph('CLAUDE_PLUGIN_ROOT')}/bin/notes` } },
     })
     this.write(join(this.claudeDir, 'plugins', 'cache', 'o', 'telegram', '1.0.0', '.mcp.json'), {
       mcpServers: { telegram: { command: `${ph('CLAUDE_PLUGIN_ROOT')}/bin/tg` } },
@@ -492,6 +498,151 @@ describe('the plan', () => {
   })
 })
 
+describe('enabledPluginKeys: the set a launch is made with', () => {
+  it('the plugins switched on at user scope, sorted; the channel plugins and the ones that are off are not in it', () => {
+    const t = new Tree()
+    t.standard()
+    t.installPlugins()
+    const st = JSON.parse(readFileSync(join(t.claudeDir, 'settings.json'), 'utf8'))
+    st.enabledPlugins['notes-plugin@market'] = false
+    t.write(join(t.claudeDir, 'settings.json'), st)
+    expect(enabledPluginKeys(t.claudeDir)).toEqual(['zoom@market'])
+  })
+  it('no plugins folder: an empty set, not a failure', () => {
+    expect(enabledPluginKeys(join(tmpdir(), 'no-such-claude-dir'))).toEqual([])
+  })
+})
+
+describe('kept on only when Claude Code starts NO server for it (the forms it reads)', () => {
+  const rec = (path: string) => [{ scope: 'user', installPath: path, version: '1.0.0' }]
+  /** One installed, enabled plugin named `form`, set up by `fill`, with the other fixtures around it. */
+  function with1(fill: (root: string, t: Tree) => void) {
+    const t = new Tree()
+    t.standard()
+    t.installPlugins()
+    const root = join(t.claudeDir, 'plugins', 'cache', 'market', 'form', '1.0.0')
+    const ip = JSON.parse(readFileSync(join(t.claudeDir, 'plugins', 'installed_plugins.json'), 'utf8'))
+    ip.plugins['form@market'] = rec(root)
+    t.write(join(t.claudeDir, 'plugins', 'installed_plugins.json'), ip)
+    const st = JSON.parse(readFileSync(join(t.claudeDir, 'settings.json'), 'utf8'))
+    st.enabledPlugins['form@market'] = true
+    t.write(join(t.claudeDir, 'settings.json'), st)
+    fill(root, t)
+    return t
+  }
+  const off = (t: Tree) => t.mustPlan(['plugin:zoom:zoom-mcp']).disabledPlugins.includes('form@market')
+  const srv = { command: 'true' }
+  const manifest = (root: string, m: unknown) => {
+    mkdirSync(join(root, '.claude-plugin'), { recursive: true })
+    writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify(m))
+  }
+
+  it('plugin.json mcpServers as an object, a PATH or an ARRAY with a server: switched OFF (Claude Code starts it)', () => {
+    for (const v of [{ x: srv }, './servers.json', ['./servers.json'], [{ x: srv }]]) {
+      const t = with1((root) => {
+        manifest(root, { name: 'form', mcpServers: v })
+        writeFileSync(join(root, 'servers.json'), JSON.stringify({ mcpServers: { x: srv } }))
+      })
+      expect(off(t), JSON.stringify(v)).toBe(true)
+    }
+  })
+
+  it('a .mcp.json with a server (wrapped or bare), or the marketplace entry’s servers WITH strict: false: switched OFF', () => {
+    expect(off(with1((root, t) => t.write(join(root, '.mcp.json'), { mcpServers: { x: srv } })))).toBe(true)
+    expect(off(with1((root, t) => t.write(join(root, '.mcp.json'), { x: srv })))).toBe(true)
+    const entry = (strict: boolean | undefined) =>
+      with1((root, t) => {
+        t.write(join(root, 'skills', 'x', 'SKILL.md'), 'a skill')
+        const loc = join(t.claudeDir, 'plugins', 'marketplaces', 'market')
+        t.write(join(t.claudeDir, 'plugins', 'known_marketplaces.json'), { market: { installLocation: loc } })
+        t.write(join(loc, '.claude-plugin', 'marketplace.json'), {
+          plugins: [
+            {
+              name: 'form',
+              source: './plugins/form',
+              ...(strict === undefined ? {} : { strict }),
+              mcpServers: { s: srv },
+            },
+          ],
+        })
+      })
+    expect(off(entry(false))).toBe(true)
+    // WITHOUT strict: false Claude Code ignores the entry's servers: the plugin has none and stays on
+    expect(off(entry(undefined))).toBe(false)
+  })
+
+  it('a plugin.json or server file that cannot be read: switched OFF (fail closed); an empty table, or no server in any form, stays ON', () => {
+    expect(off(with1((root, t) => t.write(join(root, '.claude-plugin', 'plugin.json'), '{ nope')))).toBe(true)
+    expect(off(with1((root) => manifest(root, { mcpServers: '../../out.json' })))).toBe(true)
+    expect(off(with1((root, t) => t.write(join(root, '.mcp.json'), {})))).toBe(false)
+    expect(off(with1((root, t) => t.write(join(root, 'skills', 'x', 'SKILL.md'), 'a skill')))).toBe(false)
+  })
+
+  it('pluginServers offers exactly those servers as plugin:<name>:<server>, from where Claude Code loads the plugin', () => {
+    const t = with1((root) => {
+      manifest(root, { name: 'form', mcpServers: ['./servers.json', { tbl: srv }] })
+      writeFileSync(join(root, 'servers.json'), JSON.stringify({ fromFile: srv }))
+    })
+    expect(
+      [...pluginServers(t.claudeDir, t.claudeDir).keys()].filter((k) => k.startsWith('plugin:form:')).sort(),
+    ).toEqual(['plugin:form:fromFile', 'plugin:form:tbl'])
+  })
+})
+
+describe('enabledPluginKeys when a plugin file cannot be read', () => {
+  it('a present but unparseable installed_plugins.json or settings.json: null (not known: no plugin change), never an empty set', () => {
+    const t = new Tree()
+    t.standard()
+    t.installPlugins()
+    expect(enabledPluginKeys(t.claudeDir)).toEqual(['zoom@market'].concat(['notes-plugin@market']).sort())
+    t.write(join(t.claudeDir, 'plugins', 'installed_plugins.json'), '{ nope')
+    expect(enabledPluginKeys(t.claudeDir)).toBeNull()
+    const u = new Tree()
+    u.standard()
+    u.installPlugins()
+    u.write(join(u.claudeDir, 'settings.json'), '{ nope')
+    expect(enabledPluginKeys(u.claudeDir)).toBeNull()
+    expect(enabledPluginKeys(join(u.claudeDir, 'absent'))).toEqual([])
+  })
+})
+
+describe('a plugin with no MCP server is not switched off by a list', () => {
+  const rec = (path: string) => [{ scope: 'user', installPath: path, version: '1.0.0' }]
+  function setup() {
+    const t = new Tree()
+    t.standard()
+    t.installPlugins()
+    const ip = JSON.parse(readFileSync(join(t.claudeDir, 'plugins', 'installed_plugins.json'), 'utf8'))
+    for (const n of ['skills-only', 'hook-only']) {
+      const root = join(t.claudeDir, 'plugins', 'cache', 'market', n, '1.0.0')
+      ip.plugins[`${n}@market`] = rec(root)
+      t.write(join(root, 'skills', 'x', 'SKILL.md'), 'a skill')
+    }
+    t.write(join(t.claudeDir, 'plugins', 'cache', 'market', 'hook-only', '1.0.0', 'hooks', 'hooks.json'), {
+      hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'true' }] }] },
+    })
+    t.write(join(t.claudeDir, 'plugins', 'installed_plugins.json'), ip)
+    const st = JSON.parse(readFileSync(join(t.claudeDir, 'settings.json'), 'utf8'))
+    st.enabledPlugins['skills-only@market'] = true
+    st.enabledPlugins['hook-only@market'] = true
+    t.write(join(t.claudeDir, 'settings.json'), st)
+    return t
+  }
+  it('skills-only and hook-only plugins stay on (an approval hook too: it loads in threads as in Main); one with servers not on the list is off', () => {
+    const plan = setup().mustPlan(['plugin:zoom:zoom-mcp'])
+    expect(plan.disabledPlugins.sort()).toEqual(['notes-plugin@market', 'telegram@claude-plugins-official'].sort())
+    expect(plan.disabledPlugins).not.toContain('skills-only@market')
+    expect(plan.disabledPlugins).not.toContain('hook-only@market')
+  })
+  it('a plugin that is not switched on at user scope is not kept on by this (it was never on)', () => {
+    const t = setup()
+    const st = JSON.parse(readFileSync(join(t.claudeDir, 'settings.json'), 'utf8'))
+    st.enabledPlugins['skills-only@market'] = false
+    t.write(join(t.claudeDir, 'settings.json'), st)
+    expect(t.mustPlan([]).disabledPlugins).toContain('skills-only@market')
+  })
+})
+
 describe('the generated file', () => {
   const mode = (p: string) => lstatSync(p).mode & 0o777
   it('is 0600 in a 0700 folder, replaced whole, its folder made private again', () => {
@@ -780,11 +931,21 @@ describe('no list: the launch is today’s, byte for byte', () => {
     // and the deny of Claude Code's own computer use, which every session has now, list or no list
     expect(s.deniedMcpServers).toEqual([{ serverName: 'computer-use' }])
     delete s.deniedMcpServers
+    // and the PreToolUse hook that leaves the permission hook's per-call record (pretool-hook.ts): one entry, for every tool, run in a clean shell
+    const pre = (
+      s.hooks as { PreToolUse?: { matcher?: string; hooks: { type: string; timeout: number; command: string }[] }[] }
+    ).PreToolUse
+    expect(pre).toHaveLength(1)
+    expect(pre?.[0]?.matcher).toBeUndefined()
+    expect(pre?.[0]?.hooks[0]).toMatchObject({ type: 'command', timeout: 5 })
+    expect(pre?.[0]?.hooks[0]?.command).toStartWith('exec /usr/bin/env -i HOME=')
+    expect(pre?.[0]?.hooks[0]?.command).toContain(`TALOS_APP_HOME='${talosHome}'`)
+    delete (s.hooks as Record<string, unknown>).PreToolUse
     return { ...o, settingsJSON: JSON.stringify(s) }
   }
   // captured from the build before the list existed (origin/main c6e5e419), the temp root as <root>
-  const GOLDEN_SPEC = String.raw`{"threadId":"trip","program":"/usr/bin/claude","args":["--dangerously-skip-permissions","--settings","<root>/talos/workers/trip/settings.json","--name","talos-trip","--system-prompt-snapshot=off","--model=sonnet","--append-system-prompt=Be the trip thread.","--session-id","11111111-2222-3333-4444-555555555555"],"env":{"PATH":"/usr/bin","HOME":"/home/alex","ENABLE_CLAUDEAI_MCP_SERVERS":"true","TALOS_APP_WORKER_THREAD":"trip","TALOS_SESSION_ROLE":"worker","TALOS_APP_HOME":"<root>/talos","TALOS_APP_WORKER_NONCE":"abababababababababababababababab","TELEGRAM_STATE_DIR":"<root>/talos/workers/_nochannel","IMESSAGE_STATE_DIR":"<root>/talos/workers/_nochannel"},"cwd":"<root>/proj","settingsJSON":"{\"disableSkillShellExecution\":true,\"effortLevel\":\"high\",\"enabledPlugins\":{\"imessage@claude-plugins-official\":false,\"telegram@claude-plugins-official\":false},\"env\":{\"IMESSAGE_STATE_DIR\":\"<root>/talos/workers/_nochannel\",\"TELEGRAM_STATE_DIR\":\"<root>/talos/workers/_nochannel\"},\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"command\":\"f='<root>/talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='/home/alex' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_APP_HOME='<root>/talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_HOOK_CHECK_DIR='<root>/proj' TALOS_APP_HOOK_CHECK_HOOKS=1 TALOS_APP_WORKER_NONCE=\\\"${'${'}TALOS_APP_WORKER_NONCE-}\\\" TALOS_PERMISSION_RELAY_OFF=\\\"${'${'}TALOS_PERMISSION_RELAY_OFF-}\\\" TALOS_PERMISSION_HOOK_WAIT_S=\\\"${'${'}TALOS_PERMISSION_HOOK_WAIT_S-}\\\" CLAUDE_PID=\\\"${'${'}CLAUDE_PID-}\\\" CLAUDE_CODE_SESSION_ATTENDED=\\\"${'${'}CLAUDE_CODE_SESSION_ATTENDED-}\\\" CLAUDE_PROJECT_DIR=\\\"${'${'}CLAUDE_PROJECT_DIR-}\\\" XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" CHRONOS_CONFIG=\\\"${'${'}CHRONOS_CONFIG-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -I -S \\\"$0\\\"' \\\"$f\\\" '/usr/bin/python3'\",\"timeout\":3600,\"type\":\"command\"}]}]},\"permissions\":{\"defaultMode\":\"bypassPermissions\",\"deny\":[\"Read(/<root>/talos/**)\",\"Read(/<root>/talos)\",\"Edit(/<root>/talos/**)\",\"Edit(/<root>/talos)\",\"Edit(/<root>/talos/workers/**)\",\"Edit(/<root>/talos/workers)\",\"Bash(talos-app post:*)\",\"Bash(*talos-app post*)\",\"Bash(*cli.ts post*)\",\"EnterWorktree\"],\"disableAutoMode\":\"disable\"},\"pluginConfigs\":{\"agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}},\"cc-plugin-agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}}}}","main":{"permissionArgs":["--dangerously-skip-permissions"],"defaultMode":null,"mcpServers":["github"],"denyRules":[]}}`
-  const GOLDEN_PLAN = String.raw`{"launch":{"session":"t-trip","argv":["/usr/bin/claude","--permission-mode=default","--settings","<root>/u/.talos/workers/trip/settings.json","--name","talos-trip","--setting-sources=user","--system-prompt-snapshot=off","--append-system-prompt-file=<root>/u/.talos/workers/trip/system-prompt.md","--mcp-config=<root>/u/.talos/workers/trip/mcp.json","--resume","11111111-2222-3333-4444-555555555555"],"cwd":"<root>/u/trip","env":{"PATH":"/usr/bin","HOME":"<root>/u","TALOS_APP_WORKER_THREAD":"trip","TALOS_SESSION_ROLE":"worker","TALOS_APP_THREAD_STATE":"1","TALOS_APP_HOME":"<root>/u/.talos","TALOS_APP_WORKER_NONCE":"abababababababababababababababab","TELEGRAM_STATE_DIR":"<root>/u/.talos/workers/_nochannel","IMESSAGE_STATE_DIR":"<root>/u/.talos/workers/_nochannel"}},"settingsJSON":"{\"disableSkillShellExecution\":true,\"enabledPlugins\":{\"imessage@claude-plugins-official\":false,\"telegram@claude-plugins-official\":false},\"env\":{\"IMESSAGE_STATE_DIR\":\"<root>/u/.talos/workers/_nochannel\",\"TELEGRAM_STATE_DIR\":\"<root>/u/.talos/workers/_nochannel\"},\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_APP_HOME='<root>/u/.talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_HOOK_CHECK_DIR='<root>/u/trip' TALOS_APP_HOOK_CHECK_HOOKS=1 TALOS_APP_WORKER_NONCE=\\\"${'${'}TALOS_APP_WORKER_NONCE-}\\\" TALOS_PERMISSION_RELAY_OFF=\\\"${'${'}TALOS_PERMISSION_RELAY_OFF-}\\\" TALOS_PERMISSION_HOOK_WAIT_S=\\\"${'${'}TALOS_PERMISSION_HOOK_WAIT_S-}\\\" CLAUDE_PID=\\\"${'${'}CLAUDE_PID-}\\\" CLAUDE_CODE_SESSION_ATTENDED=\\\"${'${'}CLAUDE_CODE_SESSION_ATTENDED-}\\\" CLAUDE_PROJECT_DIR=\\\"${'${'}CLAUDE_PROJECT_DIR-}\\\" XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" CHRONOS_CONFIG=\\\"${'${'}CHRONOS_CONFIG-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -I -S \\\"$0\\\"' \\\"$f\\\" '/usr/bin/python3'\",\"timeout\":3600,\"type\":\"command\"}]}],\"PreCompact\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/thread-state.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_THREAD='trip' CLAUDE_PROJECT_DIR='<root>/u/agent' XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -B -X \\\"pycache_prefix=$4\\\" -I -S \\\"$0\\\" \\\"$2\\\" \\\"$3\\\"' \\\"$f\\\" '/usr/bin/python3' save '<root>/u/agent' '/nonexistent'\",\"timeout\":5,\"type\":\"command\"}]}],\"SessionStart\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/thread-state.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_THREAD='trip' CLAUDE_PROJECT_DIR='<root>/u/agent' XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -B -X \\\"pycache_prefix=$4\\\" -I -S \\\"$0\\\" \\\"$2\\\" \\\"$3\\\"' \\\"$f\\\" '/usr/bin/python3' inject '<root>/u/agent' '/nonexistent'\",\"timeout\":5,\"type\":\"command\"}],\"matcher\":\"startup|resume|clear|compact|fork\"}]},\"permissions\":{\"allow\":[\"Edit(/<root>/u/agent/threads/trip.state.md)\"],\"defaultMode\":\"default\",\"deny\":[\"Read(/<root>/u/.talos/**)\",\"Read(/<root>/u/.talos)\",\"Edit(/<root>/u/.talos/**)\",\"Edit(/<root>/u/.talos)\",\"Edit(/<root>/u/.talos/workers/**)\",\"Edit(/<root>/u/.talos/workers)\",\"Bash(talos-app post:*)\",\"Bash(*talos-app post*)\",\"Bash(*cli.ts post*)\",\"EnterWorktree\",\"Edit(/<root>/u/agent/hooks/**)\",\"Edit(/<root>/u/agent/kit/hooks/**)\",\"Edit(/<root>/u/agent/**/.claude/**)\",\"Edit(/<root>/u/trip/.claude)\",\"Edit(/<root>/u/trip/.claude/**)\",\"Edit(/<root>/u/trip/.mcp.json)\",\"Edit(/<root>/u/trip/.env*)\",\"Edit(/<root>/u/agent/.claude)\",\"Edit(/<root>/u/agent/.claude/**)\",\"Edit(/<root>/u/agent/.mcp.json)\",\"Edit(/<root>/u/agent/.env*)\",\"Edit(/<root>/u/.claude/settings.json)\",\"Edit(/<root>/u/.claude/settings.local.json)\",\"Edit(/<root>/u/.claude/skills/**)\",\"Edit(/<root>/u/.claude/commands/**)\",\"Edit(/<root>/u/.claude/agents/**)\",\"Edit(/<root>/u/.claude/plugins/**)\",\"Edit(/<root>/u/.claude/hooks/**)\",\"Edit(/<root>/u/.claude/CLAUDE.md)\",\"Edit(/<root>/u/.claude/rules/**)\",\"Edit(/<root>/u/.claude/output-styles/**)\",\"Edit(/<root>/u/.claude/workflows/**)\",\"Edit(/<root>/u/.claude/routines/**)\",\"Edit(/<root>/u/.claude.json)\",\"Edit(/<root>/u/agent/threads/trip.state.md/*)\"],\"disableAutoMode\":\"disable\"},\"pluginConfigs\":{\"agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}},\"cc-plugin-agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}}}}","cwd":"<root>/u/trip"}`
+  const GOLDEN_SPEC = String.raw`{"threadId":"trip","program":"/usr/bin/claude","args":["--dangerously-skip-permissions","--settings","<root>/talos/workers/trip/settings.json","--name","talos-trip","--system-prompt-snapshot=off","--model=sonnet","--append-system-prompt=Be the trip thread.","--session-id","11111111-2222-3333-4444-555555555555"],"env":{"PATH":"/usr/bin","HOME":"/home/alex","ENABLE_CLAUDEAI_MCP_SERVERS":"true","TALOS_APP_WORKER_THREAD":"trip","TALOS_SESSION_ROLE":"worker","TALOS_APP_HOME":"<root>/talos","TALOS_APP_WORKER_NONCE":"abababababababababababababababab","TELEGRAM_STATE_DIR":"<root>/talos/workers/_nochannel","IMESSAGE_STATE_DIR":"<root>/talos/workers/_nochannel"},"cwd":"<root>/proj","settingsJSON":"{\"autoContinueAtUsageLimit\":true,\"disableSkillShellExecution\":true,\"effortLevel\":\"high\",\"enabledPlugins\":{\"imessage@claude-plugins-official\":false,\"telegram@claude-plugins-official\":false},\"env\":{\"IMESSAGE_STATE_DIR\":\"<root>/talos/workers/_nochannel\",\"TELEGRAM_STATE_DIR\":\"<root>/talos/workers/_nochannel\"},\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"command\":\"f='<root>/talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='/home/alex' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_APP_HOME='<root>/talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_HOOK_CHECK_DIR='<root>/proj' TALOS_APP_HOOK_CHECK_HOOKS=1 TALOS_APP_WORKER_NONCE=\\\"${'${'}TALOS_APP_WORKER_NONCE-}\\\" TALOS_PERMISSION_RELAY_OFF=\\\"${'${'}TALOS_PERMISSION_RELAY_OFF-}\\\" TALOS_PERMISSION_HOOK_WAIT_S=\\\"${'${'}TALOS_PERMISSION_HOOK_WAIT_S-}\\\" CLAUDE_PID=\\\"${'${'}CLAUDE_PID-}\\\" CLAUDE_CODE_SESSION_ATTENDED=\\\"${'${'}CLAUDE_CODE_SESSION_ATTENDED-}\\\" CLAUDE_PROJECT_DIR=\\\"${'${'}CLAUDE_PROJECT_DIR-}\\\" XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" CHRONOS_CONFIG=\\\"${'${'}CHRONOS_CONFIG-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -I -S \\\"$0\\\"' \\\"$f\\\" '/usr/bin/python3'\",\"timeout\":3600,\"type\":\"command\"}]}]},\"permissions\":{\"defaultMode\":\"bypassPermissions\",\"deny\":[\"Read(/<root>/talos/**)\",\"Read(/<root>/talos)\",\"Edit(/<root>/talos/**)\",\"Edit(/<root>/talos)\",\"Edit(/<root>/talos/workers/**)\",\"Edit(/<root>/talos/workers)\",\"Bash(talos-app post:*)\",\"Bash(*talos-app post*)\",\"Bash(*cli.ts post*)\",\"EnterWorktree\"],\"disableAutoMode\":\"disable\"},\"pluginConfigs\":{\"agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}},\"cc-plugin-agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}}}}","main":{"permissionArgs":["--dangerously-skip-permissions"],"defaultMode":null,"mcpServers":["github"],"denyRules":[]}}`
+  const GOLDEN_PLAN = String.raw`{"launch":{"session":"t-trip","argv":["/usr/bin/claude","--permission-mode=default","--settings","<root>/u/.talos/workers/trip/settings.json","--name","talos-trip","--setting-sources=user","--system-prompt-snapshot=off","--append-system-prompt-file=<root>/u/.talos/workers/trip/system-prompt.md","--mcp-config=<root>/u/.talos/workers/trip/mcp.json","--resume","11111111-2222-3333-4444-555555555555"],"cwd":"<root>/u/trip","env":{"PATH":"/usr/bin","HOME":"<root>/u","TALOS_APP_WORKER_THREAD":"trip","TALOS_SESSION_ROLE":"worker","TALOS_APP_THREAD_STATE":"1","TALOS_APP_HOME":"<root>/u/.talos","TALOS_APP_WORKER_NONCE":"abababababababababababababababab","TELEGRAM_STATE_DIR":"<root>/u/.talos/workers/_nochannel","IMESSAGE_STATE_DIR":"<root>/u/.talos/workers/_nochannel"}},"settingsJSON":"{\"autoContinueAtUsageLimit\":true,\"disableSkillShellExecution\":true,\"enabledPlugins\":{\"imessage@claude-plugins-official\":false,\"telegram@claude-plugins-official\":false},\"env\":{\"IMESSAGE_STATE_DIR\":\"<root>/u/.talos/workers/_nochannel\",\"TELEGRAM_STATE_DIR\":\"<root>/u/.talos/workers/_nochannel\"},\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/permission-relay.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_APP_HOME='<root>/u/.talos' TALOS_APP_WORKER_THREAD='trip' TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_APP_HOOK_CHECK_DIR='<root>/u/trip' TALOS_APP_HOOK_CHECK_HOOKS=1 TALOS_APP_WORKER_NONCE=\\\"${'${'}TALOS_APP_WORKER_NONCE-}\\\" TALOS_PERMISSION_RELAY_OFF=\\\"${'${'}TALOS_PERMISSION_RELAY_OFF-}\\\" TALOS_PERMISSION_HOOK_WAIT_S=\\\"${'${'}TALOS_PERMISSION_HOOK_WAIT_S-}\\\" CLAUDE_PID=\\\"${'${'}CLAUDE_PID-}\\\" CLAUDE_CODE_SESSION_ATTENDED=\\\"${'${'}CLAUDE_CODE_SESSION_ATTENDED-}\\\" CLAUDE_PROJECT_DIR=\\\"${'${'}CLAUDE_PROJECT_DIR-}\\\" XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" CHRONOS_CONFIG=\\\"${'${'}CHRONOS_CONFIG-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -I -S \\\"$0\\\"' \\\"$f\\\" '/usr/bin/python3'\",\"timeout\":3600,\"type\":\"command\"}]}],\"PreCompact\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/thread-state.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_THREAD='trip' CLAUDE_PROJECT_DIR='<root>/u/agent' XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -B -X \\\"pycache_prefix=$4\\\" -I -S \\\"$0\\\" \\\"$2\\\" \\\"$3\\\"' \\\"$f\\\" '/usr/bin/python3' save '<root>/u/agent' '/nonexistent'\",\"timeout\":5,\"type\":\"command\"}]}],\"SessionStart\":[{\"hooks\":[{\"command\":\"f='<root>/u/.talos/workers/_hook/thread-state.py'; exec /usr/bin/env -i HOME='<root>/u' PATH=/usr/bin:/bin LANG=C.UTF-8 TALOS_SESSION_ROLE=worker TALOS_APP_WORKER_THREAD='trip' CLAUDE_PROJECT_DIR='<root>/u/agent' XDG_STATE_HOME=\\\"${'${'}XDG_STATE_HOME-}\\\" /bin/sh -c '[ -f \\\"$0\\\" ] || exit 0; exec \\\"$1\\\" -B -X \\\"pycache_prefix=$4\\\" -I -S \\\"$0\\\" \\\"$2\\\" \\\"$3\\\"' \\\"$f\\\" '/usr/bin/python3' inject '<root>/u/agent' '/nonexistent'\",\"timeout\":5,\"type\":\"command\"}],\"matcher\":\"startup|resume|clear|compact|fork\"}]},\"permissions\":{\"allow\":[\"Edit(/<root>/u/agent/threads/trip.state.md)\"],\"defaultMode\":\"default\",\"deny\":[\"Read(/<root>/u/.talos/**)\",\"Read(/<root>/u/.talos)\",\"Edit(/<root>/u/.talos/**)\",\"Edit(/<root>/u/.talos)\",\"Edit(/<root>/u/.talos/workers/**)\",\"Edit(/<root>/u/.talos/workers)\",\"Bash(talos-app post:*)\",\"Bash(*talos-app post*)\",\"Bash(*cli.ts post*)\",\"EnterWorktree\",\"Edit(/<root>/u/agent/hooks/**)\",\"Edit(/<root>/u/agent/kit/hooks/**)\",\"Edit(/<root>/u/agent/**/.claude/**)\",\"Edit(/<root>/u/trip/.claude)\",\"Edit(/<root>/u/trip/.claude/**)\",\"Edit(/<root>/u/trip/.mcp.json)\",\"Edit(/<root>/u/trip/.env*)\",\"Edit(/<root>/u/agent/.claude)\",\"Edit(/<root>/u/agent/.claude/**)\",\"Edit(/<root>/u/agent/.mcp.json)\",\"Edit(/<root>/u/agent/.env*)\",\"Edit(/<root>/u/.claude/settings.json)\",\"Edit(/<root>/u/.claude/settings.local.json)\",\"Edit(/<root>/u/.claude/skills/**)\",\"Edit(/<root>/u/.claude/commands/**)\",\"Edit(/<root>/u/.claude/agents/**)\",\"Edit(/<root>/u/.claude/plugins/**)\",\"Edit(/<root>/u/.claude/hooks/**)\",\"Edit(/<root>/u/.claude/CLAUDE.md)\",\"Edit(/<root>/u/.claude/rules/**)\",\"Edit(/<root>/u/.claude/output-styles/**)\",\"Edit(/<root>/u/.claude/workflows/**)\",\"Edit(/<root>/u/.claude/routines/**)\",\"Edit(/<root>/u/.claude.json)\",\"Edit(/<root>/u/agent/threads/trip.state.md/*)\"],\"disableAutoMode\":\"disable\"},\"pluginConfigs\":{\"agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}},\"cc-plugin-agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}}}}","cwd":"<root>/u/trip"}`
 
   onCaseExactTmp('the spec', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'talos-golden-')))

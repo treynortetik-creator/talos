@@ -1,6 +1,6 @@
 // D54: install.sh puts a REAL `talos-app` command on PATH (a wrapper script), not an alias that dies with the terminal.
 // Runs the real script with a throwaway HOME and --bin-dir/PATH, so nothing on the developer's machine is touched.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import {
   chmodSync,
   copyFileSync,
@@ -12,7 +12,12 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
+import { t } from '@talos-app/testkit'
 import { tempHome, writeKit } from './helpers.ts'
+
+// every test here runs the real install.sh (bash, bun, id, a few forks) in a synchronous spawn: the runner's 20 s default only catches a hang,
+// and on a loaded machine one install alone can pass it, so the default scales with the machine like the other real-process tests
+setDefaultTimeout(t(60_000))
 
 const INSTALL = resolve(import.meta.dir, '..', 'scripts', 'install.sh')
 const BRIDGE_DIR = resolve(import.meta.dir, '..')

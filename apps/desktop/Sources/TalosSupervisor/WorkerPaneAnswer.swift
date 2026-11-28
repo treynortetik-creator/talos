@@ -24,7 +24,7 @@ extension WorkerManager {
         guard let r = sendKey(id, paneKeyArgv(id, step), intent) else { return .refused }
         return r.ok ? .sent : (r.timedOut ? .unknown : .failed)
       },
-      awake: { [self] in awake() }, echoWait: Self.echoWait)
+      awake: { [self] in awake() }, echoWait: options.echoWait)
     switch driver.run(option: choice, text: text) {
     case .delivered:
       rt[id]?.offer.enterSentFor = offer.id

@@ -392,7 +392,10 @@ final class WorkerHookTests {
     #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin", rules: mac) == good, "with this Mac's own rules too: a temp folder is not in the home")
     #expect(WorkerHook.findPython3(path: "\(bin):/usr/bin", rules: bare) == good)
     // a relative entry and an empty one (both mean the thread folder) are never asked, even when a python3 sits there
+    // (this moves the whole process into bin, so it moves back before the folder is deleted: with no working folder every relative path breaks)
+    let was = FileManager.default.currentDirectoryPath
     FileManager.default.changeCurrentDirectoryPath(bin)
+    defer { FileManager.default.changeCurrentDirectoryPath(was) }
     #expect(WorkerHook.findPython3(path: ":.:bin", rules: bare) == nil)
     // a folder named python3, and a file that cannot be run, are passed over for the next entry
     try FileManager.default.createDirectory(atPath: root + "/d/python3", withIntermediateDirectories: true)
@@ -658,6 +661,16 @@ final class WorkerHookTests {
       line
         == "This thread's session doesn't start: python3 is not on the thread session's PATH (outside its own folders), so its permission hook cannot run, and without it the session's approval prompts would wait at the terminal on the Mac and never reach your phone. Reinstall Talos on the Mac (or fix the hook), then restart this thread's session."
     )
+  }
+
+  /// The python3 test moves the whole process into its temp folder. 2026-11-27: it never moved back, the folder was deleted, and every
+  /// later `currentDirectoryPath` in the run was "" (a relative path became "/.build": a read-only file system) in whichever test ran next.
+  @Test func theWorkingFolderIsBackWhereItWasAfterThePython3Test() throws {
+    do {
+      let other = try WorkerHookTests()
+      try other.python3IsLookedForOnAbsolutePathEntriesOnly()
+    }  // its folder is deleted here
+    #expect(!FileManager.default.currentDirectoryPath.isEmpty)
   }
 }
 

@@ -165,11 +165,14 @@ public struct WorkersFile: Codable, Equatable, Sendable {
     /// so the update check can say an instruction edit alone ("instructions changed"); nil in the agent folder (that folder's files
     /// are loaded by the session itself, never hashed) and from an older build. A value that is not a hash reads as absent.
     public var instructions_hash: String?
+    /// The compact point it was started with (`session_opts.compact_window`); nil: none, or one that cannot be read.
+    public var compact_window: Int?
 
     public init(
       cwd: String, model: String, effort: String?, mcp_allow: [String]?, spec_hash: String? = nil, update_tried_hash: String? = nil,
-      instructions_hash: String? = nil
+      instructions_hash: String? = nil, compact_window: Int? = nil
     ) {
+      self.compact_window = compact_window.flatMap { WorkerSpec.compactWindowRange.contains($0) ? $0 : nil }
       self.cwd = cwd
       self.model = model
       self.effort = effort
@@ -179,7 +182,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       self.instructions_hash = instructions_hash.flatMap { SpecHash.isValid($0) ? $0 : nil }
     }
 
-    enum CodingKeys: String, CodingKey { case cwd, model, effort, mcp_allow, spec_hash, update_tried_hash, instructions_hash }
+    enum CodingKeys: String, CodingKey { case cwd, model, effort, mcp_allow, spec_hash, update_tried_hash, instructions_hash, compact_window }
 
     public init(from d: Decoder) throws {
       let c = try d.container(keyedBy: CodingKeys.self)
@@ -198,6 +201,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       spec_hash = hash(.spec_hash)
       update_tried_hash = hash(.update_tried_hash)
       instructions_hash = hash(.instructions_hash)
+      compact_window = ((try? c.decodeIfPresent(Int.self, forKey: .compact_window)) ?? nil).flatMap { WorkerSpec.compactWindowRange.contains($0) ? $0 : nil }
     }
 
     public func encode(to e: Encoder) throws {
@@ -209,6 +213,7 @@ public struct WorkersFile: Codable, Equatable, Sendable {
       try c.encodeIfPresent(spec_hash, forKey: .spec_hash)
       try c.encodeIfPresent(update_tried_hash, forKey: .update_tried_hash)
       try c.encodeIfPresent(instructions_hash, forKey: .instructions_hash)
+      try c.encodeIfPresent(compact_window, forKey: .compact_window)
     }
   }
 
@@ -450,6 +455,8 @@ public struct ThreadSessionSettings: Equatable, Sendable {
   public var model: String
   public var effort: String?
   public var idleParkMin: Int
+  /// Tokens to compact at (`session_opts.compact_window`, 100000 to 1000000); nil = the same as the owner's other sessions (shell or user settings value). A thread's own, never inherited.
+  public var compactWindow: Int?
   /// The MCP servers this session may use besides `talos-app`. nil = no list (today's behaviour); a list, even an empty one, means only those.
   public var mcpAllow: [String]?
   /// Set for a sub-thread: what the launcher checks and makes for it. Its options above are already the effective ones.
@@ -461,8 +468,9 @@ public struct ThreadSessionSettings: Equatable, Sendable {
   public var optsUnread: [String] = []
   public init(
     threadId: String, cwd: String? = nil, model: String = "inherit", effort: String? = nil, idleParkMin: Int = 30,
-    mcpAllow: [String]? = nil, sub: SubThreads.Launch? = nil, optsUnread: [String] = [], name: String? = nil
+    mcpAllow: [String]? = nil, sub: SubThreads.Launch? = nil, optsUnread: [String] = [], name: String? = nil, compactWindow: Int? = nil
   ) {
+    self.compactWindow = compactWindow
     self.name = name
     self.optsUnread = optsUnread
     self.threadId = threadId
@@ -620,7 +628,8 @@ public struct DedicatedSettings: Equatable, Sendable {
       out[id] = ThreadSessionSettings(
         threadId: id, cwd: cwd, model: (sub == nil ? raw["model"] as? String : eff.model) ?? "inherit",
         effort: sub == nil ? raw["effort"] as? String : eff.effort, idleParkMin: idle, mcpAllow: eff.mcpAllow, sub: sub,
-        optsUnread: sub == nil ? ThreadSessionSettings.unreadOpts(t) : [], name: t["name"] as? String)
+        optsUnread: sub == nil ? ThreadSessionSettings.unreadOpts(t) : [], name: t["name"] as? String,
+        compactWindow: SubThreads.compactWindow(t))
     }
     var settings = DedicatedSettings(enabled: true, maxLive: maxLive, threads: out)
     settings.droppedEntries = dropped

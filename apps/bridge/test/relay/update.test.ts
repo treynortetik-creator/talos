@@ -2,7 +2,9 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cli, connectProject, ENV_ID, FAKE_PROJECT_TOKEN, RELAY_SERVICE_ID, world } from './helpers.ts'
+import { cli, connectProject, ENV_ID, FAKE_PROJECT_TOKEN, RELAY_SERVICE_ID, useWorldCleanup, world } from './helpers.ts'
+
+useWorldCleanup()
 
 describe('relay update', () => {
   test('not connected: says how to connect, and the Railway way, and asks Railway nothing', async () => {

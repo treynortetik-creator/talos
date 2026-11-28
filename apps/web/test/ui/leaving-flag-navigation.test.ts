@@ -32,4 +32,11 @@ describe('the leaving flag and the Navigation API', () => {
     navigate({ destination: { sameDocument: false }, downloadRequest: 'photo.png' })
     expect(leaving.now).toBe(false)
   })
+
+  it('a navigation that fails or is refused puts the page back to not leaving', () => {
+    navigate({ destination: { sameDocument: false }, downloadRequest: null })
+    expect(leaving.now).toBe(true)
+    nav.dispatchEvent(new Event('navigateerror'))
+    expect(leaving.now).toBe(false)
+  })
 })

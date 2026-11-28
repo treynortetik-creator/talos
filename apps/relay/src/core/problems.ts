@@ -22,6 +22,7 @@ import type { AppEnv, RelayServices } from '../services.ts'
 import { VERSION } from '../version.ts'
 import { reportIdTaken } from './bug-reports.ts'
 import { registerRelayFeature } from './features.ts'
+import { scrubError } from './log.ts'
 import { findRuntime } from './runtime.ts'
 
 export function registerProblems(_services: RelayServices): void {
@@ -150,7 +151,7 @@ export function installFatalHandlers(o: {
 }): () => void {
   const proc = o.proc ?? (process as unknown as ProcLike)
   const exit = o.exit ?? ((c) => process.exit(c))
-  const print = o.print ?? ((e) => console.error(e))
+  const print = o.print ?? ((e) => console.error(scrubError(e)))
   const onFatal = (err: unknown) => {
     saveFatalProblem(o.dataDir, err)
     print(err)

@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/schedules/* apps/bridge/src/tools/schedules.ts apps/bridge/src/inbound-schedule.ts apps/relay/src/core/schedules.ts apps/web/src/features/schedules/* apps/web/src/lib/schedulesClient.ts apps/web/src/lib/socketSchedules.ts
 // Schedules end to end (docs/SCHEDULES.md S9, WP-S4): the BUILT relay + the BUILT web app + the REAL bridge (under
 // FakeClaude, which plays the Claude session and its sub-agent) + the REAL vendored Chronos CLI under a CHRONOS_NOW the
 // test moves. Nothing on the path under test is mocked: every frame is signed by the browser's device key, routed by the
@@ -6,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserContext, Page } from '@playwright/test'
 import { type JwkP256T, verifyOwnerFrame } from '@talos-app/protocol'
-import type { ChannelNote, FakeClaude } from '@talos-app/testkit'
+import { type ChannelNote, type FakeClaude, t } from '@talos-app/testkit'
 import {
   test as base,
   card,
@@ -306,15 +307,19 @@ test('list: Chronos jobs in groups with their words; pause and resume are signed
   const t1 = Date.now()
   const back = await rawSocket(page, [sentFrames(page, 'hello')[0]?.text as string, first], 2000)
   expect(back.some((f) => f.type === 'ack' && f.ref === JSON.parse(first).id)).toBe(true)
+  expect(stack.claude.notifications.filter((n) => n.meta.kind === 'schedule_run' && n.at >= t1)).toHaveLength(0)
 
-  // Run now again: the sheet says it already ran (again:true), and the bridge's 1-per-2-min rule answers in words.
+  // Run now again: the sheet says it already ran (again:true), and the bridge runs it again: there is no two-minute lock.
   await row(page, 'standup-prep').getByRole('link').click()
   await page.getByTestId('action-bar').getByRole('button', { name: 'Run now' }).click()
   await expect(page.getByTestId('run-now-sheet')).toContainText('It already ran today at')
+  const t2 = Date.now()
   await page.getByTestId('run-now-sheet').getByRole('button', { name: 'Run again' }).click()
   expect(sentFrames(page, 'schedule.run_now').at(-1)?.json).toMatchObject({ schedule_id: 'standup-prep', again: true })
-  await expect(page.getByText('That job was just started. Give it a couple of minutes.')).toBeVisible()
-  expect(stack.claude.notifications.filter((n) => n.meta.kind === 'schedule_run' && n.at >= t1)).toHaveLength(0)
+  const note2 = await runNote(stack.claude, 'standup-prep', 15_000, t2)
+  expect(note2.meta.run_id).not.toBe(note.meta.run_id)
+  expect((await runAsAgent(stack.claude, note2)).start).toBe('GO')
+  await expect(page.getByText('That job was just started. Give it a couple of minutes.')).toHaveCount(0)
   // and the run id the session already used can't be claimed twice
   const replay = await stack.claude.callTool('schedule_run_start', { run_id: note.meta.run_id as string })
   expect(replay.content[0]?.text).toMatch(/^SKIP|unknown run|already/)
@@ -322,7 +327,7 @@ test('list: Chronos jobs in groups with their words; pause and resume are signed
 
 // ---- edit through a card ---------------------------------------------------------------------------------------------
 
-test('edit: the form sends only the touched field, the card is approved, the bridge writes it; a conflict saves nothing', async ({
+test('edit: the form sends only the touched field, Save applies at once with no card, the bridge writes it; a conflict saves nothing', async ({
   stack,
   mac,
   page,
@@ -338,34 +343,31 @@ test('edit: the form sends only the touched field, the card is approved, the bri
   await expect(mainToggle).toHaveAttribute('aria-expanded', 'true')
   await page.getByRole('button', { name: 'Edit Daily digest' }).click()
   await page.getByLabel('Name').fill('Morning digest')
-  await page.getByRole('button', { name: 'Review change' }).click()
-  const patch = sentFrames(page, 'schedule.patch').at(-1)?.json as { change: Record<string, unknown> }
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByTestId('saved-line')).toHaveText('Saved.', { timeout: t(15_000) })
+  const patch = sentFrames(page, 'schedule.patch').at(-1)?.json as {
+    change: Record<string, unknown>
+    form_save?: boolean
+  }
+  expect(patch.form_save).toBe(true)
   expect(patch.change).toMatchObject({ op: 'update', id: 'daily-digest', set: { name: 'Morning digest' } })
   expect(Object.keys(patch.change.set as object)).toEqual(['name'])
-  const pending = page.locator('[data-card-state="pending"]')
-  await expect(pending).toContainText('Change scheduled job: Morning digest')
-  await expect(pending).toContainText('your form')
-  // a rename is low-risk: no step-up, straight to the bridge
-  await pending.getByRole('button', { name: 'Save change' }).click()
-  await expect(page.locator('[data-card-state="done"]')).toContainText('Saved', { timeout: 15_000 })
+  // the owner's own Save is applied at once: no card was ever made, nothing to approve
+  await expect(page.locator('[data-card-state]')).toHaveCount(0)
   expect(mac.job('daily-digest')).toMatchObject({ name: 'Morning digest' })
   await openSchedules(page, 'daily-digest')
   await expect(row(page, 'daily-digest')).toContainText('Morning digest')
 
-  // Conflict: the card is drawn, then the job changes on the Mac (another Chronos write), then the owner approves.
+  // Conflict: the form is open on the job as it was, then the job changes on the Mac (another Chronos write), then the owner saves.
   await row(page, 'daily-digest').getByRole('link').click()
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await page.getByLabel('Name').fill('Evening digest')
-  await page.getByRole('button', { name: 'Review change' }).click()
-  const p2 = page.locator('[data-card-state="pending"]')
-  await expect(p2).toContainText('Change scheduled job: Evening digest')
   const etag = String(mac.job('daily-digest')?.etag)
   mac.change({ op: 'update', id: 'daily-digest', base_etag: etag, set: { description: 'Edited at the Mac' } })
-  await p2.getByRole('button', { name: 'Save change' }).click()
-  await expect(page.getByTestId('card-conflict')).toContainText(
-    onHost('The job changed on your Mac before you approved. Nothing was saved.'),
-    { timeout: 15_000 },
-  )
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText(onHost('The job changed on your Mac. Reload it and try again.'), {
+    timeout: t(15_000),
+  })
   expect(mac.job('daily-digest')).toMatchObject({ name: 'Morning digest', description: 'Edited at the Mac' })
 })
 
@@ -426,7 +428,26 @@ test('failure: a failed session run reaches the app (system row, Failed, tab dot
   expect((await runAsAgent(claude, note, { ok: false, summary: 'The repository was not reachable.' })).start).toBe('GO')
   expect(mac.job('weekly-review')).toMatchObject({ today: 'failed' })
 
-  // The alert is held by the quiet window: no push yet.
+  // The first failure of a job in a day wakes Main (the agent) to fix it, and holds the owner's alert: no push, even with the
+  // quiet window over (the relay's clock moved past it). The hold is the bridge's, not the window's.
+  const wake = await claude.waitForNotification(
+    (n) => n.meta.kind === 'job_failed' && n.meta.schedule_id === 'weekly-review',
+    20_000,
+  )
+  expect(wake.content).toContain('it reported a failure')
+  expect(wake.content).toContain('schedule_rerun')
+  stack.skew.ms = 2 * 3600_000
+  await page.waitForTimeout(2500) // timing-ok: a negative window: no push may arrive while the repair is held
+  expect(pushes(stack, 'schedule_failed')).toBe(0)
+  stack.skew.ms = 0
+
+  // Main tries its one repair and it fails again: now the owner is told. The alert reaches the relay, and the quiet window
+  // (the relay's clock is back inside it) holds the push: none yet.
+  const again = Date.now()
+  const rerun = await claude.callTool('schedule_rerun', { job_id: 'weekly-review' })
+  expect(rerun.content[0]?.text).toContain('offered to run again')
+  const note2 = await runNote(claude, 'weekly-review', 20_000, again)
+  expect((await runAsAgent(claude, note2, { ok: false, summary: 'Still not reachable.' })).start).toBe('GO')
   await page.waitForTimeout(2500)
   expect(pushes(stack, 'schedule_failed')).toBe(0)
   // The window ends (the relay's clock moves past it): the held alert goes out once.
@@ -441,6 +462,10 @@ test('failure: a failed session run reaches the app (system row, Failed, tab dot
   await openSchedules(page, 'weekly-review')
   await expect(row(page, 'weekly-review')).toContainText('Failed')
   await openThread(page, 'General')
+  // the first failure says Main is on it; the second, which Main's repair did not fix, sends the owner to Schedules
+  await expect(
+    page.getByText('Scheduled job "Weekly review" didn\'t finish: it reported a failure. Main is looking into it.'),
+  ).toBeVisible()
   await expect(
     page.getByText('Scheduled job "Weekly review" didn\'t finish: it reported a failure. Open Schedules.'),
   ).toBeVisible()

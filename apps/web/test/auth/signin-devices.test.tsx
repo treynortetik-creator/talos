@@ -556,7 +556,7 @@ describe('Account section: sign out and revoke', () => {
     unsubscribe.mockRestore()
   })
 
-  it('a device the Mac has not confirmed cannot sign out everywhere, so it signs out of itself', async () => {
+  it('a device the Mac has not confirmed cannot sign out everywhere: it stays signed in and says so', async () => {
     const { calls } = mount({
       'POST /api/auth/logout-all': () => json(403, { error: 'device_not_pinned' }),
       'POST /api/auth/logout': () => json(204),
@@ -566,12 +566,13 @@ describe('Account section: sign out and revoke', () => {
     await userEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', { name: 'Sign out everywhere' }),
     )
-    await waitFor(() => expect(here()).toBe('/login'))
-    expect(calls.filter((c) => c.method === 'POST').map((c) => c.url)).toEqual([
-      '/api/auth/logout-all',
-      '/api/auth/logout',
-    ])
-    expect((await privateCounts(storage)).cache).toBe(0)
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Your other devices are still signed in. Do this from the Mac.',
+    )
+    expect(here()).not.toBe('/login')
+    expect(useSession.getState().status).toBe('authed')
+    expect(calls.filter((c) => c.method === 'POST').map((c) => c.url)).toEqual(['/api/auth/logout-all'])
+    expect((await privateCounts(storage)).cache).toBe(2)
   })
 
   it('revoking THIS device warns first; confirming signs out, wipes chats and drops the dead key', async () => {

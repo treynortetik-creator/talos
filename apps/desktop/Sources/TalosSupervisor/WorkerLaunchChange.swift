@@ -30,7 +30,8 @@ extension WorkerManager {
       }
       // a folder whose setting cannot be read is not known: never compared, so a typo restarts nothing and loses no conversation
       let wanted = LaunchChange.Signature(
-        cwd: s.unreadFolderField == nil ? wantedFolder(s) : nil, model: s.model, effort: s.effort, mcpAllow: s.mcpAllow)
+        cwd: s.unreadFolderField == nil ? wantedFolder(s) : nil, model: s.model, effort: s.effort, mcpAllow: s.mcpAllow,
+        compactWindow: s.compactWindow)
       var debounce = r.change
       debounce.settle = options.launchChangeSettle
       let change = LaunchChange.compare(

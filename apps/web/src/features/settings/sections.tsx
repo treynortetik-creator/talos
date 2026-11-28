@@ -1,5 +1,5 @@
 // Settings sections owned by WP6: Account, Notifications, Appearance (8.5). Connection moved into Health.
-import type { RouteRes } from '@talos-app/protocol'
+import { PUSH_TEXT_DEFAULT, type RouteRes } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
@@ -45,6 +45,7 @@ const SHARED_PASSKEY_BEFORE =
   'This device shares its passkey with another device of yours. Removing the device does not remove that passkey: it keeps working for the other device, and for anyone who can unlock it. To remove the passkey, remove every device that uses it, then set them up again.'
 const SHARED_PASSKEY_AFTER =
   'Removed. Its passkey is shared with another device and still works. To remove the passkey, remove every device that uses it, then set them up again.'
+const SIGN_OUT_ALL_REFUSED = 'Your other devices are still signed in. Do this from the Mac.'
 
 // ---- Account ------------------------------------------------------------------------------------------------------
 export function AccountSection(_p: SectionProps) {
@@ -143,16 +144,14 @@ export function AccountSection(_p: SectionProps) {
     setConfirm(null)
     try {
       if (!FAKE) {
-        try {
-          await http.json('POST', path)
-        } catch (e) {
-          // "Everywhere" is for devices the Mac has confirmed. A device still waiting for the Mac can only leave itself.
-          if (path === '/api/auth/logout-all' && e instanceof HttpError && e.status === 403) {
-            await http.json('POST', '/api/auth/logout')
-          } else throw e
-        }
+        await http.json('POST', path)
       }
     } catch (e) {
+      // "Everywhere" is for devices the Mac has confirmed. A device still waiting for the Mac stays signed in, and is told so.
+      if (path === '/api/auth/logout-all' && e instanceof HttpError && e.status === 403) {
+        setErr(SIGN_OUT_ALL_REFUSED)
+        return
+      }
       if (!(e instanceof HttpError && e.status === 401)) {
         setErr("Couldn't sign out. Check your connection and try again.")
         return
@@ -307,7 +306,7 @@ export function AccountSection(_p: SectionProps) {
 }
 
 // ---- Notifications ------------------------------------------------------------------------------------------------
-type NoteAt = 'master' | 'quiet' | 'names' | 'push'
+type NoteAt = 'master' | 'quiet' | 'names' | 'text' | 'push'
 
 export function NotificationsSection({ readOnly }: SectionProps) {
   const client = useTalosClient()
@@ -415,6 +414,26 @@ export function NotificationsSection({ readOnly }: SectionProps) {
         This changes browser notifications. iPhone notifications always show General and Inbox by name and call every
         other thread &ldquo;a thread&rdquo;, whatever it is set to.
       </p>
+      <Row>
+        <span className="min-w-0">
+          <label htmlFor="message-text" className="block">
+            Show message text in browser notifications
+          </label>
+          <span className="block text-xs text-text-2">
+            On by default: a browser or Home Screen notification shows the first 80 characters of a reply (passwords,
+            keys and link codes are hidden). Turn it off and it says only &ldquo;New reply in&rdquo; the thread. The
+            thread name has its own setting above. iPhone app notifications have their own switch in the app, also on by
+            default.
+          </span>
+        </span>
+        <Switch
+          id="message-text"
+          checked={config?.notifications.web_message_text ?? PUSH_TEXT_DEFAULT}
+          disabled={readOnly || !config}
+          onCheckedChange={(v) => void patch({ notifications: { web_message_text: v } }, 'text')}
+        />
+      </Row>
+      {noteFor('text')}
       {inShell ? (
         <NativePushRow />
       ) : onMac ? (

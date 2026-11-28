@@ -1,31 +1,37 @@
-// Runs every kit/scripts/test-*.sh the way a new owner's machine would: a short TMPDIR, an empty temp HOME, no XDG_* variables,
+// Runs every kit/scripts/test-*.sh, and kit/scripts/self-test.sh (required: see kitLaneScripts), the way a new owner's machine would: a short TMPDIR, an empty temp HOME, no XDG_* variables,
 // no network opt-ins. Each script is its own test, so a failure names the script. A script that cannot run on this platform is
 // listed in PLATFORM_ONLY and skipped by name with its reason printed; nothing is skipped without appearing in that list.
 // Lines a script prints that start with "skip" (sub-checks it left out) are echoed too, so they are never silent: each one is
 // matched against KNOWN_SKIPS in kit-run.ts and printed with its reason, or marked UNLISTED when nobody wrote a reason down.
 // A script that hangs is killed together with everything it started (see kit-run.ts) and fails with the output it had printed.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
-import { classifySkips, failureReport, runScript } from './kit-run.ts'
+import { classifySkips, failureReport, kitLaneScripts, runScript } from './kit-run.ts'
 import { ROOT } from './size-report.ts'
 
 const KIT_SCRIPTS = join(ROOT, 'kit/scripts')
 const TIMEOUT_MS = 300_000
 
 /**
- * Script name -> its own time cap. test-default-agent.sh renders the kit and runs the whole self-test.sh inside it: about 2.5 min
- * alone on a quiet Mac, about 4 min on a loaded one, so the 300 s default is no room when CI runs several jobs at once.
+ * Script name -> its own time cap (scaled by the time factor below). test-default-agent.sh renders the kit and runs the whole
+ * self-test.sh inside it: about 2.5 min alone on a quiet Mac, about 4 min on a loaded one, so the 300 s default is no room when
+ * CI runs several jobs at once. test-update.sh (about 155 s with other suites running) and test-install.sh (about 103 s) each
+ * hit the 290 s kill of the 300 s default in a loaded gate at factor 1 (a Mac with more than 4 cores), while the scripts were fine.
  */
-const SLOW_MS: Record<string, number> = { 'test-default-agent.sh': 600_000 }
+const SLOW_MS: Record<string, number> = {
+  'test-default-agent.sh': 600_000,
+  'test-update.sh': 600_000,
+  'test-install.sh': 600_000,
+}
 
 /** Script name -> the platform it needs and why. Empty today: every kit test fakes `say`, `afplay` and `launchctl`, so all run anywhere. */
 const PLATFORM_ONLY: Record<string, { platform: NodeJS.Platform; reason: string }> = {}
 
-function scriptEnv(home: string, tmp: string): Record<string, string> {
+function scriptEnv(home: string, tmp: string, name = ''): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined || k.startsWith('XDG_') || k.startsWith('TALOS_TEST_') || k.startsWith('GIT_')) continue
@@ -34,7 +40,9 @@ function scriptEnv(home: string, tmp: string): Record<string, string> {
   // test-default-agent.sh runs self-test.sh, which runs most of these scripts again. This file runs each one already, so the
   // second run is left out, except in the full CI run (`ci-local.sh --full` sets TALOS_KIT_FULL_SELF_TEST=1), which keeps one
   // run of them inside a rendered agent folder.
-  const suites = { TALOS_SELF_TEST_SUITES: process.env.TALOS_KIT_FULL_SELF_TEST === '1' ? 'run' : 'skip' }
+  // self-test.sh itself, run here as a lane member, never runs them: they would be a third run on the full one.
+  const full = process.env.TALOS_KIT_FULL_SELF_TEST === '1' && name !== 'self-test.sh'
+  const suites = { TALOS_SELF_TEST_SUITES: full ? 'run' : 'skip' }
   // the machine's time factor is the one TALOS_TEST_ value the scripts read (a speed budget scales with it, as every test's does)
   const factor = process.env.TALOS_TEST_TIME_FACTOR
     ? { TALOS_TEST_TIME_FACTOR: process.env.TALOS_TEST_TIME_FACTOR }
@@ -47,14 +55,29 @@ function skipReason(name: string, platform: NodeJS.Platform): string | undefined
   return entry && entry.platform !== platform ? `${name} needs ${entry.platform}: ${entry.reason}` : undefined
 }
 
-const scripts = readdirSync(KIT_SCRIPTS)
-  .filter((f) => /^test-.*\.sh$/.test(f))
-  .sort()
+// every test-*.sh, and self-test.sh (a required member, see LANE_REQUIRED_EXTRA in kit-run.ts)
+const scripts = kitLaneScripts(KIT_SCRIPTS)
 
 describe('kit test scripts', () => {
   it('finds the kit test scripts, and PLATFORM_ONLY names only scripts that exist', () => {
     expect(scripts.length).toBeGreaterThan(10)
     for (const name of Object.keys(PLATFORM_ONLY)) expect(scripts).toContain(name)
+  })
+
+  it('the lane runs self-test.sh itself, so a kit change cannot land while it fails', () => {
+    expect(scripts).toContain('self-test.sh')
+    expect(scripts.filter((n) => n === 'self-test.sh')).toHaveLength(1)
+  })
+
+  it('the lane runs self-test.sh with its suites left out, even on the full run: test-*.sh and test-default-agent.sh run them already', () => {
+    try {
+      for (const full of [undefined, '1']) {
+        vi.stubEnv('TALOS_KIT_FULL_SELF_TEST', full)
+        expect(scriptEnv('/h', '/t', 'self-test.sh').TALOS_SELF_TEST_SUITES, String(full)).toBe('skip')
+      }
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('SLOW_MS names only scripts that exist', () => {
@@ -146,7 +169,7 @@ describe('kit test scripts', () => {
       const { code, out } = await runScript(join(KIT_SCRIPTS, name), {
         cwd: join(ROOT, 'kit'),
         timeoutMs: timeoutMs - 10_000,
-        env: scriptEnv,
+        env: (home, tmp) => scriptEnv(home, tmp, name),
       })
       for (const { line, reason } of classifySkips(name, out))
         console.warn(`${name}: ${line} [${reason ?? 'UNLISTED skip: add it to KNOWN_SKIPS in kit-run.ts'}]`)

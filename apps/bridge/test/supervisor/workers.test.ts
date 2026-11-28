@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -1583,6 +1584,64 @@ describe('the idle park (P3d3, part 5)', () => {
     await x.tick()
     expect(x.m.state('trip')).toBe('parked')
     expect(x.file()?.threads.trip?.last_active_at).toBeUndefined()
+  })
+  it('the last lines above the box are in workers.json only after four quiet minutes, redacted and capped, and gone the moment the pane changes', async () => {
+    const x = setup({ threads: [QUICK] })
+    await live(x)
+    const rule = '─'.repeat(40)
+    const shown = (...above: string[]) => [...above, rule, '❯ half a draft', rule, 'model: sonnet  12% ctx']
+    x.host().screen = shown(
+      'one',
+      'two',
+      `export TOKEN=ghp_${'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'}`,
+      'mail jane@example.com',
+    )
+    await x.tick()
+    await x.tick(6)
+    expect(x.file()?.threads.trip?.quiet_lines).toBeUndefined() // not quiet yet
+    await x.tick(215) // just under four minutes since the screen last changed
+    await x.tick(6)
+    expect(x.file()?.threads.trip?.quiet_lines).toBeUndefined()
+    await x.tick(20)
+    await x.tick(6)
+    const lines = x.file()?.threads.trip?.quiet_lines
+    expect(lines).toHaveLength(3)
+    expect(lines?.[0]).toContain('two')
+    expect(JSON.stringify(lines)).not.toContain('ghp_a1B2')
+    expect(JSON.stringify(lines)).not.toContain('jane@example.com')
+    expect(JSON.stringify(lines)).not.toContain('half a draft') // the box is never read
+    x.host().screen = shown('something new happened')
+    await x.tick()
+    await x.tick(6)
+    expect(x.file()?.threads.trip?.quiet_lines).toBeUndefined()
+  })
+  it('quiet_lines of an earlier supervisor are never carried: a restart that adopts the worker publishes none (stale text is not republished for ever)', async () => {
+    const x = setup({ threads: [QUICK] })
+    writeFileSync(
+      workersJsonPath(x.home),
+      JSON.stringify({
+        v: 1,
+        supervisor: { pid: 1, heartbeat_at: '2026-11-10T11:59:00.000Z' },
+        threads: {
+          trip: {
+            state: 'live',
+            session_id: '11111111-2222-3333-4444-999999999999',
+            tmux: 't-trip',
+            pane_pid: 5001,
+            cwd: '/home/alex/trip',
+            started_at: '2026-11-10T10:00:00.000Z',
+            last_turn_at: '2026-11-10T10:00:00.000Z',
+            last_active_at: '2026-11-10T10:00:00.000Z',
+            quiet_lines: ['an old line from before the restart'],
+          },
+        },
+      }),
+    )
+    await x.tick()
+    await x.tick(6)
+    await x.tick(6)
+    expect(JSON.stringify(x.file())).not.toContain('an old line from before the restart')
+    expect(x.file()?.threads.trip?.quiet_lines).toBeUndefined()
   })
   it('an adopted worker carries the idle clock on from workers.json: a restart buys it no extra idle time', async () => {
     const prior = (x: ReturnType<typeof setup>, last: string) =>
@@ -3861,6 +3920,34 @@ describe('restart on update (update-restart.ts)', () => {
     expect(w.x.m.state('trip')).toBe('parking')
     expect(w.x.events()).toContain('update_restart')
   })
+  it('the notice of Claude Code’s own wait at a usage limit holds an update restart (it would end the wait); once it is gone, it restarts', async () => {
+    const w = world()
+    await live(w.x)
+    w.spec.v = H('b')
+    const RULE = '─'.repeat(110)
+    const screen = (notice: boolean) => [
+      '',
+      '❯ Run the gate and tell me what failed.',
+      '',
+      RULE,
+      '❯ ',
+      RULE,
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+      ...(notice ? ['  Continuing automatically when it resets · Esc to cancel'] : []),
+    ]
+    w.x.host().screen = screen(true)
+    await w.x.tick(2)
+    await w.update()
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('live')
+    expect(w.x.events()).not.toContain('update_restart')
+    w.x.host().screen = screen(false)
+    await w.x.tick(5) // the first look without it
+    await w.x.tick(5) // a settled miss: the skip is over
+    await w.x.tick(5)
+    expect(w.x.m.state('trip')).toBe('parking')
+    expect(w.x.events()).toContain('update_restart')
+  })
   it('a session in a turn waits and is named; its restart afterwards is said in a line of its own (Fable R1-1)', async () => {
     const w = world()
     await live(w.x)
@@ -5038,5 +5125,347 @@ describe('the Esc line is read at Claude’s own indent, and a new prompt clears
     await inTurn(x)
     await crashed(x)
     expect(lastPlan(x)?.resumeTurn).toBeFalsy()
+  })
+})
+
+describe('a usage limit never starts a session, and an owner’s stop at a limit sticks (continue-at-limit; Claude Code’s timer lives in its own process)', () => {
+  const SRC = join(import.meta.dir, '../../src')
+  const LIMIT_SCREEN = parseCapture(
+    readFileSync(join(import.meta.dir, '../../../desktop/Tests/Fixtures/synthetic/usage-limit.txt'), 'utf8'),
+  )
+  const NAMED = [{ ...TRIP, name: 'Trip' }]
+  const ticks = async (x: ReturnType<typeof setup>, n: number, s = 1) => {
+    for (let i = 0; i < n; i++) await x.tick(s)
+  }
+  const HOUR = 3600
+  const entry = (x: ReturnType<typeof setup>) =>
+    JSON.parse(readFileSync(workersJsonPath(x.home), 'utf8')).threads.trip as Record<string, unknown>
+  /** A day and a bit of fake clock, an hour at a time: past any reset the usage-limit screen could name. */
+  const pastEveryReset = (x: ReturnType<typeof setup>) => ticks(x, 26, HOUR)
+
+  it('the only readers of a usage-limit reset moment are display, status and refusal code: none of them starts a session', () => {
+    const readers = (dir: string): string[] => {
+      const out: string[] = []
+      for (const f of readdirSync(join(SRC, dir)))
+        if (
+          f.endsWith('.ts') &&
+          /needsYouResetsAt|usageNeedsYou|resetsAt\(|\.resets_at/.test(readFileSync(join(SRC, dir, f), 'utf8'))
+        )
+          out.push(`${dir}/${f}`)
+      return out
+    }
+    const found = [...readers('supervisor'), ...readers('router')].sort()
+    // a new reader here must be read for "does it start a session?" before it is added to this list
+    expect(found).toEqual([
+      'router/governor.ts',
+      'router/router.ts',
+      'router/status-line.ts',
+      'supervisor/limit-wait.ts', // the park skip: the reset the wait notice names, kept to bound the skip; it ends nothing and starts nothing
+      'supervisor/main-request.ts',
+      'supervisor/main.ts', // Main's own needs_you; a usage menu there only HOLDS Main's hang restart (main.ts)
+      'supervisor/usage-limit.ts',
+      'supervisor/worker-notices.ts',
+      'supervisor/worker-status.ts',
+    ])
+    // and the files that start, wake or restart a session do not read it at all
+    for (const f of [
+      'workers.ts',
+      'worker-slots.ts',
+      'worker-launch.ts',
+      'workers-wiring.ts',
+      'owed-pointer.ts',
+      'wake-reader.ts',
+    ])
+      expect(readFileSync(join(SRC, 'supervisor', f), 'utf8'), f).not.toMatch(
+        /needsYouResetsAt|usageNeedsYou|resetsAt\b|resets_at|readUsageLimit/,
+      )
+  })
+
+  it('a parked (idle), an owner-stopped and a switched-off thread session is never started by time passing, a limit screen or not', async () => {
+    // idle-parked
+    const a = setup()
+    await live(a)
+    await a.m.park('trip', 'idle')
+    a.host().exit(0)
+    await a.tick()
+    expect(a.m.state('trip')).toBe('parked')
+    await pastEveryReset(a)
+    expect([a.m.state('trip'), a.host().launches.length]).toEqual(['parked', 1])
+    // owner-stopped
+    const b = setup()
+    await live(b)
+    await b.m.stop('trip')
+    b.host().exit(0)
+    await b.tick()
+    expect(b.m.entry('trip')).toMatchObject({ state: 'off', stopped_why: 'owner' })
+    await pastEveryReset(b)
+    expect([b.m.state('trip'), b.host().launches.length]).toEqual(['off', 1])
+    // the thread left the dedicated list (archived, or switched back to shared): its session is parked, never started again
+    const list: WorkerThread[] = [TRIP]
+    const c = setup({ threads: list })
+    await live(c)
+    list.length = 0
+    await c.tick()
+    c.host().exit(0)
+    await c.tick()
+    await pastEveryReset(c)
+    expect(c.host().launches.length).toBe(1)
+    expect(['parked', 'off']).toContain(c.m.state('trip'))
+  })
+
+  it('an archived thread is not a dedicated thread at all, so it has no session to continue', () => {
+    const raw = (archived: boolean) => ({
+      default_thread: 'general',
+      dedicated: { enabled: true },
+      threads: [
+        { id: 'general', kind: 'fixed' },
+        {
+          id: 'trip',
+          kind: 'user',
+          session: 'dedicated',
+          session_opts: { cwd: '/home/alex/trip' },
+          ...(archived ? { archived: true } : {}),
+        },
+      ],
+    })
+    expect(dedicatedThreads(raw(false), '/agent')?.map((t) => t.id)).toEqual(['trip'])
+    expect(dedicatedThreads(raw(true), '/agent')?.map((t) => t.id)).toEqual([])
+  })
+
+  it('the owner stops a session that sits on the usage-limit screen: it is killed (Claude Code’s timer goes with it) and nothing restarts it at the reset', async () => {
+    const x = setup({ threads: NAMED })
+    await live(x)
+    x.host().screen = LIMIT_SCREEN
+    await ticks(x, WORKER_TIMING.dialog_settle_s + 2)
+    const needs = entry(x).needs_you as { kind: string; resets_at?: string }
+    expect(needs.kind).toBe('usage limit')
+    const resetAt = Date.parse(needs.resets_at ?? '')
+    expect(resetAt).toBeGreaterThan(x.wall())
+    await x.m.stop('trip')
+    await ticks(x, WORKER_TIMING.owner_stop_s + 2)
+    expect(x.host().signals).toContain('SIGTERM') // the process (and the timer in it) is told to end
+    x.host().exit(0, 15)
+    await x.tick()
+    expect(x.m.entry('trip')).toMatchObject({ state: 'off', stopped_why: 'owner' })
+    // the reset passes, and a day after it: still off, one launch ever
+    while (x.wall() < resetAt + 25 * HOUR * 1000) await x.tick(HOUR)
+    expect([x.m.state('trip'), x.host().launches.length]).toEqual(['off', 1])
+    expect(x.posts.every(([, text]) => !/resumed|continu(ed|ing) the session/i.test(text))).toBe(true)
+  })
+
+  it('what the idle park does today at a limit: on the screen it waits on the owner and is never parked; with no screen (Claude Code waiting by itself) it is parked at idle_park_min, which ends Claude Code’s wait', async () => {
+    const quick: WorkerThread = { ...TRIP, idleParkMin: 5 }
+    // (a) the usage-limit screen is up: needs_you holds the park, however long it sits
+    const a = setup({ threads: [{ ...quick, name: 'Trip' }] })
+    await live(a)
+    a.host().screen = LIMIT_SCREEN
+    await ticks(a, WORKER_TIMING.dialog_settle_s + 2)
+    await ticks(a, 12, 60)
+    expect(a.m.state('trip')).toBe('live')
+    // (b) Claude Code armed its own wait: no menu, a quiet idle pane. Talos cannot tell it from any quiet session
+    const b = setup({ threads: [quick] })
+    await live(b)
+    await ticks(b, 12, 60)
+    expect(['parking', 'parked']).toContain(b.m.state('trip'))
+    expect(b.audit.some(([e, f]) => e === 'worker_parked' && f?.why === 'idle')).toBe(true)
+  })
+
+  it('a session killed while it waited at a limit is not a cut turn: its next start carries no resume-the-turn variables (so no second run beside Claude Code’s own continue)', async () => {
+    const x = setup({ threads: NAMED, saved: () => true })
+    await live(x)
+    x.host().screen = LIMIT_SCREEN
+    await ticks(x, WORKER_TIMING.dialog_settle_s + 2)
+    x.host().screen = null
+    x.host().exit(1) // killed or crashed while quiet at the limit
+    await x.tick()
+    expect(x.m.state('trip')).toBe('parked')
+    await x.m.start('trip')
+    expect(x.plans[x.plans.length - 1]?.resumeTurn).toBeFalsy()
+  })
+})
+
+describe('the park skip: while Claude Code’s own wait at a usage limit shows, nothing automatic ends the session', () => {
+  const QUICK: WorkerThread = { ...TRIP, idleParkMin: 5 }
+  const H = 3600
+  const RULE = '─'.repeat(110)
+  /** Claude's box and status row, then (optionally) the wait notice under them; `above` is conversation. */
+  const screenWith = (notice: string | null, above: string[] = []) => [
+    '',
+    '❯ Run the gate and tell me what failed.',
+    '',
+    ...above,
+    "  You've hit your Fable limit · resets 4pm",
+    '',
+    RULE,
+    '❯ ',
+    RULE,
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ...(notice === null ? [] : [`  ${notice}`]),
+  ]
+  /** The wait's clock text for a moment, as Claude Code draws it (en-US, lower case am/pm, no space), in this zone. */
+  const clockIn = (ms: number) => {
+    const d = new Date(ms)
+    const h = d.getHours()
+    const min = d.getMinutes()
+    return `${h % 12 === 0 ? 12 : h % 12}${min === 0 ? '' : `:${String(min).padStart(2, '0')}`}${h >= 12 ? 'pm' : 'am'}`
+  }
+  const at = (ms: number) => `Continuing automatically at ${clockIn(ms)} · Esc to cancel`
+  const UNKNOWN_RESET = 'Continuing automatically when it resets · Esc to cancel'
+  const steps = async (x: ReturnType<typeof setup>, n: number, s: number) => {
+    for (let i = 0; i < n; i++) await x.tick(s)
+  }
+  const entryOf = (x: ReturnType<typeof setup>) =>
+    JSON.parse(readFileSync(workersJsonPath(x.home), 'utf8')).threads.trip as Record<string, unknown>
+  const parkedIdle = (x: ReturnType<typeof setup>) =>
+    x.audit.some(([e, f]) => e === 'worker_parked' && f?.why === 'idle')
+  const governorPark = (x: ReturnType<typeof setup>) =>
+    writeControl(x.home, {
+      v: 1,
+      thread_id: 'trip',
+      message_ids: [],
+      at: new Date(x.wall()).toISOString(),
+      reason: 'governor',
+      action: 'park',
+    })
+
+  it('the notice blocks the idle park, however long it sits (inside the skip); the same quiet pane without it parks', async () => {
+    const a = setup({ threads: [QUICK] })
+    await live(a)
+    a.host().screen = screenWith(UNKNOWN_RESET)
+    await steps(a, 8, 600) // 80 minutes, far past idle_park_min
+    expect(a.m.state('trip')).toBe('live')
+    expect(parkedIdle(a)).toBe(false)
+    expect(entryOf(a).limit_wait).toMatchObject({ since: expect.any(String) })
+    const b = setup({ threads: [QUICK] })
+    await live(b)
+    b.host().screen = screenWith(null)
+    await steps(b, 8, 600)
+    expect(['parking', 'parked']).toContain(b.m.state('trip'))
+    expect(parkedIdle(b)).toBe(true)
+  })
+
+  it('the notice blocks the governor’s park; without it the governor parks', async () => {
+    const a = setup({ threads: [QUICK] })
+    await live(a)
+    a.host().screen = screenWith(UNKNOWN_RESET)
+    await a.tick(2)
+    governorPark(a)
+    await steps(a, 3, 5)
+    expect(a.m.state('trip')).toBe('live')
+    expect(a.audit.some(([e, f]) => e === 'worker_park_skipped' && f?.why === 'limit_wait')).toBe(true)
+    const b = setup({ threads: [QUICK] })
+    await live(b)
+    b.host().screen = screenWith(null)
+    await b.tick(2)
+    governorPark(b)
+    await steps(b, 3, 5)
+    expect(['stopping', 'parking', 'parked']).toContain(b.m.state('trip'))
+  })
+
+  it('an owner’s stop or park still ends it at once, notice or not', async () => {
+    const a = setup({ threads: [QUICK] })
+    await live(a)
+    a.host().screen = screenWith(UNKNOWN_RESET)
+    await a.tick(2)
+    await a.m.stop('trip')
+    await steps(a, WORKER_TIMING.owner_stop_s + 2, 1)
+    expect(a.host().signals).toContain('SIGTERM')
+    a.host().exit(0, 15)
+    await a.tick()
+    expect(a.m.entry('trip')).toMatchObject({ state: 'off', stopped_why: 'owner' })
+    expect(entryOf(a).limit_wait).toBeUndefined()
+    const b = setup({ threads: [QUICK] })
+    await live(b)
+    b.host().screen = screenWith(UNKNOWN_RESET)
+    await b.tick(2)
+    await b.m.park('trip', 'owner')
+    await steps(b, 3, 1)
+    expect(['stopping', 'parking', 'parked']).toContain(b.m.state('trip'))
+  })
+
+  it('the skip ends at the reset plus 15 minutes, notice still showing', async () => {
+    const x = setup({ threads: [QUICK] })
+    await live(x)
+    const reset = x.wall() + 60 * 60_000 // an hour from now
+    x.host().screen = screenWith(at(reset))
+    await x.tick(2)
+    await steps(x, 6, 600) // 62 minutes in: the reset has passed, the 15 minutes have not
+    expect(x.m.state('trip')).toBe('live')
+    await steps(x, 1, 600) // 72 minutes
+    expect(x.m.state('trip')).toBe('live')
+    await steps(x, 2, 600) // 92 minutes: past the reset plus 15 minutes
+    expect(['parking', 'parked']).toContain(x.m.state('trip'))
+    expect(parkedIdle(x)).toBe(true)
+  })
+
+  it('the skip ends 6 hours after the notice first showed, even when it still shows (no reset to read, or one a day away)', async () => {
+    const x = setup({ threads: [QUICK] })
+    await live(x)
+    x.host().screen = screenWith(UNKNOWN_RESET)
+    await x.tick(2)
+    await steps(x, 5, H) // five hours
+    expect(x.m.state('trip')).toBe('live')
+    await steps(x, 2, H) // seven hours
+    expect(['parking', 'parked']).toContain(x.m.state('trip'))
+    const y = setup({ threads: [QUICK] })
+    await live(y)
+    y.host().screen = screenWith(at(y.wall() + 20 * H * 1000))
+    await y.tick(2)
+    await steps(y, 5, H)
+    expect(y.m.state('trip')).toBe('live')
+    await steps(y, 2, H)
+    expect(['parking', 'parked']).toContain(y.m.state('trip'))
+  })
+
+  it('a quoted copy of the notice in the conversation holds nothing', async () => {
+    const x = setup({ threads: [QUICK] })
+    await live(x)
+    x.host().screen = screenWith(null, ['⏺ Bash(echo hi)', `  ⎿  ${UNKNOWN_RESET}`, `  ${at(x.wall() + H * 1000)}`])
+    await steps(x, 8, 600)
+    expect(['parking', 'parked']).toContain(x.m.state('trip'))
+    expect(parkedIdle(x)).toBe(true)
+    expect(entryOf(x).limit_wait).toBeUndefined()
+  })
+
+  it('the notice going away clears the skip: a quiet session then parks as before', async () => {
+    const x = setup({ threads: [QUICK] })
+    await live(x)
+    x.host().screen = screenWith(UNKNOWN_RESET)
+    await x.tick(2)
+    expect(entryOf(x).limit_wait).toBeDefined()
+    x.host().screen = screenWith(null)
+    await steps(x, 3, 1) // gone for longer than a torn frame
+    expect(entryOf(x).limit_wait).toBeUndefined()
+    await x.tick(H)
+    expect(['parking', 'parked']).toContain(x.m.state('trip'))
+  })
+
+  it('the skip survives a supervisor restart: the first time the notice showed is kept in the session’s own fields', async () => {
+    const x = setup()
+    await live(x)
+    await x.tick(1000) // the notice first shows well after the start
+    x.host().screen = screenWith(UNKNOWN_RESET)
+    await x.tick(2)
+    const since = (entryOf(x).limit_wait as { since: string }).since
+    expect(Date.parse(since)).toBeGreaterThan(x.wall() - 10_000)
+    // another supervisor on the same home and the same pane, five hours after the notice first showed
+    const y = setup()
+    // its wall clock runs with its ticks (no jump), starting five hours after the first time
+    let shift = Date.parse(since) + 5 * H * 1000 - y.wall()
+    ;(y.m as unknown as { d: { home: string; wallMs: () => number } }).d.home = x.home
+    ;(y.m as unknown as { d: { wallMs: () => number } }).d.wallMs = () => y.wall() + shift
+    const h = new FakeHost(() => 9100)
+    h.pid = x.host().pid
+    h.running = true
+    h.screen = screenWith(UNKNOWN_RESET)
+    y.hosts.set('trip', h)
+    await y.tick()
+    await steps(y, 40, 60) // far past the default idle_park_min (30 minutes) on its own clock: the skip still holds it
+    expect(y.m.state('trip')).toBe('live')
+    // its looks kept the first-seen time (a fresh first-seen would hold the session another 6 hours)
+    expect((y.m.entry('trip') as unknown as { limit_wait?: { since: string } }).limit_wait?.since).toBe(since)
+    shift += 2 * H * 1000 // now seven hours after the FIRST time: over, though the notice still shows
+    await steps(y, 40, 60) // the wall clock's jump makes it active once; then a whole idle window passes
+    expect(['parking', 'parked']).toContain(y.m.state('trip'))
   })
 })

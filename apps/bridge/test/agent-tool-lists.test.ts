@@ -36,6 +36,7 @@ describe('agent tool name lists', () => {
       'schedule_propose',
       'schedule_run_start',
       'schedule_run_done',
+      'schedule_rerun',
       'wake_me',
     ])
     expect([...CONFIG_BRIDGE_TOOLS]).toEqual(['config_propose', 'settings_read', 'set_thread_instructions'])

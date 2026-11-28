@@ -5,6 +5,7 @@ import { Outlet, useLocation, useMatch, useNavigate } from 'react-router'
 import { FirstRunGate } from './features/agent-config/FirstRun.tsx'
 import { BugReporter } from './features/bugreport/BugReporter.tsx'
 import { openBugReport } from './features/bugreport/store.ts'
+import { useAnnounceNeedsYou } from './features/cards/useAnnounceNeedsYou.ts'
 import { useAwaitingOwner } from './features/cards/useAwaitingOwner.ts'
 import { noteViewedThread } from './features/native/capture.ts'
 import { type ActionCtx, DIALOG_GUARDED, dialogOpen, runAction } from './features/palette/actions.ts'
@@ -53,7 +54,6 @@ export function Shell() {
   const onThread = useMatch('/t/:thread')
   const onCard = useMatch('/card/:id')
   const onTerminal = useMatch('/terminal') !== null
-  const onGraph = useMatch('/memory/graph') !== null
   const inThread = onThread !== null || onCard !== null
   const [detail, setDetail] = useState<{ node: ReactNode; title?: string } | null>(null)
 
@@ -75,6 +75,7 @@ export function Shell() {
   )
   const viewing = onThread?.params.thread ?? cardThread
   useEffect(() => watchNativeViewing(viewing), [viewing])
+  useAnnounceNeedsYou(viewing)
   useEffect(() => noteViewedThread(viewing), [viewing])
   // biome-ignore lint/correctness/useExhaustiveDependencies: the panel closes on navigation
   useEffect(() => setDetail(null), [loc.pathname])
@@ -167,9 +168,8 @@ export function Shell() {
               className={cn(
                 'mx-auto min-h-0 w-full flex-1 overscroll-contain',
                 // the terminal wants the whole width; every other screen reads best in a column
-                onTerminal || onGraph ? 'max-w-none' : 'max-w-[760px] lg:max-w-[760px]',
-                // the graph fills the area and takes the wheel for zoom, so the page itself never scrolls
-                onGraph ? 'overflow-hidden' : 'overflow-y-auto',
+                onTerminal ? 'max-w-none' : 'max-w-[760px] lg:max-w-[760px]',
+                'overflow-y-auto',
               )}
               id="main"
             >

@@ -1,6 +1,7 @@
 import type { AttachmentRefT, CardT, InboxItemT, MessageT } from '@talos-app/protocol'
 import { ownValue } from '@talos-app/protocol'
 import { Suspense, useEffect, useRef, useState } from 'react'
+import { announceCopy } from '../../lib/announceCopy.ts'
 import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { useConnectionMeta } from '../../lib/connectionMeta.ts'
 import { clockTime, formatDuration } from '../../lib/format.ts'
@@ -18,8 +19,10 @@ import { SharedContentBox } from '../share/SharedContentBox.tsx'
 import { AttachmentView } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
 import { REVEAL } from './messageRow.ts'
+import { QuietLines } from './QuietLines.tsx'
 import { runContextOf } from './runBlock.ts'
 import { SpeakButton } from './SpeakButton.tsx'
+import { SystemRowActions } from './SystemRowActions.tsx'
 import { UndoToHere } from './UndoToHere.tsx'
 import { useAgentName } from './useThreads.ts'
 
@@ -216,6 +219,7 @@ function CopyButton({ text }: { text: string }) {
   )
   const copy = async () => {
     const ok = await copyText(text)
+    announceCopy(ok)
     setState(ok ? 'ok' : 'fail')
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => setState(null), COPY_NOTE_MS)
@@ -239,7 +243,7 @@ function CopyButton({ text }: { text: string }) {
         {state === 'ok' ? <IconCheck width={14} height={14} /> : <IconCopy width={14} height={14} />}
         <span>Copy</span>
       </button>
-      <span role="status" data-testid="msg-copy-note" className={cn(state === null && 'sr-only')}>
+      <span data-testid="msg-copy-note" className={cn(state === null && 'sr-only')}>
         {state === 'ok' ? 'Copied' : state === 'fail' ? "Couldn't copy" : ''}
       </span>
     </>
@@ -371,7 +375,11 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
           type="button"
           data-testid="msg-copy"
           className="flex min-h-11 items-center rounded-button px-3 text-left hover:bg-surface-2"
-          onClick={async () => setCopied((await copyText(text)) ? 'ok' : 'fail')}
+          onClick={async () => {
+            const ok = await copyText(text)
+            announceCopy(ok)
+            setCopied(ok ? 'ok' : 'fail')
+          }}
         >
           {copied === 'ok' ? 'Copied' : copied === 'fail' ? "Couldn't copy" : 'Copy'}
         </button>
@@ -383,9 +391,12 @@ function MessageActions({ m, owner, children }: { m: MessageT; owner: boolean; c
             try {
               const r = await getPlatform().share({ text })
               // 'unsupported' is also what a cancelled share sheet returns (platform.ts): close without a word.
-              if (r === 'copied') setCopied('ok')
-              else setOpen(false)
+              if (r === 'copied') {
+                announceCopy(true)
+                setCopied('ok')
+              } else setOpen(false)
             } catch {
+              announceCopy(false)
               setCopied('fail')
             }
           }}
@@ -570,9 +581,13 @@ export function MessageView({
   if (m.author === 'system') {
     const failed = /security check/i.test(m.text ?? '')
     return (
-      <div role="status" className="flex items-center justify-center gap-2 px-4 py-2 text-center text-sm text-text-2">
-        {failed && <Mascot state="worried" size={24} name={agent} decorative animate={false} />}
-        {m.text}
+      <div role="status" className="px-4 py-2 text-center text-sm text-text-2">
+        <div className="flex items-center justify-center gap-2">
+          {failed && <Mascot state="worried" size={24} name={agent} decorative animate={false} />}
+          {m.text}
+        </div>
+        <QuietLines messageId={m.id} />
+        {m.actions && m.actions.length > 0 && <SystemRowActions actions={m.actions} />}
       </div>
     )
   }

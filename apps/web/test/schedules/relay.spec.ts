@@ -101,7 +101,7 @@ test('edit sends only the touched fields; the card arrives over the socket, is a
   const dev = await openTab(harness, page, context, bridge, '/schedules/daily-digest')
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await page.getByLabel('Name').fill('Morning Digest')
-  await page.getByRole('button', { name: 'Review change' }).click()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
   await waitUntil(() => frameOfType(harness, 'schedule.patch').length === 1, 'schedule.patch')
   const patch = frameOfType(harness, 'schedule.patch')[0] as unknown as {
     raw: { change: { set: unknown; op: string }; id: string }

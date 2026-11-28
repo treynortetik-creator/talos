@@ -254,9 +254,10 @@ struct RelaunchWatchdogTests {
       RelaunchWatchdog.start(pid: v.processIdentifier, app: "/Applications/Fake.app", settleSeconds: "0.1", opener: r.opener))
     w.terminate()  // the quit path ends the helper first
     w.waitUntilExit()
+    // the helper is already reaped (waitUntilExit above), so nothing is left to write the marker once the app dies: no wait needed
+    #expect(!w.isRunning)
     kill(v.processIdentifier, SIGKILL)
     v.waitUntilExit()
-    Thread.sleep(forTimeInterval: 1.0)
     #expect(!FileManager.default.fileExists(atPath: r.marker.path))
   }
 
@@ -268,9 +269,9 @@ struct RelaunchWatchdogTests {
     let w = try #require(
       RelaunchWatchdog.start(pid: v.processIdentifier, app: "/Applications/Fake.app", maxSeconds: 1, settleSeconds: "0.1", opener: r.opener))
     #expect(wait(6) { !w.isRunning }, "the helper must end on its own")
+    // the helper was seen to exit above, so nothing is left to write the marker once the app dies: no wait needed
     kill(v.processIdentifier, SIGKILL)
     v.waitUntilExit()
-    Thread.sleep(forTimeInterval: 0.6)
     #expect(!FileManager.default.fileExists(atPath: r.marker.path))
   }
 

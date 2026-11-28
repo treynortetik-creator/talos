@@ -63,6 +63,8 @@ export function createClientOwner(
         ...(input.text !== undefined ? { text: input.text } : {}),
         // signed with the rest: only the owner's own tap can always-allow a kind
         ...(input.always ? { always: true } : {}),
+        // signed with the rest: only the owner's own tap can allow a kind of call for the session
+        ...(input.session ? { session: true, ...(input.sessionHash ? { session_hash: input.sessionHash } : {}) } : {}),
       })
     },
     async patchConfig(patch) {

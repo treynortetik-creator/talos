@@ -10,7 +10,7 @@
 // prompt. permissionCardAllowsPrimary() re-derives all of that from the card itself, so the app and the bridge reach the
 // same answer and a card changed on the way never shows Allow for something it does not show.
 import { z } from 'zod'
-import { jcs, payloadHash } from './canonical.ts'
+import { jcs, payloadHash, sha256Hex } from './canonical.ts'
 import { MAX_CARD_PAYLOAD_BYTES } from './card-edits.ts'
 import type { ErrorCodeT } from './errors.ts'
 import { bindingFrom, type CardT } from './models.ts'
@@ -72,6 +72,78 @@ export function cleanDenyNote(text: unknown): string | undefined {
     .trim()
   const cut = [...folded].slice(0, PERMISSION_DENY_NOTE_MAX).join('').trim()
   return cut === '' ? undefined : cut
+}
+
+/** "Allow for this session": limits on an offer (an offer over any of them is refused whole, never cut). Lengths are in code points. */
+export const SESSION_RULES_MAX = 3
+export const SESSION_RULE_TOOL_MAX = 64
+export const SESSION_RULE_CONTENT_MAX = 160
+export type SessionRuleT = { tool: string; content: string }
+
+/**
+ * Whether a rule's content names something: at least one literal character (not a blank, `*`, `?`, `:` or `/`) before its first
+ * wildcard. Content that is only wildcards (`*`, `**`, `:*`, `* *`, `*:*`) allows the whole tool, so it is never offered; neither are
+ * `domain:*` (every site, and a `domain:` prefix is looked past before this check) and path globs such as `//**`. The hook has the
+ * same rule (kit/hooks/_talos_common.py `_session_literal`).
+ */
+export function sessionContentHasLiteral(content: string): boolean {
+  const body = content.replace(/^domain:/i, '')
+  const wild = body.search(/[*?]/)
+  return /[^\s*?:/]/u.test(wild < 0 ? body : body.slice(0, wild))
+}
+
+/**
+ * What the owner signs when they tap "Allow for this session": the sha256 of the canonical (JCS) list of {content, tool} that the
+ * button shows. The bridge and the hook compare it with the rules THEY hold, so a relay that rewrites the words on the way to the phone
+ * gets a plain allow, never a rule. The hook has a Python twin (kit/hooks/_talos_common.py `session_rules_hash`); a test makes them agree.
+ */
+export function sessionRulesHash(rules: readonly SessionRuleT[]): string {
+  return `sha256:${sha256Hex(jcs(rules.map((r) => ({ tool: r.tool, content: r.content }))))}`
+}
+
+/**
+ * The rules Claude Code offered for "Allow for this session", or undefined when the offer must not be shown. It is Claude Code's
+ * text, built from the model's own command, so it is untrusted: a rule is shown exactly as it will be granted or the offer is
+ * refused whole. Never cut, never cleaned. Refused: not a list of 1 to SESSION_RULES_MAX plain {tool, content} objects (any extra
+ * key too), a rule with no content or only wildcards (a whole-tool allow is close to bypass, so it is never one tap), text over a limit (by code
+ * point), blank content, and any control, bidi, zero-width, other invisible, gap-padding or lone-surrogate character. The
+ * hook runs the same checks (kit/hooks/_talos_common.py `session_offer`) and so does the bridge: neither trusts the other.
+ */
+export function cleanSessionRules(x: unknown): SessionRuleT[] | undefined {
+  if (!Array.isArray(x) || x.length < 1 || x.length > SESSION_RULES_MAX) return undefined
+  // built here: the two regular expressions it joins are defined further down this file
+  const unsafe = new RegExp(`${INVISIBLE_OR_BIDI.source}|${PERMISSION_EXTRA_MARKED.source}`, 'u')
+  const out: SessionRuleT[] = []
+  for (const r of x) {
+    if (typeof r !== 'object' || r === null || Array.isArray(r)) return undefined
+    const keys = Object.keys(r)
+    if (keys.length !== 2 || !keys.includes('tool') || !keys.includes('content')) return undefined
+    const { tool, content } = r as { tool: unknown; content: unknown }
+    if (typeof tool !== 'string' || typeof content !== 'string') return undefined
+    if (tool === '' || [...tool].length > SESSION_RULE_TOOL_MAX) return undefined
+    if (content.trim() === '' || [...content].length > SESSION_RULE_CONTENT_MAX) return undefined
+    if (unsafe.test(tool) || unsafe.test(content)) return undefined
+    if (!sessionContentHasLiteral(content)) return undefined
+    out.push({ tool, content })
+  }
+  return out
+}
+
+/**
+ * The offer a hook carried, if it can be shown as a third choice on that call's card: `cleanSessionRules` accepts it AND every rule is
+ * for the call's own tool. The composer uses this to decide whether a card has `session_allow`, and the relay uses it to decide whether
+ * a Main-session hook card should win over the channel's card, so the two can never disagree.
+ */
+export function validSessionOffer(toolName: string, rules: unknown): SessionRuleT[] | undefined {
+  const offered = cleanSessionRules(rules)
+  return offered?.every((o) => o.tool === toolName) ? offered : undefined
+}
+
+/** What the "Allow for this session" button says, in plain words, from rules `cleanSessionRules` kept. A Bash rule is the command; another tool is named. */
+export function sessionAllowWords(rules: readonly SessionRuleT[]): string {
+  const each = rules.map((r) => (r.tool === 'Bash' ? `\`${r.content}\`` : `${r.tool} \`${r.content}\``))
+  const list = each.length > 1 ? `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}` : (each[0] ?? '')
+  return `Allow ${list} for the rest of this session`
 }
 
 /** The start of the note on a card that does not show all of its call (the parts that are not shown follow). */
@@ -281,6 +353,11 @@ export type ComposePermissionCardInput = {
   deny_note?: boolean
   /** Why Claude Code asked, only when the bridge could prove it (PERMISSION_ASKED_WHY_TEXT); unset otherwise. */
   asked_why?: PermissionAskedWhy
+  /**
+   * The hook's request carried a rule Claude Code offered ("Allow for this session"): the card offers a third choice. Kept only when
+   * `cleanSessionRules` accepts it and every rule is for this call's own tool; otherwise the card is as it always was.
+   */
+  session_allow?: { rules: unknown }
 }
 
 /** The title the composer writes for a tool name (hidden characters shown as markers; a very long name gets a fixed title). */
@@ -336,6 +413,9 @@ export function composePermissionCard(input: ComposePermissionCardInput): CardT 
   if (input.explain) card.explain = { status: 'pending' }
   // Same: beside the card, outside the binding, so the hash below is the same with or without it
   if (input.deny_note) card.deny_note = true
+  // Same: beside the card, outside the binding. Only a clean offer for this call's own tool.
+  const offered = input.session_allow ? validSessionOffer(r.tool_name, input.session_allow.rules) : undefined
+  if (offered) card.session_allow = { rules: offered }
   if (input.asked_why) card.asked_why = input.asked_why
   // the one refusal first; then what is not shown, or an older Claude Code: notes, Allow stays
   if (input.repeated) card.warning = PERMISSION_REPEAT_WARNING
@@ -486,6 +566,15 @@ export class OpenPermissionIds {
     this.seen.add(requestId)
     this.open.add(requestId)
     return { repeated: false }
+  }
+  /**
+   * Opens an id again for the SAME prompt: the bridge took its card away (a hook's card replaced it) and the hook ended with no
+   * answer, so the prompt is still open at Claude Code and its card must come back. Not a repeat: a second prompt with this id
+   * afterwards still is.
+   */
+  reopen(requestId: string): void {
+    this.seen.add(requestId)
+    this.open.add(requestId)
   }
   isOpen = (requestId: string): boolean => this.open.has(requestId)
   /** True once the id was opened in this session, open or not (a minted id must never reuse one Claude Code could send). */

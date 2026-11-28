@@ -601,7 +601,7 @@ describe('midnight, restarts, orphans, late', () => {
   )
 
   test(
-    'a failed run reaches the app whatever notify says: a system row, and an alert on the next status',
+    'a failed run reaches the app whatever notify says: a system row now, and the alert once Main has had two hours to fix it',
     async () => {
       h = await startSched({ now: BEFORE_0730, jobs: [draft({ notify: 'never' })] })
       await h.advance(90_000)
@@ -614,6 +614,10 @@ describe('midnight, restarts, orphans, late', () => {
         { direction: 'from_bridge' },
       )
       expect(row.message.text).toContain('Daily Digest')
+      // the first failure of the day wakes Main, which gets two hours to fix it (job-failed-wake.test.ts): no alert yet
+      await h.relay.expectNoFrame('schedule.status', (s) => s.alert?.kind === 'job_failed', 200)
+      // timing-ok: the product deadline is two hours of the fake clock
+      await h.advance(2 * 3600_000 + 60_000)
       const st = await h.app.expectFrame('schedule.status', (s) => s.alert?.kind === 'job_failed', {
         direction: 'in',
         timeoutMs: 10_000,

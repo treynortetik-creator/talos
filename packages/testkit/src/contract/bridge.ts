@@ -9,6 +9,57 @@ import { SPEC_CORE_TOOLS } from './spec-tools.ts'
 
 const MARKER = /<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>/
 
+/** The bridge's own lines (bridge.log, never stderr) that say a frame failed, a refusal was held back, or a step after a hand-over threw. */
+const LOG_LINES =
+  /frame processing failed|refusal not sent|last owner time not kept|delivery bookkeeping failed|unseen record not kept|hand-over finished after the store closed/
+
+type Note = { content: string; meta: Record<string, string>; at: number }
+
+/**
+ * Does this notification carry that message? By the id the bridge puts in meta (a text notification's message_id is the
+ * message's client_msg_id), or, for a backlog note (whose meta names only its newest message), by the message's own text.
+ * Never by a word of the test's text alone: fixed bridge words such as "(oldest first)" or "its first words" would match.
+ */
+const carries = (n: Note, msg: { client_msg_id: string }, text: string) =>
+  n.meta.message_id === msg.client_msg_id || (n.meta.kind === 'backlog' && n.content.includes(text))
+
+/**
+ * What a failed count assertion prints: how many times the bridge said hello and the relay said ready (a reconnect shows as a
+ * second pair), every frame the relay saw in order with its id, seq, stage and, for a message, its client_msg_id (a replay
+ * shows as the same id to_bridge twice), each notification's kind, ids, time, whether the counter matched it, and its
+ * redelivered / routed marks, and the bridge's lines about a frame that failed or a refusal it could not send.
+ * Ids, kinds and codes only, never message text.
+ */
+function traceOf(
+  relay: FakeRelay,
+  notes: Record<string, readonly Note[]>,
+  opts: { mine?: (n: Note) => boolean; logs?: Record<string, string> } = {},
+): string {
+  const rows = relay.frames.map((r) => {
+    const f = r.raw as Record<string, unknown> & { relay?: { seq?: number } }
+    const id = f.ref ?? f.id ?? ''
+    return `#${r.n} ${r.direction} ${String(f.type)} ${String(id)}${f.relay?.seq !== undefined ? ` seq=${f.relay.seq}` : ''}${f.client_msg_id ? ` client_msg_id=${String(f.client_msg_id)}` : ''}${f.stage ? ` stage=${String(f.stage)}` : ''}${f.code ? ` code=${String(f.code)}` : ''}`
+  })
+  const count = (dir: string, type: string) =>
+    relay.frames.filter((r) => r.direction === dir && r.frame.type === type).length
+  const t0 = Math.min(Number.POSITIVE_INFINITY, ...Object.values(notes).flatMap((l) => l.map((n) => n.at)))
+  const lists = Object.entries(notes).map(
+    ([label, list]) =>
+      `${label}:\n${list.map((n, i) => `  [${i}] +${n.at - t0}ms kind=${n.meta.kind} message_id=${n.meta.message_id ?? '-'} thread=${n.meta.thread_id ?? '-'} matched=${opts.mine ? opts.mine(n) : '-'} redelivered=${n.meta.redelivered ?? '-'} routed=${n.meta.routed ?? '-'}`).join('\n') || '  (none)'}`,
+  )
+  const lines = Object.entries(opts.logs ?? {}).map(([label, text]) => {
+    const hits = text.split('\n').filter((l) => LOG_LINES.test(l))
+    return `bridge.log (${label}):\n${hits.map((l) => `  ${l.slice(0, 300)}`).join('\n') || '  (none of the failure lines)'}`
+  })
+  return [
+    `hellos from bridge: ${count('from_bridge', 'hello')}, readies to bridge: ${count('to_bridge', 'ready')}`,
+    ...lists,
+    ...lines,
+    'relay frames:',
+    ...rows,
+  ].join('\n')
+}
+
 /**
  * Bridge contract (run by WP5 against the real bridge): FakeRelay drives it (and enforces the Ed25519 hello and HTTP
  * signatures with `relay.bridgeKey`, which the harness installs in the bridge), FakeClaude asserts notification shapes
@@ -119,7 +170,21 @@ export function defineBridgeContract(name: string, harness: BridgeHarness) {
       expect(notice.content).toContain(`A message from device ${app.device.deviceId} failed its signature check`)
       expect(notice.content).not.toContain('tampered')
       await sleep(150)
-      expect(bridge.claude.notifications).toHaveLength(1)
+      // the notices about this dropped frame: exactly one (a replay of the frame must not make a second)
+      const sigNotice = (n: Note) => n.content.includes('failed its signature check')
+      expect(
+        bridge.claude.notifications.filter(sigNotice),
+        traceOf(
+          relay,
+          { now: bridge.claude.notifications },
+          { mine: sigNotice, logs: { now: bridge.logText?.() ?? '' } },
+        ),
+      ).toHaveLength(1)
+      // and nothing else reached the agent: any other notification is listed in the failure with its kind
+      expect(
+        bridge.claude.notifications.filter((n) => !sigNotice(n)).map((n) => n.meta.kind),
+        'a notification other than the signature notice reached the agent',
+      ).toEqual([])
       expect(
         bridge.claude.notifications.some((n) => n.content.includes('tampered') || n.content.includes('legit')),
       ).toBe(false)
@@ -272,20 +337,28 @@ export function defineBridgeContract(name: string, harness: BridgeHarness) {
 
     if (harness.restart) {
       it('after a restart a message that was delivered but not consumed still arrives, once and in order', async () => {
-        const a = await app.sendMessage('general', 'first')
+        const a = await app.sendMessage('general', 'restart probe one')
         await relay.expectFrame('ack', (f) => f.ref === a.id, { direction: 'from_bridge' })
         const before = bridge
         bridge = await (harness.restart as NonNullable<BridgeHarness['restart']>)(before)
-        await app.sendMessage('general', 'second')
-        await bridge.claude.waitForNotification((x) => x.content.includes('second'))
-        const arrivals = (h: BridgeHandle) => h.claude.notifications.filter((x) => x.content.includes('first')).length
+        const b = await app.sendMessage('general', 'restart probe two')
+        await bridge.claude.waitForNotification((x) => carries(x, b, 'restart probe two'))
+        const mine = (n: Note) => carries(n, a, 'restart probe one')
+        const arrivals = (h: BridgeHandle) => h.claude.notifications.filter(mine).length
         // It reached Claude in one process or the other (a crash before the push replays it), and the new process never
         // pushes it twice. Without the first check a message lost in the restart would pass.
         await waitFor(() => arrivals(before) + arrivals(bridge) >= 1, 5_000, 'the first message to reach Claude')
-        expect(arrivals(bridge)).toBeLessThanOrEqual(1)
-        const texts = bridge.claude.notifications.map((x) => x.content)
-        const at = texts.findIndex((t) => t.includes('first'))
-        if (at >= 0) expect(at).toBeLessThan(texts.findIndex((t) => t.includes('second')))
+        expect(
+          arrivals(bridge),
+          traceOf(
+            relay,
+            { before: before.claude.notifications, now: bridge.claude.notifications },
+            { mine, logs: { before: before.logText?.() ?? '', now: bridge.logText?.() ?? '' } },
+          ),
+        ).toBeLessThanOrEqual(1)
+        const notes = bridge.claude.notifications
+        const at = notes.findIndex(mine)
+        if (at >= 0) expect(at).toBeLessThan(notes.findIndex((x) => carries(x, b, 'restart probe two')))
       })
     }
   })

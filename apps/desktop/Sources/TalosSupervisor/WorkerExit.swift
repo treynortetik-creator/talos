@@ -14,6 +14,7 @@ extension WorkerManager {
     let after = r.afterPark
     r.afterPark = nil
     rt[id] = r
+    let facts = cutFacts(id)  // before `release`: it clears the turn in progress and the launch's nonce
     if r.pgid > 0, signaller.alive(r.pgid) { signaller.signal(r.pgid, SIGKILL) }  // the children of a crashed worker
     release(id)
     r = rt[id] ?? r
@@ -54,6 +55,7 @@ extension WorkerManager {
       r.entry.restarts = Array((r.entry.restarts + [ISOTime.string(t)]).suffix(10))
       rt[id] = r
     }
+    if crashed { recordCutTurn(id, facts, why: .crash, now: t) }  // a turn that was running is resumed at the next start
     if crashed, WorkerPolicy.crashLooping(restarts: r.restartTimes, now: t) {
       fail(id, "crash_loop", "the session crashed 5 times in 15 minutes")
     } else if wasStarting {
@@ -111,6 +113,7 @@ extension WorkerManager {
     rt[id]?.entry.pane_pid = 0
     rt[id]?.needsYouPrompt = nil
     rt[id]?.entry.turn_started_at = nil  // a turn with no pane has not finished: `last_turn_at` stays the last one that did
+    rt[id]?.cut = CutTurnWatch()  // nothing of a launch that is over
     rt[id]?.flaggedPrompt = nil
     rt[id]?.dialogSinceAwake = nil
     rt[id]?.dlg.reset()
@@ -121,5 +124,18 @@ extension WorkerManager {
     unlink(dir(id) + "/ready")
     unlink(dir(id) + "/nonce")
     unlink(dir(id) + "/launch.sh")
+  }
+
+  /// A worker that cannot go on: `failed`, with the error the owner sees (moved here from WorkerManager.swift, unchanged).
+  func fail(_ id: String, _ code: String, _ detail: String, axis: String? = nil) {
+    if rt[id] == nil { return }
+    rt[id]?.entry.state = "failed"
+    rt[id]?.entry.error = .init(code: code, detail: WorkersFile.ErrorInfo.clipDetail(detail), at: ISOTime.string(now()), axis: axis)
+    rt[id]?.folderChangeTo = nil
+    rt[id]?.pendingPointer = false
+    rt[id]?.afterPark = nil
+    rt[id]?.heldSince = nil
+    dirty = true
+    emit(.failed(thread: id, code: code))
   }
 }

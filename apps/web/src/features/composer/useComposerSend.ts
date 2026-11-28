@@ -11,6 +11,8 @@ import {
   useEffect,
   useRef,
 } from 'react'
+import { announce } from '../../lib/announce.ts'
+import { ANNOUNCE, SOURCE, sendResultWords } from '../../lib/announceText.ts'
 import { type TalosClient, TalosClientError } from '../../lib/client.ts'
 import { getPlatform } from '../../lib/platform.ts'
 import { MAX_MESSAGE_CHARS } from '../../lib/socketClient.ts'
@@ -131,12 +133,14 @@ export function useComposerSend(o: {
     getPlatform().haptic('light')
     keepFocus()
     try {
-      await client.sendMessage({
+      const sent = await client.sendMessage({
         threadId,
         text: body,
         attachments,
         ...(replyTarget ? { replyTo: replyTarget.id } : {}),
       })
+      // The box just empties, which says nothing to a screen reader. A failure shows in the box's own alert instead.
+      announce(sendResultWords(sent.state, ANNOUNCE.sent), SOURCE.sent)
       if (replyTarget) setReplyTo(threadId, undefined)
     } catch (e) {
       // A sign-out wiped the composer while this was in flight: its words are not given back.

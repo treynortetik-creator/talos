@@ -39,12 +39,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -77,12 +79,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -124,7 +128,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -140,11 +145,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -334,12 +341,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -372,12 +381,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -419,7 +430,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -435,11 +447,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -769,12 +783,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -807,12 +823,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -854,7 +872,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -870,11 +889,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -1164,12 +1185,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1202,12 +1225,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1249,7 +1274,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -1265,11 +1291,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -1572,12 +1600,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1615,12 +1645,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1665,12 +1697,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1712,7 +1746,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -1728,11 +1763,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -1944,12 +1981,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -1982,12 +2021,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2029,7 +2070,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -2045,11 +2087,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -2174,12 +2218,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2212,12 +2258,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2259,7 +2307,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -2275,11 +2324,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -2402,12 +2453,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2449,7 +2502,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -2465,11 +2519,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -2681,12 +2737,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2886,12 +2944,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2924,12 +2984,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -2971,7 +3033,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -2987,11 +3050,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -3277,12 +3342,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -3315,12 +3382,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -3362,7 +3431,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -3378,11 +3448,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"
@@ -3588,12 +3660,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -3626,12 +3700,14 @@
             "config-propose/1",
             "custom-themes/1",
             "needs-you/1",
+            "quiet-lines/1",
             "bridge-standby/1",
             "features-64/1",
             "features-implied/1",
             "health/1",
             "problems/1",
             "share/1",
+            "term-view/1",
             "agents/1",
             "thread-sessions/1",
             "usage-as-of/1",
@@ -3673,7 +3749,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -3689,11 +3766,13 @@
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "memory_browser": true,
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "mirror": {
               "telegram": "off"

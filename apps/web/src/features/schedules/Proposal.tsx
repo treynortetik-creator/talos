@@ -3,7 +3,7 @@
 // revision; approving sends card.resolve with the hash of what is on screen.
 import { type CardT, ScheduleCardPayload, type ScheduleChangeT, type ScheduleT } from '@talos-app/protocol'
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
+import { NotSentError, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { SlowPatch } from '../../lib/socketSchedules.ts'
 import { Button, Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from '../../ui/index.ts'
@@ -19,8 +19,18 @@ export type ProposeError = {
   clientRef?: string
 }
 
+const CONFLICT_WORDS = 'The job changed on your Mac. Reload it and try again.'
+const PATCH_CONFLICT = /^The job changed on your (?:Mac|computer|PC)\. Reload it and try again\.$/
+
 export function proposeError(e: unknown): ProposeError {
   if (e instanceof SlowPatch) return { message: refusalWords(e), fields: [], clientRef: e.clientRef }
+  // nothing left the phone (offline, or the Mac has not confirmed this device): its own words, and a retry is safe
+  if (e instanceof NotSentError) return { message: e.message, fields: [] }
+  if (e instanceof TalosClientError && e.code === 'schedule_conflict')
+    // The Mac words this well when it sees it first ("The job changed on your Mac. Reload it and try again.", in the host's own
+    // words). Its other conflict texts are not for the owner: the card binding names fields (base_etag), the apply path says
+    // "card", Chronos's own validate puts the code in front. All of them mean the same thing.
+    return { message: PATCH_CONFLICT.test(e.message) ? e.message : CONFLICT_WORDS, fields: [] }
   if (e instanceof TalosClientError)
     return {
       message: e.code === 'schedule_invalid' ? 'Some fields need a change.' : refusalWords(e),

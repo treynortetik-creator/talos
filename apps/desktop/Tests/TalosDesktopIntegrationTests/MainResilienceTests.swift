@@ -304,7 +304,8 @@ struct CleanExitTests {
   @Test(arguments: bothHosts)
   func cleanExitsRestartAtTheFirstStepWithoutSpendingTheCrashLoop(kind: HostKind) throws {
     let r = try Rig(
-      kind, scenario: "clean-exit.sh", env: ["FAKE_CLEAN_EXITS": "3"],
+      // each run lives 2 s: under load a 0.4 s run can be gone before the first look at its pane (read as "exited immediately")
+      kind, scenario: "clean-exit.sh", env: ["FAKE_CLEAN_EXITS": "3", "FAKE_EXIT_AFTER": "2"],
       timings: timings { $0.restartCap = 2; $0.backoff = Backoff(steps: [0.3, 30, 30, 30, 30], jitter: 0) }, configure: { $0.args = noDialogArgs })
     defer { r.teardown() }
     r.start()

@@ -41,6 +41,7 @@ extension WorkerManager {
     let e = r.entry
     func notRunning() {
       r.adoptPending = false
+      recordCutAtAdopt(id, e, now: t)  // before the turn is forgotten below: a session that died while the app was away was cut mid-turn
       // mid-turn (or on its way out) when the app or the Mac went away: interrupted, not idle
       if e.state == "busy" || e.state == "stopping" || e.turn_started_at != nil { r.entry.stopped_why = "interrupted" }
       r.entry.turn_started_at = nil
@@ -80,6 +81,7 @@ extension WorkerManager {
     r.entry.pane_pid = pid
     if !named, let sid = Self.sessionId(argv: snap.argv) { r.entry.session_id = sid }  // what it really runs
     r.paneId = ps.paneId
+    restoreCutRerun(&r, id)  // the re-run the last copy started is still guarded
     r.startedAt = e.started_at.flatMap(ISOTime.parse) ?? t
     r.startedAwake = awake()
     r.readyAt = e.state == "starting" ? 0 : r.startedAt

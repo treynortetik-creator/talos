@@ -7,6 +7,11 @@
 // written off (threadSessionsAllowed), so its default reads true and turning it off, not on, is the change it can propose.
 // Changed on purpose (2026-11-19, voice input archived: docs/archived/voice.md): agent.voice and agent.voice_persona have no row any more
 // (the config still accepts and ignores them), and voice_notes.reply_with_voice is 'always' or 'never' for the agent, default 'never'.
+// Changed on purpose (2026-11-25, browser notification message text): notifications.web_message_text is a phone-only row the agent
+// is refused by name (the lock-screen preview is the owner's switch).
+// Changed on purpose (2026-11-22, the owner asked for it): the agent may set work.thread (where work alerts land) when he asks; every other work row is as it was.
+// Changed on purpose (2026-11-26, Nyx): memory.nyx_url is a phone leaf the agent is refused by name (the address of the owner's Nyx is the
+// owner's); the config gained a `memory` section, with no default address.
 // Refresh the file only on purpose: WRITE_GOLDEN=1 vitest run packages/protocol/test/settings-parity.test.ts
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

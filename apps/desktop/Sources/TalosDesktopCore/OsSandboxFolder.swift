@@ -47,20 +47,24 @@ enum OsSandboxFolder {
   }
 
   /// Every command string of a settings object: hooks (by event name, so the order is the same every run), the status line, and the helpers
-  /// Claude Code runs.
-  private static func settingsCommands(_ s: [String: Any]) -> [String] {
-    var out: [String] = []
+  /// Claude Code runs. Each comes with `name`, how a refusal says which one it is (the hook's event and number, or the setting's key): a refusal
+  /// never prints the command, which can hold a secret. A hook's number counts every entry of the event's `hooks` lists (a prompt, agent or http
+  /// hook too, which is not returned), flat across the matcher groups, from 1, per event.
+  private static func settingsCommands(_ s: [String: Any]) -> [(name: String, cmd: String)] {
+    var out: [(name: String, cmd: String)] = []
     let hooks = s["hooks"] as? [String: Any] ?? [:]
     for event in hooks.keys.sorted() {
+      var n = 0
       for g in (hooks[event] as? [Any] ?? []) {
         for h in ((g as? [String: Any])?["hooks"] as? [Any] ?? []) {
-          if let c = (h as? [String: Any])?["command"] as? String { out.append(c) }
+          n += 1
+          if let c = (h as? [String: Any])?["command"] as? String { out.append(("the \(event) hook (number \(n))", c)) }
         }
       }
     }
-    if let line = (s["statusLine"] as? [String: Any])?["command"] as? String { out.append(line) }
+    if let line = (s["statusLine"] as? [String: Any])?["command"] as? String { out.append(("statusLine", line)) }
     for k in ["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper"] {
-      if let v = s[k] as? String { out.append(v) }
+      if let v = s[k] as? String { out.append((k, v)) }
     }
     return out
   }
@@ -70,17 +74,18 @@ enum OsSandboxFolder {
 
   /// The one form of a hook line in which the shell certainly keeps the folder's path as ONE word, and so does this check: an optional plain
   /// interpreter (no flag), then the folder variable inside double quotes, then a path of plain characters (`"$CLAUDE_PROJECT_DIR"/hooks/x.sh`,
-  /// `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes. Anything else with a space in the folder's path is cut like the shell would.
+  /// `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes, and the only whole hook line credited as the kit's own (no `bun`: it reads `bunfig.toml` and `.env` from the
+  /// working folder; no relative path). Anything else with a space in the folder's path is cut like the shell would.
   private static let simpleHook = try? NSRegularExpression(
-    pattern: #"^(?:(bash|sh|zsh|python3?|node|bun) )?(?:"\#(projectDir)"/([A-Za-z0-9._@+/-]*)|"\#(projectDir)/([A-Za-z0-9._@+/-]*)")\z"#)
+    pattern: #"^(?:(bash|sh|zsh|python3?|node) )?(?:"\#(projectDir)"/([A-Za-z0-9._@+/-]*)|"\#(projectDir)/([A-Za-z0-9._@+/-]*)")\z"#)
 
   /// The words of a shell command line that may name a file: quotes, `;`, `|`, `&`, `(`, `)`, `<`, `>`, `=` taken apart. The project folder
   /// variable (and its braced form, with a quote that closes right after it) becomes the folder BEFORE the cut, as the shell cuts what it expands,
   /// so a folder path with a space in it is cut there too (and refused), except in the simple hook form (`simpleHook`) whose folder path stays one word.
-  private static func words(_ cmd: String, _ folder: String) -> [String] { tokens(cmd, folder).filter { $0.utf16.count > 1 } }
+  private static func words(_ cmd: String, _ folder: String) -> [String] { tokens(cmd, folder, bare: true).filter { $0.utf16.count > 1 } }
 
   /// All the words, one-letter ones too (`bun x`). A command with a NUL in it has none (nothing real carries one).
-  private static func tokens(_ cmd: String, _ folder: String) -> [String] {
+  private static func tokens(_ cmd: String, _ folder: String, bare: Bool = false) -> [String] {
     if cmd.unicodeScalars.contains("\u{0}") { return [] }
     let ns = cmd as NSString
     if let m = simpleHook?.firstMatch(in: cmd, range: NSRange(location: 0, length: ns.length)) {
@@ -92,7 +97,53 @@ enum OsSandboxFolder {
     }
     let replaced = cmd.replacingOccurrences(
       of: #"\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])["']?"#, with: NSRegularExpression.escapedTemplate(for: folder), options: .regularExpression)
-    return replaced.components(separatedBy: wordBreaks).filter { !$0.isEmpty }
+    let cut = replaced.components(separatedBy: wordBreaks).filter { !$0.isEmpty }
+    guard bare else { return cut }
+    // the bare word each command of the line runs as a file of the working folder (`bash evil`, `. evil`): named as `./word`, after the words
+    let scripts = replaced.components(separatedBy: segmentBreaks).compactMap { seg in
+      bareScript(seg.components(separatedBy: shellSpace).filter { !$0.isEmpty })
+    }
+    return cut + scripts
+  }
+
+  /// JavaScript's `\s`: what a regular expression there counts as white space (not Foundation's set, which lacks U+FEFF and has U+0085).
+  private static let shellSpace = CharacterSet(charactersIn: "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
+    .union(CharacterSet(charactersIn: "\"'`<>"))
+  private static let segmentBreaks = CharacterSet(charactersIn: ";|&()\n")
+
+  /// Programs that run the script named by their first non-flag argument (a bare word there is read from the working folder).
+  private static let scriptRunners = try? NSRegularExpression(
+    pattern: #"^(?:python[0-9.]*|node|deno|bun|tsx|bash|sh|zsh|dash|ksh|csh|tcsh|fish|ruby|perl|php|lua)\z"#)
+  /// Prefixes that run the next word as the program.
+  private static let programPrefixes = try? NSRegularExpression(pattern: #"^(?:env|exec|nohup|time|command|sudo)\z"#)
+  private static let assignment = try? NSRegularExpression(pattern: #"^[A-Za-z_][A-Za-z0-9_]*="#)
+
+  /// The bare word a command (its words, program first) runs as a file of the working folder, as `./word`, or nil: the word after `.` or
+  /// `source`, or the first word that is no flag after an interpreter (`bash evil`, `node evil`, `bun run evil`, `python3 -m evil`). A word with
+  /// a slash is named already; a bare word is not, and the shell reads it from the folder it runs in, which the session can write.
+  static func bareScript(_ tokens: [String]) -> String? {
+    var t = tokens[...]
+    while true {
+      while let f = t.first, !f.isEmpty, matches(assignment, f) { t = t.dropFirst() }
+      if let f = t.first, matches(programPrefixes, (f as NSString).lastPathComponent) { t = t.dropFirst() } else { break }
+    }
+    let prog = t.first ?? ""
+    let at = { (i: Int) -> String? in t.count > i ? t[t.startIndex + i] : nil }
+    var word: String?
+    if prog == "." || prog == "source" {
+      word = at(1)
+    } else if matches(scriptRunners, (prog as NSString).lastPathComponent) {
+      var i = 1
+      while i < t.count {
+        let x = t[t.startIndex + i]
+        if x == "-m" { word = at(i + 1); break }
+        if x.hasPrefix("-") || (i == 1 && x == "run") { i += 1; continue }
+        word = x
+        break
+      }
+    }
+    guard let w = word, !w.isEmpty, !w.contains("/"), !w.hasPrefix("-") else { return nil }
+    return "./" + w
   }
 
   /// A flag that makes a program read an argument as code or a command line (`-c`, `-e`, `-p`, `-m`, `--eval`): its other arguments are then not plain file names.
@@ -107,10 +158,32 @@ enum OsSandboxFolder {
   private static func argvWords(_ argv: [String], _ folder: String) -> [String] {
     let whole = matches(fileTakers, ((argv.first ?? "") as NSString).lastPathComponent) && !argv.contains { matches(runsItsArgument, $0) }
     let others = wordBreaks.subtracting(CharacterSet(charactersIn: " "))
-    return argv.flatMap { a -> [String] in
+    let ws = argv.flatMap { a -> [String] in
       let plain = whole && a.hasPrefix("/") && a.contains(" ") && a.rangeOfCharacter(from: others) == nil && P.lstatOk(a)
       return plain ? [a] : words(a, folder)
     }
+    return bareScript(argv).map { ws + [$0] } ?? ws
+  }
+
+  /// The only argv forms of a stdio server credited as the kit's own: `[<absolute file>, ...args]`, or `[bash|sh|zsh|node|python3, <absolute file>,
+  /// ...args]` with nothing between the interpreter and the file (a shell may take `-x` or `-e` first). Any wrapper (env, nice, timeout, busybox,
+  /// npx, ...) or flag that takes a value is not the kit's. Which file it is, and that it is the kit's, is checked after.
+  static func argvForm(_ argv: [String]) -> Bool {
+    guard let first = argv.first else { return false }
+    if first.hasPrefix("/") { return true }
+    guard ["bash", "sh", "zsh", "node", "python3"].contains(first) else { return false }
+    var i = 1
+    if ["bash", "sh", "zsh"].contains(first) { while i < argv.count, argv[i] == "-x" || argv[i] == "-e" { i += 1 } }
+    return i < argv.count && argv[i].hasPrefix("/")
+  }
+
+  /// What a server entry carries that the kit's own never does: a `cwd`, or an `env` that is anything but an empty object (null, a list and a
+  /// string count).
+  static func envOrCwd(_ entry: [String: Any]) -> String? {
+    if entry.keys.contains("cwd") { return "cwd" }
+    guard let env = entry["env"] else { return nil }
+    if let o = env as? [String: Any], !(env is NSNull), o.isEmpty { return nil }
+    return "env"
   }
 
   private static let scriptExt = try? NSRegularExpression(pattern: #"\.(?:py|sh|js|mjs|cjs|ts|rb|pl)$"#)
@@ -123,10 +196,11 @@ enum OsSandboxFolder {
   }
 
   /// A command on one plain line for a refusal: control characters and runs of blanks become one space, and a long one is cut.
-  private static func shown(_ cmd: String) -> String {
+  /// The hook and server lines (`limit`) are not cut short at 160: the TypeScript side prints the whole command, so a long folder path reads the same on both.
+  private static func shown(_ cmd: String, limit: Int = 160) -> String {
     let one = cmd.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }.joined()
       .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
-    return one.count > 160 ? String(one.prefix(160)) + "..." : one
+    return one.count > limit ? String(one.prefix(limit)) + "..." : one
   }
 
   /// The folders every program can write to, by real path, in the order the TypeScript side lists them: the process's TMPDIR, the app's temp
@@ -141,7 +215,7 @@ enum OsSandboxFolder {
   }
 
   /// A path by its real spelling, its own name kept: the folders on its way are resolved (the file need not exist).
-  private static func realName(_ p: String) -> String {
+  static func realName(_ p: String) -> String {
     var rest: [String] = []
     var d = (p as NSString).deletingLastPathComponent
     while true {
@@ -157,7 +231,7 @@ enum OsSandboxFolder {
   /// would load from its working folder (`bunfig.toml`, `.env`, and `.env.*` as a pattern: Claude Code's sandbox takes patterns), the owner's
   /// `~/Library/LaunchAgents` (a session could otherwise plant a login job that runs outside the sandbox), the kit release and the clone Talos's
   /// bridge runs from, each by real path. The session's own scripts are not here: a command that would need them locked is refused instead.
-  static func denyWrite(_ folder: String, userHome: String? = nil, kitDir: String? = nil, clone: String? = nil) -> [String] {
+  static func denyWrite(_ folder: String, userHome: String? = nil, kitDir: String? = nil, trusted: Trusted? = nil) -> [String] {
     var out: [String] = []
     func add(_ p: String) { if !out.contains(p) { out.append(p) } }
     func real(_ p: String) -> String { (try? P.real(p)) ?? realName(p) }  // a link is followed (the kernel compares real paths); a missing folder is where it would be
@@ -166,7 +240,8 @@ enum OsSandboxFolder {
     for n in bunFiles { add(folder + "/" + n) }
     if let h = userHome { add(real(h + "/Library/LaunchAgents")) }
     if let k = kitDir { add(real(k)) }
-    if let c = clone { add(real(c)) }
+    // the recorded clone, its bridge folder and the bun(s), whatever the session's folder: a folder that holds or sits inside them is refused at launch
+    if let t = trusted { for p in t.recordedPaths.denyOrder { add(p) } }
     return out
   }
 
@@ -178,6 +253,8 @@ enum OsSandboxFolder {
   struct Trusted {
     var bun: String
     var bridgeDir: String
+    var extraBuns: [String] = []
+    var bunInTemp = false
     /// The clone the bridge runs from: two folders above `apps/bridge`; the bridge folder itself when it is not laid out so.
     var clone: String {
       let up = ((bridgeDir as NSString).deletingLastPathComponent as NSString)
@@ -192,33 +269,83 @@ enum OsSandboxFolder {
     return target == root || target.hasPrefix(root + "/")
   }
 
-  /// Is every file this command names the kit release's own: reached through the folder's `hooks`/`scripts`/`kit` link into the release, or
-  /// inside the release? A command that names no file is not.
-  private static func isKitOwn(_ cmd: String, _ folder: String, _ kitDir: String, templates: String? = nil, argv: [String]? = nil) -> Bool {
-    let named = argv.map { naming(argvWords($0, folder)) } ?? pathWords(cmd, folder)
-    guard !named.isEmpty else { return false }
-    for w in named {
-      guard !w.contains("$"), !w.hasPrefix("~") else { return false }
-      let abs = w.hasPrefix("/") ? w : P.resolve(folder, w)
-      if abs.hasPrefix(folder + "/") {
-        if isLeadHook(abs, folder, templates) { continue }
-        let first = String(abs.dropFirst(folder.count + 1).split(separator: "/").first ?? "")
-        if kitNames.contains(first), P.isLink(folder + "/" + first), leadsInto(folder + "/" + first, kitDir) { continue }
-        return false
-      }
-      let rp = realName(abs)
-      let root = (try? P.real(kitDir)) ?? kitDir
-      if rp.hasPrefix(root + "/") { continue }
-      return false
+  private static func under(_ p: String, _ d: String) -> Bool { p == d || p.hasPrefix(d + "/") }
+
+  /// A file's real path: links followed when it exists, else its folders resolved.
+  private static func realOf(_ p: String) -> String { (try? P.real(p)) ?? realName(p) }
+
+  /// A path with a link on it that leads nowhere (yet), at the end or anywhere above: whoever makes the target later (in a temp folder, say)
+  /// decides what runs. A path whose only problem is that its last name is missing, in a folder that resolves, is not one.
+  private static func hasDanglingLink(_ p: String) -> Bool {
+    if (try? P.real(p)) != nil { return false }
+    if (try? P.real((p as NSString).deletingLastPathComponent)) == nil { return true }
+    return P.lstatOk(p)
+  }
+
+  /// The path segments as the kernel cuts them: at every `/` byte (a `/` with a combining mark after it is still one `/` there).
+  private static func hasDotSegment(_ w: String) -> Bool {
+    w.utf8.split(separator: 0x2F, omittingEmptySubsequences: false).contains { $0.elementsEqual([0x2E]) || $0.elementsEqual([0x2E, 0x2E]) }
+  }
+
+  /// The files a command line names, by the path as written (made absolute against the folder, links not followed): a word that is an absolute or
+  /// folder-relative path, whether or not the file exists yet, or a script by name. A word that still has a `$` in it is whatever the environment
+  /// says, a `~` word is someone's home folder, and a path with a `.` or `..` segment goes where the links on its way say: each is named as it
+  /// stands, so it is never the kit's own.
+  private static func namedFiles(_ ws: [String], _ folder: String) -> [String] {
+    var out: [String] = []
+    for w in ws {
+      if w.contains("$") { out.append(w); continue }
+      if w.utf8.contains(0x2F), hasDotSegment(w) { out.append("$" + w); continue }
+      var abs: String?
+      if w.hasPrefix("/") { abs = w }
+      else if w.hasPrefix("./") || (w.contains("/") && !w.hasPrefix("-")) { abs = P.resolve(folder, w) }
+      else if isScriptName(w) { abs = P.resolve(folder, w) }
+      else if w.hasPrefix("~") { out.append(w); continue }
+      // the folder itself is named too (it is writable), never skipped
+      if let a = abs { out.append(a) }
     }
-    return true
+    return out
+  }
+
+  /// Is every file this command names the kit release's own, credited by the path as written? A hook line only whole (`simpleHook`), a server
+  /// only in the forms `argvForm` allows; each file through the folder's own `hooks`/`scripts`/`kit` link into the release, a lead's hook, or by
+  /// path inside the release; never when the kit sits where a session can write (`blockedByWritable` then says so), or on a dangling link.
+  private static func kitOwn(
+    _ cmd: String, _ folder: String, _ kitDir: String, templates: String?, argv: [String]?, writableRoots: [String]?
+  ) -> (ok: Bool, blockedByWritable: Bool) {
+    // credited only whole, in the form the kit writes: the shell and the programs read anything else (a bare word run from the folder, a
+    // variable, a nested shell, a wrapper) in ways this check cannot follow
+    if let argv { if !argvForm(argv) { return (false, false) } } else if !matches(simpleHook, cmd) { return (false, false) }
+    let kit = realOf(kitDir)
+    let roots = [folder] + (writableRoots ?? tempRoots())
+    let kitWritable = roots.contains { under(kit, $0) || under($0, kit) || under(kitDir, $0) }
+    var blocked = false
+    func kitFile(_ path: String) -> Bool {
+      let f = path.replacingOccurrences(of: "/{2,}", with: "/", options: .regularExpression)  // a doubled slash is the same path
+      if f.contains("$") || f.hasPrefix("~") || f == folder { return false }
+      let own: Bool
+      if under(f, folder) {
+        if isLeadHook(f, folder, templates) { return true }
+        let first = String(f.dropFirst(folder.count + 1).split(separator: "/").first ?? "")
+        let link = folder + "/" + first
+        own = kitNames.contains(first) && P.isLink(link) && leadsInto(link, kit) && under(realOf(f), kit)
+      } else {
+        own = (under(f, kit) || under(f, kitDir)) && under(realOf(f), kit)
+      }
+      if own && hasDanglingLink(f) { return false }
+      if own && kitWritable { blocked = true; return false }
+      return own
+    }
+    let files = namedFiles(argv.map { argvWords($0, folder) } ?? words(cmd, folder), folder)
+    let ok = !files.isEmpty && files.allSatisfy(kitFile)
+    return (ok, blocked)
   }
 
   /// A lead's hook: `<folder>/.claude/hooks/<name>`, directly there, a regular file (never a link) whose bytes are exactly those of `<name>` in the lead
   /// templates of the clone Talos recorded (`kit/templates/lead`, what `lead init` copies). The folder's `.claude` is unwritable from a session, but a
   /// file put there before the switch went on is only as good as its content, so the content is what is compared, never the place.
   private static func isLeadHook(_ abs: String, _ folder: String, _ templates: String?) -> Bool {
-    guard let templates, (abs as NSString).deletingLastPathComponent == folder + "/.claude/hooks" else { return false }
+    guard let templates, (abs as NSString).deletingLastPathComponent == folder + "/.claude/hooks", !P.isLink(folder + "/.claude/hooks") else { return false }
     let name = (abs as NSString).lastPathComponent
     var st = stat()
     guard lstat(abs, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, let have = FileManager.default.contents(atPath: abs),
@@ -268,7 +395,7 @@ enum OsSandboxFolder {
   }
 
   /// The env keys Talos writes into its server's entry (mcpEntry in mcp-config.ts): nothing else may be set (NODE_OPTIONS, BUN_*, DYLD_*, PATH, ...).
-  static let talosEnvKeys = ["TALOS_APP_HOME", "TALOS_AGENT_DIR"]
+  static let talosEnvKeys = ["TALOS_APP_HOME", "TALOS_AGENT_DIR", bunCacheKey]
 
   /// Why the folder's `talos-app` entry is not Talos's own, or nil when it is: `<bun> --no-env-file --config=<bridge>/bunfig.toml
   /// <bridge>/src/server.ts` by real paths equal to the recorded ones, an env of Talos's keys only. `old` is the form earlier installs wrote
@@ -283,12 +410,14 @@ enum OsSandboxFolder {
     let realFolder = (try? P.real(folder)) ?? folder
     guard let bridge = try? P.real(trusted.bridgeDir) else { return .why("the bridge Talos recorded is not there") }
     if bridge == realFolder || bridge.hasPrefix(realFolder + "/") { return .why("the bridge Talos recorded is inside the session folder") }
+    if trusted.bunInTemp { return .why("its bun is in a shared temp folder") }
     guard let command = entry["command"] as? String, command.hasPrefix("/"), let bun = try? P.real(command), bun == ((try? P.real(trusted.bun)) ?? trusted.bun)
     else { return .why("its command is not the bun Talos uses") }
     let args = (entry["args"] as? [Any])?.compactMap { $0 as? String } ?? []
     if let env = entry["env"] {
       guard let e = env as? [String: Any] else { return .why("its env is not a list of settings") }
       if let k = e.keys.sorted().first(where: { !talosEnvKeys.contains($0) }) { return .why("its env sets \(k)") }
+      if let v = e[bunCacheKey], (v as? String) != "0" { return .why("its env sets \(bunCacheKey) to something else") }
       if let h = e["TALOS_APP_HOME"] as? String, (try? P.real(h)) != (try? P.real(talosHome)) { return .why("its TALOS_APP_HOME is not this Talos home") }
       if e.values.contains(where: { !($0 is String) }) { return .why("an env value is not a string") }
     }
@@ -304,18 +433,24 @@ enum OsSandboxFolder {
   /// Every command that runs outside the sandbox, and where it comes from, in a fixed order: the folder's project and local settings, then its
   /// git root's, then `.mcp.json`, then the owner's user settings. One plain line for the first one that may not run, or nil.
   static func commandProblem(
-    _ folder: String, claudeDir: String, loadsProject: Bool, kitDir: String, talosHome: String = "", trusted: Trusted? = nil
+    _ folder: String, claudeDir: String, loadsProject: Bool, kitDir: String, talosHome: String = "", trusted: Trusted? = nil,
+    writableRoots: [String]? = nil
   ) -> String? {
     let templates = trusted.map { $0.clone + "/kit/templates/lead" }
-    func moved(_ where_: String, _ what: String) -> String {
-      "\(where_) runs \(what), which is not the kit's own; move it to your user settings (~/.claude/settings.json), then start again"
+    func moved(_ where_: String, _ what: String, blocked: Bool = false) -> String {
+      blocked
+        ? "\(where_) runs \(what), which would be the kit's own, but the kit release (\(realOf(kitDir))) sits where a session can write (the session folder or a shared temp folder); move the kit out of there, then start again"
+        : "\(where_) runs \(what), which is not the kit's own; move it to your user settings (~/.claude/settings.json), then start again"
     }
     if loadsProject {
       var dirs: [String] = []
       for d in [folder, gitRoot(folder)] where !dirs.contains(d) { dirs.append(d) }
       for d in dirs {
         for (_, file) in projectSettings(d) {
-          for c in settingsCommands(readJSON(file) ?? [:]) where !isKitOwn(c, folder, kitDir, templates: templates) { return moved(file, "\"\(shown(c))\"") }
+          for (name, c) in settingsCommands(readJSON(file) ?? [:]) {
+            let r = kitOwn(c, folder, kitDir, templates: templates, argv: nil, writableRoots: writableRoots)
+            if !r.ok { return moved(file, name, blocked: r.blockedByWritable) }
+          }
         }
       }
     }
@@ -331,10 +466,14 @@ enum OsSandboxFolder {
           return "\(folder)/.mcp.json has a talos-app server that is not Talos's own (\(why)); run talos-app adopt for this folder, then start again"
         }
       }
-      if !isKitOwn(line, folder, kitDir, templates: templates, argv: argv) { return moved(folder + "/.mcp.json", "the \(name) server (\"\(shown(line))\")") }
+      let r = kitOwn(line, folder, kitDir, templates: templates, argv: argv, writableRoots: writableRoots)
+      if !r.ok { return moved(folder + "/.mcp.json", "the \(name) server", blocked: r.blockedByWritable) }
+      if let what = envOrCwd(entry) {
+        return "\(folder)/.mcp.json runs the \(name) server with its own \(what), which the extra lock does not allow for a kit server; remove the \(what), then start again"
+      }
     }
-    for c in settingsCommands(readJSON(claudeDir + "/settings.json") ?? [:]) where !userCommandOK(c, folder) {
-      return "\(claudeDir)/settings.json runs \"\(shown(c))\", which the extra lock cannot allow (it must be an absolute path to a file outside the session folder and every folder a session can write, with no npx, uvx, bunx, bun x, -m or relative script); change it, then start again"
+    for (name, c) in settingsCommands(readJSON(claudeDir + "/settings.json") ?? [:]) where !userCommandOK(c, folder) {
+      return "\(claudeDir)/settings.json runs \(name), which the extra lock cannot allow (it must be an absolute path to a file outside the session folder and every folder a session can write, with no npx, uvx, bunx, bun x, -m or relative script); change it, then start again"
     }
     return nil
   }
@@ -342,7 +481,7 @@ enum OsSandboxFolder {
   /// The folder's `hooks` or `scripts` link is gone while the settings still run scripts from it: the hooks would silently not run. Only a command
   /// that names a file directly in the folder's `hooks` or `scripts` counts: a lead's `.claude/hooks/...` is a different folder.
   static func kitProblem(_ folder: String) -> String? {
-    let commands = projectSettings(folder).flatMap { settingsCommands(readJSON($0.file) ?? [:]) }
+    let commands = projectSettings(folder).flatMap { settingsCommands(readJSON($0.file) ?? [:]).map { $0.cmd } }
     for n in kitLinks where !P.lstatOk(folder + "/" + n) {
       for c in commands where pathWords(c, folder).contains(where: { $0.hasPrefix(folder + "/" + n + "/") }) {
         return "\(n) is missing from \(folder) (its link into the kit release is gone) while .claude/settings.json runs scripts from it, so the guards would silently not run; run the kit's install again, then start again"
@@ -387,6 +526,9 @@ enum OsSandboxFolder {
     return nil
   }
 
+  /// The env keys a project or local settings file may carry: the package-cache folders `lead init` writes and the connector switch.
+  private static let settingsEnvOK: Set<String> = Set(OsSandbox.cacheEnv.map { $0.0 } + ["ENABLE_CLAUDEAI_MCP_SERVERS"])
+
   private static let writeRule = try? NSRegularExpression(pattern: #"^(?:Edit|Write|MultiEdit|NotebookEdit)\(.+\)$"#)
 
   /// Settings that could take a command out of the sandbox or let a session write outside its folder, in any settings file the session loads
@@ -400,7 +542,8 @@ enum OsSandboxFolder {
       for d in [folder, gitRoot(folder)] where !dirs.contains(d) { dirs.append(d) }
       files = dirs.flatMap { d in projectSettings(d).map { $0.file } }
     }
-    files.append(claudeDir + "/settings.json")
+    let userFile = claudeDir + "/settings.json"
+    files.append(userFile)
     for f in files {
       guard let s = readJSON(f) else { continue }
       if let key = foreignSandboxKey(s) {
@@ -413,6 +556,11 @@ enum OsSandboxFolder {
       for rule in (perms["allow"] as? [Any] ?? []).compactMap({ $0 as? String })
       where writeRule?.firstMatch(in: rule, range: NSRange(rule.startIndex..., in: rule)) != nil {
         return "\(f) allows \"\(shown(rule))\", a write to a path the sandbox does not decide; remove it, then start again"
+      }
+      // the env of a project or local settings file goes into the whole session: only the keys `lead init` writes
+      if f != userFile, let env = s["env"] as? [String: Any],
+        let key = env.keys.sorted(by: { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }).first(where: { !settingsEnvOK.contains($0) }) {
+        return "This folder's settings set \(key), which can change what runs outside the sandbox. Remove it from .claude/\((f as NSString).lastPathComponent) to start this thread sandboxed."
       }
     }
     return nil
@@ -428,20 +576,22 @@ enum OsSandboxFolder {
 
   /// Everything about the folder that refuses a start while the switch is on, or nil.
   static func launchProblem(
-    _ folder: String, claudeDir: String, loadsProject: Bool, kitDir: String, userHome: String? = nil, talosHome: String = "", trusted: Trusted? = nil
+    _ folder: String, claudeDir: String, loadsProject: Bool, kitDir: String, userHome: String? = nil, talosHome: String = "", trusted: Trusted? = nil,
+    writableRoots: [String]? = nil
   ) -> String? {
     (loadsProject ? kitProblem(folder) : nil) ?? settingsProblem(folder, claudeDir: claudeDir, loadsProject: loadsProject)
-      ?? commandProblem(folder, claudeDir: claudeDir, loadsProject: loadsProject, kitDir: kitDir, talosHome: talosHome, trusted: trusted)
-      ?? linkProblem(folder, kitDir: kitDir, userHome: userHome, clone: trusted?.clone)
+      ?? linkProblem(folder, kitDir: kitDir, userHome: userHome)
+      ?? commandProblem(folder, claudeDir: claudeDir, loadsProject: loadsProject, kitDir: kitDir, talosHome: talosHome, trusted: trusted, writableRoots: writableRoots)
+      ?? cloneFenceProblem(folder, trusted)
   }
 
   /// A file the session could write through another name: every existing fixed protected path in the folder (the files inside, for a folder)
   /// must be a regular file with link count 1. A hard link made earlier outside the sandbox would let a sandboxed session write a protected
   /// file. The kit's own links (`hooks`, `scripts`, `kit`) are links on purpose and point outside the folder: not walked, but they must lead
   /// into the kit release. One plain line naming the file relative to the folder, or nil.
-  static func linkProblem(_ folder: String, kitDir: String, userHome: String? = nil, clone: String? = nil) -> String? {
+  static func linkProblem(_ folder: String, kitDir: String, userHome: String? = nil) -> String? {
     var budget = OsSandbox.walkCap
-    for p in denyWrite(folder, userHome: userHome, kitDir: kitDir, clone: clone) {
+    for p in denyWrite(folder, userHome: userHome, kitDir: kitDir) {
       // outside the session folder (LaunchAgents, the kit release) nothing is writable from the sandbox: not walked
       guard p.hasPrefix(folder + "/") else { continue }
       let rel = String(p.dropFirst(folder.count + 1))

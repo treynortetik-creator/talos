@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Local CI: runs the same jobs as .github/workflows/ci.yml on this Mac and posts the result to GitHub as commit
 # statuses (context `local-ci/<job>`), so a PR shows green or red without spending Actions minutes.
-# Added 2026-10-29 when the account ran out of Actions minutes; it stays the default afterwards (ci.yml is now
-# manual-only, `gh workflow run CI --ref <branch>` still runs it in the cloud). docs/CI-LOCAL.md has the details.
+# Added 2026-10-29 when the account ran out of Actions minutes; it stays the default afterwards (ci.yml is now manual-only, `gh workflow run CI --ref <branch>` still runs it in the cloud). docs/CI-LOCAL.md has the details.
 #
 #   scripts/ci-local.sh --pr 39                 # test the PR's head commit
 #   scripts/ci-local.sh --ref feat/x            # any branch, tag or sha (pushed or local)
@@ -20,10 +19,8 @@
 #        pushed), CI_STATUS_WHERE (the words in a status, default this machine's own name), CI_STATUS_URL (its link), CI_SHA_FILE (the sha tested,
 #        written here), CI_WT_BASE (where scratch worktrees go), CI_SLEEP_GUARD=1 (fail jobs of a run the Mac slept through; default is a warning)
 #
-# Up to CI_SLOTS runs go at once. Each holds a slot (~/.cache/talos-ci/locks/slot-N) and gets its own scratch worktree,
-# temp dir (~/.cache/talos-ci/tmp/talos-ci-sN), Playwright port, image-test port and container, so your checkout is never
-# touched and runs never share a port. A step that needs a machine-wide resource that can't be split (the desktop build,
-# browser downloads, starting colima) takes a mutex for just that step. A queued run re-resolves the PR head once it has
+# Up to CI_SLOTS runs go at once. Each holds a slot (~/.cache/talos-ci/locks/slot-N) and gets its own scratch worktree, temp dir (~/.cache/talos-ci/tmp/talos-ci-sN), Playwright port, image-test port and container, so your checkout is never
+# touched and runs never share a port. A step that needs a machine-wide resource that can't be split (the desktop build, browser downloads, starting colima) takes a mutex for just that step. A queued run re-resolves the PR head once it has
 # its slot, so it never tests a stale commit; statuses go to the commit actually tested. Logs: ~/.cache/talos-ci/logs/ (logs/hostile/ and logs/nightly/ for those runs).
 # Inside a run the install and build happen once, then mod, image and the Swift jobs go beside check, and browser after it.
 # Exit 0 only if all passed.
@@ -256,7 +253,7 @@ WHERE="$(ci_where)" # what a status says it ran on: the machine's own name (CI_S
 # These are for this script only. Left exported they reach every job: the test suites run ci-local.sh copies of their own (a fake
 # repo, a fake gh) and would post to the real repository's commit, write the real CI_SHA_FILE and say "ci-runner". Like TALOS_CI_CACHE
 # above they stay readable here and in the subshells, and no child process gets them.
-export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_PUSHED_AT CI_MOD_REAL
+export -n CI_REPO CI_STATUS_WHERE CI_STATUS_URL CI_SHA_FILE CI_WT_BASE CI_SLEEP_GUARD TALOS_CI_FORCE_DESKTOP CI_ATTEMPT_URL CI_STATUS_PREFIX CI_REMOTE_JOBS CI_SHARD_TOOLS CI_FALLBACK_NOTES CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_PART_E2E_WORKERS CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_NIGHTLY CI_HOSTILE CI_SETTLE CI_PUSHED_AT CI_MOD_REAL CI_TITAN_PART
 case "${CI_RUN_ID:-}" in *[!0-9]*) echo "ci-local: CI_RUN_ID is a run number, not '$CI_RUN_ID'" >&2; exit 64 ;; esac
 # CI_BROWSER_E2E_PART=<machine> (CI_TITAN_BROWSER=e2e, docs/CI-MACHINES.md, "The e2e packages on Titan"): every e2e package but
 # the web one runs on that machine as ci-part/browser-e2e, so this run's browser job runs protocol and web only and folds that
@@ -466,7 +463,7 @@ plan_skips() {
   SKIP_JOBS=(${skip[@]+"${skip[@]}"})
   SKIP_WHYS=(${whys[@]+"${whys[@]}"})
 }
-plan_skips
+plan_skips; reuse_prepare # (jobs-check.sh: reuse_gate_step answers a step from the gate only for the first run of a commit here)
 
 # The fast lane (job_fast): a run that tests check and posts its answers also posts report-ci/fast, about 3 minutes in. Not check
 # as a part (ci-part/, report-ci/: Titan's check-titan): the run that owns check posts the fast lane, once.
@@ -595,8 +592,8 @@ wants() { # wants <job...>: 0 if this run has any of them
 # Once per run, before the jobs: they all use one node_modules and one apps/web/dist + apps/relay/dist, and two jobs must
 # not install or build into them at the same time. So the browser job's suites are told not to build (SKIP_BUILD,
 # E2E_SKIP_BUILD; the bundles are the ones `pnpm build` made, byte for byte).
-# A rerun of the same commit (a dispatch, a hand run) writes the same log names. The earlier log is moved to logs/prev/ first,
-# as <short>-<job>.<when it was moved>.log, so it is not lost; the latest keeps its name, which is what everything else reads.
+# A rerun of the same commit (a dispatch, a hand run) writes the same log names: the earlier log is moved to logs/prev/ first, as
+# <short>-<job>.<when it was moved>.log, so it is not lost; the latest keeps its name, which is what everything else reads.
 # logs/prev/ is outside the <short>-*.log names, so a red run's upload carries only the latest.
 keep_prev_log() { # keep_prev_log <log>
   [ -s "$1" ] || return 0
@@ -622,13 +619,14 @@ setup_ok() { # a job's first step: a failed install or build fails every job tha
   return 1
 }
 
-# JOB_WAITED: the seconds the job calling it spent here, waiting (run_job keeps it apart from the job's own steps).
-JOB_WAITED=0
+JOB_WAITED=0 # the seconds the job calling wait_for_job spent there, waiting (run_job keeps it apart from the job's own steps)
 wait_for_job() { # wait_for_job <job> [marker]: until that job of this run has finished or left <marker>; at once if it isn't in the run
   wants "$1" || return 0
   local t=$(date +%s)
+  ci_fold_wait "$RESULTS" "${CI_JOBNAME:-}" # it waits for another job, no heavy step of its own going: idle, not busy (turn.sh)
   until [ -f "$RESULTS/$1" ] || { [ -n "${2:-}" ] && [ -f "$RESULTS/$2" ]; } ||
     ! kill -0 "$(cat "$RESULTS/$1.group" 2>/dev/null)" 2>/dev/null; do sleep 1; done
+  ci_fold_resume "$RESULTS" "${CI_JOBNAME:-}" "$LOCKS" # its turn begins: after any gate that holds the machine now
   JOB_WAITED=$((JOB_WAITED + $(date +%s) - t))
 }
 
@@ -649,7 +647,7 @@ cd "$WT"
 ci_bun_version() { bun --version 2>/dev/null | tr -d ' \r\n' | grep . || echo none; }
 RUN_BUN="$(ci_bun_version)" # for timings.tsv: the bun this run started with
 echo "ci-local: $SHORT ${PR:+(PR $PR) }slot $CI_SLOT/$CI_SLOTS, jobs: $JOBS"
-setup_run
+ci_time_factor; setup_run # the factor first: the run's jobs read it
 T_SETUP=$(date +%s)
 
 RESULTS="$RUN_DIR/results"
@@ -761,15 +759,17 @@ start_jobs() { # start_jobs <job...>: these jobs, one after another, as one back
   set -m # each background group gets its own process group, so a cancelled run can stop all of it
   (
     set +m
-    # Only this shell posts statuses. A job (install scripts, test code, a browser) gets no way to: a pass it could post by hand
-    # for any commit of the repository would be a pass nobody tested.
+    # Only this shell posts statuses: a pass a job (test code, a browser) could post by hand for any commit would be one nobody tested.
     unset GH_TOKEN GITHUB_TOKEN
     [ "${CI_HOSTILE:-}" != 1 ] || ci_hostile_env # the hostile nightly's clock shift and time zone, for the jobs only
+    for j in "${@:2}"; do ci_fold_wait "$RESULTS" "$j"; done # a job behind another of its group has not begun: idle, not busy (turn.sh)
     for j in "$@"; do
+      CI_JOBNAME="$j" # for ci_yield and wait_for_job (turn.sh)
+      [ "$j" = "$1" ] || ci_fold_resume "$RESULTS" "$j" "$LOCKS" # a job behind another begins its turn now
       case "$j" in
         desktop | mobile) # a build wants every core: after this run's quiet suites. The jobs of a run overlap now (one slot of CI's each,
-          # up to TALOS_CI_SLOTS), but two Swift jobs never do, whichever runs they are of: each takes the desktop mutex, and no slot
-          # inside it, around its Swift steps (job_desktop around ci.sh, job_mobile around its steps), never a slot while it waits
+          # up to TALOS_CI_SLOTS), but two Swift jobs never do: each takes the desktop mutex, and no slot inside it, around its Swift
+          # steps (job_desktop around ci.sh, job_mobile around its steps), never a slot while it waits
           wait_for_job check quiet-done
           run_job "$j" ;;
         *) run_job "$j" ;;
@@ -862,7 +862,7 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
     elif [ "$rc" = 0 ]; then
       rc=1; nottested="not tested: browser-e2e part status unreadable on GitHub; re-run"
     fi
-  fi
+  fi; titan_red_convert "$j" "$took" # a Titan part's red (machine.sh)
   # For a run of this commit waiting behind this one. A skip is stored as "skip", not 0: it is a pass for a run that may skip, and
   # no answer at all for a --full run, which skips nothing (see the wait above).
   # a refusal (a tool missing here) or a "not tested" is no answer for a run waiting behind this one: it tests the job itself
@@ -904,9 +904,9 @@ report() { # report <job> <exit code> <seconds> <why it skipped>
       *) post "$j" success "skipped ($why)" ;;
     esac
   else
-    if [ -s "$RESULTS/$j.warn" ]; then warned=", with warnings (see its log)"; sed 's/^/  ! /' "$RESULTS/$j.warn"; fi
+    if [ -s "$RESULTS/$j.warn" ]; then warned=", with warnings (see its log)"; sed 's/^/  ! /' "$RESULTS/$j.warn"; fi; reuse_report "$j" # a step the gate answered is said, never a plain pass
     if [ "$answered" = 1 ]; then echo "  ✓ $j ($took): answered first elsewhere in this attempt; nothing posted"
-    else echo "  ✓ $j ($took)"; post "$j" success "$(noted "$j" "passed on $WHERE in ${secs}s$parts$retried$warned")"; fi
+    else echo "  ✓ $j ($took)"; post "$j" success "$(noted "$j" "$(titan_pass_say "$j" "$fb" "$log")passed on $WHERE in ${secs}s$REUSE_SAYS$parts$retried$warned")"; titan_report_green "$j" "$secs"; fi
   fi
   if [ "$n" -gt 0 ]; then
     while IFS=$'\t' read -r t f; do
@@ -982,12 +982,13 @@ echo "ci-local: timing: waited $((T_SLOT - T_ASKED))s, setup $((T_SETUP - T_SLOT
 # seconds (its wall time less the time it waited for another job: browser's wall includes the whole of check), then the desktop
 # job's pty use, pty=<peak /dev/ttys*>/<kern.tty.ptmx_max>, or - when it did not run (appended: older rows have nine columns),
 # then the bun the run started with, bun=<version> (bun=none without one; appended: older rows have ten columns), then the
-# seconds of Chronos's suite inside check, chronos=<seconds> or chronos=- when it did not run (appended: older rows have eleven).
+# seconds of Chronos's suite inside check, chronos=<seconds> or chronos=- when it did not run (appended: older rows have eleven), then
+# reused=<job>:<gate step> for each job that took a step from the gate's result (reuse_timings), or reused=- (appended: twelve columns before).
 _pty="$(cat "$RESULTS/desktop.pty" 2>/dev/null)"
 _chronos="$(cat "$RESULTS/chronos.secs" 2>/dev/null)"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$SHORT" "$CI_SLOT" "$JOBS" \
   "$((T_SLOT - T_ASKED))" "$((T_SETUP - T_SLOT))" "$((T_DONE - T_SETUP))" "${#FAILED[@]}" "$JOB_TIMES" "${_pty:--}" "bun=$RUN_BUN" \
-  "chronos=${_chronos:--}" >> "$LOGS/timings.tsv"
+  "chronos=${_chronos:--}" "$(reuse_timings)" >> "$LOGS/timings.tsv"
 [ ${#HELD[@]} -eq 0 ] || echo "::warning::ci-local: failed here, not posted: the owning machine's pass for this attempt stands: ${HELD[*]} ($SHORT)"
 if [ ${#FAILED[@]} -eq 0 ] && [ -z "$BAD_BEFORE" ] && [ ${#POSTFAIL[@]} -gt 0 ]; then
   echo "ci-local: FAILED: the jobs passed, but these statuses were not posted: ${POSTFAIL[*]} ($SHORT)"; exit 1

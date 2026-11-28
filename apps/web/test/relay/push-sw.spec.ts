@@ -1,4 +1,5 @@
-import type { BrowserContext, Worker } from '@playwright/test'
+import type { BrowserContext, Page, Worker } from '@playwright/test'
+import { buildPushPayload, withPushWords } from '@talos-app/protocol'
 import { expect, test } from '../helpers/fixtures.ts'
 import { openSignedIn } from '../helpers/util.ts'
 
@@ -8,7 +9,13 @@ test.beforeEach(({ browserName }) =>
   test.skip(browserName !== 'chromium', 'service worker push events are driven through the Chromium protocol'),
 )
 
-type Shown = { title: string; body?: string; tag?: string; data?: unknown; error?: string }
+const DEFAULT_CONFIG = {
+  agent: { name: 'Talos' },
+  notifications: { show_thread_names: 'all' as const },
+  threads: [{ id: 'general', name: 'General', kind: 'fixed' as const }],
+}
+
+type Shown = { title: string; body?: string; tag?: string; data?: unknown; silent?: boolean; error?: string }
 
 // What the service worker asked the browser to show. We record it at `registration.showNotification` instead of
 // reading it back with `getNotifications()`: Chromium answers that from the OS notification tray (on macOS, the
@@ -25,7 +32,13 @@ async function recordShows(context: BrowserContext, origin: string): Promise<Wor
     const reg = g.registration
     const show = reg.showNotification.bind(reg)
     reg.showNotification = async (title, options) => {
-      const entry: Shown = { title, body: options?.body, tag: options?.tag, data: options?.data }
+      const entry: Shown = {
+        title,
+        body: options?.body,
+        tag: options?.tag,
+        data: options?.data,
+        silent: options?.silent ?? undefined,
+      }
       try {
         await show(title, options)
       } catch (e) {
@@ -39,11 +52,11 @@ async function recordShows(context: BrowserContext, origin: string): Promise<Wor
 
 const shown = (sw: Worker) => sw.evaluate(() => (self as unknown as { __shown: Shown[] }).__shown)
 
-test('the service worker shows a push built from PushPayload (fixed template, no message text)', async ({
-  page,
-  context,
-  harness,
-}) => {
+async function armedWorker(
+  harness: { url: string } & Parameters<typeof openSignedIn>[0],
+  page: Page,
+  context: BrowserContext,
+) {
   await context.grantPermissions(['notifications'], { origin: harness.url })
   const cdp = await context.newCDPSession(page)
   let registrationId = ''
@@ -68,6 +81,15 @@ test('the service worker shows a push built from PushPayload (fixed template, no
   const push = (data: unknown) =>
     cdp.send('ServiceWorker.deliverPushMessage', { origin: harness.url, registrationId, data: JSON.stringify(data) })
 
+  return { sw, push }
+}
+
+test('the service worker shows a push built from PushPayload (fixed template, no message text)', async ({
+  page,
+  context,
+  harness,
+}) => {
+  const { sw, push } = await armedWorker(harness, page, context)
   await push({
     web_push: 8030,
     notification: {
@@ -84,6 +106,7 @@ test('the service worker shows a push built from PushPayload (fixed template, no
     title: 'Talos',
     body: 'New reply in General',
     tag: 'reply-general',
+    silent: true, // the page is on /t/general and focused: shown silently
     data: { navigate: '/t/general', kind: 'reply', thread_id: 'general' },
   })
 
@@ -99,4 +122,43 @@ test('the service worker shows a push built from PushPayload (fixed template, no
   })
   // Nothing built from the non-PushPayload data ever reaches the screen.
   expect(JSON.stringify(all)).not.toMatch(/leaked text/)
+})
+
+test('a push with real words shows the thread name and the preview; an old fixed-text push still shows as before', async ({
+  page,
+  context,
+  harness,
+}) => {
+  const { sw, push } = await armedWorker(harness, page, context)
+  const generic = buildPushPayload({ template: 'reply', thread_id: 'general' }, DEFAULT_CONFIG)
+  await push(withPushWords(generic, { thread: 'General', text: 'The report is ready,\n  take a look.' }))
+  await expect.poll(() => shown(sw)).toHaveLength(1)
+  await push(generic)
+  await expect.poll(() => shown(sw)).toHaveLength(2)
+  const all = await shown(sw)
+  expect(all[0]).toMatchObject({
+    title: 'General',
+    body: 'The report is ready, take a look.',
+    data: { navigate: '/t/general', kind: 'reply', thread_id: 'general' },
+  })
+  expect(all[1]).toMatchObject({ title: 'Talos', body: 'New reply in General' })
+})
+
+test('a words push for a thread that is not on screen is audible; for the thread on screen it is silent', async ({
+  page,
+  context,
+  harness,
+}) => {
+  const { sw, push } = await armedWorker(harness, page, context) // the page is on /t/general, focused
+  const other = buildPushPayload(
+    { template: 'reply', thread_id: 'inbox' },
+    { ...DEFAULT_CONFIG, threads: [{ id: 'inbox', name: 'Inbox', kind: 'fixed' as const }] },
+  )
+  const open = buildPushPayload({ template: 'reply', thread_id: 'general' }, DEFAULT_CONFIG)
+  await push(withPushWords(other, { thread: 'Inbox', text: 'Something else came in' }))
+  await push(withPushWords(open, { thread: 'General', text: 'You are reading this one' }))
+  await expect.poll(() => shown(sw)).toHaveLength(2)
+  const all = await shown(sw)
+  expect(all[0]).toMatchObject({ title: 'Inbox', body: 'Something else came in', silent: undefined })
+  expect(all[1]).toMatchObject({ title: 'General', silent: true })
 })

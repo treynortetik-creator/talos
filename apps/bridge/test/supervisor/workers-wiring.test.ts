@@ -19,11 +19,12 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { SPEC_HASH_PATTERN } from '@talos-app/protocol'
+import { AUTO_CONTINUE_AT_LIMIT_DEFAULT, SPEC_HASH_PATTERN } from '@talos-app/protocol'
 import { leadSettings } from '../../src/lead/settings.ts'
 import { osSandboxForStart } from '../../src/supervisor/plan-wiring.ts'
 import { KIT_MARKETPLACE, MANAGED_SETTINGS, ROOTED_KIT } from '../../src/supervisor/rooted-kit.ts'
 import { classifyUpdate } from '../../src/supervisor/update-check.ts'
+import { autoContinueAtLimitOn } from '../../src/supervisor/worker-config.ts'
 import {
   installReleaseCommand,
   installWorkerHook,
@@ -127,6 +128,15 @@ describe('the dedicated threads', () => {
     // the thread's own idle time, from its session options (P3d3, part 5)
     const quick = { ...trip, session_opts: { ...trip.session_opts, idle_park_min: 5 } }
     expect(dedicatedThreads(config([quick]), '/a')?.[0]?.idleParkMin).toBe(5)
+    // the thread's own compact point: set only when valid; a bad value is unset and costs nothing else
+    const withWindow = (compact_window: unknown) =>
+      dedicatedThreads(config([{ ...trip, session_opts: { ...trip.session_opts, compact_window } }]), '/a')?.[0]
+    expect(withWindow(400000)?.compactWindow).toBe(400000)
+    expect(dedicatedThreads(config([trip]), '/a')?.[0]).not.toHaveProperty('compactWindow')
+    for (const bad of [null, 5, 99999, 1000001, 400000.5, 'auto']) {
+      expect(withWindow(bad), String(bad)).not.toHaveProperty('compactWindow')
+      expect(withWindow(bad)?.model, String(bad)).toBe('sonnet')
+    }
     expect(dedicatedThreads(config([trip], false), '/a')).toEqual([])
     expect(dedicatedThreads(config([{ ...trip, archived: true }]), '/a')).toEqual([])
     // a sub-thread is listed with the Mac's rules: here its parent is not there, so its start is refused (P3d5)
@@ -2115,4 +2125,73 @@ describe('a start that runs the cut turn again, through the planner (0.26)', () 
       expect(plan({ dry: true }).specHash).toBe(again.specHash)
     },
   )
+})
+
+describe('continue at the usage limit, read at each start (config.json auto_continue_at_limit)', () => {
+  function planWithSwitch(autoContinue?: () => boolean) {
+    const root = tmp()
+    const userHome = join(root, 'home')
+    const agentDir = join(userHome, 'agent')
+    const talosHome = join(userHome, '.talos')
+    const trip = join(userHome, 'trip')
+    for (const d of [agentDir, talosHome, trip, join(userHome, '.claude')]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(agentDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'talos-app': {} } }))
+    const planner = workerPlanner({
+      threadFolders: () => [],
+      kitVendor: sealedRelease(),
+      talosHome,
+      userHome,
+      agentDir,
+      claudeDir: join(userHome, '.claude'),
+      resolveClaude: () => '/usr/bin/claude',
+      mainArgs: () => ['--permission-mode=default'],
+      managedDir: NO_MANAGED,
+      audit: () => {},
+      ...(autoContinue ? { autoContinue } : {}),
+    })
+    const p = planner({
+      thread: { id: 'trip', cwd: trip, model: 'inherit', effort: null, parentCwd: null },
+      sessionId: '11111111-2222-3333-4444-555555555555',
+      resume: false,
+      nonce: 'ab'.repeat(16),
+      baseEnv: { PATH: '/usr/bin', HOME: userHome, TALOS_APP_BRIDGE: '1' },
+    })
+    if ('refused' in p) throw new Error(p.refused.detail)
+    const settings = JSON.parse(readFileSync(join(talosHome, 'workers', 'trip', 'settings.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    return { settings }
+  }
+
+  onCaseExactTmp(
+    'the settings file carries the key as read: true, false, and the default when no reader is given',
+    () => {
+      expect(planWithSwitch(() => true).settings.autoContinueAtUsageLimit).toBe(true)
+      const off = planWithSwitch(() => false).settings
+      expect(Object.hasOwn(off, 'autoContinueAtUsageLimit')).toBe(true)
+      expect(off.autoContinueAtUsageLimit).toBe(false)
+      expect(planWithSwitch().settings.autoContinueAtUsageLimit).toBe(AUTO_CONTINUE_AT_LIMIT_DEFAULT)
+    },
+  )
+
+  it('config.json decides: false only when it says false; absent, junk and unreadable read as the default', () => {
+    const home = tmp()
+    const cfg = join(home, 'config.json')
+    expect(autoContinueAtLimitOn(home)).toBe(AUTO_CONTINUE_AT_LIMIT_DEFAULT) // no file
+    for (const [raw, want] of [
+      [{ auto_continue_at_limit: true }, true],
+      [{ auto_continue_at_limit: false }, false],
+      [{}, AUTO_CONTINUE_AT_LIMIT_DEFAULT],
+      [{ auto_continue_at_limit: 'no' }, AUTO_CONTINUE_AT_LIMIT_DEFAULT],
+      [{ auto_continue_at_limit: 0 }, AUTO_CONTINUE_AT_LIMIT_DEFAULT],
+      [{ auto_continue_at_limit: null }, AUTO_CONTINUE_AT_LIMIT_DEFAULT],
+      [[], AUTO_CONTINUE_AT_LIMIT_DEFAULT],
+    ] as const) {
+      writeFileSync(cfg, JSON.stringify(raw))
+      expect(autoContinueAtLimitOn(home), JSON.stringify(raw)).toBe(want)
+    }
+    writeFileSync(cfg, '{ not json')
+    expect(autoContinueAtLimitOn(home)).toBe(AUTO_CONTINUE_AT_LIMIT_DEFAULT)
+  })
 })

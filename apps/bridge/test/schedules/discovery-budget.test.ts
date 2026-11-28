@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SCHEDULES_ANSWER_MS } from '@talos-app/protocol'
+import { t } from '@talos-app/testkit'
 import type { BridgeEnv } from '../../src/config.ts'
 import { DISCOVERY_TIMEOUT_MS, DISCOVERY_TOTAL_MS, discover } from '../../src/schedules/discovery.ts'
 import { killHeldPipes } from '../held-pipe.ts'
@@ -147,16 +148,22 @@ describe('discovery: one deadline for the whole discovery', () => {
     }
   }, 15_000)
 
-  test('a Chronos 0.2 (no `api`) is still read as old within the total', async () => {
-    const d = join(dir, 'old')
-    mkdirSync(d)
-    const bin = join(d, 'chronos')
-    writeFileSync(bin, `#!/bin/sh\nif [ "$1" = api ]; then echo usage >&2; exit 2; fi\necho "chronos 0.2.2"\n`, {
-      mode: 0o755,
-    })
-    const r = await discover(env({ chronosBin: bin, chronosAutoDiscover: false }), deps({ totalMs: TOTAL }))
-    expect(r.state).toBe('unsupported')
-  }, 15_000)
+  test(
+    'a Chronos 0.2 (no `api`) is still read as old within the total',
+    async () => {
+      const d = join(dir, 'old')
+      mkdirSync(d)
+      const bin = join(d, 'chronos')
+      writeFileSync(bin, `#!/bin/sh\nif [ "$1" = api ]; then echo usage >&2; exit 2; fi\necho "chronos 0.2.2"\n`, {
+        mode: 0o755,
+      })
+      // two real spawns (`api version`, then `version`) must both fit: on a loaded machine they take longer, so the total scales
+      // with TALOS_TEST_TIME_FACTOR here (the product's own budgets stay as they are)
+      const r = await discover(env({ chronosBin: bin, chronosAutoDiscover: false }), deps({ totalMs: t(TOTAL) }))
+      expect(r.state).toBe('unsupported')
+    },
+    t(15_000),
+  )
 
   test('a single healthy Chronos is unchanged: ready, with the default budgets', async () => {
     const d = join(dir, 'ok')

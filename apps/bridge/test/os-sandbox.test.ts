@@ -34,6 +34,7 @@ import {
   readOwnerExcludes,
   withOsSandbox,
 } from '../src/guards/os-sandbox.ts'
+import { trustedBridge } from '../src/guards/os-sandbox-folder.ts'
 import {
   buildGuardConfig,
   HOME_NEVER,
@@ -144,7 +145,10 @@ describe('the settings it builds', () => {
           x.endsWith('/talos/kit') ||
           // another test file in this run may have named a kit folder (TALOS_KIT_HOME): the lock denies that one
           (process.env.TALOS_KIT_HOME !== undefined && x.endsWith(`/${basename(process.env.TALOS_KIT_HOME)}`)) ||
-          x === resolve(import.meta.dir, '..', '..', '..'),
+          x === resolve(import.meta.dir, '..', '..', '..') ||
+          // the recorded clone's bridge folder and bun (always denied)
+          x === resolve(import.meta.dir, '..') ||
+          x === trustedBridge()?.bun,
         x,
       ).toBe(true)
       expect(x.includes(aside), x).toBe(false)

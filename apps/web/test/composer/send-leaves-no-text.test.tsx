@@ -12,7 +12,7 @@ afterEach(cleanup)
 describe('sending from a blurred box', () => {
   it('leaves the box empty and sends once', async () => {
     const client = createFakeClient()
-    const send = vi.spyOn(client, 'sendMessage').mockResolvedValue(undefined as never)
+    const send = vi.spyOn(client, 'sendMessage').mockResolvedValue({ clientMsgId: 'm_1', state: 'sent' })
     render(
       <ClientProvider client={client}>
         <Composer threadId="general" />

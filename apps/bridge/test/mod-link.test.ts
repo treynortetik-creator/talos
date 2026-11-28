@@ -37,7 +37,12 @@ type Rig = {
   file: () => string
 }
 
-function rig(opts: { extraCommands?: Array<{ name: string; description: string; source: string }> } = {}): Rig {
+function rig(
+  opts: {
+    extraCommands?: Array<{ name: string; description: string; source: string }>
+    approving?: () => string[]
+  } = {},
+): Rig {
   const clock = fakeClock()
   const states: unknown[] = []
   const inventories: unknown[] = []
@@ -62,6 +67,7 @@ function rig(opts: { extraCommands?: Array<{ name: string; description: string; 
     clock,
     log,
     sink,
+    approvingPlugins: opts.approving ?? (() => []),
     keys: {
       read: () => secret,
       write: (k) => {
@@ -210,6 +216,26 @@ describe('sync authentication', () => {
 })
 
 describe('state and inventory (the read side)', () => {
+  test('the flag comes from the bridge’s OWN read: set on an enabled plugin it says approves, added when the mod left the plugin out, and a flag the mod claims for another is dropped', () => {
+    const r = rig({ approving: () => ['hooky@market', 'omitted@market'] })
+    const req = r.mod.syncRequest(keyOf(r)) as { inventory?: { plugins: unknown[] } }
+    if (!req.inventory) throw new Error('no inventory')
+    req.inventory.plugins = [
+      { name: 'hooky@market', enabled: true },
+      { name: 'quiet@market', enabled: true, approves_tool_calls: true }, // claimed by the mod: dropped
+      { name: 'off@market', enabled: false },
+    ]
+    r.link.sync(req as never)
+    const inv = r.inventories[0] as { plugins: Array<Record<string, unknown>> }
+    expect(inv.plugins).toEqual([
+      { name: 'hooky@market', enabled: true, approves_tool_calls: true },
+      { name: 'quiet@market', enabled: true },
+      { name: 'off@market', enabled: false },
+      { name: 'omitted@market', enabled: true, approves_tool_calls: true },
+    ])
+    expect(SessionInventory.safeParse(inv).success).toBe(true)
+  })
+
   test('a valid sync stores state and inventory and hands both to the sink as protocol-valid values', () => {
     const r = rig()
     const res = r.link.sync(r.mod.syncRequest(keyOf(r)))

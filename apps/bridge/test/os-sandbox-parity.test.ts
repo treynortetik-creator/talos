@@ -47,13 +47,21 @@ type Entry = {
   removeDir?: boolean
   hardlinkTo?: string
 }
-type Trusted = { bun: string; bridgeDir: string } | null
+type Trusted = { bun: string; bridgeDir: string; bunInTemp?: boolean } | null
 type Recipe = {
   gitConfigCount: number
   ownerExcludes: string[]
   trustedBridge: Trusted
   entries: Entry[]
-  cases: Array<{ name: string; entries: Entry[]; launchArgs?: string[]; trustedBridge?: Trusted }>
+  cases: Array<{
+    name: string
+    entries: Entry[]
+    launchArgs?: string[]
+    trustedBridge?: Trusted
+    writableRoots?: string[]
+    folder?: string
+    loadsProject?: boolean
+  }>
 }
 type Golden = { cases: Record<string, string | null>; names: Record<string, unknown>; pieces: Record<string, unknown> }
 
@@ -103,7 +111,7 @@ function build(entries: Entry[]): string {
 
 /** The record the recipe names (paths relative to the root), or null. */
 const trustedOf = (t: Trusted, base: string) =>
-  t ? { bun: join(base, t.bun), bridgeDir: join(base, t.bridgeDir) } : null
+  t ? { bun: join(base, t.bun), bridgeDir: join(base, t.bridgeDir), ...(t.bunInTemp ? { bunInTemp: true } : {}) } : null
 
 const sortKeys = (v: unknown): unknown =>
   Array.isArray(v)
@@ -154,9 +162,12 @@ describe('the OS sandbox builds what the Mac builds (recipe.json and golden.json
         {
           talosHome: join(base, 'TalosHome'),
           userHome: join(base, 'UserHome'),
-          folder: join(base, 'Agent'),
+          folder: join(base, c.folder ?? 'Agent'),
+          ...(c.loadsProject === false ? { loadsProject: false } : {}),
           claudeDir: join(base, 'UserHome', '.claude'),
           platform: 'darwin',
+          // the kit sits in the root, a temp folder: no writable roots unless the case names some (paths from the root)
+          writableRoots: (c.writableRoots ?? []).map((p) => join(base, p)),
           ...(c.launchArgs ? { launchArgs: c.launchArgs } : {}),
           trusted: trustedOf('trustedBridge' in c ? (c.trustedBridge as Trusted) : r.trustedBridge, base),
         },
@@ -177,6 +188,7 @@ describe('the OS sandbox builds what the Mac builds (recipe.json and golden.json
         folder: join(base, 'Agent'),
         claudeDir: join(base, 'UserHome', '.claude'),
         platform: 'darwin',
+        writableRoots: [],
         trusted: trustedOf((recipe as Recipe).trustedBridge, base),
       },
       { ownerExcludes: () => [], write: () => {} },

@@ -76,7 +76,7 @@ async function runNow(
   o: { summary?: string; notepad?: string; ok?: boolean } = {},
 ): Promise<{ note: Notification; done: string }> {
   const before = runNotes(id).length
-  if (before > 0) await h.advance(2 * 60_000 + 1_000) // Run now is limited to one a job every two minutes
+  if (before > 0) await h.advance(2 * 60_000 + 1_000) // let the earlier run settle before the next one
   const f = await h.app.runScheduleNow(id, { again: before > 0 })
   await h.app.expectFrame('ack', (a) => a.ref === f.id, { direction: 'in' })
   await waitFor(() => runNotes(id).length === before + 1, 10_000, `run ${before + 1} of ${id}`)

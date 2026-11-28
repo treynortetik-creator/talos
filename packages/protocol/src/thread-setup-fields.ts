@@ -1,6 +1,7 @@
 // The value rules and rows of the thread fields an agent sets a session up with (folder, model, effort, MCP list, colour). Kept
 // out of settings-table.ts, which holds the table; its THREAD_FIELD_RULES spreads SETUP_THREAD_FIELD_RULES in.
 import { z } from 'zod'
+import { COMPACT_WINDOW_MAX, COMPACT_WINDOW_MIN } from './compact-window.ts'
 import { ModelValue } from './config.ts'
 import { ThreadId } from './ids.ts'
 import { THREAD_COLORS, THREAD_TOPIC_MAX } from './models.ts'
@@ -30,6 +31,8 @@ export const none = (v: unknown) => (v === '' || v === null || v === undefined ?
 export const ThreadColorValue = z.enum(THREAD_COLORS)
 export const ThreadEffortValue = z.enum(DOCUMENTED_EFFORTS)
 export const ThreadIdleValue = z.number().int().min(5).max(720)
+/** Null clears it: the session then follows the owner's other sessions (their shell or user settings value). */
+export const ThreadCompactValue = z.number().int().min(COMPACT_WINDOW_MIN).max(COMPACT_WINDOW_MAX).nullable()
 export const ThreadSessionValue = z.enum(['shared', 'dedicated'])
 // What Plain and a server name refuse too: C1 controls, line and paragraph separators, zero-width and direction marks, the BOM. Kept
 // here, on a proposal's value, and not in `AbsolutePath`, which also reads folders already on disk and must stay as lenient as before.
@@ -61,7 +64,7 @@ export const NewThread = z.strictObject({
   idle_park_min: ThreadIdleValue.optional(),
 })
 
-type SetupField = 'color' | 'effort' | 'model' | 'mcp_allow' | 'session_opts.cwd'
+type SetupField = 'color' | 'effort' | 'compact_window' | 'model' | 'mcp_allow' | 'session_opts.cwd'
 export const SETUP_THREAD_FIELD_RULES: Readonly<Record<SetupField, ThreadFieldRow>> = {
   color: {
     risk: 'low',
@@ -86,6 +89,18 @@ export const SETUP_THREAD_FIELD_RULES: Readonly<Record<SetupField, ThreadFieldRo
     },
     read: (t) => t.session_opts?.effort ?? null,
     set: (v, t) => ({ session_opts: { ...(t?.session_opts ?? {}), effort: v } }),
+  },
+  compact_window: {
+    risk: 'low',
+    rule: {
+      label: 'compact at (tokens)',
+      phrase: 'when a thread session compacts its conversation',
+      hint: `${COMPACT_WINDOW_MIN}-${COMPACT_WINDOW_MAX} tokens, or null to follow the owner's other sessions (the value from their shell or user settings); there is no screen for it yet, so it is set through a settings card`,
+      value: ThreadCompactValue,
+      show: (v) => (v === null ? "the same as the owner's other sessions" : `${String(v)} tokens`),
+    },
+    read: (t) => t.session_opts?.compact_window ?? null,
+    set: (v, t) => ({ session_opts: { ...(t?.session_opts ?? {}), compact_window: v } }),
   },
   // The model, folder and MCP list are what a session may reach: high, a card every time unless the owner asked for it.
   // A sub-thread's folder and list are held to its parent's (judged in config-propose.ts).

@@ -1,6 +1,7 @@
 // `set_status`, `inbox_triage`, `inbox_raw` (spec 4.4).
 import { EventId, wrapExternal } from '@talos-app/protocol'
 import { inboxUpdateFrame, statusFrame } from '../frames-out.ts'
+import { forgetWorking } from '../worker/working-row.ts'
 import { fail, needStr, ok, str, ToolError, threadArg, threadProps } from './common.ts'
 import { NOT_FOR_WORKERS, OWN_THREAD, type ToolRecord } from './define.ts'
 
@@ -34,6 +35,8 @@ export const setStatus: ToolRecord = {
       // sendEphemeral is false when the socket is not ready, and an ephemeral frame is never replayed
       if (!ctx.transport.sendEphemeral(statusFrame(ctx.clock.now(), id, state, label)))
         return ok(`status ${state} not sent: the app connection is down. Set it again once it is back.`)
+      // Main's own word replaces ours: the idle sweep (working-row.ts) must not wipe what Main just said
+      if (!ctx.worker) forgetWorking(ctx, id)
       return ok(`status ${state}`)
     } catch (e) {
       return fail((e as Error).message)

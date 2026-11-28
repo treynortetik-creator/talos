@@ -78,6 +78,12 @@ public enum SubThreads {
     return min(720, max(5, (o?["idle_park_min"] as? Int) ?? 30))
   }
 
+  /// The compact point of the thread's own `session_opts`, never its parent's: an integer in range, else unset (a bad value costs no other field).
+  public static func compactWindow(_ t: [String: Any]) -> Int? {
+    let o = t["session_opts"] as? [String: Any]
+    return JSONValue.int(o?["compact_window"]).flatMap { WorkerSpec.compactWindowRange.contains($0) ? $0 : nil }
+  }
+
   enum Link {
     case none
     /// A live parent that has no parent of its own.

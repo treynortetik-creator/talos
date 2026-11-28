@@ -23,3 +23,8 @@ export function frame<T extends string, S extends z.ZodRawShape>(type: T, shape:
 export function ownerFrame<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
   return z.strictObject({ ...envelope, type: z.literal(type), ...shape, device_id: DeviceId, osig: Osig })
 }
+
+/** Frames with no signature that still refuse any field not listed (the remote terminal's stream, frames-term.ts): strict, no `.default()`. */
+export function strictFrame<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
+  return z.strictObject({ ...envelope, type: z.literal(type), ...shape })
+}

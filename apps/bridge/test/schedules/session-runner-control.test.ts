@@ -265,6 +265,22 @@ describe('Run now (N12) and control (S8.3)', () => {
   )
 
   test(
+    'Run now has no two-minute lock: a second one right after the first is never answered "rate_limited"',
+    async () => {
+      h = await startSched({ now: MON_0700_EDT, jobs: [draft()] })
+      const first = await h.app.runScheduleNow('daily-digest')
+      await h.app.expectFrame('ack', (a) => a.ref === first.id, { direction: 'in' })
+      const again = await h.app.runScheduleNow('daily-digest', { again: true })
+      const answer = await Promise.race([
+        h.app.expectFrame('ack', (a) => a.ref === again.id, { direction: 'in' }).then(() => 'ack'),
+        h.app.expectFrame('error', (e) => e.ref === again.id, { direction: 'in' }).then((e) => e.code),
+      ])
+      expect(answer).not.toBe('rate_limited')
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
     'a one-shot job: Run now has ds = its once date',
     async () => {
       h = await startSched({
@@ -347,18 +363,6 @@ describe('Run now (N12) and control (S8.3)', () => {
   )
 
   test(
-    'Run now twice inside 2 minutes for one job is rate_limited',
-    async () => {
-      h = await startSched({ jobs: [draft()] })
-      const a = await h.app.runScheduleNow('daily-digest')
-      await h.app.expectFrame('ack', (x) => x.ref === a.id, { direction: 'in' })
-      const b = await h.app.runScheduleNow('daily-digest')
-      expect((await h.app.expectFrame('error', (e) => e.ref === b.id, { direction: 'in' })).code).toBe('rate_limited')
-    },
-    SCHED_START_MS + t(65_000),
-  )
-
-  test(
     'a headless job runs through Chronos (its fake claude); a blocked headless is headless_blocked',
     async () => {
       h = await startSched({ jobs: [draft({ id: 'bg-job', name: 'Background', runner: 'headless' })] })
@@ -371,7 +375,7 @@ describe('Run now (N12) and control (S8.3)', () => {
       )
       // block it the way the launch watchdog does, then Run now again
       writeFileSync(join(h.box.homeDir(), 'headless.blocked'), '{"since":"2026-10-05T07:00:00-04:00"}')
-      await h.advance(3 * 60_000) // past the 2 minute per-job limit
+      await h.advance(3 * 60_000) // a few minutes on, as the owner's next tap would be
       const b = await h.app.runScheduleNow('bg-job', { again: true })
       expect((await h.app.expectFrame('error', (e) => e.ref === b.id, { direction: 'in' })).code).toBe(
         'headless_blocked',

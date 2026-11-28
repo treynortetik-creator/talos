@@ -180,7 +180,7 @@ rm -f "$V/../.talos-memory-ok" "$SB/refresh.called"; touch -t 202601010000 "$F/.
 rm -rf "$XDG_DATA_HOME"
 
 # ===================================================================================== (c)
-# Clio search upgrades (a stub semantic arm and a stub reranker; no model, no network):
+# Nyx search upgrades (a stub semantic arm and a stub reranker; no model, no network):
 #   link menu, fast keyword arm (ripgrep), rerank by default for questions, loud degraded warning, preimage exclusion.
 export XDG_DATA_HOME="$SB/xdg-c"; mkdir -p "$XDG_DATA_HOME"      # no venv here yet: lexical only
 files_of() { python3 -c 'import json,sys; print("\n".join(r["file"] for r in json.load(sys.stdin)["results"]))'; }

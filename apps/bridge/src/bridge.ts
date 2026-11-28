@@ -5,7 +5,6 @@ import { existsSync, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { AGENTS_FEATURE, drivingActive, neutralizeControlTags, newUlid, supervisorFresh } from '@talos-app/protocol'
-import { ActionRuleAsks } from './action-rule-asks.ts'
 import { defaultKeychainRunner, ServerSecrets } from './apps/keychain.ts'
 import { AppService } from './apps/service.ts'
 import { pruneAttachmentRetries } from './attachment-retry.ts'
@@ -18,17 +17,14 @@ import { CardLedger } from './cards-ledger.ts'
 import { type Clock, realClock } from './clock.ts'
 import { assertSecureRelayUrl, type BridgePaths, paths as pathsOf } from './config.ts'
 import { ConfigFile, supervisorFlagOpts } from './config-file.ts'
-import { ConfigProposals } from './config-propose/service.ts'
 import {
   type BridgeContext,
   defaultThreadRef,
   postSystemNotice,
   reportUnansweredFromEarlierRuns,
   SeenTracker,
-  threadRef,
 } from './context.ts'
 import { DeviceStore } from './devices.ts'
-import { DialogCards } from './dialog-card.ts'
 import { Enrollment } from './enrollment.ts'
 import { filesSentFor } from './files/sent.ts'
 import { installFiles } from './files/wiring.ts'
@@ -47,6 +43,8 @@ import { INSTRUCTIONS as INSTRUCTIONS_TEXT } from './instructions.ts'
 import { commitRotation, type KeyMaterial, loadBridgeKey, loadKeyFile } from './keys.ts'
 import { agentDirFromEnv } from './last-good.ts'
 import { createLogger, type Logger } from './log.ts'
+import { startMainCards } from './main-cards-wiring.ts'
+import { bugReportWake, inboxRef, makeMainWake, retryMainWake } from './main-wake/wiring.ts'
 import { MediaStore } from './media.ts'
 import { MediaRetention } from './media-retention.ts'
 import { installMemory } from './memory/install.ts'
@@ -55,8 +53,9 @@ import { fileKeyStore, ModLink } from './mod/link.ts'
 import { type Notification, systemNotification, withDrivingMeta } from './notify.ts'
 import { tellAgentOfDrop } from './outbox-drop.ts'
 import { withPaneRun } from './pane-run.ts'
-import { notePeers, notePeerTaint, PeerService } from './peer/service.ts'
+import { notePeers, notePeerTaint } from './peer/service.ts'
 import { PermissionRelay, type VerdictSender } from './permission/relay.ts'
+import { defaultApprovingPlugins } from './plugins/agent-plugins.ts'
 import { ProblemService } from './problems/service.ts'
 import { noteRelay } from './relay/auto.ts'
 import { RelayClient } from './relay-client.ts'
@@ -67,12 +66,12 @@ import { governorState } from './router/governor.ts'
 import { ThreadRouter } from './router/router.ts'
 import { UsagePool } from './router/usage-pool.ts'
 import { ScheduleService } from './schedules/service.ts'
-import { ScreenConsent } from './screen-consent.ts'
 import { createSearchService, type SearchServiceHandle } from './search/install.ts'
 import { SessionControls } from './session/controls.ts'
 import { SpeakService } from './speak/service.ts'
 import { StatusWriter, statusStartFacts } from './status-file.ts'
 import { BridgeStopping, PendingResults, within } from './stopping.ts'
+import { createTermService } from './term/wiring.ts'
 import { callTool, toolsFor } from './tools/index.ts'
 import { workerStoreOf } from './tools/read-inbound.ts'
 import { HttpTransport, LiveTransport } from './transport.ts'
@@ -190,15 +189,6 @@ export class Bridge {
   readonly hub: HubServer | undefined
   /** Option C, worker mode only: the connection to main's hub. */
   readonly hubClient: HubClient | undefined
-  /** The services only a live main-session bridge runs: settings proposals, dialogs, screen consent, action-rule asks, linked agents. */
-  private startMainCards(): void {
-    this.ctx.configProposals = new ConfigProposals(this.ctx)
-    this.ctx.dialogs = new DialogCards(this.ctx)
-    this.ctx.screenConsent = new ScreenConsent(this.ctx)
-    this.ctx.actionRuleAsks = new ActionRuleAsks(this.ctx)
-    this.ctx.peers = new PeerService(this.ctx, this.after.peers)
-  }
-
   private constructor(opts: BridgeOptions, keyRef: KeyMaterial | undefined) {
     const { env } = opts
     // TALOS_APP_CHRONOS_NOW is a test hook (S1.4): a production bundle that sees it refuses to start, like the relay does
@@ -292,6 +282,7 @@ export class Bridge {
     const usage = live ? new UsagePool(this.log) : undefined
     const modLink = new ModLink({
       clock: this.clock,
+      approvingPlugins: defaultApprovingPlugins(),
       log: this.log,
       // Only a live bridge owns the key file; a headless process must not rotate the running bridge's secret.
       ...(live ? { keys: fileKeyStore(p.modKey) } : {}),
@@ -377,7 +368,7 @@ export class Bridge {
     }
     this.ctx.permission = new PermissionRelay(this.ctx)
     // O1: only a live main-session bridge can mint a settings card (a worker or a headless process has no relay socket to ask)
-    if (live && !worker) this.startMainCards()
+    if (live && !worker) startMainCards(this.ctx, this.after.peers)
     this.ctx.session = new SessionControls(this.ctx)
     // MCP apps: only a live bridge answers app requests; the service does nothing until TALOS_APP_APPS=1
     if (live) {
@@ -387,6 +378,8 @@ export class Bridge {
       })
       this.ctx.apps = new AppService(this.ctx, { secrets: new ServerSecrets(keychain), ...(opts.apps ?? {}) })
     }
+    // The remote terminal's read-only view of the agent's pane: the live main bridge, with tmux on this Mac (src/term)
+    if (live && !worker) this.ctx.term = createTermService(this.ctx, p.home, opts.term)
     // WP-V5: the memory browser (only a live bridge answers the app; headless processes would just hold a second index)
     if (live) this.stopMemory = installMemory(this.ctx)
     if (live && !worker) this.ctx.memoryRoots = memoryRootsFor(this.ctx, opts.undo?.agentDir) // Settings > Memory folders
@@ -405,6 +398,8 @@ export class Bridge {
         bridgeVersion: BRIDGE_VERSION,
         claudeCodeVersion: () => this.claudeCodeVersion(),
       })
+    // Wakes Main on the bridge's own account (a bug report, a failed job): written down first, so a restart keeps them
+    if (live && !worker) this.ctx.mainWake = makeMainWake(this.ctx, store.db, this.clock, this.log)
     // Problem reports: the live main bridge files them, and sees its own `error` log lines (never a worker or a headless run)
     if (live && !worker) {
       this.ctx.problems = new ProblemService({
@@ -414,11 +409,9 @@ export class Bridge {
         timezone: () => config.config.timezone,
         bridgeVersion: BRIDGE_VERSION,
         userHome: homedir(),
-        notice: (text) =>
-          postSystemNotice(this.ctx, text, {
-            thread: this.ctx.config.thread('inbox') ? threadRef(this.ctx, 'inbox') : defaultThreadRef(this.ctx),
-          }),
+        notice: (text) => postSystemNotice(this.ctx, text, { thread: inboxRef(this.ctx) }),
         fetchScreenshot: (ref) => this.ctx.media.download(ref),
+        wake: bugReportWake(this.ctx, this.clock),
       })
       this.log.setErrorTap?.(this.ctx.problems.tap)
       // security files changed outside the app: one line in the Inbox thread (no agent wake-up)
@@ -426,10 +419,7 @@ export class Bridge {
         home: p.home,
         now: () => this.clock.now(),
         clock: this.clock,
-        alert: (text) =>
-          postSystemNotice(this.ctx, text, {
-            thread: this.ctx.config.thread('inbox') ? threadRef(this.ctx, 'inbox') : defaultThreadRef(this.ctx),
-          }),
+        alert: (text) => postSystemNotice(this.ctx, text, { thread: inboxRef(this.ctx) }),
       })
     }
     this.enrollment = new Enrollment(this.ctx, () => opts.undo?.agentDir ?? agentDirFromEnv(process.env))
@@ -459,6 +449,7 @@ export class Bridge {
           onBadFrame: (raw, message) => this.inbound?.onBadFrame(raw, message),
           onDisconnect: ({ code, authed }) => {
             this.log.info('relay socket closed', { code, authed })
+            this.ctx.term?.endAll('mac_offline', false) // the relay dropped its side of every view with the socket
             this.statusWriter?.poke()
           },
           onSuperseded: () => this.pauseSuperseded(),
@@ -805,6 +796,7 @@ export class Bridge {
       }
       this.ctx.permission.reconcile()
       if (this.statusWriter) await this.ctx.seen.resendToMain(this.ctx, (n) => this.deliver(n))
+      await retryMainWake(this.ctx, this.log) // a wake Main's channel refused is sent again
       this.tellRelayNeedsRestart()
       // A row the relay never acked stays queued; on a link that stayed up nothing else would send it again.
       if (this.client?.connected) (this.ctx.transport as LiveTransport).flushOutbox({ idleOnly: true })
@@ -950,7 +942,9 @@ export class Bridge {
     this.pollTimer = this.debounce = null
     this.ctx.schedules?.stop(final)
     this.ctx.dialogs?.stop()
+    this.ctx.questions?.closeAll()
     this.ctx.peers?.stop()
+    this.ctx.term?.stopAll('restart') // a stop closes every view; the pages are told while the socket is still up
     void this.ctx.apps?.stop().catch(() => {})
     this.stopMemory()
     for (const w of this.watchers) w.close()

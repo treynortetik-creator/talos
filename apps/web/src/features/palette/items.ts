@@ -95,6 +95,8 @@ export function buildItems(i: ItemInput): PaletteItem[] {
         group: entry.group,
         run: id === 'searchMessages' && q ? { type: 'search', q: i.query.trim() } : { type: 'act', act: entry.act },
         ...(id === 'searchMessages' && q ? { hint: PALETTE_TEXT.searchHint } : {}),
+        // the screen was Memory before it was Nyx: typing "memory" still finds it
+        ...(id === 'memory' ? { hint: PALETTE_TEXT.memoryHint } : {}),
       })
     }
     // numbered as the sidebar numbers them (the Inbox is listed, but has no number); opening goes by id

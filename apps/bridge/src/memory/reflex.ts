@@ -12,17 +12,7 @@
 // not written for 6 hours is forgotten, for a thread whose settings do not run that hook. It reads no model and no index, it
 // never throws (any failure is "no pointers"), and it never logs a message.
 import { createHash } from 'node:crypto'
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { BridgeContext } from '../context.ts'
@@ -132,8 +122,6 @@ const isCapWord = (t: Tok) => isUpperStr(String.fromCodePoint(t.raw.codePointAt(
 
 export type GazNote = { p: string; t: string; d: string; e?: number; pe?: number }
 export type Gazetteer = {
-  /** The agent folder the file was built for (realpath), when it says. */
-  repo: string | undefined
   notes: GazNote[]
   alias: Map<string, number[]>
   title: Map<string, number[]>
@@ -314,7 +302,6 @@ function parseGazetteer(raw: unknown): Gazetteer | null {
   const ignore = strings(o.ignore)
   if (!alias || !title || !surname || !given || !ordinary || !caps || !ignore) return null
   return {
-    repo: typeof o.repo === 'string' ? o.repo : undefined,
     notes,
     alias,
     title,
@@ -567,14 +554,6 @@ export function forgetPointers(ctx: BridgeContext): void {
   pointed.delete(ctx)
 }
 
-const real = (p: string) => {
-  try {
-    return realpathSync(p)
-  } catch {
-    return p
-  }
-}
-
 /**
  * The pointers for one owner message, or none: any off switch, a missing or stale gazetteer, no readable note, or any error at
  * all gives []. Never throws and never logs the text.
@@ -588,8 +567,8 @@ export function lookupNotes(ctx: BridgeContext, text: string, thread = 'main'): 
     const path = gazetteerPath(s.agentDir, process.env)
     if (existsSync(join(dirname(path), KILL_NAME))) return []
     const gaz = loadGazetteer(path)
-    // a gazetteer built for another folder points at nothing here
-    if (!gaz || (gaz.repo !== undefined && real(gaz.repo) !== s.agentDir)) return []
+    // the path is named from this agent folder (gazetteerPath), so the file is this folder's own
+    if (!gaz) return []
     const sent = sentFor(ctx, dirname(path), THREAD_ID.test(thread) ? thread : 'main')
     const out = notesFor(text, { gaz, scope: s.scope, seen: sent.set })
     if (out.length) saveSent(ctx, sent)

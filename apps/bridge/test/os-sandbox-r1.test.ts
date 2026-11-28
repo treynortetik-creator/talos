@@ -43,7 +43,10 @@ function world(over: { project?: object; user?: object; local?: object } = {}) {
   if (over.project) put(join(folder, '.claude', 'settings.json'), JSON.stringify(over.project))
   if (over.local) put(join(folder, '.claude', 'settings.local.json'), JSON.stringify(over.local))
   const start = () =>
-    prepareOsSandbox({ talosHome: home, userHome, folder, claudeDir }, { ownerExcludes: () => [], write: () => {} })
+    prepareOsSandbox(
+      { talosHome: home, userHome, folder, claudeDir, writableRoots: [] },
+      { ownerExcludes: () => [], write: () => {} },
+    )
   return { home, userHome, claudeDir, folder, start }
 }
 const refusal = (r: ReturnType<ReturnType<typeof world>['start']>) => ('refusal' in r ? r.refusal : null)

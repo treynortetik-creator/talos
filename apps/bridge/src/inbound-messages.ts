@@ -114,7 +114,7 @@ export const messagesFrames = {
 
   async onMessage(this: Inbound, it: Item, f: Of<'message'>) {
     const { ctx } = this
-    if (ctx.store.hasSeen(f.client_msg_id)) return this.done(it) // a replay under a new frame id: consumed, not notified twice
+    if (this.isSeen(f.client_msg_id)) return this.done(it) // a replay under a new frame id: consumed, not notified twice
     if (!ctx.config.thread(f.thread_id))
       return this.reject(it, 'bad_frame', `unknown thread ${f.thread_id}`, [f.client_msg_id])
     noteOwnerDevice(ctx, it) // not seen before, and for a thread that exists
@@ -141,9 +141,28 @@ export const messagesFrames = {
         ...(replyTo ? { replyTo } : {}),
       }),
     )
-    bumpLastOwnerTs(ctx, f.ts)
-    this.afterOwnerNotify(thread.id, f.client_msg_id)
+    this.noteHandedOver([it.frame.id, f.client_msg_id])
+    this.afterHandOver(f.ts, thread.id, f.client_msg_id)
     this.done(it, [f.client_msg_id])
+  },
+
+  /**
+   * What follows a hand-over that already happened: the owner's last-word time and the phone's `delivered` receipt. Each step is
+   * best effort and the next one runs whatever the last did, so a store write that throws here cannot skip the receipt, the
+   * unseen record, or the caller's `done()` (which marks the frame seen and consumes it).
+   */
+  afterHandOver(this: Inbound, ts: string, threadId: string, messageId: string) {
+    const { ctx } = this
+    try {
+      bumpLastOwnerTs(ctx, ts)
+    } catch (e) {
+      ctx.log.warn('last owner time not kept after a hand-over', { error: (e as Error).message })
+    }
+    try {
+      this.afterOwnerNotify(threadId, messageId)
+    } catch (e) {
+      ctx.log.warn('delivery bookkeeping failed after a hand-over', { error: (e as Error).message })
+    }
   },
 
   /**
@@ -160,7 +179,12 @@ export const messagesFrames = {
   afterOwnerNotify(this: Inbound, threadId: string, messageId: string) {
     // A message the router gave to a thread's own worker is not persisted here (SeenTracker.routerOwns): the router tracks it.
     // One that fell back to this session is, so a main session that dies with it in flight is reported.
-    this.ctx.seen.add(threadId, messageId)
+    try {
+      this.ctx.seen.add(threadId, messageId)
+    } catch (e) {
+      // its kv write failed: the receipt below still goes, the phone must learn the message was delivered
+      this.ctx.log.warn('unseen record not kept after a hand-over', { error: (e as Error).message })
+    }
     // with the message's undo point, when the relay keeps it (undo/marks.ts)
     const undo = this.ctx.undoMarks?.delivered(messageId)
     this.ctx.transport.sendEphemeral(receiptFrame(this.ctx.clock.now(), messageId, 'delivered', undo))
@@ -236,10 +260,19 @@ export const messagesFrames = {
           clock: { local_time: localTime(new Date(now).toISOString(), ctx.config.config.timezone) },
         }),
       )
-      bumpLastOwnerTs(ctx, part[part.length - 1]?.it.frame.ts ?? new Date(now).toISOString())
+      for (const { it } of part) this.noteHandedOver([it.frame.id, (it.frame as Of<'message'>).client_msg_id])
+      try {
+        bumpLastOwnerTs(ctx, part[part.length - 1]?.it.frame.ts ?? new Date(now).toISOString())
+      } catch (e) {
+        ctx.log.warn('last owner time not kept after a hand-over', { error: (e as Error).message })
+      }
       for (const { it } of part) {
         const f = it.frame as Of<'message'>
-        this.afterOwnerNotify(f.thread_id, f.client_msg_id)
+        try {
+          this.afterOwnerNotify(f.thread_id, f.client_msg_id)
+        } catch (e) {
+          ctx.log.warn('delivery bookkeeping failed after a hand-over', { error: (e as Error).message })
+        }
         this.done(it, [f.client_msg_id])
       }
     }

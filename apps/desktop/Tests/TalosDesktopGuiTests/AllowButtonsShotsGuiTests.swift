@@ -19,8 +19,9 @@ struct AllowButtonsShotsGuiTests {
     return d
   }
 
-  /// Draws the view in the given appearance; returns the sRGB bitmap and writes the PNG.
-  func render<V: View>(_ v: V, size: CGSize, dark: Bool, to path: String) async throws -> NSBitmapImageRep {
+  /// Draws the view in the given appearance; returns the sRGB bitmap (what was saved) and each button's rectangle in that bitmap's
+  /// pixels, by title, and writes the PNG.
+  func render<V: View>(_ v: V, size: CGSize, dark: Bool, to path: String) throws -> (rep: NSBitmapImageRep, buttons: [String: CGRect]) {
     _ = NSApplication.shared
     let host = NSHostingView(rootView: AnyView(v.frame(width: size.width, height: size.height)))
     let w = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -29,8 +30,6 @@ struct AllowButtonsShotsGuiTests {
     w.contentView = host
     host.frame = NSRect(origin: .zero, size: size)
     host.layoutSubtreeIfNeeded()
-    try await Task.sleep(nanoseconds: 600_000_000)
-    host.layoutSubtreeIfNeeded()
     host.displayIfNeeded()
     let raw = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
     host.cacheDisplay(in: host.bounds, to: raw)
@@ -38,15 +37,25 @@ struct AllowButtonsShotsGuiTests {
     let png = try #require(rep.representation(using: .png, properties: [:]))
     try png.write(to: URL(fileURLWithPath: path))
     // what is checked is what was saved
-    return try #require(NSBitmapImageRep(data: png))
+    let back = try #require(NSBitmapImageRep(data: png))
+    func all(_ view: NSView) -> [NSButton] { ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(all) }
+    let scale = CGFloat(back.pixelsWide) / host.bounds.width
+    var rects: [String: CGRect] = [:]
+    for b in all(host) {
+      let r = host.convert(b.bounds, from: b)
+      let top = host.isFlipped ? r.minY : host.bounds.height - r.maxY  // bitmap row 0 is the top
+      rects[b.title] = CGRect(x: r.minX * scale, y: top * scale, width: r.width * scale, height: r.height * scale)
+    }
+    return (back, rects)
   }
 
-  /// (pixels near the Talos orange, pixels near the cream ground, pixels near white)
-  func count(_ rep: NSBitmapImageRep) -> (orange: Int, cream: Int, ink: Int) {
+  /// (pixels near the Talos orange, pixels near the cream ground, pixels near black) among the pixels inside `rect` (the whole image when nil).
+  func count(_ rep: NSBitmapImageRep, in rect: CGRect? = nil) -> (orange: Int, cream: Int, ink: Int) {
     var o = 0, c = 0, wh = 0
     guard let data = rep.bitmapData else { return (0, 0, 0) }
     let per = rep.bitsPerPixel / 8
     for i in 0..<(rep.pixelsWide * rep.pixelsHigh) {
+      if let rect, !rect.contains(CGPoint(x: CGFloat(i % rep.pixelsWide) + 0.5, y: CGFloat(i / rep.pixelsWide) + 0.5)) { continue }
       let px = data + i * per
       let (r, g, b) = (Int(px[0]), Int(px[1]), Int(px[2]))
       let a = per >= 4 ? Int(px[3]) : 255
@@ -58,7 +67,7 @@ struct AllowButtonsShotsGuiTests {
     return (o, c, wh)
   }
 
-  @Test func thePanelAndTheWindowReadClearlyInLightAndDark() async throws {
+  @Test func thePanelAndTheWindowReadClearlyInLightAndDark() throws {
     let dir = try shotsDir()
     let clone = NSHomeDirectory() + "/Library/Application Support/app.talos.desktop/talos"
     let c = CloneConfirmCenter()
@@ -69,13 +78,22 @@ struct AllowButtonsShotsGuiTests {
     uc.apply(.needsAllow(version: "0.1.6", clone: clone))
     for dark in [false, true] {
       let tag = dark ? "dark" : "light"
-      let panel = try await render(AllowUpdatesView(center: c, token: token), size: CGSize(width: 400, height: 190), dark: dark, to: dir + "/panel-\(tag).png")
-      let win = try await render(UpdateWindow(controller: uc, allow: c), size: CGSize(width: 440, height: 250), dark: dark, to: dir + "/window-\(tag).png")
-      for (name, rep) in [("panel", panel), ("window", win)] {
-        let n = count(rep)
+      let panel = try render(AllowUpdatesView(center: c, token: token), size: CGSize(width: 400, height: 190), dark: dark, to: dir + "/panel-\(tag).png")
+      let win = try render(UpdateWindow(controller: uc, allow: c), size: CGSize(width: 440, height: 250), dark: dark, to: dir + "/window-\(tag).png")
+      for (name, shot) in [("panel", panel), ("window", win)] {
+        let whole = count(shot.rep)
+        #expect(whole.cream > 3000, "\(name) \(tag): the cream ground stays cream")
+        // the buttons' own pixels: body text elsewhere in the image must not satisfy these
+        let allow = try #require(shot.buttons[AllowUpdatesCopy.allowButton], "\(name) \(tag): no Allow updates button in \(shot.buttons.keys)")
+        let n = count(shot.rep, in: allow)
         #expect(n.orange > 1500, "\(name) \(tag): the filled orange Allow updates button is there (\(n.orange) px)")
-        #expect(n.cream > 3000, "\(name) \(tag): the cream ground stays cream")
-        #expect(n.ink > 300, "\(name) \(tag): dark ink text on the buttons (\(n.ink) px)")
+        #expect(shot.buttons.count >= 2, "\(name) \(tag): the other button is there too: \(shot.buttons.keys)")
+        // the filled button's text is dark ink on the orange; the other button (a bezel or an outline) draws fewer, thinner dark pixels
+        #expect(n.ink > 300, "\(name) \(tag): dark ink text on the Allow updates button (\(n.ink) px)")
+        for (title, rect) in shot.buttons where title != AllowUpdatesCopy.allowButton {
+          let ink = count(shot.rep, in: rect).ink
+          #expect(ink > 30, "\(name) \(tag): dark ink text on the \(title) button (\(ink) px)")
+        }
       }
     }
   }

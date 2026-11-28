@@ -121,7 +121,7 @@ export function windowFor(model: string | undefined, tokens: number): number {
 }
 
 // `projects/<any folder>/<session id>.jsonl`: the id is a UUID, so at most one folder holds it.
-function findTranscript(claudeDir: string, sessionId: string): string | undefined {
+export function findTranscript(claudeDir: string, sessionId: string): string | undefined {
   try {
     for (const d of readdirSync(join(claudeDir, 'projects'))) {
       const p = join(claudeDir, 'projects', d, `${sessionId}.jsonl`)

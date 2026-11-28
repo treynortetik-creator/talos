@@ -43,13 +43,17 @@ command on your PATH (it is a small script, not a shell alias, so it works in ev
 
 ## Step 2. Create the relay on Railway
 
-1. In Railway choose **New Project, Deploy from GitHub repo** and pick your copy of this repository. Railway reads
-   `railway.json` and builds `apps/relay/Dockerfile`. The build should succeed, but the first start fails with
-   "Invalid relay environment" because the variables are not set yet. That is expected.
+1. In Railway choose **New Project, Deploy from GitHub repo** and pick your copy of this repository. Then open the
+   service's **Settings** and set, by hand: the Dockerfile path `apps/relay/Dockerfile`, the healthcheck path `/healthz`
+   (timeout 60 seconds), the watch paths, restart on failure (10 retries), one replica and sleep off. The full list is in
+   [`deploy-railway.md`](deploy-railway.md), "Dashboard settings". Services are configured in the Railway dashboard: a
+   new service cannot read its settings from the repository, so without the Dockerfile path the build does not find the
+   image. The build should then succeed, but the first start fails with "Invalid relay environment" because the
+   variables are not set yet. That is expected.
 
-   > **Deploying from the command line.** A command-line deploy (`railway up`) may ignore `railway.json` and fail to
-   > find the Dockerfile. If so, set the service variable `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile` and deploy
-   > again.
+   > **Deploying from the command line.** A command-line deploy (`railway up`) may not use the Dockerfile path from the
+   > dashboard. If it fails to find the Dockerfile, set the service variable
+   > `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile` and deploy again.
    >
    > **Auto-deploy.** Connecting the GitHub repository (as above) turns on auto-deploy: every merge to `main` builds
    > and deploys the relay. Turn it off under the service's **Settings, Source** if you would rather deploy by hand.
@@ -214,7 +218,7 @@ shows what is on and what is not; each row there has a how-to in the table at th
 ```bash
 talos-app memory init --agent-dir /path/to/your/agent-folder   # pick folders (y/N each), then folders to leave out
 talos-app memory show                                          # what is shared, before you rely on it
-talos-app memory on                                            # the browser stays off until you run this
+talos-app memory on                                            # the sharing stays off until you run this
 ```
 
 It is read-only and never shows dotfiles, keys, `.env` files or anything under a folder holding a `.talos-private`
@@ -359,7 +363,7 @@ printf 'TALOS_APP_TTS_EXT=m4a\n' >> ~/.config/talos/app/bridge.env
 
 `{out}` is replaced by the file to write and `{text}` by the words to speak. Commands run directly, never through a shell. In
 the app, Settings, Voice, set Spoken replies to Always to have every reply read aloud, or leave it on Never and use the Speak
-button. The kit's own `scripts/stt.sh` still transcribes an audio file you give the agent; the bridge does not call it.
+button; a reply the agent also gives a spoken version (`voice_text`) still comes with audio on Never. The kit's own `scripts/stt.sh` still transcribes an audio file you give the agent; the bridge does not call it.
 
 ## Optional settings on Railway
 

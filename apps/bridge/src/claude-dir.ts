@@ -10,3 +10,12 @@ export function claudeConfigDir(home: string, configured?: string): string {
     throw new Error(`CLAUDE_CONFIG_DIR must be an absolute path (it is "${configured}"); fix it or unset it`)
   return trim(configured)
 }
+
+/** Main's Claude Code config folder: its own CLAUDE_CONFIG_DIR (from the login shell or the settings), else ~/.claude. */
+export function mainClaudeDir(mainEnv: Record<string, string>, userHome: string): string {
+  try {
+    return claudeConfigDir(userHome, mainEnv.CLAUDE_CONFIG_DIR || undefined)
+  } catch {
+    return join(userHome, '.claude')
+  }
+}

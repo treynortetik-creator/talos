@@ -26,6 +26,10 @@ const base = (query: string): ItemInput => ({
 })
 
 describe('buildItems and slash commands', () => {
+  it('typing "memory" still finds the Nyx screen (it was Memory before it was Nyx)', () => {
+    expect(buildItems(base('memory')).map((x) => x.id)).toContain('memory')
+  })
+
   it('a plain word never lists a command, even when commands are handed in', () => {
     for (const q of ['deploy', 'release', 'notes', 'e'])
       expect(buildItems(base(q)).filter((i) => i.run.type === 'slash')).toEqual([])

@@ -30,6 +30,9 @@ export function mcpEntryState(entry: unknown, bridgeDir: string): 'current' | 'o
   return a[0] === 'run' && a.includes('--cwd') ? 'old' : 'other'
 }
 
+/** Set for every bun Talos runs outside the sandbox (the guard hook, the talos-app server): bun's compiled-code cache in ~/.bun/install/cache is not read. */
+export const BUN_CACHE_OFF = { name: 'BUN_RUNTIME_TRANSPILER_CACHE_PATH', value: '0' } as const
+
 /**
  * bun by absolute path: Claude Code starts the MCP server with the PATH of its own session, and Main can start with a bare one
  * (2026-11-09: "Executable not found in $PATH: bun", the bridge never ran). The bun on PATH comes first (a stable path like
@@ -43,8 +46,8 @@ export function bunPath(): string {
 }
 
 /**
- * `agentDir` goes in as TALOS_AGENT_DIR: the server runs with the bridge folder as its working folder (`bun run --cwd`), so
- * the agent folder it serves cannot be read from there. Only the last-good save uses it. No PATH is written: Claude Code puts the entry's
+ * The env is TALOS_APP_HOME, `agentDir` as TALOS_AGENT_DIR (the server runs in the agent folder, which it cannot otherwise tell; only the
+ * last-good save uses it) and the bun cache switch (`BUN_CACHE_OFF`). No PATH is written: Claude Code puts the entry's
  * env over the session's, so a PATH here would hide ~/.local/bin (claude) and /opt/homebrew/bin (ffmpeg, gh, tmux) from the bridge.
  * `server.ts` is run directly (not through the `start` script, whose shell needs a bare `bun`), by absolute path, with `--no-env-file` and
  * `--config=<the bridge clone's bunfig.toml>`: the server's working folder stays the agent folder (the bridge and its CLI read it as that),
@@ -55,7 +58,11 @@ export function mcpEntry(bridgeDir: string, home: string, agentDir?: string, bun
   return {
     command: bun,
     args: ['--no-env-file', `--config=${bridgeBunfig(bridgeDir)}`, bridgeServer(bridgeDir)],
-    env: { TALOS_APP_HOME: home, ...(agentDir ? { TALOS_AGENT_DIR: agentDir } : {}) },
+    env: {
+      TALOS_APP_HOME: home,
+      ...(agentDir ? { TALOS_AGENT_DIR: agentDir } : {}),
+      [BUN_CACHE_OFF.name]: BUN_CACHE_OFF.value,
+    },
   }
 }
 

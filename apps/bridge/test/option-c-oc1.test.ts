@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CLAIM_DEADLINE_MS, DedicatedConfig, newUlid, WAKE_NOTICE, WakeFile, wakeLimitText } from '@talos-app/protocol'
-import { fakeClock, t } from '@talos-app/testkit'
+import { bridgeChildEnv, fakeClock, t } from '@talos-app/testkit'
 import { Bridge } from '../src/bridge.ts'
 import { loadEnv } from '../src/config.ts'
 import { cardUpdateFrame } from '../src/frames-out.ts'
@@ -115,14 +115,15 @@ async function startWorker(home: string, relayUrl: string, connect = true) {
 describe('OC1: worker mode is fail-closed', () => {
   test('worker env plus TALOS_APP_BRIDGE=1: non-zero exit, no bridge.pid, no relay socket', async () => {
     const home = mkdtempSync(join(tmpdir(), 'oc1-fail-'))
-    const proc = Bun.spawn(['bun', 'run', join(import.meta.dir, '..', 'src', 'server.ts')], {
-      env: {
-        ...process.env,
+    const argv = ['bun', 'run', join(import.meta.dir, '..', 'src', 'server.ts')]
+    const proc = Bun.spawn(argv, {
+      env: bridgeChildEnv(argv, {
         TALOS_APP_HOME: home,
+        TALOS_TEST_ROOT: home,
         TALOS_APP_BRIDGE: '1',
         TALOS_APP_WORKER_THREAD: 'trip',
         TALOS_APP_RELAY_URL: 'http://127.0.0.1:9',
-      },
+      }).env,
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -136,8 +137,13 @@ describe('OC1: worker mode is fail-closed', () => {
 
   test('a bad thread id refuses too', async () => {
     const home = mkdtempSync(join(tmpdir(), 'oc1-bad-'))
-    const proc = Bun.spawn(['bun', 'run', join(import.meta.dir, '..', 'src', 'server.ts')], {
-      env: { ...process.env, TALOS_APP_HOME: home, TALOS_APP_WORKER_THREAD: 'Not A Thread' },
+    const argv = ['bun', 'run', join(import.meta.dir, '..', 'src', 'server.ts')]
+    const proc = Bun.spawn(argv, {
+      env: bridgeChildEnv(argv, {
+        TALOS_APP_HOME: home,
+        TALOS_TEST_ROOT: home,
+        TALOS_APP_WORKER_THREAD: 'Not A Thread',
+      }).env,
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',

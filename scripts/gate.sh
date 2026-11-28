@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The one gate every push goes through (the pre-push hook runs it; builders run it by hand before they push). It REFUSES on
 # any failure, and when it cannot run at all: there is no "warning only" here. In this order, stopping at the first that fails:
-#   1. typecheck  the whole workspace (pnpm typecheck)
+#   1. typecheck  the whole workspace (pnpm typecheck: tsgo by default, TALOS_TYPECHECK=tsc for tsc; scripts/typecheck.mjs picks)
 #   2. lint       biome check . (the whole tree)
 #   3. personal   check-no-personal on the working tree, with the maintainer's private list when this checkout or the main
 #                 checkout of the repository has one (it says so when there is none)
@@ -23,7 +23,8 @@
 #   --checks-only typecheck, lint, personal, size and timing, no suites (gate-push.sh after a race whose new commits touch none of
 #                 this change's tests; CI runs everything after the merge)
 #   --fast        the checks, vitest related, and of the bridge tests only the changed ones, the ones that import a changed
-#                 file directly and the guards that read it (scripts/gate-fast.sh); no e2e or old-client step. Of the browser
+#                 file directly and the guards that read it (scripts/gate-fast.sh); no old-client step, and of the e2e specs only those with a
+#                 `// gate-reads:` line that matches a changed file (under the heavy lock). Of the browser
 #                 specs only the changed spec files themselves, each on every Playwright project that takes it (desktop, iphone,
 #                 pixel), under the heavy lock; with no changed spec there is no browser step and no
 #                 heavy lock. CI runs everything else after the push. A change on the keep-out list (scripts/gate-fast-keepout.txt) or
@@ -100,31 +101,14 @@ fi
 trap 'say "stopped"; exit 130' INT TERM
 
 # ---- how long a test may take here ------------------------------------------------------------------------------------------
-# On a machine with 4 cores or fewer the same tests need longer: every test budget is multiplied by TALOS_TEST_TIME_FACTOR
-# (vitest.config.ts, apps/bridge/scripts/test-parallel.ts, the testkit's t(ms)). The cores this process may use: nproc honours a
-# CPU affinity limit (taskset), getconf does not and is the fallback where there is no nproc (macOS). One set already wins.
-# The core count, read once for every rule that needs it (GATE_CORES: a test's own count, never set otherwise). CORES_RAW is
-# what was read (the small-machine notice below takes only a real count, 1 to 4); CORES is that as a number for the factor.
-# Apple silicon counts its efficiency cores too, and tests on them run several times slower: an M1 Air reports 8 and has 4
-# performance cores, so its gate ran at factor 1 and timing tests failed under load. There the performance cores are the count
-# (hw.perflevel0.physicalcpu; a Mac without performance levels, or another system, has no such key and keeps nproc).
-# Only on a small one, though (8 cores or fewer in all): a base M5's 4 performance cores sit beside 6 efficiency cores, and that
-# machine is fast.
-all_cores() { nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0; }
-cores_here() {
-  local all p
-  all="$(all_cores)"
-  p="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null)"
-  case "$p" in '' | *[!0-9]*) p="" ;; esac
-  case "$all" in '' | *[!0-9]*) all=0 ;; esac
-  if [ -n "$p" ] && [ "$all" -le 8 ]; then echo "$p"; else echo "$all"; fi
-}
+# Every test budget is multiplied by TALOS_TEST_TIME_FACTOR (vitest.config.ts, apps/bridge/scripts/test-parallel.ts, the testkit's
+# t(ms)). One set already wins; else the rule in scripts/talos-machine.sh (talos_time_factor: the core floor, 3 on 4 cores or
+# fewer, and the load measured now). GATE_CORES is a test's own core count, never set otherwise. CORES_RAW is what was read (the
+# small-machine notice below takes only a real count, 1 to 4); CORES is that as a number for the factor.
 CORES_RAW="${GATE_CORES:-$(cores_here)}"
 CORES="$CORES_RAW"
 case "$CORES" in '' | *[!0-9]* | 0) CORES=1 ;; esac
-if [ -z "${TALOS_TEST_TIME_FACTOR:-}" ]; then
-  if [ "$CORES" -le 4 ]; then TALOS_TEST_TIME_FACTOR=3; else TALOS_TEST_TIME_FACTOR=1; fi
-fi
+talos_time_factor "$CORES"
 export TALOS_TEST_TIME_FACTOR
 refuse() {
   say "REFUSED: $*"
@@ -162,7 +146,7 @@ fi
 # stays one path.
 # The Vitest projects' folders (vitest.config.ts `projects`).
 VITEST_ROOTS="packages/protocol packages/testkit packages/integrations apps/relay apps/web apps/mobile scripts"
-VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 WEB_ALL=0
+VIT=() BUN=() E2E=() E2E_MARKED=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 WEB_ALL=0
 FOLDER_HITS=() # for --plan: which folder-listing test was picked for which folder
 # shellcheck source=scripts/gate/plan.sh
 . scripts/gate/plan.sh
@@ -190,6 +174,13 @@ READERS_POOL=""
 # installer tests read install.sh, kit/ and scripts/ this way: any change there runs them (root-install, install-bughunt,
 # uninstall-bughunt, kit-update; the other root-install* files are macOS-only or heavy, and CI's).
 GUARDS=""
+# The e2e specs (e2e/tests/**/*.spec.ts, Playwright) take the same line, and a spec that has one is run (in the e2e list, never in the
+# Vitest or bridge ones) when a changed or deleted file matches it: a source change otherwise never pulls in the spec that drives it
+# (e0229ae51 changed apps/bridge/src/schedules/ and turned CI's browser-e2e red at schedules.spec.ts, 2026-11-25). The fast gate keeps
+# exactly these specs (E2E_MARKED), under the heavy lock. A mark names a narrow folder or file, never apps/bridge/src/*: a wide one
+# would run the e2e specs on almost every push. Both counts (plan.sh, plan-check.cjs) plan it, and gate.test.ts checks each mark still
+# matches a file.
+E2E_GUARDS=""
 # The web app's browser specs (apps/web/test/**/*.spec.ts, Playwright; CI's browser job runs all of them on three browsers):
 # a change under apps/web/src/features/<x>/ runs apps/web/test/<x>/*.spec.ts, a changed spec runs itself, and a change to
 # what every screen is built from (ui, lib, theme, the shell, the entry, the service worker, the build) runs this smoke
@@ -234,14 +225,14 @@ else
 fi
 if [ "$ASK_FAST" = 1 ] && [ "$IN_LOCK" = 0 ]; then
   if [ "$FAST" = 1 ]; then
-    if [ "${#WEB[@]}${#WEBKIT[@]}" = 00 ]; then FAST_LOCK_SAYS="no heavy lock"; else FAST_LOCK_SAYS="the heavy lock for its browser specs"; fi
-    say "fast gate: of the bridge tests only the changed ones, their direct importers and their guards; of the browser specs only the changed spec files, on every project that takes them; no e2e or old-client step; $FAST_LOCK_SAYS (CI runs everything after the push)"
+    if [ "${#WEB[@]}${#WEBKIT[@]}${#E2E[@]}" = 000 ]; then FAST_LOCK_SAYS="no heavy lock"; else FAST_LOCK_SAYS="the heavy lock for its browser specs"; fi
+    say "fast gate: of the bridge tests only the changed ones, their direct importers and their guards; of the browser specs only the changed spec files, on every project that takes them; of the e2e specs only those that read a changed file (their gate-reads line); no old-client step; $FAST_LOCK_SAYS (CI runs everything after the push)"
   else
     say "full gate, not the fast one: $FAST_WHY"
     [ "$PLAN" = 0 ] && declare -F fast_fallback_log >/dev/null && fast_fallback_log # one line for the evidence (gate-fast.sh)
   fi
 fi
-if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0 COREPACK=0; fi
+if [ "$CHECKS_ONLY" = 1 ]; then VIT=() BUN=() E2E=() E2E_MARKED=() VPROJ=() WEB=() WEBKIT=() SWIFT=() SWIFT_PARSE=() VIT_ALL=0 BUN_ALL=0 E2E_ALL=0 OLD=0 WEB_ALL=0 COREPACK=0; fi
 [ -d e2e ] || E2E_ALL=0 # a checkout with no e2e package has no e2e to run (the hook's tests run in such a clone)
 [ -d e2e ] && [ -f scripts/old-client.sh ] || OLD=0 # nor the old-client step, nor one without its script
 [ -f apps/web/playwright.config.ts ] || { WEB_ALL=0; WEB=(); WEBKIT=(); } # nor web browser specs without the web app's Playwright config
@@ -281,7 +272,7 @@ if [ "$PLAN" = 1 ]; then
   web_projects_report >&2
   # why each folder-listing test is there (on stderr: stdout stays the plan)
   [ "${#FOLDER_HITS[@]}" = 0 ] || { echo "folder readers:"; printf '  %s\n' "${FOLDER_HITS[@]}" | LC_ALL=C sort -u; } >&2
-  echo "time factor: $TALOS_TEST_TIME_FACTOR (test budgets x$TALOS_TEST_TIME_FACTOR)" >&2
+  echo "time factor: $TALOS_TEST_TIME_FACTOR (test budgets x$TALOS_TEST_TIME_FACTOR; $TIME_FACTOR_WHY)" >&2
   exit 0
 fi
 # ---- can it run at all ---------------------------------------------------------------------------------------------------
@@ -292,7 +283,7 @@ if [ "$IN_LOCK" = 0 ] && [ "$((${#SWIFT[@]} + ${#SWIFT_PARSE[@]}))" -gt 0 ]; the
   [ "$(uname -s)" = Darwin ] || refuse "this change touches Swift ($SWIFT_WHAT) and this machine is not a Mac, so it cannot be built here: land it from a Mac"
   { command -v swift >/dev/null 2>&1 && command -v swiftc >/dev/null 2>&1; } || refuse "this change touches Swift ($SWIFT_WHAT) and swift is not installed on this machine: install the Xcode Command Line Tools (xcode-select --install), or land it from a Mac that has Swift"
 fi
-say "time factor $TALOS_TEST_TIME_FACTOR: every test budget x$TALOS_TEST_TIME_FACTOR on this machine"
+say "time factor $TALOS_TEST_TIME_FACTOR: every test budget x$TALOS_TEST_TIME_FACTOR on this machine ($TIME_FACTOR_WHY)"
 [ "$IN_LOCK" = 0 ] && [ -f scripts/tmp-sweep.sh ] && bash scripts/tmp-sweep.sh # day-old test folders in $TMPDIR, once per gate
 command -v node >/dev/null 2>&1 || refuse "no node on PATH: the gate cannot run, so the push cannot go"
 # The repo's Node major (.nvmrc). Another major on PATH fails tests that look wrong (Node 26 refuses
@@ -393,6 +384,79 @@ step() { # step <name> <command...>: runs it, refuses on failure
   say "$name ok ($((SECONDS - t)) s)"
 }
 
+# ---- the record CI may reuse -----------------------------------------------------------------------------------------------
+# The whole bridge suite that passed here on exactly this commit is written down, so the CI run of the same sha on this machine
+# need not run it again (scripts/ci-local/jobs-check.sh, reuse_gate_step, which says every rule it is read by; docs/CI-LOCAL.md,
+# "Reusing the gate's result"). Only a pass counts, and only a plain one: a step that failed, or went on by an excuse, writes nothing
+# (and rec_begin first removes what an earlier run of this commit wrote, so a pass never outlives a later red of the same tree);
+# neither does a work tree that is not exactly the commit (an edit, a file git does not know that a test could read, a file marked
+# assume-unchanged or skip-worktree, a sparse checkout) or a commit that moved while the step ran. The step runs with CI=true, as in
+# CI, where bun refuses a committed .only and a missing snapshot and the golden rewrite is refused, none of which the gate's lint
+# catches; the record says ci=true and the CI side requires its own CI to be the same. A record is <cache>/gate-results/<sha>/<step>,
+# key=value lines, "end" last (a record without it is partial). The knobs that change what a test does (TALOS_*, BUN_*, NODE_OPTIONS,
+# TZ, the hostile flags) go in as env.<NAME>=<sha256 of the value>, never the value (it may be a secret); the CI side decides which of
+# them may differ.
+GATE_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+REC_BEFORE="" REC_EXCUSED0=0
+rec_cache() { printf '%s\n' "${TALOS_CI_CACHE:-${HOME:-}/.cache/talos-ci}"; }
+rec_sha() { perl -MDigest::SHA=sha256_hex -e 'local $/; print sha256_hex(scalar(<STDIN>) // "")'; }
+# "<HEAD sha> <its tree>" when the work tree is exactly that commit: nothing changed, nothing untracked that git does not ignore, no
+# file git was told to leave out of its look (assume-unchanged, skip-worktree), no sparse checkout
+rec_state() {
+  local h t
+  h="$(git rev-parse -q --verify HEAD 2>/dev/null)" && t="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" || return 1
+  [ -z "$(git status --porcelain --untracked-files=all 2>/dev/null)" ] || return 1
+  [ "$(git config --get core.sparseCheckout 2>/dev/null)" != true ] || return 1
+  [ -z "$(git ls-files -v 2>/dev/null | grep -m1 '^[a-zS]')" ] || return 1
+  printf '%s %s\n' "$h" "$t"
+}
+rec_excused_bytes() { { [ -n "${GATE_EXCUSE_OUT:-}" ] && wc -c <"$GATE_EXCUSE_OUT" 2>/dev/null; } | tr -d ' ' | grep . || echo 0; }
+# rec_begin <step>: before the step. What an earlier run of this commit wrote for it goes first: a pass that this run's failure, excuse
+# or untidy tree would leave standing must not.
+rec_begin() {
+  local h
+  h="$(git rev-parse -q --verify HEAD 2>/dev/null)" && rm -f "$(rec_cache)/gate-results/$h/$1" "$(rec_cache)/gate-results/$h/$1.tmp"
+  REC_BEFORE="$(rec_state)" || REC_BEFORE=""
+  REC_EXCUSED0="$(rec_excused_bytes)"
+}
+# rec_end <step> <the command the step ran, without its env>: after the step passed
+rec_end() {
+  local id="$1" cmd="$2" dir sha tree v tf slots cache
+  cache="$(rec_cache)"
+  [ -n "${HOME:-}" ] || return 0
+  [ -n "$REC_BEFORE" ] || { say "not recorded for CI ($id): the work tree is not exactly the commit (a change, an untracked or assume-unchanged file, a sparse checkout)"; return 0; }
+  [ "$(rec_state)" = "$REC_BEFORE" ] || { say "not recorded for CI ($id): the commit or the work tree changed while the step ran"; return 0; }
+  [ "$(rec_excused_bytes)" = "$REC_EXCUSED0" ] || { say "not recorded for CI ($id): the step passed with an excused failure"; return 0; }
+  sha="${REC_BEFORE%% *}" tree="${REC_BEFORE##* }"
+  dir="$cache/gate-results/$sha"
+  # the factor as the tests read it: a number of at least 1, else 1 (vitest.config.ts, test-parallel.ts)
+  tf="$(awk -v n="${TALOS_TEST_TIME_FACTOR:-}" 'BEGIN { print (n ~ /^[0-9]+(\.[0-9]+)?$/ && n + 0 >= 1) ? n + 0 : 1 }')"
+  slots="${TALOS_HEAVY_SLOTS:-$(head -1 "$cache/heavy-slots" 2>/dev/null)}"
+  (
+    umask 077
+    mkdir -p "$dir" || exit 1
+    {
+      echo "talos-gate-result v1"
+      echo "step=$id"
+      echo "cmd=$cmd"
+      echo "sha=$sha"
+      echo "tree=$tree"
+      echo "gate=$GATE_ID"
+      echo "at=$(date +%s)"
+      echo "machine=$(hostname -s 2>/dev/null)"
+      echo "uid=$(id -u)"
+      echo "ci=true" # the step ran with CI=true (its env CI=true)
+      echo "time_factor=$tf"
+      echo "heavy_slots=${slots//[!0-9]/}"
+      echo "bun=$(bun --version 2>/dev/null | head -1 | tr -d ' \r' | grep . || echo none)"
+      for v in $(compgen -e | LC_ALL=C sort); do
+        case "$v" in TALOS_* | BUN_* | NODE_OPTIONS | TZ | CI_HOSTILE | CI_NIGHTLY) printf 'env.%s=%s\n' "$v" "$(printf '%s' "${!v}" | rec_sha)" ;; esac
+      done
+      echo "end"
+    } >"$dir/$id.tmp" && mv -f "$dir/$id.tmp" "$dir/$id"
+  ) && say "recorded for CI: $id at ${sha:0:7} (gate $GATE_ID)" || say "not recorded for CI ($id): $dir could not be written"
+}
+
 # swift_build <package folder>: swift build --build-tests there, in a process group of its own with a time limit (GATE_SWIFT_LIMIT
 # seconds, 900 x the time factor), under the machine's desktop mutex like the Mac app's Swift test script. Without
 # Xcode the Command Line Tools keep Testing.framework outside the default search path: the same flags as test.sh.
@@ -456,7 +520,7 @@ fi
 # The fast gate takes no lock when it has no browser specs: it runs a handful of test files beside whatever else runs, a few at a
 # time (GATE_FAST_JOBS). Its own browser specs (a changed spec file) run under the lock like the planned gate's: a web server
 # and up to two browsers beside CI's suites flake each other's timing, and take the preview port.
-if [ "$FAST" = 1 ] && [ "${#WEB[@]}${#WEBKIT[@]}" = 00 ]; then
+if [ "$FAST" = 1 ] && [ "${#WEB[@]}${#WEBKIT[@]}${#E2E[@]}" = 000 ]; then
   : # the suites run straight, below
 elif [ "$IN_LOCK" = 0 ] && [ "$VIT_ALL$BUN_ALL$E2E_ALL$OLD$WEB_ALL${#VIT[@]}${#BUN[@]}${#E2E[@]}${#VPROJ[@]}${#WEB[@]}${#WEBKIT[@]}" != 00000000000 ] && [ ! -f scripts/heavy-lock.sh ]; then
   say "no heavy-lock.sh here, suites run unlocked" # a copy of the gate alone (its own tests); the checkout always has it
@@ -488,7 +552,9 @@ if [ "$COREPACK" = 1 ]; then
   else say "the installer tests with a corepack pnpm first on PATH: skipped, they run on a Mac only"; fi
 fi
 if [ "$BUN_ALL" = 1 ]; then
-  tstep "tests (the whole bridge suite)" bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts'
+  rec_begin bun-all
+  tstep "tests (the whole bridge suite)" env CI=true bash -c 'cd apps/bridge && exec bun run scripts/test-parallel.ts'
+  rec_end bun-all 'bun run scripts/test-parallel.ts'
 elif [ "$FAST" = 1 ] && [ "${#BUN[@]}" -gt 0 ]; then
   # one process per file, as CI runs them, and fewer at a time than the whole suite takes: no lock keeps CI's runs apart
   FAST_JOBS="${GATE_FAST_JOBS:-2}"

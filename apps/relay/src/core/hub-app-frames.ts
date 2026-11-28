@@ -17,6 +17,7 @@ import type { AppConn, AppHandler, HubDeps } from './hub-types.ts'
 import { FrameRejected } from './hub-types.ts'
 import { isScheduleOwnerType, type ScheduleRouter } from './schedules.ts'
 import type { StoredFrame } from './store.ts'
+import type { TermRouter } from './term.ts'
 import { mkFrame } from './util.ts'
 
 /** What the app-frame switch uses of Hub, and nothing else. Hub builds it in its constructor. */
@@ -29,6 +30,7 @@ export type AppFramesCtx = {
   historyCtx: HistoryCtx
   schedules: ScheduleRouter
   ephemeral: EphemeralRouter
+  term: TermRouter
   appRouter: AppRouter
   sendApp(a: AppConn, frame: Record<string, unknown>): void
   appError(a: AppConn, code: string, message: string, ref?: unknown): void
@@ -64,6 +66,8 @@ export const appFrames = {
         return configFrames.onAgentRecover.call(this.configCtx, a, frame, raw)
       case 'undo.request':
         return configFrames.onUndoRequest.call(this.configCtx, a, frame, raw)
+      case 'plugin.add.request':
+        return configFrames.onPluginAddRequest.call(this.configCtx, a, frame, raw)
       case 'inbox.update': {
         // The inbox row itself is written by the hooks module's handler. That write runs first and the ack follows it, so an
         // app is never told "done" for a change that was not saved; a failed write leaves no seen id and the retry is a
@@ -151,6 +155,15 @@ export const appFrames = {
       case 'app.request':
         if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
         return this.appRouter.onRequest(a.id, frame, raw)
+      // The remote terminal's view (core/term.ts): an open, resume or close is signed by the device, and its credit is not; none is
+      // stored, queued or replayed, and what the Mac sends back goes to the one socket that opened the view
+      case 'term.open':
+      case 'term.resume':
+      case 'term.close':
+        if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
+        return this.term.onApp(a.id, frame.device_id, frame, raw)
+      case 'term.ack':
+        return this.term.onAck(a.id, frame, raw)
       case 'pong':
       case 'error':
       case 'hello':

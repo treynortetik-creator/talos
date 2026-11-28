@@ -129,6 +129,8 @@ export function createSocketRequests(c: SocketCtx) {
         throw new NotSentError('device_not_pinned', 'Waiting for your Mac to confirm this device.')
       const id = typeof frame.id === 'string' ? frame.id : newUlid()
       const signed = await signOwnerFrame({ v: 1, id, ts: signedTs(), ...frame, device_id: k.deviceId }, k.privateKey)
+      // The socket may have gone while this was being signed: sending into nothing would wait out the whole timeout.
+      if (!c.canSend()) throw new NotSentError('internal', "You're offline.")
       return await new Promise<number | undefined>((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id)
@@ -170,6 +172,8 @@ export function createSocketRequests(c: SocketCtx) {
       throw new TalosClientError('device_not_pinned', 'Waiting for your Mac to confirm this device.')
     const id = newUlid()
     const signed = await signOwnerFrame({ v: 1, id, ts: signedTs(), ...frame, device_id: k.deviceId }, k.privateKey)
+    // The socket may have gone while this was being signed: sending into nothing would wait out the whole timeout.
+    if (!c.canSend()) throw new NotSentError('mac_offline', "You're offline.")
     return await new Promise((resolve, reject) => {
       let done = false
       let off: () => void = () => {}

@@ -292,6 +292,9 @@ routes.post('/api/auth/device/verify', rate('auth'), csrf, sessionAny, async (c)
         return c.json({ error: 'device_proof_required', challenge }, 409)
       }
     }
+    // "Sign out everywhere" may have run while the awaits above were pending: it ends this session and burns this code, so a
+    // pairing it cancelled must not write a device now (nothing awaits between here and the end of the writes).
+    if (!core.sessionExists(sess.sessionId)) return c.json({ error: 'code_invalid' }, 410)
     core.upsertDevice({
       id: b.device.id,
       name: b.device.name,
@@ -374,6 +377,7 @@ routes.post('/api/auth/logout', rate('auth'), csrf, sessionAny, (c) => {
       c.get('services').db.prepare('delete from core_push_devices where device_id = ?').run(sess.deviceId)
       // The notification keys go with it: no more sealed text, and the buttons on notifications already delivered stop working.
       c.get('services').db.prepare('delete from core_native_grants where device_id = ?').run(sess.deviceId)
+      c.get('services').db.prepare('delete from core_push_last where device_id = ?').run(sess.deviceId)
       c.get('services').db.prepare('delete from core_push_subs where device_id = ?').run(sess.deviceId)
     }
   }
@@ -383,13 +387,22 @@ routes.post('/api/auth/logout', rate('auth'), csrf, sessionAny, (c) => {
 })
 
 // Pinned sessions only: a session the Mac refused must not be able to sign the owner out everywhere (review #28).
-routes.post('/api/auth/logout-all', rate('auth'), csrf, session, (c) => {
-  state(c).core.deleteAllSessions()
+routes.post('/api/auth/logout-all', rate('auth'), csrf, session, async (c) => {
+  const { core, services } = state(c)
+  // A pairing in progress ends with the sessions, in the same transaction: its code is burned, its half-registered passkey is
+  // dropped and a never-paired device still waiting for the Mac's y is revoked.
+  const cancelled = core.signOutEverywhere()
   c.get('services').db.prepare('delete from core_push_devices').run()
   c.get('services').db.prepare('delete from core_native_grants').run()
+  c.get('services').db.prepare('delete from core_push_last').run()
   // Browser and Home Screen push subscriptions are not tied to a session, so they would keep delivering after this.
   c.get('services').db.prepare('delete from core_push_subs').run()
   c.get('services').bus.revalidateApps()
+  for (const id of cancelled)
+    await services.bus.toBridge(frame('device.revoked', { device_id: id }, services.clock.now()), {
+      durable: true,
+      ttl_s: 7 * 24 * 3600,
+    })
   c.header('Set-Cookie', clearedCookie())
   return c.body(null, 204)
 })

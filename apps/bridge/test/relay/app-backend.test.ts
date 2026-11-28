@@ -4,7 +4,9 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, lstatSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { RelayRedeployRequest } from '@talos-app/protocol'
-import { cli, ENV_ID, PROJECT_ID, RELAY_SERVICE_ID, world } from './helpers.ts'
+import { cli, ENV_ID, PROJECT_ID, RELAY_SERVICE_ID, useWorldCleanup, world } from './helpers.ts'
+
+useWorldCleanup()
 
 const appFile = {
   v: 1,

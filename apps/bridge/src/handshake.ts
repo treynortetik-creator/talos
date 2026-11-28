@@ -23,6 +23,7 @@ import {
   newUlid,
   ORIGINAL_TS_FEATURE,
   PEER_FEATURE,
+  PLUGIN_ADD_FEATURE,
   PROBLEMS_FEATURE,
   PROBLEMS_INSTALL_FEATURE,
   RUN_FEATURE,
@@ -35,6 +36,7 @@ import {
   SPEAK_FEATURE,
   SUBTHREADS_FEATURE,
   signChallenge,
+  TERM_VIEW_FEATURE,
   THEMES_V2_FEATURE,
   THREAD_SESSIONS_FEATURE,
   THREADS_FEATURE,
@@ -80,6 +82,10 @@ export function bridgeFeatures(svc: {
   peers?: unknown
   /** Run in the terminal pane (src/pane-run.ts): only while the Mac app's run channel answers. */
   paneRun?: { available: boolean } | undefined
+  /** The read-only terminal view (src/term): the live main bridge with tmux. */
+  term?: { available: boolean } | undefined
+  /** "Add plugin to agent" (src/plugins): present on a live main bridge, which is the one that answers `plugin.add.request`. */
+  agentPlugins?: unknown
   /** Sub-threads: advertised only while the Mac app reports it checks a sub-thread's folder (workers.json). */
   config?: { subthreadsSupported?(): boolean }
 }): string[] {
@@ -117,6 +123,8 @@ export function bridgeFeatures(svc: {
     ALWAYS_ALLOW_FEATURE,
     ...(svc.problems ? [PROBLEMS_INSTALL_FEATURE] : []),
     ...(svc.peers ? [PEER_FEATURE] : []),
+    // the form in Settings > Plugins is shown only to a bridge that lists it (an older one would ignore the frame); before attest/1
+    ...(svc.agentPlugins ? [PLUGIN_ADD_FEATURE] : []),
     // the config takes every stock theme id (iris, harbor): always on, last, where an older page goes without it
     THEMES_V2_FEATURE,
     // reads the newer Always allow kinds (generic, schedule, undo, config); before attest/1, which a test pins last
@@ -125,6 +133,8 @@ export function bridgeFeatures(svc: {
     ATTEST_FEATURE,
     // last: an older page goes without it. Only while the Mac app's run channel is connected
     ...(svc.paneRun?.available ? [RUN_PANE_FEATURE] : []),
+    // after everything else: a page that reads only the first 20 goes without it, as it goes without the view
+    ...(svc.term?.available ? [TERM_VIEW_FEATURE] : []),
   ]
 }
 

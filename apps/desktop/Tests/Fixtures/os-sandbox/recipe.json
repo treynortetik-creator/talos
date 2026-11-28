@@ -1,5 +1,5 @@
 {
-  "about": "The tree both languages build under a case-mixed root, to compare the OS sandbox settings and the refusals byte for byte (apps/bridge/test/os-sandbox-parity.test.ts and OsSandboxParityTests.swift). A path with `link` is a symbolic link to that text (`replace`: over what is there); one with `absolute` is made at that path (and removed after, its folder too when `removeDir`). Each case is the tree plus its own entries (a later entry for the same path replaces it) and, when it has `launchArgs`, Main's launch arguments; its golden line is the refusal of a whole start (the home's preflight first, then the launch arguments, then the folder's checks), or null. The settings are built with the user home `UserHome`, the kit release `Kit` and the agent folder `Agent`. `{ROOT}` in a file's text is the case's root. `trustedBridge` is what Talos recorded about its bridge, relative to the root (the bun, and `<clone>/apps/bridge`); a case may replace it, or set it to null (no record). It is the recorded value that both the settings (the clone is denied) and the `talos-app` server check use.",
+  "about": "The tree both languages build under a case-mixed root, to compare the OS sandbox settings and the refusals byte for byte (apps/bridge/test/os-sandbox-parity.test.ts and OsSandboxParityTests.swift). A path with `link` is a symbolic link to that text (`replace`: over what is there); one with `absolute` is made at that path (and removed after, its folder too when `removeDir`). Each case is the tree plus its own entries (a later entry for the same path replaces it) and, when it has `launchArgs`, Main's launch arguments; its golden line is the refusal of a whole start (the home's preflight first, then the launch arguments, then the folder's checks), or null. The settings are built with the user home `UserHome`, the kit release `Kit` and the agent folder `Agent`. `{ROOT}` in a file's text is the case's root. `trustedBridge` is what Talos recorded about its bridge, relative to the root (the bun, and `<clone>/apps/bridge`); a case may replace it, or set it to null (no record). It is the recorded value that both the settings (the clone is denied) and the `talos-app` server check use. A case may name its `folder` (relative to the root; default `Agent`) and set `loadsProject` to false (a thread outside the agent folder, which loads user settings only). A record may carry `bunInTemp` (its bun is in a shared temp folder: the record and its denies stay, a `talos-app` server entry is refused).",
   "gitConfigCount": 2,
   "ownerExcludes": ["*.swp", ".direnv/"],
   "entries": [
@@ -33,7 +33,7 @@
     },
     {
       "path": "Agent/.claude/settings.json",
-      "text": "{\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"hooks/stop.sh\"}]}]}}"
+      "text": "{\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
     },
     {
       "path": "Agent/.mcp.json",
@@ -167,7 +167,7 @@
       "entries": [
         {
           "path": "Agent/.claude/settings.json",
-          "text": "{\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}, {\"type\": \"command\", \"command\": \"bash scripts/x.sh\"}]}]}}"
+          "text": "{\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}, {\"type\": \"command\", \"command\": \"bash \\\"$CLAUDE_PROJECT_DIR\\\"/scripts/x.sh\"}]}]}}"
         }
       ]
     },
@@ -545,6 +545,1094 @@
         {
           "path": "Agent/.claude/settings.json",
           "text": "{\"sandbox\":{\"enabled\":true,\"failIfUnavailable\":true,\"allowUnsandboxedCommands\":true},\"permissions\":{\"deny\":[\"Read(/x/**)\"]},\"enableAllProjectMcpServers\":false,\"disableClaudeAiConnectors\":true,\"env\":{\"XDG_CACHE_HOME\":\"/x\"},\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/turn-start.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after bash in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash evil; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after a dot in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\". evil; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after source in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"source evil; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after node in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"node evil; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a ~ word with no slash in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"~evil; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "the folder itself as a word in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"true \\\"$CLAUDE_PROJECT_DIR\\\"; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook followed by true is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh; true\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a variable file in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$TMPDIR/evil.sh; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a variable in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$X; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a command substitution in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$(printf /tmp/evilzz); \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a file in tmp that does not exist yet in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/evilzz; \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a longer variable name is not the project folder",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$CLAUDE_PROJECT_DIRS/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a nested shell around the kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"sh -c \\\"$CLAUDE_PROJECT_DIR/hooks/stop.sh\\\"\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "eval around the kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"eval \\\"$CLAUDE_PROJECT_DIR/hooks/stop.sh\\\"\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a quote the check could misread in front of a kit hook is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"true $'''\\\"'\\\" ; $CLAUDE_PROJECT_DIR/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "the plain kit hook lines are allowed",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"},{\"type\":\"command\",\"command\":\"\\\"${CLAUDE_PROJECT_DIR}\\\"/hooks/stop.sh\"},{\"type\":\"command\",\"command\":\"python3 \\\"$CLAUDE_PROJECT_DIR/hooks/stop.sh\\\"\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after bash in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after sh in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"sh\",\"args\":[\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after node in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"node\",\"args\":[\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after bun run in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bun\",\"args\":[\"run\",\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a bare word after python3 -m in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"python3\",\"args\":[\"-m\",\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a ~ word with no slash in a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\",\"~evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "the folder itself as an argument of a kit server is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\",\"{ROOT}/Agent\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with flags and arguments after its file is allowed",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"-x\",\"{ROOT}/Kit/hooks/stop.sh\",\"serve\",\"3\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook through another link to the kit is refused",
+      "entries": [
+        {
+          "path": "Agent/k2",
+          "link": "../Kit/hooks"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/k2/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a relative kit hook through another link to the kit is refused",
+      "entries": [
+        {
+          "path": "Agent/k2",
+          "link": "../Kit/hooks"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"k2/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook through a link to one kit file is refused",
+      "entries": [
+        {
+          "path": "Agent/s.sh",
+          "link": "../Kit/hooks/stop.sh"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/s.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a relative kit hook with a dot-dot is refused",
+      "entries": [
+        {
+          "path": "Agent/evil/x",
+          "text": "x"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"evil/../hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a relative kit hook run by bash with a dot-dot is refused",
+      "entries": [
+        {
+          "path": "Agent/evil/x",
+          "text": "x"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash evil/../hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook with a dot-dot is refused",
+      "entries": [
+        {
+          "path": "Agent/evil/x",
+          "text": "x"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/evil/../hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a relative kit hook line is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a relative kit hook run by bash is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash scripts/x.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook run by bun is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bun \\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through another link to the kit is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Agent/k2/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with a dot-dot is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"evil/../hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through env -i is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"env\",\"args\":[\"-i\",\"bash\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through env -S is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"env\",\"args\":[\"-S\",\"bash\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through nice is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"nice\",\"args\":[\"bash\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through timeout is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"timeout\",\"args\":[\"9\",\"bash\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through setsid is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"setsid\",\"args\":[\"bash\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through busybox is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"busybox\",\"args\":[\"sh\",\"evil\",\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with bash --rcfile is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"--rcfile\",\"{ROOT}/Kit/hooks/stop.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with node -r is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"node\",\"args\":[\"-r\",\"{ROOT}/Kit/scripts/x.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with node --import is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"node\",\"args\":[\"--import\",\"{ROOT}/Kit/scripts/x.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with bun --preload is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bun\",\"args\":[\"--preload\",\"{ROOT}/Kit/scripts/x.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with perl -I is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"perl\",\"args\":[\"-I\",\"{ROOT}/Kit/scripts\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with ruby -r is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"ruby\",\"args\":[\"-r\",\"{ROOT}/Kit/scripts/x.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with python3 -X is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"python3\",\"args\":[\"-X\",\"{ROOT}/Kit/scripts/x.sh\",\"evil\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with python3 -mevil is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"python3\",\"args\":[\"-mevil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with python3 -c is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"python3\",\"args\":[\"-c\",\"import evil # {ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with node -e is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"node\",\"args\":[\"-e\",\"require('evil')||'{ROOT}/Kit/scripts/x.sh'\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with bash -c and a split word is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"-c\",\"ba''sh evil; {ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with bash -c and a backslash is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"-c\",\"\\\\bash evil; {ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through npx is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"npx\",\"args\":[\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through bunx is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bunx\",\"args\":[\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server through uv run is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"uv\",\"args\":[\"run\",\"evil\",\"{ROOT}/Kit/scripts/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with NODE_OPTIONS in its env is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"env\":{\"NODE_OPTIONS\":\"--require ./evil.js\"}}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with BASH_ENV in its env is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"env\":{\"BASH_ENV\":\"./evil\"}}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with a null env is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"env\":null}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with a list as its env is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"env\":[\"BASH_ENV=x\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with a cwd is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"cwd\":\"/tmp\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server with an empty env is allowed",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"],\"env\":{}}}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env BASH_ENV is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"BASH_ENV\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env ENV is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"ENV\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env NODE_OPTIONS is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"NODE_OPTIONS\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env PATH is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"PATH\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env PYTHONPATH is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"PYTHONPATH\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env LD_PRELOAD is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"LD_PRELOAD\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env DYLD_INSERT_LIBRARIES is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"DYLD_INSERT_LIBRARIES\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env BUN_OPTIONS is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"BUN_OPTIONS\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env PERL5OPT is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"PERL5OPT\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env RUBYOPT is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"RUBYOPT\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env BASH_FUNC_cat%% is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"BASH_FUNC_cat%%\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env SHELLOPTS is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"SHELLOPTS\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env PS4 is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"PS4\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env BASHOPTS is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"BASHOPTS\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env HOME is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"HOME\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env ZDOTDIR is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"ZDOTDIR\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env XDG_CONFIG_HOME is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"XDG_CONFIG_HOME\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env GIT_CONFIG_GLOBAL is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"GIT_CONFIG_GLOBAL\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env GIT_CONFIG_COUNT is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"GIT_CONFIG_COUNT\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env NODE_PATH is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"NODE_PATH\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env PERL5LIB is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"PERL5LIB\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env RUBYLIB is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"RUBYLIB\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env CLAUDE_PROJECT_DIR is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"CLAUDE_PROJECT_DIR\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env TMPDIR is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"TMPDIR\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env FOO is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"FOO\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env GIT_CONFIG_KEY_0 is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"GIT_CONFIG_KEY_0\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env GIT_CONFIG_VALUE_0 is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"GIT_CONFIG_VALUE_0\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env RIPGREP_CONFIG_PATH is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"RIPGREP_CONFIG_PATH\":\"./evil\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env the lead writes is allowed",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"ENABLE_CLAUDEAI_MCP_SERVERS\":\"false\",\"npm_config_cache\":\"/x/npm\",\"npm_config_store_dir\":\"/x/pnpm-store\",\"BUN_INSTALL_CACHE_DIR\":\"/x/bun\",\"XDG_CACHE_HOME\":\"/x/xdg\",\"XDG_STATE_HOME\":\"/x/state\",\"PNPM_HOME\":\"/x/pnpm\",\"npm_config_devdir\":\"/x/node-gyp\",\"PLAYWRIGHT_BROWSERS_PATH\":\"/x/playwright\"},\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit in a writable place is refused, as a hook",
+      "writableRoots": ["."],
+      "entries": []
+    },
+    {
+      "name": "a kit in a writable place is refused, as a server",
+      "writableRoots": ["."],
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{}"
+        },
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/stop.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook that is a link to a file in tmp is refused",
+      "entries": [
+        {
+          "path": "/tmp/talos-osbx-r91-out.sh",
+          "text": "#!/bin/sh\n",
+          "absolute": true
+        },
+        {
+          "path": "Kit/hooks/out.sh",
+          "link": "/tmp/talos-osbx-r91-out.sh"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/out.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook that is a dangling link is refused",
+      "entries": [
+        {
+          "path": "Kit/hooks/out.sh",
+          "link": "nowhere.sh"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/out.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook that is a file that does not exist is allowed",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/nope.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook with a doubled slash is the same path and is allowed",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"//hooks/stop.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook below a dangling folder link is refused",
+      "entries": [
+        {
+          "path": "Kit/hooks/sub",
+          "link": "nowhere"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/sub/x.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit hook two folders below a dangling link is refused",
+      "entries": [
+        {
+          "path": "Kit/hooks/a",
+          "link": "nowhere"
+        },
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/a/b/x.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server below a dangling folder link is refused",
+      "entries": [
+        {
+          "path": "Kit/hooks/sub",
+          "link": "nowhere"
+        },
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"bash\",\"args\":[\"{ROOT}/Kit/hooks/sub/x.sh\"]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a kit server run directly below a dangling folder link is refused",
+      "entries": [
+        {
+          "path": "Kit/hooks/sub",
+          "link": "nowhere"
+        },
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"k\":{\"command\":\"{ROOT}/Kit/hooks/sub/x.sh\",\"args\":[]}}}"
+        }
+      ]
+    },
+    {
+      "name": "a project settings env with no hook and no server is refused",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"env\":{\"FOO\":\"1\",\"PATH\":\"/x\"}}"
+        }
+      ]
+    },
+    {
+      "name": "a folder that holds the Talos code folder is refused",
+      "entries": [],
+      "trustedBridge": {
+        "bun": "Bun/bin/bun",
+        "bridgeDir": "Agent/clone/apps/bridge"
+      }
+    },
+    {
+      "name": "a folder inside the Talos code folder is refused",
+      "folder": "Clone/work",
+      "entries": [
+        {
+          "path": "Clone/work/notes.txt",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "name": "a folder that holds the pinned bun is refused",
+      "folder": "Bun",
+      "entries": [
+        {
+          "path": "Bun/bin/bun",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "name": "a thread outside the agent folder that holds the Talos code folder is refused",
+      "loadsProject": false,
+      "entries": [],
+      "trustedBridge": {
+        "bun": "Bun/bin/bun",
+        "bridgeDir": "Agent/clone/apps/bridge"
+      }
+    },
+    {
+      "name": "a thread outside the agent folder, beside the Talos code folder, starts",
+      "loadsProject": false,
+      "folder": "Thread",
+      "entries": [
+        {
+          "path": "Thread/notes.txt",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "name": "a talos-app server with the bun cache switch set to 0 is allowed",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"talos-app\":{\"command\":\"{ROOT}/Bun/bin/bun\",\"args\":[\"--no-env-file\",\"--config={ROOT}/Clone/apps/bridge/bunfig.toml\",\"{ROOT}/Clone/apps/bridge/src/server.ts\"],\"env\":{\"TALOS_APP_HOME\":\"{ROOT}/TalosHome\",\"TALOS_AGENT_DIR\":\"{ROOT}/Agent\",\"BUN_RUNTIME_TRANSPILER_CACHE_PATH\":\"0\"}}}}"
+        }
+      ]
+    },
+    {
+      "name": "a talos-app server with the bun cache switch set to 1 is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"talos-app\":{\"command\":\"{ROOT}/Bun/bin/bun\",\"args\":[\"--no-env-file\",\"--config={ROOT}/Clone/apps/bridge/bunfig.toml\",\"{ROOT}/Clone/apps/bridge/src/server.ts\"],\"env\":{\"TALOS_APP_HOME\":\"{ROOT}/TalosHome\",\"TALOS_AGENT_DIR\":\"{ROOT}/Agent\",\"BUN_RUNTIME_TRANSPILER_CACHE_PATH\":\"1\"}}}}"
+        }
+      ]
+    },
+    {
+      "name": "a talos-app server whose recorded bun is in a temp folder is refused",
+      "entries": [
+        {
+          "path": "Agent/.mcp.json",
+          "text": "{\"mcpServers\":{\"talos-app\":{\"command\":\"{ROOT}/Bun/bin/bun\",\"args\":[\"--no-env-file\",\"--config={ROOT}/Clone/apps/bridge/bunfig.toml\",\"{ROOT}/Clone/apps/bridge/src/server.ts\"],\"env\":{\"TALOS_APP_HOME\":\"{ROOT}/TalosHome\",\"TALOS_AGENT_DIR\":\"{ROOT}/Agent\",\"BUN_RUNTIME_TRANSPILER_CACHE_PATH\":\"0\"}}}}"
+        }
+      ],
+      "trustedBridge": {
+        "bun": "Bun/bin/bun",
+        "bridgeDir": "Clone/apps/bridge",
+        "bunInTemp": true
+      }
+    },
+    {
+      "name": "a folder with no talos-app server starts when the recorded bun is in a temp folder",
+      "entries": [],
+      "trustedBridge": {
+        "bun": "Bun/bin/bun",
+        "bridgeDir": "Clone/apps/bridge",
+        "bunInTemp": true
+      }
+    },
+    {
+      "name": "the second command hook of an event, in another matcher group, is named by its number",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"$CLAUDE_PROJECT_DIR\\\"/hooks/stop.sh\"}]},{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"./tools/guard.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a command hook after a prompt hook is numbered with the prompt hook counted",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"prompt\",\"prompt\":\"check it\"},{\"type\":\"command\",\"command\":\"./tools/guard.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "name": "a project apiKeyHelper is not the kit's",
+      "entries": [
+        {
+          "path": "Agent/.claude/settings.json",
+          "text": "{\"apiKeyHelper\":\"./tools/key.sh\"}"
         }
       ]
     }

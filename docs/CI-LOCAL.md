@@ -86,7 +86,7 @@ waiting `--full` run never takes over a non-full run's result for the same commi
 pull requests skip. The job-level gates in `job_desktop` and `job_mobile` are unchanged and still apply to a job that runs.
 
 **The install and kit tests inside `check`.** `scripts/root-install*.test.ts` (one suite in four files, so vitest runs them side
-by side: 155 s as one file, 56 s split) and `scripts/kit-tests.test.ts` (every `kit/scripts/test-*.sh`) are most of the vitest
+by side: 155 s as one file, 56 s split) and `scripts/kit-tests.test.ts` (every `kit/scripts/test-*.sh`, and `kit/scripts/self-test.sh` itself, a required member run with its suites left out: a kit change cannot pass the gate or CI while it fails) are most of the vitest
 step. `kit/scripts/test-default-agent.sh` runs `self-test.sh` on a rendered agent folder, and `self-test.sh` runs 17 of those same
 suites again; `kit-tests.test.ts` sets `TALOS_SELF_TEST_SUITES=skip` so they run once (that script: 216 s before, 13 s after),
 except on a `--full` run, which sets `TALOS_KIT_FULL_SELF_TEST=1` and keeps the second run inside the rendered folder. Beyond
@@ -100,6 +100,66 @@ check job still posts its own result, and its log says they were skipped. Everyt
 The earlier audit (`docs/CI-AUDIT-2026-10-31.md`) declined to skip beyond desktop and mobile because a skip is the one change that
 can turn a real failure green. This is the owner's call to take it; the red-base rule, the exact-words rule and the full-run
 trigger are what keep it from doing that. Tests: `scripts/ci-affected.test.ts`.
+
+### Reusing the gate's result
+
+A commit that lands through `gate.sh --push` has already had its tests run by the gate, on exactly that tree. When that run was the
+whole bridge suite (any change under `apps/bridge/` plans it: `bun-all`), the CI run of the same sha on the same Mac does not run it
+again: `step_bun_schedules` and `step_bun_rest` are one suite split in two (`--only` and `--skip` of `test/schedules/`), and the gate
+ran all of it. What the gate runs as a touched set (`vitest related`, the fast gate's few files, the planned e2e and browser specs)
+is not a CI job's suite, so it is never reused; neither are `typecheck` and `lint` (together 20 s of a 900 s `check`, not worth a
+rule), `contract`, Chronos, the Vitest suite and `browser`. `gate.sh --push` never runs the whole Vitest suite (only a hand-run
+`gate.sh --full` does), so there is no `vitest-all` record to take.
+
+**The record.** `gate.sh` writes `<cache>/gate-results/<sha>/bun-all` (key=value lines, `end` last) when the step passed with exit 0,
+no excuse (`GATE_EXCUSE_OUT` did not grow), the work tree exactly the commit before and after it (no change, no file git does not
+know: `git status --porcelain --untracked-files=all` empty) and the same HEAD. It holds the sha, the tree, the step and its exact
+command, the gate's id (`<date>-<pid>`, printed as `recorded for CI: bun-all at <sha7> (gate <id>)`), the time, the machine
+(`hostname -s`), the user, the time factor as the tests read it, the heavy slots, the bun version and one line per knob that changes
+what a test does (`TALOS_*`, `BUN_*`, `NODE_OPTIONS`, `TZ`, `CI_HOSTILE`, `CI_NIGHTLY`) as `env.NAME=<sha256 of the value>`, never the
+value. `ci-local.sh` removes records older than three days (`find -mtime +2`) on each run. Before its step, the gate removes the record of the same sha and step, so a pass never outlives a later red, excuse or untidy tree of the same commit; and the step runs with `CI=true`, as in CI (under it bun refuses a committed `.only` and a missing snapshot, which a plain local run passes and no lint catches).
+
+**The rule, in `reuse_gate_step` (`scripts/ci-local/jobs-check.sh`).** A step is answered by the record only when every one holds;
+any doubt runs the step as ever, and the log says which did not hold (`not reusing the gate's result for bun-all (step_bun_rest): ...`):
+
+- the run may reuse at all: `CI_REUSE` unset or 1 (any other value is off), no `<cache>/reuse-off` file, not hostile, not the nightly, not `--full` (every dispatch
+  and the nightly are `--full`), a `local-ci` run (not `ci-part/` or `report-ci/`), and the first run of this commit on this machine:
+  a log of an earlier run in `logs/` or `logs/prev/` means a rerun, which tests everything again (a red CI run is never answered by the
+  gate's green: that would be a retry). It is judged from this machine's logs only: a red attempt that ran elsewhere, with these logs
+  already swept, is not seen;
+- the record is the gate's own file: a regular file, not a link, owned by this user, not writable by group or others, nor its folder
+  nor `gate-results/`; the record and its folder changed (ctime, which no one can backdate) no later than the run's start, so the
+  commit's own install and build scripts, which run after it, cannot write one; its first line is `talos-gate-result v1`, its last is
+  `end`, and every key is there exactly once;
+- the same step, the same command (a gate that changes its command stops being reused until the CI side is changed with it), the same
+  commit (and this checkout's HEAD is it) and the same tree, which is read from git here, never from the record;
+- recorded on this machine, by this user, not more than `CI_REUSE_MAX_AGE` (86400 s) ago, and not in the future;
+- a time factor (`TALOS_TEST_TIME_FACTOR`) no higher than this run's: the gate's tests had budgets as tight as this run's or tighter,
+  so its pass proves at least what this run would. A gate at a higher factor gave every test a longer budget and proves less, so it is
+  never reused. Both pick the factor by one rule when none is set (`scripts/talos-machine.sh`): max(3 on 4 cores or fewer else 1,
+  clamp(ceil(load / cores), 1, 4)), the load being the larger of the 1- and 5-minute averages, read once at the start of the gate or
+  the CI job (the job prints `time factor N` and why). Equal-only would almost never reuse once the factor follows the load. Known limit: a test that waits `t(ms)` and asserts that nothing happened has a longer window at a higher factor; such windows scale with the machine's speed, so a shorter one at a lower factor is taken as the same strength. Also the same heavy slots, the same bun, and the same set of knobs with the same values: both
+  ways, a knob one side has and the other lacks is a difference. Not counted: this run's and the gate's own bookkeeping
+  (`REUSE_ENV_IGNORED`: the slot, the held locks, the junit folder, the tmux prefix, `TALOS_MACHINE`, bun's install paths);
+- the same `CI`: the gate runs the step as `env CI=true`, as the runner does, and the record says `ci=true`. Under `CI` bun refuses a
+  committed `.only` and a missing snapshot (a plain local run passes both, and biome's `noFocusedTests` is not an error here), and the
+  golden rewrite is refused. A run whose `CI` is not `true` (a hand run) does not reuse.
+
+Not compared, because the tests are meant to be hermetic against them: the rest of the environment (`PATH`, `TMPDIR`, the Claude
+session variables of a builder's shell) and the versions of the tools but bun's.
+
+**What shows it.** Each reused step prints `ci-local: reused the gate's result for bun-all (gate <id>, <time>) in place of
+step_bun_rest: ...` into the job's log; the run's output prints `~ check: reused the gate's result for bun-all (gate ..., ...) in place of
+...`; the job's status reads `passed on <machine> in <n>s, reused the gate's bun-all (rest+schedules; gate <id>), ...` (right after the
+seconds, so the 140-character cut never takes it); `logs/timings.tsv`
+has a thirteenth column, `reused=<job>:<gate step>[+...]` or `reused=-`; the job's per-test file says `# parts elsewhere:
+bridge-shard-1:gate bridge-shard-2:gate` (a shard another machine ran keeps its own entry), so the check shadow compare reads the
+bridge tests as not run here. A green run with a
+reused step has never tested that step itself: read it with that in mind.
+
+**Off.** `CI_REUSE=0` (or anything but 1) in the environment, or a `reuse-off` file in the cache (`touch ~/.cache/talos-ci/reuse-off`), runs everything as
+before; both are read at each step, so no restart is needed. Tests: `scripts/gate-push.test.ts` (the record) and
+`scripts/ci-local-jobs-gates.test.ts` (the rule, and a real `check` job).
 
 ## Inside a run
 
@@ -276,7 +336,13 @@ One gate for every machine and every builder. It **refuses** on any failure, and
 PATH, no `node_modules`, a `pnpm-lock.yaml` newer than `node_modules`, or no bun when bridge tests are needed): a gate that
 cannot run is not a pass. In order, stopping at the first that fails:
 
-1. **typecheck**: `pnpm typecheck`, the whole workspace.
+1. **typecheck**: `pnpm typecheck`, the whole workspace. Every package's `typecheck` (and `typecheck:mod`) goes through
+   `scripts/typecheck.mjs`, which runs **tsgo** (`@typescript/native-preview`, pinned exactly in the root `package.json`) by default and
+   **tsc** when `TALOS_TYPECHECK=tsc` (the fallback: set it to get today's compiler on any machine). The two print the same diagnostics;
+   tsc exits 2 on type errors and tsgo 1, and the wrapper exits 1 for either, so nothing may read the number. The nightly
+   (`CI_NIGHTLY=1`, `scripts/ci-local/jobs-check.sh`) runs one more pass with `TALOS_TYPECHECK=tsc` after the suites and the audit (a red one turns the nightly red and
+   never hides them), so a checker difference shows within a day. The compiler is the repo's own, `node_modules/.bin/<name>`, never one
+   found on PATH; the e2e package is covered too (tsgo and tsc gave identical output on it).
 2. **lint**: `biome check .`, the whole tree.
 3. **personal**: `scripts/check-no-personal.sh` on the working tree, with the private list (`scripts/personal-denylist.txt`) from
    this checkout or the main checkout of the repository. When there is none it says so, and only the generic rules run.
@@ -293,6 +359,10 @@ cannot run is not a pass. In order, stopping at the first that fails:
    A changed e2e spec (`e2e/tests/`) runs itself, and a change to what every spec runs on (the e2e harness, its config or
    package) runs them all: Playwright, one worker, Chromium. The gate refuses when Playwright or its Chromium isn't
    installed. A docs-only change runs no suite.
+   An e2e spec that drives one source folder says so on a line of its own, `// gate-reads: <pattern>...` (the guards' line: case
+   patterns, `*` matches `/`), and runs when a changed or deleted file matches it, in the e2e list only
+   (`schedules.spec.ts` reads `apps/bridge/src/schedules/*`). Name a narrow folder or file, never `apps/bridge/src/*`: a wide mark runs
+   the e2e specs on almost every push. The fast gate keeps these specs, under the heavy lock, and no other e2e spec.
 
 `--full` runs every Vitest project, the whole bridge suite and every e2e spec instead of the touched ones. `--base <ref>` measures the change
 against another ref. `--plan` prints the steps and the suites' files and runs nothing. `scripts/gate.test.ts` checks the
@@ -330,7 +400,7 @@ rule and the keep-out list are for the code a test checks, not the test, so a `s
 longer forces the full gate. A test helper that is not a test file (`scripts/root-install-harness.ts`,
 `apps/bridge/test/helpers.ts`, a fixture) still counts as code; the protected paths and the 60-file limit apply as before. Every
 fall back to the full gate adds one line to `~/.cache/talos-ci/logs/fast-fallbacks.tsv` (`TALOS_CI_CACHE`): UTC time, machine,
-sha, the printed reason and the changed files that tripped it, so the keep-out list can be cut by evidence. It runs no e2e or old-client step, and of the browser specs only the **changed spec files** (`apps/web/test/**/*.spec.ts`, still there; never a feature's folder of specs or the smoke set, which CI runs), each on every Playwright project that takes it: desktop, iphone and pixel; `iphone-se` as well for `cards/permission-sheet.spec.ts` (`--plan` prints them on stderr as `web projects: <spec> -> <projects>`). A change to more than `WEB_SPECS_MAX` (40) specs is the full gate; a deleted spec runs nothing. A fast gate with such a spec **takes the heavy lock** (the light checks run first, outside it; the suites it chose run inside it) and refuses when Chromium or WebKit is not installed; one with none **takes no heavy lock**: the bridge files run through `test-parallel.ts
+sha, the printed reason and the changed files that tripped it, so the keep-out list can be cut by evidence. It runs no old-client step, no e2e spec but those whose `// gate-reads:` line matches a changed file (they take the heavy lock), and of the browser specs only the **changed spec files** (`apps/web/test/**/*.spec.ts`, still there; never a feature's folder of specs or the smoke set, which CI runs), each on every Playwright project that takes it: desktop, iphone and pixel; `iphone-se` as well for `cards/permission-sheet.spec.ts` (`--plan` prints them on stderr as `web projects: <spec> -> <projects>`). A change to more than `WEB_SPECS_MAX` (40) specs is the full gate; a deleted spec runs nothing. A fast gate with such a spec **takes the heavy lock** (the light checks run first, outside it; the suites it chose run inside it) and refuses when Chromium or WebKit is not installed; one with none **takes no heavy lock**: the bridge files run through `test-parallel.ts
 --files`, 2 at a time (`GATE_FAST_JOBS`). Why direct only: `src/bridge.ts` reaches 317 of the 321 bridge source files, and 283
 of the 371 bridge test files reach `bridge.ts` (through `test/helpers.ts` and four harnesses). Following imports further picks
 about 283 test files for almost any source change (measured 2026-11-14), which is most of the suite.
@@ -600,8 +670,9 @@ _gate_ is a hold of one of the gate slots (K+1..N). Nobody is stopped: a class t
   the run, and the older code's gate that queued later waits for the run, as it always did (otherwise each would wait for the other
   until a cap). `heavy-lock.sh status` marks a starved run "starved: goes next". The tests inject the clock
   (`CI_TURN_NOW`, seconds).
-- **What is never held up.** A run already admitted goes on whatever waits: its own holds of CI's slots, its jobs, its cleanup
-  (stopping it for a waiting gate would throw away its verdict, and holding its inner holds back would deadlock). Nested calls
+- **What is never held up.** A run already admitted goes on whatever waits: a hold it has begun, its steps, its cleanup
+  (stopping it for a waiting gate would throw away its verdict, and holding its inner holds back would deadlock). The one thing it may do is
+  **yield between holds** (next bullet): it takes no new hold while a gate waits, never cutting one short. Nested calls
   (`TALOS_CI_NESTED`, a run inside a holder) pass straight through, as they do for the locks.
 - **Bounded, and said.** A waiter's line names who it waits for (the runs or gates that hold the machine, with pid, what and
   since when, or the waiters that go first) and is said again every five minutes with the time so far. A gate's wait counts in its
@@ -626,6 +697,27 @@ _gate_ is a hold of one of the gate slots (K+1..N). Nobody is stopped: a class t
   waits for check, desktop for check's quiet group): in a run with other work going the run holds as before, so this helps most with check
   or browser alone waiting for Titan, and little with the 120 s look at check's shard parts. A gate that went while a run was idle, and still
   holds when the part is taken back, delays that take-back by its remaining hold: never an overlap, short of `CI_TURN_MAX_S`.
+- **A run yields to a waiting gate between holds.** A CI run holds its run slot from its start to its end (35 to 60 minutes), so a gate used to
+  wait for the whole run, though the run takes the heavy lock only in pieces. Now a CI job that is about to ask for a slot of the suites mutex
+  or for the desktop mutex (`ci_mutex`, kind ci, holding nothing: `TALOS_HELD_LOCKS` empty) first asks `ci_yield` (turn.sh). When a gate waits
+  in `locks.queue/suites`, or holds a gate slot, the job takes no slot (an exclusive group's partly taken slots go back), marks itself idle as a fold
+  wait does (the same `results/folding-<job>`, with the run's first-yield time and caps in it) and asks again each poll; its ticket keeps its
+  place in the queue, and its lock timeout does not run meanwhile. A job that waits for another job (`wait_for_job`) and the second job
+  of a group that has not begun (desktop then mobile) are marked idle the same way, so the run is idle, and the gate may go, as soon as
+  every job that has not ended is between holds or waiting: **a gate waits for the holds that are on, at most one CI job's step group,
+  never for the rest of the run.** The boundary is the whole hold: a hold, and so check's quiet group (the exclusive hold), is never
+  left in the middle, a job never runs half-locked, and a yield only delays the start of a hold, so every job's result is what it would be without it.
+  The work a job does outside a hold (check's typecheck and lint, the image job) is not a boundary: a gate that comes then waits for it.
+  **The caps are the starved run's, once per run:** after `CI_TURN_PASS_MAX` gates (2, a line each in `results/yield-passes`, written by
+  `ci_turn_pass`) have passed the run while it yielded, or `CI_TURN_PASS_MAX_S` seconds (1800) after its first yield (`results/yield-since`),
+  its marks stop counting: the run holds the turn again, the gates that wait are behind it, and each job goes on after the gates that hold
+  now (`ci_fold_resume`: waits, saying so, kills nobody, and past `CI_TURN_MAX_S` goes ahead beside the gate, loudly). A cap of `0` never
+  yields. A mark not touched for 5 minutes (its job died) counts for nothing. The switch below turns it off, and a run started inside a holder never yields.
+  A gate that waits for a **starved queued CI run** (`ci_turn_ahead`) is no reason to yield (the run it waits for is queued for a run slot this run holds: a
+  cycle), and while a job yields its queue ticket is set aside as `<ticket>.part` (same name, so its place in line stays; `ci_queue_order` skips it), so it
+  never holds up another run's exclusive group, which takes slots only when first in line.
+  **Limits, accepted:** a gate that the guard keeps refusing is still a waiting gate, so a run can idle for it up to its time cap;
+  and the cap is per run, so a run that has been passed by two gates gives way to no more until it ends.
 - **A holder that is gone.** A run slot or a gate slot whose owner process is gone counts for nothing (the same check every lock
   makes): a crashed gate never holds CI back, nor a crashed run a gate.
 - **Off switch.** `CI_TURN=0` in the environment or a `turn-off` file in the cache gives the old behaviour (read on every look, by a CI run that already waits too).

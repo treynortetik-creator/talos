@@ -1,7 +1,9 @@
 // ci-local.sh gates, split from ci-local-jobs.test.ts so the two run side by side: the same harness, the same tests.
 import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   appendFileSync,
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -9,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -69,6 +72,7 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   const copy = join(clone, 'scripts', 'ci-local.sh')
   writeFileSync(copy, readFileSync(script, 'utf8').replace('\ncd "$WT"\n', `\n${jobs}\ncd "$WT"\n`))
   copyCiLocalParts(join(clone, 'scripts')) // the parts ci-local.sh sources in place
+  cpSync(join(here, 'talos-machine.sh'), join(clone, 'scripts/talos-machine.sh')) // the time factor's rule, shared with gate.sh
   const bin = join(T, 'bin')
   mkdirSync(bin)
   harnessBin(bin) // the PATH is this folder alone: real tools by name, refusing stubs for the rest (scripts/harness-path.ts)
@@ -79,8 +83,9 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
   tool('gh', 'case "$1" in repo) echo owner/repo ;; api) echo "$*" >> "$GH_LOG" ;; esac')
   // Exit 1 when the line it just wrote contains $FAIL_ON.
   const fake = (n: string) =>
-    `echo "${n} $* SKIP_BUILD=\${SKIP_BUILD:-} E2E_SKIP_BUILD=\${E2E_SKIP_BUILD:-}" >> "$CALLS"
+    `echo "${n} $* SKIP_BUILD=\${SKIP_BUILD:-} E2E_SKIP_BUILD=\${E2E_SKIP_BUILD:-} TALOS_TYPECHECK=\${TALOS_TYPECHECK:-}" >> "$CALLS"
      [ -n "\${FAIL_ON:-}" ] && [[ "$* " == *"$FAIL_ON"* ]] && exit 1
+     [ -n "\${FAIL_ON_TSC:-}" ] && [ "\${TALOS_TYPECHECK:-}" = tsc ] && exit 1
      exit 0`
   tool('pnpm', fake('pnpm'))
   tool('bun', fake('bun'))
@@ -92,6 +97,7 @@ function repo(jobs = '', tools: Record<string, string> = {}) {
     CI_LOCK_TIMEOUT: '30',
     TALOS_CI_NESTED: '0',
     CI_SLOTS: '1',
+    GATE_LOAD: '0', // an idle machine unless a test says otherwise: the real load never decides a test (scripts/talos-machine.sh)
     ...harnessEnv(T, bin, home), // PATH is the private folder alone; HOME is the test's
     GH_LOG: join(T, 'gh.log'),
     CALLS: calls,
@@ -185,6 +191,33 @@ describe('ci-local.sh gates', () => {
     ['check:personal', 'personal data found'],
     ['audit --prod --audit-level high', 'a high or critical advisory'],
   ]
+
+  it('the typecheck is the default compiler on a push run; the nightly adds one tsc pass of typecheck and typecheck:mod (TALOS_TYPECHECK=tsc)', async () => {
+    const push = repo()
+    expect(await push.start([...noStatus, '--jobs', 'check']).done).toBe(0)
+    const typechecks = (r: ReturnType<typeof repo>) => r.calledLines().filter((l) => /^pnpm typecheck(:mod)? /.test(l))
+    expect(typechecks(push)).toHaveLength(2)
+    expect(typechecks(push).some((l) => l.includes('TALOS_TYPECHECK=tsc'))).toBe(false)
+    const night = repo()
+    expect(await night.start([...noStatus, '--jobs', 'check'], { CI_NIGHTLY: '1' }).done).toBe(0)
+    const lines = typechecks(night)
+    expect(lines).toHaveLength(4)
+    expect(lines.filter((l) => l.includes('TALOS_TYPECHECK=tsc')).map((l) => l.split(' ')[1])).toEqual([
+      'typecheck',
+      'typecheck:mod',
+    ])
+  })
+
+  it('the nightly’s tsc pass failing turns the nightly red, and the suites and the audit still run; a push run never runs that pass', async () => {
+    const night = repo()
+    const run = night.start([...noStatus, '--jobs', 'check'], { CI_NIGHTLY: '1', FAIL_ON_TSC: '1' })
+    expect(await run.done).not.toBe(0)
+    expect(night.log('check', 'nightly')).toContain("(tsc, the nightly's second look)")
+    const lines = night.calledLines().join('\n')
+    for (const later of ['test:contract', 'audit --prod --audit-level high']) expect(lines).toContain(later)
+    const push = repo()
+    expect(await push.start([...noStatus, '--jobs', 'check'], { FAIL_ON_TSC: '1' }).done).toBe(0)
+  })
 
   it('a green check job ran every step, with nothing dropped', async () => {
     const r = repo()
@@ -438,34 +471,41 @@ describe('check: a red suite and the suites after it', () => {
     expect(ran(b, 'test:corepack-install')).toBe(true)
   })
 
-  it('a red quick gate leaves out the gates after it, every suite and the audit, each said with the red step named; hostile too (they are no suite)', async () => {
-    for (const hostile of ['', '1']) {
-      for (const [red, after] of [
-        ['typecheck ', ['typecheck:mod', 'lint', 'notices:check']],
-        ['typecheck:mod', ['lint', 'notices:check']],
-        ['lint', ['notices:check']],
-      ] as const) {
-        const r = repo('', uname)
-        const run = r.start([...noStatus, '--jobs', 'check'], { FAIL_ON: red, CI_HOSTILE: hostile })
-        expect(await run.done).toBe(1)
-        const why = `pnpm ${red.trim()} failed`
-        expect(notRun(r.log('check', hostile ? 'hostile' : ''))).toEqual(
-          [
-            ...after,
-            'step_contract',
-            'step_bun_schedules',
-            'step_chronos',
-            'step_bun_rest',
-            'step_vitest',
-            'step_corepack_install',
-            'audit',
-          ].map((n) => `NOT RUN: ${n} (${why})`),
-        )
-        expect(ran(r, 'test:contract'), `${red} hostile=${hostile}`).toBe(false)
-        expect(ran(r, 'audit --prod'), `${red} hostile=${hostile}`).toBe(false)
-      }
-    }
-  })
+  // One test for each red step and each of hostile or not: six ci-local runs in one test took 14 s alone, and over its 60 s under the
+  // push gate's load (it timed out at 60,010 ms, 07:00 on 11-25), where each run alone has a budget of its own.
+  it.each(
+    ['', '1'].flatMap((hostile) =>
+      (
+        [
+          ['typecheck ', ['typecheck:mod', 'lint', 'notices:check']],
+          ['typecheck:mod', ['lint', 'notices:check']],
+          ['lint', ['notices:check']],
+        ] as const
+      ).map(([red, after]) => ({ hostile, red, after })),
+    ),
+  )(
+    'a red quick gate ($red, hostile=$hostile) leaves out the gates after it, every suite and the audit, each said with the red step named (hostile too: they are no suite)',
+    async ({ hostile, red, after }) => {
+      const r = repo('', uname)
+      const run = r.start([...noStatus, '--jobs', 'check'], { FAIL_ON: red, CI_HOSTILE: hostile })
+      expect(await run.done).toBe(1)
+      const why = `pnpm ${red.trim()} failed`
+      expect(notRun(r.log('check', hostile ? 'hostile' : ''))).toEqual(
+        [
+          ...after,
+          'step_contract',
+          'step_bun_schedules',
+          'step_chronos',
+          'step_bun_rest',
+          'step_vitest',
+          'step_corepack_install',
+          'audit',
+        ].map((n) => `NOT RUN: ${n} (${why})`),
+      )
+      expect(ran(r, 'test:contract'), `${red} hostile=${hostile}`).toBe(false)
+      expect(ran(r, 'audit --prod'), `${red} hostile=${hostile}`).toBe(false)
+    },
+  )
 
   it('a green run says nothing NOT RUN', async () => {
     const r = repo('', uname)
@@ -1127,3 +1167,552 @@ exit 0`
     expect(installs()).toContain('lock=present')
   })
 })
+
+// The gate's result reused (scripts/ci-local/jobs-check.sh, reuse_gate_step; gate.sh writes the record, rec_end). A whole bridge suite
+// that passed in the gate on exactly this commit stands in for CI's two bridge steps; everything else about the run is as ever.
+describe("the gate's result for the whole bridge suite, reused by the CI run of the same commit", () => {
+  const BUN_CMD = 'bun run scripts/test-parallel.ts'
+  const NOW = () => Math.floor(Date.now() / 1000)
+  const hostName = execFileSync('hostname', ['-s'], { encoding: 'utf8' }).trim()
+  const sha256 = (v: string) => createHash('sha256').update(v).digest('hex')
+  type Over = Record<string, string | null>
+  /**
+   * The record gate.sh would have written for `sha` (rec_end), under <cache>/gate-results: `over` replaces a field (null leaves it
+   * out), `env` the knobs it saw (name -> value), `partial` leaves out its last line.
+   */
+  const writeRecord = (
+    cache: string,
+    sha: string,
+    tree: string,
+    over: Over = {},
+    opts: { env?: Record<string, string>; partial?: boolean; mode?: number; step?: string } = {},
+  ) => {
+    const step = opts.step ?? 'bun-all'
+    const fields: Over = {
+      step,
+      cmd: BUN_CMD,
+      sha,
+      tree,
+      gate: '20261124T120000Z-4242',
+      at: String(NOW() - 60),
+      machine: hostName,
+      uid: String(process.getuid?.()),
+      ci: 'true', // the gate ran the suite with CI=true, as the runner has it
+      time_factor: '1',
+      heavy_slots: '',
+      bun: 'none',
+      ...over,
+    }
+    const dir = join(cache, 'gate-results', sha)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(join(cache, 'gate-results'), 0o700)
+    chmodSync(dir, 0o700)
+    const lines = [
+      'talos-gate-result v1',
+      ...Object.entries(fields).flatMap(([k, v]) => (v === null ? [] : [`${k}=${v}`])),
+      ...Object.entries(opts.env ?? {}).map(([k, v]) => `env.${k}=${sha256(v)}`),
+      ...(opts.partial ? [] : ['end']),
+    ]
+    const f = join(dir, step)
+    writeFileSync(f, `${lines.join('\n')}\n`, { mode: 0o600 })
+    chmodSync(f, opts.mode ?? 0o600)
+    return f
+  }
+
+  describe('reuse_gate_step, the decision (jobs-check.sh sourced alone, in a one-commit repo)', () => {
+    function fixture() {
+      const T = mkdtempSync(join(tmpdir(), 'reuse-'))
+      dirs.push(T)
+      const git = (...a: string[]) =>
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], {
+          cwd: join(T, 'wt'),
+          encoding: 'utf8',
+          env: fixtureGitEnv(T),
+        }).trim()
+      mkdirSync(join(T, 'wt'))
+      git('init', '-q', '-b', 'main')
+      writeFileSync(join(T, 'wt/a.txt'), 'a\n')
+      git('add', '-A')
+      git('commit', '-qm', 'a')
+      const sha = git('rev-parse', 'HEAD')
+      const tree = git('rev-parse', 'HEAD^{tree}')
+      const cache = join(T, 'cache')
+      mkdirSync(cache)
+      const reused = join(T, 'job.reused') // beside the flake file the job is given: the file reuse_gate_step writes to
+      /** reuse_gate_step bun-all <cmd> <step>, with `vars` set as shell variables first; its exit code and what it said */
+      const probe = (
+        vars: Record<string, string> = {},
+        env: Record<string, string> = {},
+        cmd = BUN_CMD,
+        id = 'bun-all',
+      ) => {
+        const sets = Object.entries({
+          CACHE: cache,
+          SHA: sha,
+          FULL: '0',
+          RUN_BUN: 'none',
+          WHERE: 'testbox',
+          REUSE_FIRST_RUN: '1',
+          CI_FLAKE_FILE: join(T, 'job.flaky'),
+          ...vars,
+        })
+          .map(([k, v]) => `${k}='${v}'`)
+          .join('; ')
+        const r = spawnSync(
+          'bash',
+          [
+            '-c',
+            `${sets}; . "${join(here, 'ci-local/jobs-check.sh')}"; reuse_gate_step ${id} "$1" step_bun_rest`,
+            'probe',
+            cmd,
+          ],
+          { cwd: join(T, 'wt'), env: { PATH: process.env.PATH ?? '', HOME: T, CI: 'true', ...env }, encoding: 'utf8' },
+        )
+        return {
+          code: r.status,
+          said: `${r.stdout}${r.stderr}`,
+          reused: existsSync(reused) ? readFileSync(reused, 'utf8') : '',
+        }
+      }
+      return { T, git, sha, tree, cache, probe }
+    }
+
+    it('the same commit and tree, the same step and command, on this machine a minute ago: reused, loudly, and written to the results file', () => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      const r = f.probe()
+      expect(r.code, r.said).toBe(0)
+      expect(r.said).toMatch(
+        /reused the gate's result for bun-all \(gate 20261124T120000Z-4242, \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\) in place of step_bun_rest/,
+      )
+      expect(r.said).toContain(f.sha.slice(0, 7))
+      const [step, what, gate, at] = r.reused.trim().split('\t')
+      expect([step, what, gate]).toEqual(['bun-all', 'step_bun_rest', '20261124T120000Z-4242'])
+      expect(at).toMatch(/^\d{4}-\d\d-\d\dT/)
+    })
+
+    it('no record for this commit: runs normally, and says there was none', () => {
+      const f = fixture()
+      const r = f.probe()
+      expect(r.code).toBe(1)
+      expect(r.said).toContain(
+        "not reusing the gate's result for bun-all (step_bun_rest): the gate left none for this commit",
+      )
+      expect(r.reused).toBe('')
+    })
+
+    const zeros = '0'.repeat(40)
+    const doubts: Array<[string, Over, string, { partial?: boolean }?]> = [
+      ['a different tree', { tree: zeros }, 'tree'],
+      ['another commit', { sha: zeros }, 'commit'],
+      ['a partial record (no last line)', {}, 'partial', { partial: true }],
+      ['a record older than a day', { at: String(NOW() - 90_000) }, 'older'],
+      ['a record from the future', { at: String(NOW() + 3_600) }, 'older'],
+      ['a record with no time', { at: null }, 'lacks'],
+      ['another command (the bridge suite run with other options)', { cmd: `${BUN_CMD} --jobs 1` }, 'command'],
+      ['another step', { step: 'vitest-all' }, 'step'],
+      ['another machine', { machine: 'some-other-box' }, 'machine'],
+      ['another user', { uid: String((process.getuid?.() ?? 0) + 1) }, 'user'],
+      ['another CI variable (the gate ran it without CI)', { ci: '' }, 'ci variable'],
+      ['another time factor (the tests had longer budgets)', { time_factor: '3' }, 'time factor'],
+      ['another number of heavy slots', { heavy_slots: '7' }, 'heavy slots'],
+      ['another bun', { bun: '9.9.9' }, 'bun'],
+      ['a key twice', {}, 'twice'], // (made below: the record gets a second tree line)
+    ]
+    it.each(doubts)('%s: runs normally, says why', (_name, over, why, opts) => {
+      const f = fixture()
+      const file = writeRecord(f.cache, f.sha, f.tree, over, opts)
+      if (why === 'twice') writeFileSync(file, readFileSync(file, 'utf8').replace('end\n', 'tree=x\nend\n'))
+      const r = f.probe()
+      expect(r.code, r.said).toBe(1)
+      expect(r.said).toContain("not reusing the gate's result for bun-all")
+      expect(r.said.toLowerCase()).toContain(why)
+      expect(r.reused).toBe('')
+    })
+
+    it('a knob that changes what a test does: the gate had one this run lacks, this run has one the gate lacked, or its value differs', () => {
+      const a = fixture()
+      writeRecord(a.cache, a.sha, a.tree, {}, { env: { TALOS_FUZZ_MS: '60000' } })
+      const hadOne = a.probe()
+      expect(hadOne.code).toBe(1)
+      expect(hadOne.said).toContain('TALOS_FUZZ_MS')
+      const b = fixture()
+      writeRecord(b.cache, b.sha, b.tree)
+      const hasOne = b.probe({}, { TALOS_FUZZ_MS: '60000' })
+      expect(hasOne.code).toBe(1)
+      expect(hasOne.said).toContain('TALOS_FUZZ_MS')
+      const c = fixture()
+      writeRecord(c.cache, c.sha, c.tree, {}, { env: { TALOS_FUZZ_MS: '60000' } })
+      expect(c.probe({}, { TALOS_FUZZ_MS: '1000' }).code).toBe(1)
+      for (const [name, value] of [
+        ['TALOS_HEAVY_SLOTS', '2'],
+        ['TZ', 'Pacific/Kiritimati'],
+        ['NODE_OPTIONS', '--require=/x/hostile-clock.cjs'],
+        ['BUN_OPTIONS', '--preload=/x/hostile-clock.cjs'],
+        ['TALOS_HOSTILE_CLOCK_MS', '2592000000'],
+      ] as const) {
+        const d = fixture()
+        writeRecord(d.cache, d.sha, d.tree)
+        expect(d.probe({}, { [name]: value }).code, name).toBe(1)
+      }
+      // the same knob with the same value on both sides is no difference
+      const e = fixture()
+      writeRecord(e.cache, e.sha, e.tree, {}, { env: { TALOS_FUZZ_MS: '60000' } })
+      expect(e.probe({}, { TALOS_FUZZ_MS: '60000' }).code).toBe(0)
+    })
+
+    it("a run's own bookkeeping variables are no difference (the slot, the held locks, the junit folder, the tmux prefix, the cache of bun)", () => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      const r = f.probe(
+        {},
+        {
+          TALOS_HEAVY_SLOT: '1',
+          TALOS_HELD_LOCKS: '/x',
+          TALOS_TEST_JUNIT_DIR: '/x/junit',
+          TALOS_TEST_TMUX_PREFIX: 'talos-test-s1',
+          TALOS_CI_SLOT_RUN: '1',
+          TALOS_MACHINE: 'lemnos',
+          BUN_INSTALL: '/x/bun',
+          BUN_INSTALL_CACHE_DIR: '/x/cache',
+        },
+      )
+      expect(r.code, r.said).toBe(0)
+    })
+
+    it("a run whose CI is not the gate's does not reuse (a hand run has none), and one with CI=1 neither", () => {
+      for (const ci of ['', '1', 'false']) {
+        const f = fixture()
+        writeRecord(f.cache, f.sha, f.tree)
+        const r = f.probe({}, { CI: ci })
+        expect(r.code, `CI=${ci}: ${r.said}`).toBe(1)
+        expect(r.said).toContain('another CI variable')
+      }
+    })
+
+    it('only CI_REUSE unset or 1 leaves reuse on: 0, off, false, no and an empty word turn it off', () => {
+      for (const v of ['0', 'off', 'false', 'no', 'x']) {
+        const f = fixture()
+        writeRecord(f.cache, f.sha, f.tree)
+        const r = f.probe({}, { CI_REUSE: v })
+        expect(r.code, `CI_REUSE=${v}: ${r.said}`).toBe(1)
+        expect(r.said).toContain('CI_REUSE is not 1')
+      }
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      expect(f.probe({}, { CI_REUSE: '1' }).code).toBe(0)
+    })
+
+    it("a record written after the run began is not the gate's (the commit's own install scripts run after it): no reuse", () => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      const r = f.probe({ T_SLOT: String(NOW() - 100) })
+      expect(r.code, r.said).toBe(1)
+      expect(r.said).toContain('written after this run began')
+      expect(f.probe({ T_SLOT: String(NOW() + 100) }).code).toBe(0)
+    })
+
+    it('the time factor is read as the tests read it: unset, 0, 1 and "abc" are all 1', () => {
+      for (const v of [undefined, '0', '1', 'abc', '1.0']) {
+        const f = fixture()
+        writeRecord(f.cache, f.sha, f.tree)
+        const r = f.probe({}, v === undefined ? {} : { TALOS_TEST_TIME_FACTOR: v })
+        expect(r.code, `${v}: ${r.said}`).toBe(0)
+      }
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree, { time_factor: '3' })
+      expect(f.probe({}, { TALOS_TEST_TIME_FACTOR: '3' }).code).toBe(0)
+    })
+
+    // A higher factor gives every test a longer budget, so a gate that passed at a higher factor than this run's proved less than this
+    // run would: no reuse. A gate at a lower or equal one proved at least as much: reuse. (The factor follows the machine's load,
+    // scripts/talos-machine.sh, so the gate's and the run's often differ.)
+    it.each([
+      // [the gate's factor, this run's TALOS_TEST_TIME_FACTOR, reused]
+      ['1', '1', true],
+      ['1', undefined, true],
+      ['1', '2', true],
+      ['1', '4', true],
+      ['2', '3', true],
+      ['3', '3', true],
+      ['1.5', '2', true],
+      ['1', '1.5', true],
+      ['2', '1', false],
+      ['2', undefined, false],
+      ['3', '1', false],
+      ['4', '3', false],
+      ['3', '2.5', false],
+      ['2.5', '2', false],
+    ] as const)("the gate's factor %s, this run's %s: reused %s", (gate, here, reused) => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree, { time_factor: gate })
+      const r = f.probe({}, here === undefined ? {} : { TALOS_TEST_TIME_FACTOR: here })
+      expect(r.code, r.said).toBe(reused ? 0 : 1)
+      if (!reused) {
+        expect(r.said).toContain('time factor')
+        expect(r.said).toContain('longer budgets')
+        expect(r.reused).toBe('')
+      }
+    })
+
+    it.each(['abc', '', '0', '0.5', '1e1', '-1', '3x', '1.2.3', '.5', '3.', '0x3'])(
+      'a record whose time factor is %j is not a factor at all: no reuse, whatever this run has',
+      (bad) => {
+        const f = fixture()
+        writeRecord(f.cache, f.sha, f.tree, { time_factor: bad })
+        const r = f.probe({}, { TALOS_TEST_TIME_FACTOR: '4' })
+        expect(r.code, r.said).toBe(1)
+        expect(r.said.toLowerCase()).toMatch(/time factor|lacks/)
+        expect(r.reused).toBe('')
+      },
+    )
+
+    it.each([
+      ['a hostile run', { env: { CI_HOSTILE: '1' }, why: 'hostile' }],
+      ['the nightly', { env: { CI_NIGHTLY: '1' }, why: 'nightly' }],
+      ['a --full run (every dispatch, and the nightly)', { vars: { FULL: '1' }, why: '--full' }],
+      ['the off switch in the environment', { env: { CI_REUSE: '0' }, why: 'CI_REUSE is not 1' }],
+      ['a rerun of a commit that already ran here', { vars: { REUSE_FIRST_RUN: '0' }, why: 'before' }],
+      ['a part or report-only run (not local-ci)', { vars: { CI_STATUS_PREFIX: 'report-ci' }, why: 'local-ci' }],
+    ] as const)('%s never reuses, with a good record there', (_name, c) => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      const r = f.probe('vars' in c ? c.vars : {}, 'env' in c ? c.env : {})
+      expect(r.code, r.said).toBe(1)
+      expect(r.said).toContain("not reusing the gate's result for bun-all")
+      expect(r.said).toContain(c.why)
+      expect(r.reused).toBe('')
+    })
+
+    it('the off switch as a file in the cache (reuse-off) turns it off with no commit', () => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      expect(f.probe().code).toBe(0)
+      writeFileSync(join(f.cache, 'reuse-off'), '')
+      const r = f.probe()
+      expect(r.code).toBe(1)
+      expect(r.said).toContain('reuse-off')
+    })
+
+    it("a record that is not the gate's own file is no record: a symlink, a file others can write, a folder others can write", () => {
+      const a = fixture()
+      const real = writeRecord(a.cache, a.sha, a.tree)
+      const link = `${real}.link`
+      renameLink(real, link)
+      expect(a.probe().code).toBe(1)
+      const b = fixture()
+      writeRecord(b.cache, b.sha, b.tree, {}, { mode: 0o666 })
+      expect(b.probe().code).toBe(1)
+      const c = fixture()
+      writeRecord(c.cache, c.sha, c.tree)
+      chmodSync(join(c.cache, 'gate-results', c.sha), 0o777)
+      expect(c.probe().code).toBe(1)
+      const d = fixture()
+      writeRecord(d.cache, d.sha, d.tree)
+      chmodSync(join(d.cache, 'gate-results'), 0o777)
+      expect(d.probe().code).toBe(1)
+    })
+
+    it('the checkout the step runs in must be the commit: another HEAD, no reuse', () => {
+      const f = fixture()
+      writeRecord(f.cache, f.sha, f.tree)
+      writeFileSync(join(f.T, 'wt/b.txt'), 'b\n')
+      f.git('add', '-A')
+      f.git('commit', '-qm', 'b')
+      const r = f.probe()
+      expect(r.code, r.said).toBe(1)
+      expect(r.said).toContain('checkout')
+    })
+  })
+
+  const baseRepo = repo
+  describe('the check job of a real ci-local.sh run', () => {
+    // A run reuses the gate's result only when the knobs in its environment (TALOS_*, BUN_*, NODE_OPTIONS, TZ: jobs-check.sh,
+    // reuse_env_now) are the record's. The record here has none, so a run of these tests must have none either: a builder's shell
+    // with BUN_ENABLE_CRASH_REPORTING in it made the first test fail (the environment is meant to be hermetic, jobs-check.sh).
+    const IGNORED = new Set(
+      'TALOS_MACHINE TALOS_HELD_LOCKS TALOS_HEAVY_SLOT TALOS_TEST_TMUX_PREFIX TALOS_SHARED_LOCK_HELD TALOS_CI_SLOT_RUN TALOS_CI_NESTED TALOS_TEST_JUNIT_DIR TALOS_TEST_TIME_FACTOR BUN_INSTALL BUN_INSTALL_CACHE_DIR'.split(
+        ' ',
+      ),
+    )
+    const repo = () => {
+      const r = baseRepo()
+      for (const k of Object.keys(r.env))
+        if (/^(TALOS_|BUN_)|^(NODE_OPTIONS|TZ)$/.test(k) && !IGNORED.has(k)) delete (r.env as Record<string, string>)[k]
+      return r
+    }
+    const check = ['--ref', 'HEAD', '--no-status', '--jobs', 'check']
+    const CI = { CI: 'true' } // the runner's own
+    type Repo = ReturnType<typeof repo>
+    const bunRuns = (r: Repo) =>
+      r.calledLines().filter((l) => l.startsWith('bun run apps/bridge/scripts/test-parallel.ts'))
+    const cache = (r: Repo) => join(r.home, '.cache/talos-ci')
+    // The record carries the time factor the gate ran at, and the run compares it with the one in its own environment (jobs-check.sh,
+    // reuse_gate_step). A run under gate.sh on a machine with 4 cores or fewer (Titan) has TALOS_TEST_TIME_FACTOR=3 there, and a
+    // record that always said 1 was never reused (both tests below failed on Titan at f5bbbb3ee): the record says the ambient factor.
+    const ambientFactor = (() => {
+      const n = process.env.TALOS_TEST_TIME_FACTOR ?? ''
+      return /^[0-9]+(\.[0-9]+)?$/.test(n) && Number(n) >= 1 ? String(Number(n)) : '1'
+    })()
+    const record = (r: Repo, over: Over = {}) =>
+      writeRecord(cache(r), r.git(r.clone, 'rev-parse', 'HEAD'), r.git(r.clone, 'rev-parse', 'HEAD^{tree}'), {
+        time_factor: ambientFactor,
+        ...over,
+      })
+    const lastRow = (r: Repo) =>
+      (
+        readFileSync(join(cache(r), 'logs/timings.tsv'), 'utf8')
+          .trim()
+          .split('\n')
+          .pop() as string
+      ).split('\t')
+
+    it('a record for the commit: neither bridge step runs, every other step does, and the run says so in its log, output, status and timings', async () => {
+      const r = repo()
+      record(r)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], CI)
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r), run.out()).toEqual([])
+      const ran = r.calledLines().join('\n')
+      for (const step of ['typecheck ', 'lint', 'test --maxWorkers', 'test:contract', 'notices:check'])
+        expect(ran).toContain(step)
+      const log = r.log('check')
+      expect(log.match(/reused the gate's result for bun-all \(gate 20261124T120000Z-4242, /g)).toHaveLength(2)
+      expect(log).toContain('in place of step_bun_schedules')
+      expect(log).toContain('in place of step_bun_rest')
+      expect(run.out()).toMatch(
+        /~ check: reused the gate's result for bun-all \(gate 20261124T120000Z-4242, \S+\) in place of step_bun_/,
+      )
+      expect(readFileSync(r.env.GH_LOG, 'utf8')).toMatch(
+        /passed on \S+ in \d+s, reused the gate's bun-all \(rest\+schedules; gate 20261124T120000Z-4242\)/,
+      )
+      expect(lastRow(r).slice(12)).toEqual(['reused=check:bun-all'])
+      // the per-test file says whose tests are not in it: the shadow compare reads the bridge suite as not run here
+      expect(ran).toMatch(/ci-test-results\.ts .* bridge-shard-1:gate bridge-shard-2:gate/)
+    })
+
+    // The run picks its own factor from the load at its start (scripts/talos-machine.sh, the gate's rule) and exports it to its jobs.
+    // GATE_LOAD / GATE_CORES stand in for the machine: 36 on 18 cores is a factor of 2.
+    describe('the factor the run picks, and the gate result it takes', () => {
+      const loaded = { ...CI, GATE_LOAD: '36', GATE_CORES: '18', TALOS_TEST_TIME_FACTOR: '' }
+      it("a gate at a factor under the run's: reused; the run says its factor and why", async () => {
+        const r = repo()
+        record(r, { time_factor: '1' })
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], loaded)
+        expect(await run.done, run.out()).toBe(0)
+        expect(run.out()).toMatch(/ci-local: time factor 2: every test budget x2 \(load 36 on 18 cores/)
+        expect(bunRuns(r), run.out()).toEqual([])
+        expect(r.log('check')).toContain("reused the gate's result for bun-all")
+      })
+      it("a gate at the run's factor: reused", async () => {
+        const r = repo()
+        record(r, { time_factor: '2' })
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], loaded)
+        expect(await run.done, run.out()).toBe(0)
+        expect(bunRuns(r), run.out()).toEqual([])
+      })
+      it("a gate at a factor over the run's (longer budgets): the bridge suite runs here, and the log says why", async () => {
+        const r = repo()
+        record(r, { time_factor: '3' })
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], loaded)
+        expect(await run.done, run.out()).toBe(0)
+        expect(bunRuns(r)).toHaveLength(2)
+        expect(r.log('check')).toContain("another time factor (the gate's 3, this run's 2")
+      })
+      it('an explicit TALOS_TEST_TIME_FACTOR wins over the load, and the jobs get it', async () => {
+        const r = repo()
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...loaded, TALOS_TEST_TIME_FACTOR: '1' })
+        expect(await run.done, run.out()).toBe(0)
+        expect(run.out()).toContain(
+          'ci-local: time factor 1: every test budget x1 (TALOS_TEST_TIME_FACTOR was already set)',
+        )
+      })
+      it('a run on a small machine has the core floor, 3, with no load at all', async () => {
+        const r = repo()
+        const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], {
+          ...CI,
+          GATE_LOAD: '0',
+          GATE_CORES: '4',
+          TALOS_TEST_TIME_FACTOR: '',
+        })
+        expect(await run.done, run.out()).toBe(0)
+        expect(run.out()).toContain('ci-local: time factor 3: every test budget x3')
+      })
+    })
+
+    it('the status keeps the reuse words in front of the warnings, inside the 140 characters GitHub keeps', async () => {
+      const r = repo()
+      record(r)
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'check'], { ...CI, FAIL_ON: 'check:personal' })
+      expect(await run.done, run.out()).toBe(0)
+      const posted = readFileSync(r.env.GH_LOG, 'utf8')
+        .split('\n')
+        .filter((l) => l.includes('state=success') && l.includes('local-ci/check'))
+      expect(posted).toHaveLength(1)
+      expect(posted[0]).toMatch(
+        /passed on \S+ in \d+s, reused the gate's bun-all \(rest\+schedules; gate \S+\), with warnings/,
+      )
+    })
+
+    it('no record: both bridge steps run as ever, and nothing is said to be reused', async () => {
+      const r = repo()
+      const run = r.start(check)
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r)).toHaveLength(2)
+      expect(run.out()).not.toContain('reused the gate')
+      expect(lastRow(r).slice(12)).toEqual(['reused=-'])
+    })
+
+    it("a rerun of the same commit tests everything again, record or not: a red CI run is never answered by the gate's green", async () => {
+      const r = repo()
+      expect(await r.start(check, { FAIL_ON: 'test --maxWorkers' }).done).toBe(1)
+      expect(bunRuns(r)).toHaveLength(2)
+      record(r)
+      const run = r.start(check)
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r)).toHaveLength(4)
+      expect(run.out()).not.toContain('reused the gate')
+    })
+
+    it('a red step that is not the bridge suite still fails the run', async () => {
+      const r = repo()
+      record(r)
+      const run = r.start(check, { FAIL_ON: 'test:contract', ...CI })
+      expect(await run.done).toBe(1)
+      expect(bunRuns(r)).toEqual([])
+    })
+
+    it('a hand run (no CI in its environment) does not reuse the suite the gate ran under CI=true', async () => {
+      const r = repo()
+      record(r)
+      const run = r.start(check, { CI: '' })
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r)).toHaveLength(2)
+      expect(r.log('check')).toContain('another CI variable')
+    })
+
+    it('a record for another tree: the bridge steps run', async () => {
+      const r = repo()
+      record(r, { tree: '0'.repeat(40) })
+      const run = r.start(check)
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r)).toHaveLength(2)
+      expect(r.log('check')).toContain("not reusing the gate's result for bun-all")
+    })
+
+    it('--full asks for every test: nothing is reused', async () => {
+      const r = repo()
+      record(r)
+      const run = r.start(['--ref', 'HEAD', '--no-status', '--full', '--jobs', 'check'])
+      expect(await run.done, run.out()).toBe(0)
+      expect(bunRuns(r)).toHaveLength(2)
+    })
+  })
+})
+
+/** `file` becomes a symlink to a copy of itself (a record made by anything but the gate's own write) */
+function renameLink(file: string, link: string) {
+  writeFileSync(link, readFileSync(file))
+  rmSync(file)
+  symlinkSync(link, file)
+}

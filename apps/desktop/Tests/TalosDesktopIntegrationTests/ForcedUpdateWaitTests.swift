@@ -161,16 +161,18 @@ struct ForcedUpdateWaitTests {
   @Test func theNewAppOffersTheCopyOnlyAfterTheUpdateReallyHappened() throws {
     let r = try Rig()
     try r.publish()
-    let u = r.updater(realSwap: true)
+    let old = Settled()  // hooked on the app that is doing the update, before it starts: it must hear nothing
+    let u = r.updater(realSwap: true, hooks: { h in h.draftSettled = { v, o in old.calls.edit { $0.append("\(v):\(o)") } } })
     u.tick()
     u.updateNow()
     u.queue.sync {}
     for _ in 0..<4 { Self.step(r, u) }
+    #expect(old.calls.get().isEmpty, "nothing is offered while the update is only under way: \(old.calls.get()) \(u.status)")
     let s = Settled()
-    #expect(s.calls.get().isEmpty, "nothing is offered while the update is only under way")
     let next = r.runNewApp(healthy: true, hooks: { h in h.draftSettled = { v, o in s.calls.edit { $0.append("\(v):\(o)") } } })
     next.tick()
     #expect(s.calls.get() == ["1.5.0:updated"], "\(s.calls.get()) \(next.status)")
+    #expect(old.calls.get().isEmpty, "the old app never offered it: \(old.calls.get())")
   }
 
   @Test func anUnhealthyUpdateThatRollsBackOffersTheCopyBecauseMainWasRestarted() throws {

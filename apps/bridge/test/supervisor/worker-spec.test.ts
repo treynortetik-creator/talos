@@ -17,6 +17,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { AUTO_CONTINUE_AT_LIMIT_DEFAULT } from '@talos-app/protocol'
+import { isInheritedClaudeVar } from '../../src/claude-env.ts'
+import { COMPACT_WINDOW_ENV, compactWindowEnv } from '../../src/supervisor/compact-window.ts'
+import { launchSpecHash } from '../../src/supervisor/launch-spec.ts'
 import {
   absolutize,
   checkCeiling,
@@ -224,7 +228,9 @@ describe('a worker’s launch', () => {
       expect(set.permissions.deny).toContain(`Read(/${i.agentDir}/**/.env)`) // any depth, as gitignore matches it
       expect(set.permissions.deny).toContain('Bash(rm -rf:*)')
       expect(set.permissions.deny).toContain('Edit(//etc/**)')
-      expect(set.hooks.PreToolUse).toEqual([{ x: 1 }])
+      // the guards' own entry first, then the one that leaves the permission hook's per-call record (pretool-hook.ts)
+      expect(set.hooks.PreToolUse).toHaveLength(2)
+      expect(set.hooks.PreToolUse[0]).toEqual({ x: 1 })
       writeFileSync(join(i.talosHome, 'guards', 'settings.json'), 'not json')
       expect(() => buildWorkerSpec(i)).toThrow(/^guards_unreadable/)
     },
@@ -797,4 +803,155 @@ describe('a resume that runs the cut turn again (0.26): CLAUDE_CODE_RESUME_INTER
       expect(() => validateSpec(buildWorkerSpec(k), trustedOf(k))).not.toThrow()
     },
   )
+})
+
+describe('continue at the usage limit: Claude Code’s own autoContinueAtUsageLimit, written explicitly', () => {
+  const trustedOf = (i: WorkerInputs, autoContinueAtLimit?: boolean) => ({
+    talosHome: i.talosHome,
+    main: i.main,
+    claudePath: i.claudePath,
+    cwd: realpathSync(i.agentDir),
+    settingSources: null,
+    ...(autoContinueAtLimit === undefined ? {} : { autoContinueAtLimit }),
+  })
+  onCaseExactTmp(
+    'the key is always in the settings: the config default when nothing is passed, else true or false as given',
+    () => {
+      const none = settingsOf(buildWorkerSpec(inputs()))
+      expect(Object.hasOwn(none, 'autoContinueAtUsageLimit')).toBe(true)
+      expect(none.autoContinueAtUsageLimit).toBe(AUTO_CONTINUE_AT_LIMIT_DEFAULT)
+      expect(settingsOf(buildWorkerSpec(inputs({ autoContinueAtLimit: true }))).autoContinueAtUsageLimit).toBe(true)
+      // false is written as false, never left out: Claude Code reads a missing key as on
+      const off = settingsOf(buildWorkerSpec(inputs({ autoContinueAtLimit: false })))
+      expect(Object.hasOwn(off, 'autoContinueAtUsageLimit')).toBe(true)
+      expect(off.autoContinueAtUsageLimit).toBe(false)
+    },
+  )
+  onCaseExactTmp('the last check holds the settings to the supervisor’s own reading of the config', () => {
+    const on = inputs({ autoContinueAtLimit: true })
+    const s = buildWorkerSpec(on)
+    expect(() => validateSpec(s, trustedOf(on, true))).not.toThrow()
+    expect(() => validateSpec(s, trustedOf(on, false))).toThrow(/autoContinueAtUsageLimit/)
+    const off = inputs({ autoContinueAtLimit: false })
+    const t = buildWorkerSpec(off)
+    expect(() => validateSpec(t, trustedOf(off, false))).not.toThrow()
+    expect(() => validateSpec(t, trustedOf(off, true))).toThrow(/autoContinueAtUsageLimit/)
+    // a spec edited after the build, the key dropped or turned into a non-boolean
+    const dropped = { ...s, settingsJSON: JSON.stringify({ ...settingsOf(s), autoContinueAtUsageLimit: undefined }) }
+    expect(() => validateSpec(dropped, trustedOf(on, true))).toThrow(/autoContinueAtUsageLimit/)
+    const junk = { ...s, settingsJSON: JSON.stringify({ ...settingsOf(s), autoContinueAtUsageLimit: 'yes' }) }
+    expect(() => validateSpec(junk, trustedOf(on, true))).toThrow(/autoContinueAtUsageLimit/)
+  })
+  onCaseExactTmp(
+    'it is the only thing the switch changes: turning it off changes that one key and the launch hash',
+    () => {
+      const base = inputs()
+      const a = buildWorkerSpec({ ...base, autoContinueAtLimit: true })
+      const b = buildWorkerSpec({ ...base, autoContinueAtLimit: false })
+      const { autoContinueAtUsageLimit: onKey, ...restA } = settingsOf(a)
+      const { autoContinueAtUsageLimit: offKey, ...restB } = settingsOf(b)
+      expect([onKey, offKey]).toEqual([true, false])
+      expect(restA).toEqual(restB)
+      expect(a.args).toEqual(b.args)
+      expect(a.env).toEqual(b.env)
+      // the settings file is one of the launch spec's files, so a changed value is a changed spec: an update check restarts the
+      // session as it does for any settings change (idle only, resuming its conversation), never a turn cut
+      const files = (s: { settingsJSON: string }) => ({ 'settings.json': s.settingsJSON })
+      const same = { argv: a.args, env: {}, baseEnv: {} }
+      expect(launchSpecHash({ ...same, files: files(a) })).not.toBe(launchSpecHash({ ...same, files: files(b) }))
+    },
+  )
+})
+
+describe('compactWindowEnv', () => {
+  it('is the plain digits for a value in range, and nothing otherwise', () => {
+    expect(compactWindowEnv(400000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '400000' })
+    expect(compactWindowEnv(100000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' })
+    expect(compactWindowEnv(1000000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
+    for (const bad of [null, undefined, 0, 99999, 1000001, 400000.5, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(compactWindowEnv(bad), String(bad)).toEqual({})
+  })
+  it('the name is one the launch keeps from a login environment, so validateSpec lets it through', () => {
+    expect(isInheritedClaudeVar(COMPACT_WINDOW_ENV)).toBe(false)
+  })
+})
+
+describe('compact_window in a worker’s launch', () => {
+  const NAME = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
+  const home = (i: WorkerInputs) => ({
+    talosHome: i.talosHome,
+    main: i.main,
+    claudePath: i.claudePath,
+    cwd: i.agentDir,
+  })
+  onCaseExactTmp('set: the variable is the plain digits, and the spec still passes validation', () => {
+    const i = inputs({ compactWindow: 400000 })
+    const s = buildWorkerSpec(i)
+    expect(s.env[NAME]).toBe('400000')
+    expect(() => validateSpec(s, home(i))).not.toThrow()
+  })
+  onCaseExactTmp('unset or null: not in the environment at all, never an empty value', () => {
+    for (const over of [{}, { compactWindow: null }, { compactWindow: undefined }]) {
+      const s = buildWorkerSpec(inputs(over))
+      expect(NAME in s.env, JSON.stringify(over)).toBe(false)
+    }
+  })
+  onCaseExactTmp('the thread’s value replaces one in the login environment; unset leaves the owner’s own', () => {
+    const base = inputs()
+    const login = { ...base.baseEnv, [NAME]: '250000' }
+    expect(buildWorkerSpec({ ...base, baseEnv: login, compactWindow: 400000 }).env[NAME]).toBe('400000')
+    expect(buildWorkerSpec({ ...base, baseEnv: login }).env[NAME]).toBe('250000')
+  })
+  onCaseExactTmp('a value outside 100000 to 1000000, or not a whole number, is never put in the environment', () => {
+    for (const bad of [5, 99999, 1000001, 400000.5, Number.NaN])
+      expect(NAME in buildWorkerSpec(inputs({ compactWindow: bad })).env, String(bad)).toBe(false)
+  })
+  onCaseExactTmp(
+    'set: the worker’s --settings env carries it too, next to the channel dirs, over the owner’s 850000',
+    () => {
+      const base = inputs()
+      const i = { ...base, baseEnv: { ...base.baseEnv, [NAME]: '850000' }, compactWindow: 400000 }
+      const s = buildWorkerSpec(i)
+      expect(settingsOf(s).env).toEqual({
+        TELEGRAM_STATE_DIR: noChannelDir(i.talosHome),
+        IMESSAGE_STATE_DIR: noChannelDir(i.talosHome),
+        [NAME]: '400000',
+      })
+      expect(() => validateSpec(s, home(i))).not.toThrow()
+    },
+  )
+  onCaseExactTmp('unset or out of range: the settings env has no such key, so the inherited value stands', () => {
+    for (const over of [{}, { compactWindow: null }, { compactWindow: 99999 }])
+      expect(NAME in settingsOf(buildWorkerSpec(inputs(over))).env, JSON.stringify(over)).toBe(false)
+  })
+  onCaseExactTmp('validateSpec lets the one key through with the spec’s own value, and refuses any other value', () => {
+    const i = inputs({ compactWindow: 400000 })
+    const s = buildWorkerSpec(i)
+    const withEnv = (v: string) => {
+      const st = settingsOf(s)
+      st.env[NAME] = v
+      return { ...s, settingsJSON: JSON.stringify(st) }
+    }
+    expect(() => validateSpec(withEnv('400000'), home(i))).not.toThrow()
+    expect(() => validateSpec(withEnv('850000'), home(i))).toThrow(WorkerSpecRefused)
+    expect(() => validateSpec(withEnv('400k'), home(i))).toThrow(WorkerSpecRefused)
+  })
+  onCaseExactTmp('only the digits change the launch spec hash: set, changed and cleared are all different', () => {
+    const base = inputs()
+    const hash = (compactWindow: number | null) => {
+      const i = { ...base, compactWindow }
+      const s = buildWorkerSpec(i)
+      return launchSpecHash({
+        argv: s.args,
+        env: s.env,
+        baseEnv: i.baseEnv,
+        files: { 'settings.json': s.settingsJSON },
+      })
+    }
+    const a = hash(null)
+    const b = hash(400000)
+    expect(b).not.toBe(a)
+    expect(hash(300000)).not.toBe(b)
+    expect(hash(400000)).toBe(b)
+  })
 })

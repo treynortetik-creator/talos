@@ -28,6 +28,8 @@ import { cardActionNotification } from './notify.ts'
 import { say } from './owner-words.ts'
 import { isPeerAddressCard } from './peer/address-ask.ts'
 import { isPermissionModeCard } from './permission-mode.ts'
+import { isPluginAddCard } from './plugins/agent-plugins.ts'
+import { isSessionErrorCard } from './router/session-error-cards.ts'
 import { isUpdateResendCard } from './router/update-resend.ts'
 import { isScreenAllowCard } from './screen-consent.ts'
 
@@ -95,6 +97,8 @@ export const cardsFrames = {
     // a permission-mode change is allowed from the card in the app only: its Allow is the owner's signed card.resolve
     if (row && isUpdateResendCard(row.binding))
       return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'update_resend_card')
+    if (row && isSessionErrorCard(row.binding))
+      return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'session_error_card')
     if (row && isPeerAddressCard(row.binding))
       return deny('open_in_app', 'This card is answered in the app, not from a notification.', 'peer_address_card')
     if (row && isPermissionModeCard(row.binding))
@@ -154,7 +158,13 @@ export const cardsFrames = {
       return this.reject(it, pre.code, pre.reason)
     }
     // A dialog card is answered by the Mac pressing a key, never by the agent. Refused here, before the ledger moves.
-    const dlg = ctx.dialogs?.precheck(f, f.device_id)
+    // an open AskUserQuestion's cards (permission/question.ts) are answered through its hook, not by a key press
+    const qst = ctx.questions?.precheck(f)
+    if (qst?.handled && !qst.ok) {
+      ctx.log.security('question card resolve refused', { card_id: f.card_id, code: qst.code })
+      return this.reject(it, qst.code, qst.reason)
+    }
+    const dlg = qst?.handled ? undefined : ctx.dialogs?.precheck(f, f.device_id)
     if (dlg?.handled && !dlg.ok) {
       ctx.log.security('dialog card resolve refused', { card_id: f.card_id, code: dlg.code })
       return this.reject(it, dlg.code, dlg.reason)
@@ -207,6 +217,11 @@ export const cardsFrames = {
     }
     this.expiry.cancel(f.card_id)
     const row = out.row
+    if (qst?.handled && qst.ok) {
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      ctx.questions?.onResolved(row, qst.choice, qst.text)
+      return this.done(it)
+    }
     if (dlg?.handled && dlg.ok) {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       await ctx.dialogs?.onResolved(row, dlg.choice, it.raw)
@@ -223,7 +238,15 @@ export const cardsFrames = {
     if (pre.handled) {
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       // the card.resolve's signed `note` is the owner's Deny note (relay.ts keeps it only for a Deny to a hook)
-      const sent = await ctx.permission.onResolved(row, f.action, f.note)
+      // `session` and `session_hash` are signed in the card.resolve too (never a notification's tap): "Allow for this session", only for a hook card
+      // that offers it, and only when the hash is that of the rules this bridge holds
+      const sent = await ctx.permission.onResolved(
+        row,
+        f.action,
+        f.note,
+        it.frame.type === 'card.resolve' && f.session === true,
+        it.frame.type === 'card.resolve' ? f.session_hash : undefined,
+      )
       // The card says "failed" in the app either way. A tap from a notification was answered "done" by the relay, so it also
       // gets a refusal: the relay turns that into the failed-tap push, and the owner is not left thinking the Allow went through.
       if (!sent.ok && it.frame.type === 'native.act') return this.reject(it, sent.code, sent.reason)
@@ -270,12 +293,30 @@ export const cardsFrames = {
       )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)
+    } else if (row.actor === 'bridge' && isPluginAddCard(row.binding)) {
+      // "Add the <plugin> plugin to your agent?": the BRIDGE installs it, only on the owner's own signed tap (plugins/agent-plugins.ts)
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      // not awaited: a settings card holds every lane while it is handled, and an install takes up to minutes
+      void (ctx.agentPlugins?.onResolved(row, f.action) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('plugin card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
     } else if (row.actor === 'bridge' && isUpdateResendCard(row.binding)) {
       // "Talos updated while <thread> was working": the BRIDGE sends the message again, only on the owner's own signed tap in the app
       // (router/update-resend.ts). The agent is never told about the card.
       this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
       await (ctx.updateResend?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
         ctx.log.warn('update resend card not applied', { card: f.card_id, error: (e as Error).message }),
+      )
+      this.closeDecided(f.card_id, nowMs, out.resolution)
+      return this.done(it)
+    } else if (row.actor === 'bridge' && isSessionErrorCard(row.binding)) {
+      // "<thread> stopped: <what>": the BRIDGE starts a fresh conversation or sends the last message again, only on the owner's own signed
+      // tap in the app (router/session-error-cards.ts). The agent is never told about the card.
+      this.fire(cardUpdateFrame(nowMs, { card_id: f.card_id, state: 'resolved', resolution: out.resolution }))
+      await (ctx.sessionErrors?.onResolved(row, f.action, it.frame.type) ?? Promise.resolve()).catch((e) =>
+        ctx.log.warn('session error card not applied', { card: f.card_id, error: (e as Error).message }),
       )
       this.closeDecided(f.card_id, nowMs, out.resolution)
       return this.done(it)

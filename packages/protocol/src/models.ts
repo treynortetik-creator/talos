@@ -116,6 +116,14 @@ export const AppView = z
   .refine((v) => v.page.kind === 'html', { message: 'page must be an html attachment' })
 export type AppViewT = z.infer<typeof AppView>
 
+/**
+ * A client-side action a chat message offers (the bridge's quiet-agent notice: "Open its terminal"). It is not a command: it carries no
+ * authority and nothing is sent anywhere when it is used, the app only moves to a screen. The list is closed (one kind today), the
+ * object keeps only its own keys, and a message whose `actions` the reader cannot understand shows its text with no button.
+ */
+export const MessageAction = z.object({ kind: z.literal('open_terminal'), thread: ThreadId })
+export type MessageActionT = z.infer<typeof MessageAction>
+
 export const Message = z.object({
   id: MsgId,
   thread_id: ThreadId,
@@ -173,6 +181,8 @@ export const Message = z.object({
   heartbeat: z.literal(true).optional().catch(undefined),
   /** An owner message's undo point (undo.ts), from a bridge that can undo: the "Undo to here" action reads it. */
   undo: UndoMark,
+  /** Buttons this row offers (system rows the live bridge writes): see MessageAction. An older reader ignores the field; an unreadable value reads as absent. */
+  actions: z.array(MessageAction).max(3).optional().catch(undefined),
 })
 
 /** Icon keys a card kind may name. The app maps each key to a drawing; a key with no drawing fails its type check. */
@@ -490,6 +500,22 @@ export const Card = z.object({
    * an older Mac and from an older relay; a value a reader does not know reads as unset, and the app then offers no note.
    */
   deny_note: z.literal(true).optional().catch(undefined),
+  /**
+   * A permission card raised for a PermissionRequest hook, when Claude Code offered a rule that names what it allows: a third
+   * choice, "Allow for this session" (the owner's signed tap carries `session: true`). The rules are only for the words on the button;
+   * the hook prints its own stored copy of Claude Code's offer. Beside the card, not in its binding; absent from a channel-relay card,
+   * an older Mac and an older relay. A value a reader does not know reads as unset, and the app then offers no third button.
+   * The checks that matter are in permission.ts `cleanSessionRules`; the app runs them again before it shows anything.
+   */
+  session_allow: z
+    .object({
+      rules: z
+        .array(z.object({ tool: z.string().min(1).max(640), content: z.string().min(1).max(1600) }))
+        .min(1)
+        .max(3),
+    })
+    .optional()
+    .catch(undefined),
   /**
    * Why a permission card asked, when the bridge could prove it (permission.ts PERMISSION_ASKED_WHY_TEXT). Beside the card, not in
    * its binding. Absent when the reason is not known; a value a reader does not know reads as unset, and the app draws no line.

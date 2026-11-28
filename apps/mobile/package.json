@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Capacitor iOS shell around the Talos web app (WP-I0). The shell loads the relay origin; it ships no web assets.",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../../scripts/typecheck.mjs",
     "test": "vitest run",
     "cap:sync": "cap sync ios",
     "xcodegen": "cd ios/App && xcodegen generate",

@@ -267,6 +267,18 @@ export class FakeApp {
     return f
   }
 
+  /** Signs and sends a `plugin.add.request` ("Add plugin to agent"). */
+  async sendPluginAddRequest(plugin: string, marketplace: string, extra: { control_id?: string } = {}) {
+    const f = await this.sign({
+      ...mkFrame('plugin.add.request'),
+      control_id: extra.control_id ?? newUlid(),
+      plugin,
+      marketplace,
+    })
+    this.send(f)
+    return f
+  }
+
   async sendConfigPatch(base_rev: number, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
     const f = await this.sign({ ...mkFrame('config.patch'), base_rev, patch, ...extra })
     this.send(f)

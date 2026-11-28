@@ -1,7 +1,7 @@
 // Stacked panes beside the chat, and the Files pane (owner-approved design, 2026-11-11). On a wide screen the thread header has
 // a pane toolbar (Files, Pages, +; Terminal only in the Mac app); panes stack in a column on the right of the chat, each can
 // be collapsed to its title bar or closed, and the layout is remembered per thread on this device. Files lists the files
-// sent in Talos (the thread's folder is under Memory: test/memory/agent-folders.spec.ts). On a phone, Files is a bottom
+// sent in Talos. On a phone, Files is a bottom
 // sheet and there is no terminal.
 
 import { expect, type Locator, type Page, test } from '@playwright/test'

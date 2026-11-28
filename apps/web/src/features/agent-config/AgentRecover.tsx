@@ -3,9 +3,9 @@
 // restore the phone asked for from one the agent asked for, so it is done at the computer (the Mac's menu, the PC's tray),
 // and a line says where (hostWords.restore).
 // With the Mac offline the button stays where it is and says why nothing is sent: recovery needs the Mac app running.
-import { type AgentRecoverActionT, type FrameOf, newUlid } from '@talos-app/protocol'
+import { type AgentRecoverActionT, type FrameOf, newUlid, ownValue } from '@talos-app/protocol'
 import { useEffect, useRef, useState } from 'react'
-import { TalosClientError, useTalosClient } from '../../lib/client.ts'
+import { TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { capital, type HostWords, useHostWords } from '../../lib/hostWords.ts'
 import { Button } from '../../ui/index.ts'
 import { NOT_CONNECTED_LINE, useWriteBlock } from '../settings/offline.ts'
@@ -78,20 +78,46 @@ export function AgentRecover() {
     }
   }
 
+  // Mid-task the owner is asked first: a thread the agent is working on. Only the Mac's own status counts; nothing here guesses
+  // that a long-running row has gone stale. Idle (or a thread that needs the owner) restarts at once.
+  const busy = useTalos((s) => s.threads.some((t) => !t.archived && ownValue(s.statuses, t.id)?.state === 'working'))
+  const [asking, setAsking] = useState(false)
+
   return (
     <div className="space-y-3" data-testid="agent-recover">
       <p className="m-0 text-sm text-text-2">
         If the agent stops answering, this asks {words.computer} to restart it. It doesn’t go through the agent.
       </p>
       <div className="flex flex-col gap-2">
-        <Button
-          variant="outline"
-          className="min-h-11 w-full"
-          aria-busy={pending === 'restart'}
-          onClick={() => void run('restart')}
-        >
-          Restart agent
-        </Button>
+        {asking && !pending ? (
+          <>
+            <p role="status" className="m-0 text-sm">
+              The agent is working on a task. Restarting now stops it.
+            </p>
+            <Button
+              variant="outline"
+              className="min-h-11 w-full"
+              onClick={() => {
+                setAsking(false)
+                void run('restart')
+              }}
+            >
+              Restart now
+            </Button>
+            <Button variant="ghost" className="min-h-11 w-full" onClick={() => setAsking(false)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="outline"
+            className="min-h-11 w-full"
+            aria-busy={pending === 'restart'}
+            onClick={() => (busy && !pending ? setAsking(true) : void run('restart'))}
+          >
+            Restart agent
+          </Button>
+        )}
       </div>
       <p data-testid="agent-recover-restore-note" className="m-0 text-sm text-text-2">
         {words.restore}

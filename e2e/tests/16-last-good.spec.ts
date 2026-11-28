@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/last-good.ts apps/bridge/src/mcp-config.ts
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'

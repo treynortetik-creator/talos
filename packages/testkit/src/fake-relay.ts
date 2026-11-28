@@ -122,6 +122,8 @@ export class FakeRelay {
   private readRefs = new Map<string, WebSocket>()
   /** MCP apps: request_id -> the socket that asked; `app.response` goes only there (MCP-APPS-SPEC M3.4). Not stored, not replayed. */
   private appReqs = new Map<string, WebSocket>()
+  /** The terminal views (core/term.ts): term_id -> the one app socket it is bound to. Never stored or replayed. */
+  private termViews = new Map<string, WebSocket>()
   private bridgeFeatures: string[] = []
   /** A replaced bridge was seen alive (its standby hello was turned away) and no hello has found the slot empty since (presence.superseded). */
   private superseded = false
@@ -554,6 +556,15 @@ export class FakeRelay {
       case 'schedule.status':
         for (const a of this.receivers('schedule.status')) this.sendTo(a, 'to_app', raw)
         return
+      case 'term.opened':
+      case 'term.key':
+      case 'term.out':
+      case 'term.closed': {
+        const sock = this.termViews.get(frame.term_id)
+        if (!sock) return // an id nobody opened: dropped
+        if (frame.type === 'term.closed') this.termViews.delete(frame.term_id)
+        return this.sendTo(sock, 'to_app', raw)
+      }
       case 'app.response': {
         const sock = this.appReqs.get(frame.request_id)
         if (!sock) return // unknown or expired request id: dropped
@@ -739,6 +750,25 @@ export class FakeRelay {
   private onAppFrame(ws: WebSocket, frame: Frame, raw: Record<string, unknown>) {
     if (SCHEDULE_OWNER.has(frame.type)) return this.onScheduleFrame(ws, frame, raw)
     if (V2_READ.has(frame.type)) return this.onReadFrame(ws, frame, raw)
+    if (
+      frame.type === 'term.open' ||
+      frame.type === 'term.resume' ||
+      frame.type === 'term.close' ||
+      frame.type === 'term.ack'
+    ) {
+      if (frame.type === 'term.open') {
+        if (!this.bridgeConnected)
+          return this.sendTo(
+            ws,
+            'to_app',
+            mkFrame('error', { ref: frame.id, code: 'mac_offline', message: 'your Mac is offline' }),
+          )
+        this.termViews.set(frame.term_id, ws)
+        this.readRefs.set(frame.id, ws) // the Mac's error about this open goes back to the asker
+      } else if (this.termViews.get(frame.term_id) !== ws) return // only the socket that opened the view
+      if (frame.type === 'term.close') this.termViews.delete(frame.term_id)
+      return void this.sendToBridge(raw, { durable: false })
+    }
     if (frame.type === 'app.request') {
       if (!this.bridgeConnected)
         return this.sendTo(
@@ -815,6 +845,7 @@ export class FakeRelay {
         if (frame.action !== 'restart') return this.error(ws, 'to_app', 'bad_frame', RECOVER_NEEDS_MAC_TEXT, frame.id)
         if (!this.bridgeConnected) return this.error(ws, 'to_app', 'mac_offline', 'your Mac is offline', frame.id)
         return this.acceptOwnerFrame(ws, frame.id, raw)
+      case 'plugin.add.request':
       case 'undo.request':
         // Like the real relay: queued for the Mac, never for one that is away
         if (!this.bridgeConnected) return this.error(ws, 'to_app', 'mac_offline', 'your Mac is offline', frame.id)

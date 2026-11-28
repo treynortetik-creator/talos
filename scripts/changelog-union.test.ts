@@ -2,7 +2,7 @@
 // gate-push rebases one onto the other. Each such conflict cost a full re-gate (8 landings bounced on 2026-11-15).
 // gate-reads: .gitattributes biome.json
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,7 +29,7 @@ const git = (cwd: string, ...args: string[]) => {
 }
 const entry = (title: string) => `## ${title}\n\n- ${title} changed.\n\n`
 
-describe('CHANGELOG.md merges as a union', () => {
+describe('CHANGELOG.md and docs/FOLLOWUPS.md merge as a union', () => {
   it('two entries added at the top on both sides rebase cleanly, both kept whole', () => {
     const d = mkdtempSync(join(tmpdir(), 'talos-changelog-union-'))
     dirs.push(d)
@@ -68,9 +68,39 @@ describe('CHANGELOG.md merges as a union', () => {
     expect(lint.status, `${lint.stdout}${lint.stderr}`).toBe(0)
   })
 
-  it('only CHANGELOG.md is a union: any other file still conflicts', () => {
+  it('two rows appended at the end of docs/FOLLOWUPS.md on both sides rebase cleanly, both kept whole', () => {
+    const d = mkdtempSync(join(tmpdir(), 'talos-followups-union-'))
+    dirs.push(d)
+    git(d, 'init', '-q', '-b', 'main')
+    copyFileSync(join(repoRoot, '.gitattributes'), join(d, '.gitattributes'))
+    mkdirSync(join(d, 'docs'))
+    const head = '# Follow-ups\n\n| From | Item |\n| ---- | ---- |\n'
+    const row = (title: string) => `| ${title} | ${title} changed |\n`
+    writeFileSync(join(d, 'docs/FOLLOWUPS.md'), `${head}${row('Older')}`)
+    git(d, 'add', '-A')
+    git(d, 'commit', '-qm', 'base')
+    git(d, 'checkout', '-qb', 'mine')
+    writeFileSync(join(d, 'docs/FOLLOWUPS.md'), `${head}${row('Older')}${row('Mine')}`)
+    git(d, 'commit', '-qam', 'mine')
+    git(d, 'checkout', '-q', 'main')
+    writeFileSync(join(d, 'docs/FOLLOWUPS.md'), `${head}${row('Older')}${row('Theirs')}`)
+    git(d, 'commit', '-qam', 'theirs')
+    git(d, 'checkout', '-q', 'mine')
+    const r = git(d, 'rebase', 'main')
+    expect(r.status, r.out).toBe(0)
+    const text = readFileSync(join(d, 'docs/FOLLOWUPS.md'), 'utf8')
+    const at = (s: string) => text.indexOf(s)
+    for (const t of ['Older', 'Theirs', 'Mine']) expect(text).toContain(row(t))
+    expect(at(row('Older'))).toBeLessThan(at(row('Theirs')))
+    expect(at(row('Theirs'))).toBeLessThan(at(row('Mine')))
+    expect(text.startsWith(head)).toBe(true)
+    expect(text).not.toMatch(/^(<<<<<<<|=======|>>>>>>>)/m)
+  })
+
+  it('only CHANGELOG.md and docs/FOLLOWUPS.md are unions: any other file still conflicts', () => {
     const attrs = readFileSync(join(repoRoot, '.gitattributes'), 'utf8')
     expect(attrs).toMatch(/^CHANGELOG\.md merge=union$/m)
-    expect(attrs.match(/merge=union/g)).toHaveLength(1)
+    expect(attrs).toMatch(/^docs\/FOLLOWUPS\.md merge=union$/m)
+    expect(attrs.match(/merge=union/g)).toHaveLength(2)
   })
 })

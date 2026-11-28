@@ -107,14 +107,28 @@ export function refusalWords(e: unknown): string {
   }
 }
 
-/** A transient message at the foot of the screen. */
-export function Notice({ text, onClose }: { text: string | null; onClose: () => void }) {
+/**
+ * A transient message at the foot of the screen. `aboveBar`: the screen has its own button bar at the foot (a job's detail), so the
+ * message sits above that bar and the tab bar, safe area included, instead of over the buttons.
+ */
+export function Notice({
+  text,
+  onClose,
+  aboveBar = false,
+}: {
+  text: string | null
+  onClose: () => void
+  aboveBar?: boolean
+}) {
   if (!text) return null
   return (
     <div
       role="status"
       data-testid="schedules-notice"
-      className="fixed inset-x-4 bottom-24 z-40 mx-auto flex max-w-md items-center gap-3 rounded-card border border-line bg-surface p-3 text-sm text-text shadow-[var(--inset-highlight)] md:bottom-6"
+      className={cn(
+        'fixed inset-x-4 z-40 mx-auto flex max-w-md items-center gap-3 rounded-card border border-line bg-surface p-3 text-sm text-text shadow-[var(--inset-highlight)] md:bottom-6',
+        aboveBar ? 'bottom-[calc(9rem+env(safe-area-inset-bottom))]' : 'bottom-24',
+      )}
     >
       <span className="flex-1">{text}</span>
       <button type="button" className="min-h-11 px-2 text-text-2 underline" onClick={onClose}>

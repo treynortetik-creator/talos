@@ -774,3 +774,86 @@ exit 0
     for (const l of lines) expect(l).toMatch(/: \d+[.,]\d+,? \d+[.,]\d+,? \d+[.,]\d+$/)
   })
 })
+
+// A Titan part that fails is Linux's red, not main's (owner, 11-25: Mac first). The part says so ("not tested: Titan failed <part>",
+// an error: no answer) and reports the red to report-ci/ (the report-only alert); the Mac then runs the part itself and its own
+// result decides. Only a part run as a gating part says it (CI_TITAN_PART=1, ci-runner.sh).
+describe('a Titan part that fails: the Mac runs it itself, and only its own result counts', () => {
+  const titan = {
+    CI_STATUS_PREFIX: 'ci-part',
+    CI_TITAN_PART: '1',
+    CI_ATTEMPT_URL: A,
+    CI_STATUS_URL: `${A}check-titan`,
+    CI_RUN_ID: '9',
+  }
+  const TLOG = '~/.cache/talos-ci/logs/2026-11-25/abc1234-check.log'
+  const titanRed = `ci-part/check\terror\t${A}check-titan\tnot tested: Titan failed check-titan, log ${TLOG}; the Mac re-runs it`
+
+  it('on Titan, a red check is "not tested" under ci-part/ and a failure under report-ci/, never a red under ci-part/', async () => {
+    const r = repo()
+    const run = r.start(checkRun, { ...titan, FAIL_ON: 'pnpm typecheck' })
+    expect(await run.done, run.out()).toBe(0) // not a failed job: the Mac answers
+    expect(r.posts('ci-part/check')).toEqual([
+      expect.stringMatching(
+        /state=error .*description=not tested: Titan failed check-titan, log ~\/\.cache\/talos-ci\/logs\/.*-check\.log;/,
+      ),
+    ])
+    expect(r.posts('report-ci/check')).toEqual([
+      expect.stringMatching(
+        /state=failure .*description=Titan failed check-titan, log ~\/\.cache\/talos-ci\/logs\/.*-check\.log/,
+      ),
+    ])
+  })
+
+  it('on Titan, a green check also reports green under report-ci/ (the alert needs the pair to say "green again")', async () => {
+    const r = repo()
+    const run = r.start(checkRun, titan)
+    expect(await run.done, run.out()).toBe(0)
+    expect(r.posts('ci-part/check')).toEqual([expect.stringMatching(/state=success .*description=passed on /)])
+    expect(r.posts('report-ci/check')).toEqual([expect.stringMatching(/state=success .*description=passed on /)])
+  })
+
+  it('a part run without CI_TITAN_PART (a shard, shadow, or by hand) keeps its red as a red', async () => {
+    const r = repo()
+    const run = r.start(checkRun, { ...titan, CI_TITAN_PART: '', FAIL_ON: 'pnpm typecheck' })
+    expect(await run.done, run.out()).toBe(1)
+    expect(r.posts('ci-part/check')).toEqual([expect.stringMatching(/state=failure /)])
+    expect(r.posts('report-ci/check')).toEqual([])
+  })
+
+  it('on the Mac, Titan\'s red is taken back at once; green here is a pass that says "Titan-only failure, not counted" with its log', async () => {
+    const want = await today()
+    const r = repo()
+    r.set('rows', [titanRed])
+    r.set('jobs', ['check-titan\tcompleted'])
+    const run = r.start(checkRun, { ...on, CI_CHECK_WAIT: '3600' })
+    expect(await run.done, run.out()).toBe(0)
+    expect(checkSteps(r)).toEqual(want) // the Mac ran the whole check itself
+    const text = `Titan-only failure, not counted: check-titan, log ${TLOG}`
+    expect(r.posts('local-ci/check')).toEqual([
+      expect.stringMatching(new RegExp(`state=success .*description=${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)),
+    ])
+    expect(r.log('check')).toContain(text)
+    expect(run.out()).toContain(text)
+  })
+
+  it('on the Mac, Titan red and red here too: red, and it does not say "not counted"', async () => {
+    const r = repo()
+    r.set('rows', [titanRed])
+    r.set('jobs', ['check-titan\tcompleted'])
+    const run = r.start(checkRun, { ...on, CI_CHECK_WAIT: '3600', FAIL_ON: 'pnpm typecheck' })
+    expect(await run.done, run.out()).toBe(1)
+    const posts = r.posts('local-ci/check')
+    expect(posts).toEqual([expect.stringMatching(/state=failure /)])
+    expect(posts.join('\n')).not.toContain('not counted')
+  })
+
+  it('on the Mac, a plain red under ci-part/ (not Titan-converted) still counts: nothing is turned green without a Mac run', async () => {
+    const r = repo()
+    r.set('rows', [partFail])
+    r.set('jobs', ['check-titan\tcompleted'])
+    const run = r.start(checkRun, on)
+    expect(await run.done).toBe(1)
+    expect(r.posts('local-ci/check')).toEqual([expect.stringMatching(/state=failure /)])
+  })
+})

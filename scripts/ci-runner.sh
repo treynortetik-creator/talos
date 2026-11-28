@@ -460,6 +460,7 @@ ci_pr_gone() {
 ci_run() {
   local cache local_ci="${CI_LOCAL_SCRIPT:-$HERE/ci-local.sh}" args sha
   unset CI_SETTLE # asked for below, by a main push run alone
+  unset CI_TITAN_PART # set below for a gating Titan part alone
   ci_guard || return 1
   if [ "${GITHUB_EVENT_NAME:-}" = schedule ] && . "$HERE/ci-runner/schedule.sh" && CI_SCHEDULE_NO_YIELD=1 ci_schedule_skip; then return 0; fi # skipped (scripts/ci-runner/schedule.sh); only the yield step waits
   ci_split_checks run || return 1
@@ -520,6 +521,8 @@ ci_run() {
       echo "ci-runner: ${_owes#local-ci/} is already answered in this attempt; nothing to test here"
       return 0
     fi
+    # A part that gates on Titan is told so (ci-local.sh, CI_TITAN_PART): its red is Linux's, and Lemnos's own run of the part decides
+    case "$CI_RUN_JOBS:${CI_RUN_PREFIX:-}" in image:local-ci | browser-e2e:ci-part | check:ci-part) export CI_TITAN_PART=1 ;; esac
     case "$CI_RUN_JOBS" in linux) export CI_STATUS_PREFIX=report-ci ;; image | browser-e2e | check) export CI_STATUS_PREFIX="$CI_RUN_PREFIX" ;; *) export CI_STATUS_PREFIX=ci-part ;; esac
     args+=(--jobs "$CI_RUN_JOBS")
   fi
@@ -635,7 +638,7 @@ ci_fallback() {
   done
   export CI_FALLBACK_NOTES="$notes"
   # what Lemnos's run left out for another machine is not left out again; a browser here is all of it, never folded or split
-  unset CI_REMOTE_JOBS CI_BROWSER_MAC_PART CI_PUSH_BEFORE CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT
+  unset CI_REMOTE_JOBS CI_BROWSER_MAC_PART CI_PUSH_BEFORE CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_BROWSER_E2E_SHADOW CI_CHECK_PART CI_CHECK_WAIT CI_TITAN_PART
   cache="$(ci_cache_dir)" || return 1
   mkdir -p "$cache/wt" || return 1
   # the nightly and a dispatch are full runs (and the nightly's fuzz is the long one), as Lemnos's own run was

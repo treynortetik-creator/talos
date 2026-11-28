@@ -51,7 +51,9 @@ test(`with every optional feature on, an older page still gets the keep-list wit
     memoryRoots: on,
     problems: {},
     peers: {},
+    agentPlugins: {},
     paneRun: on,
+    term: on,
     config: { subthreadsSupported: () => true },
   }
   const all = bridgeFeatures(everything)
@@ -88,7 +90,9 @@ test(`with every optional feature on, the first hello carries every feature (at 
     memoryRoots: on,
     problems: {},
     peers: {},
+    agentPlugins: {},
     paneRun: on,
+    term: on,
     config: { subthreadsSupported: () => true },
   }
   const all = bridgeFeatures(everything)

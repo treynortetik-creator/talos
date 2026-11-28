@@ -134,6 +134,10 @@ test.describe('on-screen keyboard', () => {
     // Settle the layout first: the card is in, so nothing above the button moves any more.
     await expect(page.getByText('Post v0.3 release notes')).toBeVisible()
     await expect(page.getByTestId('timeline-card').locator('.animate-pulse')).toHaveCount(0)
+    // Expand enables as the page frame mounts below it; the thread then scrolls to the bottom twice, a frame apart.
+    // Wait for the page and both scrolls, or the button moves between mousedown and mouseup.
+    await expect(page.frameLocator('iframe[title="report.html"]').getByText('report')).toBeVisible()
+    await frames(page)
     await page.getByRole('button', { name: 'Expand report.html to full screen' }).click()
     await expect(page.getByRole('dialog', { name: 'report.html' })).toBeVisible()
     await frames(page)

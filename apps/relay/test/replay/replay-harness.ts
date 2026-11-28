@@ -25,6 +25,8 @@ export type LogEntry = { to: string; frame: unknown } | { to: string; closed: nu
 
 export class FakeConn implements Conn {
   closed: { code: number; reason?: string } | null = null
+  /** Bytes the socket has queued and not yet written (a slow phone); a test sets it. */
+  buffered = 0
   constructor(
     readonly name: string,
     private log: LogEntry[],
@@ -38,6 +40,9 @@ export class FakeConn implements Conn {
     this.log.push({ to: this.name, closed: code, ...(reason ? { reason } : {}) })
   }
   terminate(): void {}
+  bufferedAmount(): number {
+    return this.buffered
+  }
 }
 
 type Attached = { onMessage(text: string): void; onClose(): void }

@@ -3,7 +3,7 @@
 // failed message, notices a dead socket quickly when the app comes back to the front, and retries a send it could not
 // save on a timer.
 import { newId } from '@talos-app/protocol'
-import { FakeRelay, waitFor } from '@talos-app/testkit'
+import { FakeRelay, t, waitFor } from '@talos-app/testkit'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createSocketClient, MAX_MESSAGE_CHARS, type OutboxEntry } from '../src/lib/socketClient.ts'
 import { createMemoryStorage } from '../src/lib/storage.ts'
@@ -28,11 +28,14 @@ afterEach(async () => {
 /** A real WebSocket that can be made to ignore the relay's `pong`, i.e. a socket that died while the phone slept. */
 class DeafWS extends WebSocket {
   static deaf = false
+  /** The pongs that reached the client (a deaf socket swallows them, so they are not counted). */
+  static pongs = 0
   constructor(url: string | URL) {
     super(url)
     this.addEventListener('message', (ev) => {
-      if (!DeafWS.deaf || typeof ev.data !== 'string') return
-      if (JSON.parse(ev.data).type === 'pong') ev.stopImmediatePropagation()
+      if (typeof ev.data !== 'string' || JSON.parse(ev.data).type !== 'pong') return
+      if (DeafWS.deaf) ev.stopImmediatePropagation()
+      else DeafWS.pongs++
     })
   }
 }
@@ -126,14 +129,17 @@ describe('D5 sending guards', () => {
 describe('D16 coming back to the app', () => {
   const show = () => doc.dispatchEvent(new Event('visibilitychange'))
 
-  it('a socket that no longer answers is dropped about 2.5 s after the app is visible, and reconnects', async () => {
+  // The probe waits wakeProbeMs for the pong; the real default (10 s) is covered by test/socket-probe.test.ts on fake timers.
+  const PROBE = { WebSocketImpl: DeafWS as never, isVisible: () => true, wakeProbeMs: 200 }
+
+  it('a socket that no longer answers is dropped when the probe finds it dead, and reconnects', async () => {
     DeafWS.deaf = false
-    const { client } = await setup({ WebSocketImpl: DeafWS as never, isVisible: () => true })
+    const { client } = await setup(PROBE)
     try {
       expect(hellos()).toBe(1)
       DeafWS.deaf = true
       show()
-      await waitFor(() => hellos() === 2, 6000, 'reconnected')
+      await waitFor(() => hellos() === 2, t(6000), 'reconnected')
       DeafWS.deaf = false
       await waitFor(() => client.store.getState().connection === 'online', 4000, 'online again')
     } finally {
@@ -144,10 +150,12 @@ describe('D16 coming back to the app', () => {
 
   it('control: a socket that answers is left alone', async () => {
     DeafWS.deaf = false
-    const { client } = await setup({ WebSocketImpl: DeafWS as never, isVisible: () => true })
+    const { client } = await setup(PROBE)
     try {
+      DeafWS.pongs = 0
       show()
-      await new Promise((r) => setTimeout(r, 3500))
+      // the probe's pong has been counted: only a socket that answers gets here (a deaf one times out in this wait)
+      await waitFor(() => DeafWS.pongs >= 1, t(6000), "the probe's pong")
       expect(hellos()).toBe(1)
       expect(client.store.getState().connection).toBe('online')
     } finally {

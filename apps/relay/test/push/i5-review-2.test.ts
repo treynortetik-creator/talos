@@ -73,7 +73,6 @@ async function pipeline(mode: 'fixed_only' | 'none' | 'all') {
     log: silent,
     transport: new NoopTransport(),
     config: () => cfg,
-    anyVisible: () => false,
     apns: sender,
   })
   return { fake, push }

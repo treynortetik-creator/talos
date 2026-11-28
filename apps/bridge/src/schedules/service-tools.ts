@@ -203,8 +203,7 @@ export function toolRunDoneQueued(
     if (!a.ok) {
       const name = this.lastGood?.schedules.find((s) => s.id === job.id)?.name ?? job.id
       if (this.markAll(failKeys(job.id, a.runId, job.ds, 'failed'))) {
-        await this.postFailure(job.id, name, 'failed')
-        this.pendingAlerts.push({ kind: 'job_failed', key: `${job.id}:${job.ds}`.slice(0, 80) })
+        await this.jobFailed({ id: job.id, name, status: 'failed', ds: job.ds, runId: a.runId, row: true })
       }
     }
     const remembered = rememberRun(this.jobMemory, this.sidecar, {

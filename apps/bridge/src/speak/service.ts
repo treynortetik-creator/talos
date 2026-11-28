@@ -25,11 +25,13 @@ import type { Logger } from '../log.ts'
 import type { MediaStore } from '../media.ts'
 import { say as hostSay } from '../owner-words.ts'
 import { readRegularFile } from '../safe-open.ts'
-import { SPEAK_CACHE_PREFIX, synthesize } from '../tts.ts'
+import { SPEAK_CACHE_PREFIX, synthesize, type TtsResult } from '../tts.ts'
 import type { SpeakBody } from '../v2-seams.ts'
 
 /** Syntheses running at once. A Mac's voice model is heavy; more than this queue (the app sees 'working'). */
 export const SPEAK_MAX_PARALLEL = 2
+/** How long a reply waits for its `voice_text` audio before the text goes out alone and the audio follows. */
+export const VOICE_ATTACH_WAIT_MS = 20_000
 /** Jobs that may wait for a free slot behind the running ones. One more is refused with 'busy' instead of queueing for ever. */
 export const SPEAK_MAX_WAITING = 6
 /** A first ask waits this long for a quick synthesis before it answers 'working'. */
@@ -67,6 +69,8 @@ export type SpeakOptions = {
   graceMs?: number
   maxParallel?: number
   maxWaiting?: number
+  /** Tests set a shorter wait than VOICE_ATTACH_WAIT_MS. */
+  replyWaitMs?: number
   /** Tests swap the synthesis; production uses the real command runner. */
   synth?: typeof synthesize
 }
@@ -80,9 +84,12 @@ export class SpeakService {
   private reuploads = new Map<string, { promise: Promise<void>; done: boolean }>()
   private running = 0
   private waiters: Array<() => void> = []
+  /** Reply voices waiting for a slot: they go after every read-aloud tap that is waiting, so a tap never sits behind them. */
+  private replyWaiters: Array<() => void> = []
   private readonly graceMs: number
   private readonly maxParallel: number
   private readonly maxWaiting: number
+  readonly replyWaitMs: number
   private readonly synth: typeof synthesize
 
   constructor(
@@ -92,6 +99,7 @@ export class SpeakService {
     this.graceMs = o.graceMs ?? SPEAK_GRACE_MS
     this.maxParallel = o.maxParallel ?? SPEAK_MAX_PARALLEL
     this.maxWaiting = o.maxWaiting ?? SPEAK_MAX_WAITING
+    this.replyWaitMs = o.replyWaitMs ?? VOICE_ATTACH_WAIT_MS
     this.synth = o.synth ?? synthesize
   }
 
@@ -205,15 +213,28 @@ export class SpeakService {
       if (j.doneAt !== undefined && now - j.doneAt > SPEAK_JOB_MEMORY_MS) this.jobs.delete(id)
   }
 
-  private async slot(): Promise<void> {
+  /**
+   * The audio for a reply's `voice_text`: one synthesis, under the same parallel limit as read aloud (it waits for a slot, never
+   * refused). It waits in a line of its own behind every read-aloud tap, so the owner's tap never waits behind reply voices.
+   */
+  async synthesizeForReply(text: string, id: string): Promise<TtsResult> {
+    await this.slot('reply')
+    try {
+      return await this.synth(this.d.env, this.d.paths, text, id)
+    } finally {
+      this.release()
+    }
+  }
+
+  private async slot(kind: 'read' | 'reply' = 'read'): Promise<void> {
     if (this.running < this.maxParallel) {
       this.running++
       return
     }
-    await new Promise<void>((resolve) => this.waiters.push(resolve))
+    await new Promise<void>((resolve) => (kind === 'reply' ? this.replyWaiters : this.waiters).push(resolve))
   }
   private release() {
-    const next = this.waiters.shift()
+    const next = this.waiters.shift() ?? this.replyWaiters.shift()
     if (next)
       next() // the slot passes straight on
     else this.running--

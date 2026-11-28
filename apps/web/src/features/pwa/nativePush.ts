@@ -20,6 +20,7 @@ import {
   NativePushError,
   nativeGrantSupported,
   nativeKeys,
+  nativeLastPlainReason,
   nativePermission,
   nativePushAvailable,
   nativeStatus,
@@ -31,12 +32,21 @@ import {
   choice,
   choiceGeneration,
   grantStored,
+  hideWordsOffer,
   resetNativeChoicesForTests,
   setChoice,
   setGrantStored,
   setTextChoice,
+  setTextPref,
   textChoice,
+  textPref,
+  wantsText,
+  wordsOfferWanted,
 } from './nativeChoice.ts'
+import { lastPushLine } from './plainPushWords.ts'
+
+/** What the row and the Home card say when Turn on worked but the words did not. */
+export const TEXT_FAILED_NOTE = "Notifications are on, but message words didn't turn on."
 
 export type NativePushView =
   | { kind: 'hidden' }
@@ -57,6 +67,12 @@ type State = {
   rich: boolean | null
   /** The owner's choice is "no text" but the relay still holds a grant: taking it back has not reached the server yet. */
   pendingRevoke: boolean
+  /** Turn on tried to make the words and could not: the row says so and offers Try again. */
+  textFailed: boolean
+  /** The one-time question to a page whose older "off" was kept: show message words? */
+  wordsOffer: boolean
+  /** "Why was that push plain?": the line about the last message push, or null before the first one. */
+  lastPush: string | null
 }
 export const useNativePush = create<State>(() => ({
   view: isNativeShell() ? { kind: 'checking' } : { kind: 'hidden' },
@@ -64,6 +80,9 @@ export const useNativePush = create<State>(() => ({
   note: null,
   rich: null,
   pendingRevoke: false,
+  textFailed: false,
+  wordsOffer: false,
+  lastPush: null,
 }))
 
 const set = (p: Partial<State>) => useNativePush.setState(p)
@@ -141,6 +160,11 @@ export async function registerNativeGrant(d: Deps, stillOnIn: () => boolean = ()
       await revokeNativeGrant(d)
       return false
     }
+    if (!stillOn()) {
+      // Signed out (or turned off) while the Keychain write was open: the keys must not outlive it, here or at the relay.
+      await revokeNativeGrant(d)
+      return false
+    }
     setGrantStored(true)
     return true
   } catch {
@@ -207,8 +231,9 @@ async function renewNativeGrant(d: Deps, stillOn: () => boolean): Promise<void> 
 
 /**
  * The one rule for "iOS says notifications are blocked", shared by the Settings row and the open-time refresh. The owner's text
- * choice ends and the phone's keys go, whether or not the relay can be reached (re-allowing notifications and tapping Turn on
- * must not bring text back). If the relay still holds this phone's token it is told to forget it and the grant is taken back.
+ * applied text ends and the phone's keys go, whether or not the relay can be reached, so opening the app after a re-allow
+ * never brings words back by itself; only the owner's Turn on tap does, and it reads their decision (`textPref`), or the
+ * default if they never made one. If the relay still holds this phone's token it is told to forget it and the grant is taken back.
  * Quiet: a failure here is retried by the next open.
  */
 async function denyLocally(d: Deps): Promise<void> {
@@ -253,16 +278,19 @@ function describeFailure(e: unknown): NativePushView {
 
 /** Reads the truth: shell plugin, relay configuration, iOS permission, and whether the relay has this phone's token. */
 export async function refreshNativePush(d: Deps): Promise<NativePushView> {
+  textPref() // classify an older page before anything below records a choice on it
   const scope = d.scope ?? globalThis
   const started = epoch
   let view: NativePushView
   let deniedRegistered: boolean | null = null
+  let last: ApnsStatusT['last']
   if (!isNativeShell(scope)) view = { kind: 'hidden' }
   else if (!nativePushAvailable(scope)) view = { kind: 'needs_setup', why: 'build' }
   else if (capabilityMissing) view = { kind: 'needs_setup', why: 'capability' }
   else {
     try {
       const st = await (d.http ?? defaultHttp).get<ApnsStatusT>('/api/push/apns')
+      last = st.last
       if (!st.configured) view = { kind: 'needs_setup', why: 'server' }
       else {
         const { permission: perm, capable } = await nativeStatus(scope)
@@ -295,6 +323,13 @@ export async function refreshNativePush(d: Deps): Promise<NativePushView> {
       set({ rich: wanted && st.registered, pendingRevoke: !wanted && st.registered })
     }
   } else set({ rich: null, pendingRevoke: false })
+  // The line about the last push: the relay's answer, plus the phone's own reason if this build of the app can give one.
+  set({ lastPush: view.kind === 'on' ? lastPushLine(last, await nativeLastPlainReason(scope)) : null })
+  const s = useNativePush.getState()
+  set({
+    wordsOffer: view.kind === 'on' && s.rich === false && wordsOfferWanted(),
+    ...(view.kind !== 'on' || s.rich === true ? { textFailed: false } : {}),
+  })
   return view
 }
 
@@ -310,10 +345,15 @@ async function dropGrantForTurnOn(d: Deps): Promise<void> {
 /** Tap handler for "Turn on". The only place that can show the iOS permission dialog. */
 export async function enableNativePush(d: Deps): Promise<void> {
   if (useNativePush.getState().busy) return
-  set({ busy: true, note: null })
+  set({ busy: true, note: null, textFailed: false })
   epoch++
+  const started = epoch
+  const gen = choiceGeneration() // a sign-out while the register POST is out must not end in a grant or a recorded 'on'
   try {
-    // Turn on starts from the fixed phrase, always: text is a separate tap. A leftover 'on' must not come back with it.
+    // The words default applies here and nowhere else: the owner's decision if there is one (a tap on Show message text or
+    // Use a fixed phrase only, or an older page's kept "off"), else the shared PUSH_TEXT_DEFAULT. Opening the app never decides.
+    const wantText = wantsText()
+    // Text starts off for this attempt; it is set to on only after a grant is stored. A leftover 'on' must not come back by itself.
     setTextChoice('off')
     // ...and any grant still alive from before (the relay kept one, or the phone still holds keys) is taken back first:
     // otherwise the relay would go on sealing text for a row that says fixed phrase. A relay that cannot be reached leaves
@@ -322,12 +362,31 @@ export async function enableNativePush(d: Deps): Promise<void> {
     const { token, env } = await registerNative({ prompt: true }, d.scope ?? globalThis)
     capabilityMissing = false
     await postSigned(d, { op: 'register', token, env })
+    if (gen !== choiceGeneration()) return // signed out meanwhile: the page belongs to no one now
     setChoice('on')
-    // Turn on never makes a grant. Message text and the Reply / Approve buttons start when the owner taps "Show message text"
-    // (`setNativeText`); until then every notification is the fixed phrase, for a new phone, for Turn off then on, and for a
-    // phone that had notifications on before this feature.
+    // Words and the Reply / Approve buttons: one tap, same busy span. A grant that cannot be made never fails Turn on (the
+    // notifications are on, as a fixed phrase) but it is never reported as on: the row says it did not turn on, with Try again.
+    // An older shell with no key calls says nothing about text.
+    let textFailed = false
+    if (wantText && nativeGrantSupported(d.scope ?? globalThis)) {
+      const ok = await registerNativeGrant(
+        d,
+        () => epoch === started && gen === choiceGeneration() && choice() !== 'off',
+      )
+      if (ok && gen === choiceGeneration() && choice() !== 'off') setTextChoice('on')
+      else textFailed = true
+    }
     await refreshNativePush(d)
-    set({ note: 'Notifications are on.' })
+    const rich = useNativePush.getState().rich
+    set({
+      textFailed: textFailed || (wantText && rich === false),
+      note:
+        textFailed || (wantText && rich === false)
+          ? TEXT_FAILED_NOTE
+          : rich === true
+            ? 'Notifications are on, with message words.'
+            : 'Notifications are on.',
+    })
   } catch (e) {
     if (e instanceof NativePushError) {
       if (e.code === 'denied') set({ view: { kind: 'blocked' } })
@@ -351,12 +410,17 @@ export async function setNativeText(d: Deps, on: boolean): Promise<void> {
   if (useNativePush.getState().busy) return
   set({ busy: true, note: null })
   epoch++ // an open-time renewal that is mid-flight must not bring a grant back
+  const gen = choiceGeneration() // a sign-out while the grant is being made must not end in text on
+  setTextPref(on ? 'on' : 'off') // the owner's decision: kept across Turn off and Turn on, and it ends the one-time offer
+  set({ wordsOffer: false })
   try {
     if (on) {
-      const ok = await registerNativeGrant(d)
+      const made = await registerNativeGrant(d)
+      const ok = made && gen === choiceGeneration()
       if (ok) setTextChoice('on')
       set({
         rich: ok,
+        textFailed: !ok,
         ...(ok ? { pendingRevoke: false } : {}),
         note: ok ? 'Message text is on.' : "Couldn't turn on message text. Notifications still work.",
       })
@@ -376,12 +440,18 @@ export async function setNativeText(d: Deps, on: boolean): Promise<void> {
   }
 }
 
+/** "Not now" on the one-time question: it does not come back. Makes no grant and changes nothing else. */
+export function dismissWordsOffer(): void {
+  hideWordsOffer()
+  set({ wordsOffer: false })
+}
+
 export async function disableNativePush(d: Deps): Promise<void> {
   if (useNativePush.getState().busy) return
   set({ busy: true, note: null })
   epoch++
   setChoice('off')
-  setTextChoice('off') // text is a separate opt-in: Turn on later starts from the fixed phrase again
+  setTextChoice('off') // applied text ends with notifications; the owner's decision (textPref) stays, and the next Turn on tap reads it
   try {
     const gone = await revokeNativeGrant(d)
     await postSigned(d, { op: 'unregister' })
@@ -403,6 +473,7 @@ export async function disableNativePush(d: Deps): Promise<void> {
 export async function refreshNativeOnOpen(d: Deps): Promise<void> {
   const scope = d.scope ?? globalThis
   if (!nativePushAvailable(scope)) return
+  textPref() // classify an older page before anything below records a choice on it
   const started = epoch
   try {
     // The permission is read before the network, so an offline open still ends the text choice on a block.
@@ -441,10 +512,10 @@ export async function refreshNativeOnOpen(d: Deps): Promise<void> {
 }
 
 /** Tests only: forget what this page load remembered. */
-export function resetNativePushForTests(): void {
+export function resetNativePushForTests(opts: { keepStorage?: boolean } = {}): void {
   epoch = 0
   capabilityMissing = false
-  resetNativeChoicesForTests()
+  resetNativeChoicesForTests(opts)
 }
 
 /**

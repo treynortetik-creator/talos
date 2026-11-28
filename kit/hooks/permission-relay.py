@@ -126,80 +126,28 @@ def bridge_pid():
         return None
 
 
-class Watcher:
-    """True once the session transcript holds the tool_result of THIS call: the prompt is over, however it ended.
-
-    The call is the transcript's tool_use block with this tool name and input that has no tool_result yet. When more than one
-    such block exists (two identical calls at once, in one assistant entry or in separate ones) the hook cannot tell which result
-    is its own, so the watcher stays off for good and only Claude Code ending the hook closes the card. Ambiguity is checked
-    on every look, so a second identical call that shows up later also turns it off."""
-
-    TAIL = 2 * 1024 * 1024
+class _NoWatch:
+    """No helper module (see `C` above): nothing to watch, the card closes only when Claude Code ends the hook."""
 
     def __init__(self, call):
-        p = call.get("transcript_path")
-        self.path = p if isinstance(p, str) and p else None
-        self.name = call.get("tool_name")
-        self.input = call.get("tool_input", {})
-        self.pending = set()         # ids of matching tool_use blocks with no result yet
-        self.mine = None
-        self.off = self.path is None
-        self.offset = 0
-        self.started = False
-        self.tries = 0
-
-    def _scan(self, data):
-        """Folds the transcript lines in `data` into the pending set. True when a result for `mine` was seen (and still unambiguous)."""
-        finished = False
-        for raw in data.splitlines():
-            try:
-                msg = json.loads(raw.decode("utf-8")).get("message") or {}
-            except Exception:
-                continue
-            content = msg.get("content")
-            for block in content if isinstance(content, list) else []:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use" and block.get("name") == self.name and block.get("input") == self.input \
-                        and isinstance(block.get("id"), str):
-                    self.pending.add(block["id"])
-                elif block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending:
-                    if block["tool_use_id"] == self.mine:
-                        finished = True
-                    self.pending.discard(block["tool_use_id"])
-            if len(self.pending) > 1:
-                self.off = True      # two identical calls open: whose result is whose cannot be told
-        return finished and not self.off
+        pass
 
     def done(self):
-        try:
-            if self.off:
-                return False
-            size = os.path.getsize(self.path)
-            if not self.started:
-                self.tries += 1
-                if self.tries > 15:          # the transcript never showed the call: rely on Claude Code ending the hook
-                    self.off = True
-                    return False
-                with open(self.path, "rb") as fh:
-                    fh.seek(max(0, size - self.TAIL))
-                    data = fh.read()
-                self.pending = set()
-                self._scan(data)
-                if len(self.pending) == 1:
-                    self.mine = next(iter(self.pending))
-                    self.started = True
-                    self.offset = size
-                return False
-            if size <= self.offset:
-                return False
-            with open(self.path, "rb") as fh:
-                fh.seek(self.offset)
-                chunk = fh.read(min(size - self.offset, 4 * 1024 * 1024))
-            self.offset += len(chunk)
-            return self._scan(chunk)
-        except Exception:
-            return False
+        return False
+
+
+Watcher = C.Watcher if C else _NoWatch     # the transcript watcher lives in _talos_common.py (this file is at its size limit)
+
+
+def answers_of(raw, tool_input):
+    """{question text: answer} from the bridge's `answers` ({"0": ..., "1": ...}: by the question's POSITION in this input, the bridge's permission/question.ts): only positions THIS input has, each answer one clipped line."""
+    qs = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    out = {}
+    if isinstance(raw, dict) and isinstance(qs, list):
+        for k, v in raw.items():
+            if isinstance(k, str) and k.isdigit() and int(k) < len(qs) and isinstance(qs[int(k)], dict) and isinstance(qs[int(k)].get("question"), str) and isinstance(v, str) and v.strip():
+                out[qs[int(k)]["question"]] = " ".join(v.split())[:500]
+    return out
 
 
 def ask_bridge(req, deadline, parent, watcher):
@@ -223,8 +171,7 @@ def ask_bridge(req, deadline, parent, watcher):
             old = None
         try:
             os.chdir(app_home())          # a relative name sidesteps the ~104-byte socket path limit
-            # run/hub.sock since the socket left home (Bun on Linux cannot watch a folder holding one); hub.sock, where it
-            # was, only while the new one is not there (a bridge not yet restarted), for one release
+            # run/hub.sock since the socket left home (Bun on Linux cannot watch a folder holding one); hub.sock, where it was, only while the new one is not there
             sock.connect("run/hub.sock" if os.path.exists("run/hub.sock") or not os.path.exists("hub.sock") else "hub.sock")
         finally:
             if old:
@@ -232,27 +179,31 @@ def ask_bridge(req, deadline, parent, watcher):
         want = bridge_pid()
         got = peer_pid(sock)
         if want is None or got is None or want != got:
+            req["_lost"] = bool(req.get("_ever"))     # on a retry this may be a takeover moment: main() tries again
             return None                   # not the live bridge (or no way to tell): the tool input is never sent
-        sock.sendall(line)
+        C and C.on_over(sock, req)        # a stop from Claude Code (SIGTERM/SIGHUP) is told to the hub before the hook exits (set before the request goes out)
+        sock.sendall(line); req["_out"] = req["_ever"] = True; C and C.trace("sent")      # the request is out whole: only now may a stop be told to the hub (the trace shows it)
         buf = b""
         while b"\n" not in buf and len(buf) < 16384:     # room for a deny with the owner's 400-character note (~5 KB as escapes)
             left = deadline - time.monotonic()
             if left <= 0:
-                return None
+                return C.ended(sock, req, "timeout") if C else None
             if watcher.done():
-                return None               # the prompt is over (blocked by Claude Code's own countdown, say): the card must not outlive it
+                return C.ended(sock, req, "result") if C else None               # the prompt is over (blocked by Claude Code's own countdown, say): the card must not outlive it
             if os.getppid() != parent:
-                return None               # whatever started this hook is gone (Claude Code ended it): do not linger holding the card open
+                return C.ended(sock, req, "parent") if C else None               # whatever started this hook is gone (Claude Code ended it): do not linger holding the card open
             sock.settimeout(min(left, 1.0))
             try:
                 chunk = sock.recv(4096)
             except socket.timeout:
                 continue
             if not chunk:
-                return None
+                req["_lost"] = True           # the bridge went away mid-wait (a restart): main() may ask again (an AskUserQuestion only)
+                return C.ended(sock, req, "eof") if C else None
             buf += chunk
         msg = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
     except Exception:
+        req["_lost"] = True
         return None
     finally:
         try:
@@ -262,7 +213,10 @@ def ask_bridge(req, deadline, parent, watcher):
     if not isinstance(msg, dict) or msg.get("t") != "perm_result" or msg.get("id") != req["id"]:
         return None
     d = msg.get("decision")
-    req["_notes"] = C.deny_notes(msg) if d == "deny" and C else []      # only with a deny; beside an allow it is never read
+    req["_notes"], req["_session"] = (C.deny_notes(msg) if d == "deny" and C else []), (C.session_chosen(msg, d, req) if C else False)   # note: deny only; session: allow only
+    if d == "answer" and req.get("tool_name") == "AskUserQuestion":      # an answer means nothing for any other tool
+        req["_answers"] = answers_of(msg.get("answers"), req.get("tool_input"))      # an AskUserQuestion's answers: the phone's tap, or the bridge's "no answer yet"
+        return "answer" if req["_answers"] else None
     return d if d in ("allow", "deny") else None
 
 
@@ -959,9 +913,11 @@ def folder_settings_problem():
 
 def main():
     try:
-        call = json.loads(sys.stdin.read() or "{}")
+        raw = sys.stdin.read() or "{}"
+        call = json.loads(raw)
         if not isinstance(call, dict) or not isinstance(call.get("tool_name"), str) or not call["tool_name"]:
             return
+        call["_raw"] = raw           # the text as Claude Code wrote it: the PreToolUse lookup keys on its raw tool_input (_talos_common.pre_key)
         event = call.get("hook_event_name")
         if event is not None and event != "PermissionRequest":
             return
@@ -983,10 +939,19 @@ def main():
         if req is None:
             return
         decision = ask_bridge(req, deadline, parent, Watcher(call))
+        tries = 0
+        # a bridge restart while an AskUserQuestion waits: ask again (the new bridge makes its cards and its own timer), a bounded number of times and never past the wait
+        while decision is None and req.pop("_lost", False) and req.get("_ever") and call["tool_name"] == "AskUserQuestion" and tries < 60 and os.getppid() == parent and time.monotonic() + 2 < deadline:
+            tries += 1
+            time.sleep(1.0)
+            req["_out"] = False
+            decision = ask_bridge(req, deadline, parent, Watcher(call))
         if decision == "allow":
-            out = {"behavior": "allow"}
+            out = {"behavior": "allow", **(C.session_grant(call, req) if C else {})}      # + "for this session": this hook's own stored rule, if the owner chose it
         elif decision == "deny":
             out = {"behavior": "deny", "message": C.deny_message(req.get("_notes", [])) if C else "Denied from the Talos app."}   # + the owner's note, if any
+        elif decision == "answer":
+            out = {"behavior": "allow", "updatedInput": dict(call["tool_input"], answers=req["_answers"])}   # completes the AskUserQuestion with these answers; no key is pressed
         else:
             return
         sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": out}}) + "\n")

@@ -223,7 +223,7 @@ function InboxScreenInner({ navigate }: { navigate: NavigateFunction }) {
                     variant="outline"
                     onClick={() => {
                       const target = config?.default_thread ?? 'general'
-                      prefillComposer(target, `re: ${open.title}`)
+                      prefillComposer(target, `re: ${open.title}`, 'append')
                       navigate(`/t/${target}`)
                     }}
                   >

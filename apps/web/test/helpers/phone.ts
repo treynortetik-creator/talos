@@ -17,6 +17,23 @@ export async function openPhoneMenu(page: Page) {
 export async function closePhoneMenu(page: Page) {
   const menu = page.getByTestId('phone-menu')
   if (!(await menu.isVisible())) return
+  // A sheet that was closing over the menu (a thread's settings after Save or Cancel) is the top layer until its exit ends, and it takes the
+  // Escape: wait for it to be gone. The app then puts the focus back by itself (the row's ⋯ in the menu, else the header's menu button): assert
+  // that, never set it here, so a focus that is not restored shows up as a failure and not as a pass.
+  await expect(page.getByTestId('thread-settings')).toBeHidden()
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const a = document.activeElement
+        const where = document.querySelector('[data-testid="phone-menu"]')?.contains(a ?? null)
+          ? 'menu'
+          : a?.matches('[data-phone-opener="menu"]')
+            ? 'opener'
+            : `${a?.tagName}${a?.getAttribute('data-testid') ? `[${a.getAttribute('data-testid')}]` : ''}`
+        return where
+      }),
+    )
+    .toMatch(/^(menu|opener)$/)
   await page.keyboard.press('Escape')
   await expect(menu).toBeHidden()
 }

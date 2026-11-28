@@ -42,6 +42,18 @@ export const CardResolveFrame = ownerFrame('card.resolve', {
    * kind to `always_allow` only after it verifies that signature for this card. Ignored on any other action or kind.
    */
   always: z.literal(true).optional(),
+  /**
+   * "Allow for this session": with action 'primary' on a permission card the hook raised that offers it (`session_allow`), the owner
+   * also lets the same kind of call through for the rest of that Claude Code session. Signed with the rest of the frame, so only the
+   * owner's own tap carries it. Ignored on any other action or card. Absent from every frame an older app sends.
+   */
+  session: z.literal(true).optional(),
+  /**
+   * With `session: true`: the sha256 of the canonical {tool, content} list the app showed on the button (permission.ts `sessionRulesHash`),
+   * signed with the rest of the frame. The bridge and the hook compare it with the rules they hold; a mismatch, or none (an older app),
+   * is a plain allow. So a relay cannot have the phone show one rule and the owner sign another.
+   */
+  session_hash: Sha256Ref.optional(),
   stepup_token: z.string().max(200).optional(), // old apps only (the passkey step-up, removed 2026-11-14): stripped, never read
   stepup: z.unknown().optional(), // old apps only (the passkey step-up, removed 2026-11-14): accepted, never read
 })

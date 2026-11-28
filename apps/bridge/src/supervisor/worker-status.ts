@@ -10,6 +10,7 @@ import type {
   WorkerStoppedWhyT,
 } from '@talos-app/protocol'
 import { holdReasonOf, persisted } from './owed-pointer.ts'
+import { quietLinesFor } from './pane-lines.ts'
 import { savedActivity } from './worker-idle.ts'
 import type { NoticeRuntime } from './worker-notices.ts'
 import type { WorkerRuntime } from './worker-types.ts'
@@ -199,10 +200,15 @@ export function publishedThreads(
   const threads: Record<string, WorkerEntryT> = {}
   const own: Record<string, OwnFields> = {}
   for (const w of ws) {
-    const { last_active_at: _old, ...entry } = w.entry
+    const { last_active_at: _old, quiet_lines: _stale, ...entry } = w.entry
     const last = savedActivity(w.entry.state, w.idle.lastActiveMs)
     const withNeeds = withPointerHold(withNeedsYou(entry as WorkerEntryT, w.notes), w)
-    threads[w.id] = last ? { ...withNeeds, last_active_at: last } : withNeeds
+    const quiet = quietLinesFor(w.entry.state, w.idle, o.wallMs)
+    threads[w.id] = {
+      ...withNeeds,
+      ...(last ? { last_active_at: last } : {}),
+      ...(quiet ? { quiet_lines: quiet } : {}),
+    }
     const mine = ownFields({
       owed: persisted(w.owed),
       state: w.entry.state,

@@ -62,7 +62,7 @@ for f in START-HERE.md BOOTSTRAP.md SETUP-INTERVIEW.md HOMEWORK.md SEED-WIKI.md 
          templates/dot-claude/settings.json wiki/README.md wiki/_index.md \
          .claude/agents/grunt.md .claude/agents/reviewer.md \
          hooks/action-rules.py hooks/action-rules.yaml hooks/compaction-guard.py hooks/memory-reflex.py hooks/bsd-sed-guard.py \
-         hooks/permission-relay.py scripts/test-permission-relay.sh hooks/thread-state.py scripts/test-thread-state.sh \
+         hooks/permission-relay.py hooks/notification-relay.py scripts/test-permission-relay.sh hooks/thread-state.py scripts/test-thread-state.sh \
          scripts/wiki-gazetteer.py scripts/settings-merge.py scripts/go-public.sh scripts/watcher.py \
          scripts/watcher-adapters/macos-calendar.sh scripts/memory/mem_rerank.py scripts/memory/fetch-reranker.sh \
          scripts/dream/common.py scripts/dream/collect.py scripts/dream/verify_quotes.py scripts/dream/apply.py \

@@ -25,6 +25,7 @@ import {
   folderLaunchProblem,
   folderLinkProblem,
   realName,
+  recordedBridgePaths,
   type TrustedBridge,
   trustedBridge,
   WALK_CAP,
@@ -94,6 +95,8 @@ export type OsSandboxInput = {
   ownerExcludes?: readonly string[]
   /** What Talos recorded about its bridge (the bun and the clone); undefined: this process's own (trustedBridge), null: none. */
   trusted?: TrustedBridge | null
+  /** The folders besides the session's that a session can write (default: the shared temp folders); a kit inside one is never credited. Tests whose kit sits in a temp folder pass []. */
+  writableRoots?: readonly string[]
   /** Main's launch arguments (past `--` is the prompt): `--add-dir` in them refuses the start. */
   launchArgs?: readonly string[]
 }
@@ -138,13 +141,14 @@ function protectedPath(realHome: string, name: string): string {
 }
 
 /** Denied for writing besides the home's and the folder's names: where login items live (~/Library/LaunchAgents) and the kit release, by real path, even when missing. */
-const extraDenyWrite = (userHome: string, trusted: TrustedBridge | null, folder: string): string[] => {
-  const clone = trusted ? realName(resolve(trusted.bridgeDir, '..', '..')) : null
+const extraDenyWrite = (userHome: string, trusted: TrustedBridge | null): string[] => {
+  const rec = trusted ? recordedBridgePaths(trusted) : null
   return [
     realName(join(userHome, 'Library', 'LaunchAgents')),
     realName(kitVendorDir(process.env, userHome)),
-    // the recorded bridge clone (never when the session's own folder is inside it: that folder must stay writable)
-    ...(clone && folder !== clone && !folder.startsWith(`${clone}/`) ? [clone] : []),
+    // the recorded clone, its bridge folder and the bun(s), whatever the session's folder: the builder alone never skips them (a folder that
+    // contains or is inside them is refused at launch by cloneFenceProblem)
+    ...(rec ? [...new Set([rec.clone, rec.bridgeDir, ...rec.buns])] : []),
   ]
 }
 
@@ -182,7 +186,7 @@ export function osSandboxSettings(i: OsSandboxInput): OsSandboxPieces {
         denyWrite: [
           ...under(OS_SANDBOX_DENY_WRITE),
           ...folderDenyWrite(folder).flatMap(forms),
-          ...extraDenyWrite(i.userHome, i.trusted === undefined ? trustedBridge() : i.trusted, folder).flatMap(forms),
+          ...extraDenyWrite(i.userHome, i.trusted === undefined ? trustedBridge() : i.trusted).flatMap(forms),
         ],
         denyRead: under(OS_SANDBOX_DENY_READ),
       },
@@ -370,6 +374,7 @@ export function prepareOsSandbox(
       userHome: i.userHome,
       talosHome: i.talosHome,
       trusted: i.trusted,
+      writableRoots: i.writableRoots,
     })
     if (problem) return { refusal: problem }
     const pieces = osSandboxSettings({

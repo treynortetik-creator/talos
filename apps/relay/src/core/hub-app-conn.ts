@@ -8,6 +8,7 @@ import {
   MAX_FRAME_BYTES_UNAUTH,
   newUlid,
   parseFrameText,
+  QUIET_LINES_FEATURE,
   WIDE_FEATURES_FEATURE,
   WS_CLOSE,
 } from '@talos-app/protocol'
@@ -25,6 +26,7 @@ import {
   RATE_PER_S,
   SHOWS_A_PERSON,
 } from './hub-types.ts'
+import type { TermRouter } from './term.ts'
 import { mkFrame } from './util.ts'
 
 /** What the app-socket handlers use of Hub, and nothing else. Hub builds it in its constructor. */
@@ -32,6 +34,7 @@ export type AppConnCtx = {
   d: HubDeps
   apps: Map<string, AppConn>
   ephemeral: EphemeralRouter
+  term: TermRouter
   appRouter: AppRouter
   isStopped(): boolean
   track(h: unknown): void
@@ -74,6 +77,7 @@ export const appConnFrames = {
       limited: false,
       helloSeq: 0,
       wideFeatures: false,
+      quietLines: false,
     }
     this.apps.set(a.id, a)
     a.handshake = this.d.clock.setTimeout(() => {
@@ -86,6 +90,7 @@ export const appConnFrames = {
         this.d.clock.clearTimeout(a.handshake)
         this.apps.delete(a.id)
         this.ephemeral.dropSocket(a.id)
+        this.term.dropSocket(a.id)
         this.appRouter.dropSocket(a.id)
       },
     }
@@ -175,6 +180,7 @@ export const appConnFrames = {
     a.helloSeq = frame.last_seq
     a.limited = !sessionPinned(a.session)
     a.wideFeatures = frame.client.features?.includes(WIDE_FEATURES_FEATURE) === true
+    a.quietLines = frame.client.features?.includes(QUIET_LINES_FEATURE) === true
     this.sendApp(a, this.ready(!a.limited))
     if (!a.limited && frame.last_seq > 0) this.sendCatchup(a, frame.last_seq)
   },

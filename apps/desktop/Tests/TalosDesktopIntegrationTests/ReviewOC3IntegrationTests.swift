@@ -223,6 +223,9 @@ struct ReviewOC3Parking {
     try r.wake("trip")
     #expect(r.wait(8) { r.up("trip") })
     defer { r.killLeftovers(r.root + "/child.trip") }
+    // the wake's pointer is typed and its Enter sent before the kill: a worker that still owes it is started again to be given it
+    // after a crash (the owed message is not lost), so it would be live and never parked (it lost that race under load)
+    #expect(r.wait(10) { r.typedLines.count == 1 && r.allEvents.contains(.pointer(thread: "trip")) }, "the pointer never went in: \(r.why("trip"))")
     let pid = try #require(r.entry("trip")?.pane_pid)
     kill(pid, SIGKILL)
     #expect(r.wait(15) {

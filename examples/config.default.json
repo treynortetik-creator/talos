@@ -34,7 +34,8 @@
   "quiet_window": null,
   "notifications": {
     "master": true,
-    "show_thread_names": "fixed_only"
+    "show_thread_names": "fixed_only",
+    "web_message_text": true
   },
   "work": {
     "label": "Work systems",
@@ -49,11 +50,13 @@
   "permission_relay": true,
   "session_models": ["default", "opus", "sonnet", "haiku"],
   "media_keep_days": null,
+  "memory": {},
   "dev": {
     "thread_fence": true,
     "note_lookup": true
   },
   "settings_lock": false,
+  "auto_continue_at_limit": true,
   "always_allow": [],
   "memory_browser": true,
   "peers": []

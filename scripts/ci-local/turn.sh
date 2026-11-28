@@ -19,7 +19,15 @@
 # it, per job, in the run's record; the run is idle while every job of it that has not ended is marked): a waiting gate may go. A job
 # that goes back to heavy work (a take-back) first takes the turn again (ci_fold_resume): it waits while a gate holds the machine,
 # and nothing is stopped; past CI_TURN_MAX_S it goes ahead, loudly, as a new run does.
-# A gate's wait is the mutex's own deadline (exit 75). A CI run fails OPEN: past CI_TURN_MAX_S it goes ahead beside the gate, loudly
+# A CI run that holds a run slot gives the machine up to a waiting gate between whole holds (ci_yield, called by ci_mutex before a CI job
+# takes a heavy-lock slot or the desktop mutex): a job that finds a gate waiting or holding takes no slot, marks itself idle as a fold wait
+# does (the same folding-<job> file, with the run's first-yield time and caps in it), keeps its place in the queue, and asks again each poll.
+# The run is idle once every job of it that has not ended is marked (a job waiting for another job, wait_for_job, and the second job of a
+# group that has not begun are marked too), so a gate waits for the holds that are on, never for the rest of the run. A hold is never cut:
+# nothing is held when a job yields, and a quiet or exclusive group, which is one hold, is never left in the middle. The caps are the
+# queued run's, once per run: after CI_TURN_PASS_MAX gates have passed it while it yielded, or CI_TURN_PASS_MAX_S seconds after its first
+# yield (results/yield-since, results/yield-passes), its markers stop counting: the run holds the turn again, the gates that wait are
+# behind it, and the job goes on after any gate that holds now (ci_fold_resume). A gate's wait is the mutex's own deadline (exit 75). A CI run fails OPEN: past CI_TURN_MAX_S it goes ahead beside the gate, loudly
 # (a log line and an alert), because an untested main commit is worse than a noisy run.
 CI_TURN_T0="" CI_TURN_ALERTED="" CI_TURN_SAYS="" CI_TURN_BASE="" CI_TURN_HELD="" CI_TURN_DIR=""
 ci_turn_on() { # ci_turn_on <locks dir>: 0 when the turns apply (two heavy slots or more, not switched off)
@@ -111,6 +119,12 @@ ci_turn_pass() { # ci_turn_pass <locks dir>: a gate has taken its slot (the turn
   # (one line of the time in <locks>.queue/gate-passes). Lines older than the oldest queued CI ticket count for nobody and go; with no CI
   # run queued there is nothing to count, and the file goes. A ticket still being written (.part) is queued too: its time is already its own.
   local f="$1.queue/gate-passes" t n old="" now
+  for t in "$(dirname "$1")"/runs/*/results/folding-*; do # a run that yields to gates (ci_yield): this gate is one pass for it, however many jobs yield
+    [ -s "$t" ] && [ "${t%/*}" != "${n:-}" ] && ci_yield_live "${t%/*}" "$t" || continue
+    n="${t%/*}"
+    printf '%s\n' "$(ci_turn_now)" >> "$n/yield-passes"
+  done
+  n=""
   for t in "$1.queue/admit"/*; do
     [ -f "$t" ] || continue
     case "$t" in *.part) [ -z "$(find "$t" -mmin +1 2>/dev/null)" ] || continue ;; esac # a .part older than a minute is a writer that died
@@ -237,7 +251,7 @@ ci_turn_status() { # ci_turn_status <locks dir>: for heavy-lock.sh status
   [ -z "$w" ] || echo "  CI runs waiting for their turn: $w"
   return 0
 }
-ci_fold_wait() { : > "$1/folding-$2" 2>/dev/null; return 0; } # ci_fold_wait <results dir> <job>: the job now waits only for a part on another machine
+ci_fold_wait() { [ -z "$2" ] || : > "$1/folding-$2" 2>/dev/null; return 0; } # ci_fold_wait <results dir> <job>: the job now waits only for a part on another machine
 ci_fold_end() { rm -f "$1/folding-$2"; return 0; } # the wait is over and what follows is light (the part's answer is read, a status posted)
 ci_turn_run_idle() { # ci_turn_run_idle <cache dir> <owner text of a run slot>: 0 when every job of that run that has not ended is marked
   # as waiting on a part (its record: runs/<nonce>/jobs lists them, results/<job> is there once one has ended). No record, or no job
@@ -249,6 +263,7 @@ ci_turn_run_idle() { # ci_turn_run_idle <cache dir> <owner text of a run slot>: 
     [ -n "$j" ] || continue
     [ ! -f "$rd/results/$j" ] || continue
     [ -f "$rd/results/folding-$j" ] || return 1
+    [ ! -s "$rd/results/folding-$j" ] || ci_yield_live "$rd/results" "$rd/results/folding-$j" || return 1 # a yield (ci_yield): idle while it counts
     n=$((n + 1))
   done < "$rd/jobs"
   [ "$n" -gt 0 ]
@@ -259,6 +274,7 @@ ci_fold_resume() { # ci_fold_resume <results dir> <job> <locks dir>: this job is
   # gates that hold the machine now (a hold ends: a gate never waits for CI in the middle of one). Past CI_TURN_MAX_S it goes ahead beside
   # them, loudly, with one alert. A run inside a holder (ci_suites_nested: it runs inside a gate's hold), or turns off: the marker is just cleared.
   local rd="$1" job="$2" locks="$3" h line said="" max="${CI_TURN_MAX_S:-3000}" t0
+  [ -n "$job" ] || return 0
   case "$max" in '' | *[!0-9]*) max=3000 ;; esac
   # (not TALOS_CI_NESTED: ci-local.sh sets that for every run once it has its slot; a run started inside a holder is ci_suites_nested)
   if ! ci_turn_on "$locks" || ci_suites_nested "$locks"; then ci_fold_end "$rd" "$job"; return 0; fi
@@ -285,6 +301,73 @@ ci_fold_resume() { # ci_fold_resume <results dir> <job> <locks dir>: this job is
     [ "$line" = "$said" ] || { echo "ci-local: $line" >&2; said="$line"; }
     sleep "${CI_POLL:-5}"
   done
+}
+ci_yield_starved() { # ci_yield_starved <results dir>: 0 when the run has yielded to gates as long as its caps allow (results/yield-since: its first
+  # yield's time and caps N S; results/yield-passes: a line for each gate that passed it meanwhile); 1 when it may still yield. A record that
+  # cannot be read counts as starved: the run then holds the turn, as it did before it could yield.
+  local t0 nmax smax n
+  [ -e "$1/yield-since" ] || return 1
+  read -r t0 nmax smax < "$1/yield-since" 2>/dev/null
+  case "$t0$nmax$smax" in '' | *[!0-9]*) return 0 ;; esac
+  [ $(($(ci_turn_now) - 10#$t0)) -lt "$smax" ] || return 0
+  n="$(wc -l < "$1/yield-passes" 2>/dev/null)"
+  [ "$((${n// /} + 0))" -ge "$nmax" ]
+}
+ci_yield_live() { # ci_yield_live <results dir> <marker file>: 0 while that yield marker counts: touched in the last 5 min (a job that yields asks every poll)
+  # and the run not starved (a marker that is empty is a fold wait's: ci_turn_run_idle never asks)
+  [ -z "$(find "$2" -mmin +5 2>/dev/null)" ] && ! ci_yield_starved "$1"
+}
+ci_yield_wanted() { # ci_yield_wanted <locks dir>: the gates that wait for the machine or hold it, "pid N (what)", one a line. A gate that waits
+  # for a starved CI run (ci_turn_ahead) is left out: that run is queued for a run slot this run holds, so yielding to the gate would be a cycle
+  local q="$1.queue/suites" t
+  while IFS= read -r t; do
+    [ -n "$t" ] && [ "$(ci_ticket_kind "$t")" != ci ] || continue
+    [ -z "$(ci_turn_ahead "$1" gate "$t" "$(sed -n 5p "$t")")" ] || continue
+    printf 'pid %s (%s)\n' "$(sed -n 1p "$t")" "$(sed -n 4p "$t" | cut -c1-70)"
+  done <<ORDER
+$( [ -d "$q" ] && ci_queue_order "$q" "$q/none")
+ORDER
+  ci_turn_holders "$1" gate
+}
+ci_yield() { # ci_yield <locks dir> <mutex name> <its queue ticket>: ci_yield_try, and whenever the job does not yield it has its ticket back
+  local rc
+  ci_yield_try "$@"
+  rc=$?
+  [ "$rc" = 0 ] || [ -z "${3:-}" ] || [ ! -f "$3.part" ] || mv -f "$3.part" "$3" 2>/dev/null # its place in line, kept: the name is the time it came
+  return $rc
+}
+ci_yield_try() { # ci_yield_try <locks dir> <mutex name> <its queue ticket>: called by ci_mutex for a CI job that holds nothing and is about to ask for a slot of the
+  # suites mutex or for the desktop mutex. 0 = it lets go now (CI_YIELD_SAYS says for whom); it is marked idle and asks again next poll, its place in
+  # the queue kept. 1 = go on: no gate waits or holds, or the run's caps are used up (it first takes the turn back: ci_fold_resume waits
+  # while a gate holds, kills nobody, and past CI_TURN_MAX_S goes ahead, loudly). Never inside a hold (TALOS_HELD_LOCKS): a hold is a whole unit.
+  # While it yields its ticket is set aside as <ticket>.part (ci_queue_order skips it, the name and so its place in line stay): a job that
+  # lets go must not hold up another run's exclusive group, which takes slots only when first in line, and wait with it for the same gate.
+  local locks="$1" rd="${RESULTS:-}" job="${CI_JOBNAME:-}" f w tmp tk="${3:-}"
+  case "$2" in suites | desktop) ;; *) return 1 ;; esac
+  [ -n "$rd" ] && [ -n "$job" ] && [ -d "$rd" ] && [ -z "${TALOS_HELD_LOCKS:-}" ] || return 1
+  f="$rd/folding-$job"
+  [ ! -e "$f" ] || [ -s "$f" ] || return 1 # an empty marker is a fold wait's own
+  if ci_turn_on "$locks"; then
+    w="$(ci_yield_wanted "$locks" | ci_turn_join)"
+    if [ -n "$w" ] && ! ci_yield_starved "$rd"; then
+      if [ -s "$f" ]; then touch "$f" 2>/dev/null
+      else
+        ci_self # the jobs of a run are subshells of one shell: $$ is the same for all of them
+        tmp="$rd/yield-since.$CI_SELF_PID.$RANDOM"
+        if [ ! -e "$rd/yield-since" ]; then # the first yield of the run: its time and caps, made whole or not at all, by the first of its jobs
+          printf '%s %s %s\n' "$(ci_turn_now)" "$(ci_turn_num "${CI_TURN_PASS_MAX:-}" 2)" "$(ci_turn_num "${CI_TURN_PASS_MAX_S:-}" 1800)" > "$tmp" 2>/dev/null &&
+            ln "$tmp" "$rd/yield-since" 2>/dev/null
+          rm -f "$tmp"
+        fi
+        { cp "$rd/yield-since" "$f.new" 2>/dev/null && [ -s "$f.new" ] && mv -f "$f.new" "$f" 2>/dev/null; } || { rm -f "$f.new"; return 1; } # never an empty marker: that reads as a fold wait
+      fi
+      [ -z "$tk" ] || [ ! -f "$tk" ] || mv -f "$tk" "$tk.part" 2>/dev/null
+      CI_YIELD_SAYS="a gate waits for the machine ($w): this job takes no hold until it has had its turn, and then takes its place in line again"
+      return 0
+    fi
+  fi
+  if [ -s "$f" ]; then ci_fold_resume "$rd" "$job" "$locks"; fi
+  return 1
 }
 ci_turn_idle_runs() { # ci_turn_idle_runs <locks dir>: "pid N (what, since T)" for each living run that waits only for a part
   local locks="$1" l o

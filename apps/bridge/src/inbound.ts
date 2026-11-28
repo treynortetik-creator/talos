@@ -14,6 +14,7 @@ import {
   OWNER_FRAME_TYPES,
   SCHEDULE_OWNER_FRAME_TYPES,
   SESSION_CONSUMABLE_FRAME_TYPES,
+  TERM_OWNER_FRAME_TYPES,
   V2_READ_OWNER_FRAME_TYPES,
   verifyOwnerFrame,
 } from '@talos-app/protocol'
@@ -33,9 +34,11 @@ import { readsFrames } from './inbound-reads.ts'
 import { runsFrames } from './inbound-runs.ts'
 import { scheduleFrames } from './inbound-schedule.ts'
 import { CLOCK_OFF_MESSAGE, clockOffMessage, type Item, type Of, type OwnerCheck } from './inbound-shared.ts'
+import { termFrames } from './inbound-term.ts'
 import { KeyedChain } from './keyed-chain.ts'
 import { systemNotification } from './notify.ts'
 import { say } from './owner-words.ts'
+import { onPluginAddRequest, resendPluginAdd } from './plugins/request.ts'
 import { onThreadSessionControl } from './router/controls.ts'
 import { isStopping } from './stopping.ts'
 import { LiveTransport } from './transport.ts'
@@ -50,6 +53,7 @@ const CONSUMABLE = new Set<string>([
   'thread.session.control',
   'agent.recover',
   'undo.request',
+  'plugin.add.request',
 ])
 const SCHEDULE_OWNER = new Set<string>([...SCHEDULE_OWNER_FRAME_TYPES, ...HEARTBEAT_OWNER_FRAME_TYPES])
 const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
@@ -58,7 +62,12 @@ const V2_READ = new Set<string>(V2_READ_OWNER_FRAME_TYPES)
  * with the fixed error and its id is NOT remembered (docs/PROTOCOL.md "Signed history reads"): marking it would let
  * unsigned junk grow seen_ids for 8 days, and checking seen_ids before the signature would be a key-less seen-id oracle.
  */
-const EPHEMERAL_READ = new Set<string>([...V2_READ_OWNER_FRAME_TYPES, 'history.request', 'media.fetch'])
+const EPHEMERAL_READ = new Set<string>([
+  ...V2_READ_OWNER_FRAME_TYPES,
+  'history.request',
+  'media.fetch',
+  ...TERM_OWNER_FRAME_TYPES,
+])
 const OTHER_DURABLE = new Set(['config.patch', 'device.enrolled', 'device.revoked'])
 /**
  * Frames the owner already believes went through when the Mac refuses them: the relay acked the message (the app shows
@@ -91,7 +100,50 @@ export class Inbound {
   readQueue: Promise<void> = Promise.resolve()
   /** Signed MCP-app requests (MCP-APPS-SPEC M4.3): their own queue, so a slow app never delays chat. */
   appQueue: Promise<void> = Promise.resolve()
+  /** Signed terminal-view frames (src/inbound-term.ts): their own queue, so a view never waits behind chat. */
+  termQueue: Promise<void> = Promise.resolve()
   inflight = new Set<string>()
+  /**
+   * Ids of owner messages whose notification already reached the agent in this process, noted in the same synchronous step as
+   * the hand-over (before any store write that can throw). If something after the hand-over fails, the frame stays unseen and
+   * unconsumed so a crash replays it, but a replay in this process finds it here and is consumed, not handed over twice.
+   * Nothing is marked seen before the hand-over, so a crash in between still replays the message: a duplicate, never a loss.
+   */
+  private readonly handedOver = new Map<string, readonly string[]>()
+
+  /**
+   * The ids of one hand-over (the frame id, and the message id the frame carries) are kept as a group: a hit on either one
+   * marks the whole group seen again, and `done()` drops the group once the store has it, so the map holds only failed tails.
+   */
+  noteHandedOver(ids: string[]): void {
+    const group = [...ids]
+    for (const id of group) this.handedOver.set(id, group)
+    while (this.handedOver.size > 1024) {
+      const oldest = this.handedOver.keys().next().value
+      if (oldest === undefined) break
+      this.handedOver.delete(oldest)
+    }
+  }
+
+  /** How many ids wait for the store to catch up (tests: zero after a clean hand-over). */
+  get handedOverCount(): number {
+    return this.handedOver.size
+  }
+
+  /** Seen in the store, or handed over in this process (then the marks the failed step missed are made again, best effort). */
+  isSeen(id: string): boolean {
+    if (this.ctx.store.hasSeen(id)) return true
+    const group = this.handedOver.get(id)
+    if (!group) return false
+    try {
+      const now = this.ctx.clock.now()
+      for (const g of group) this.ctx.store.markSeen(g, now, 'ok')
+      for (const g of group) this.handedOver.delete(g)
+    } catch {
+      // still not stored: the in-memory note keeps this process from handing it over again
+    }
+    return true
+  }
   /** Per-session lanes for frames that must wait behind an owner message's undo point (inbound-lanes.ts). */
   private readonly lanes = new KeyedChain()
   private collecting = false
@@ -152,6 +204,9 @@ export class Inbound {
     const ownerFrame = (OWNER_FRAME_TYPES as readonly string[]).includes(type) || EPHEMERAL_READ.has(type)
     // Every refused frame is logged, newer or not, whatever the notice below decides.
     ctx.log.warn('relay frame did not parse', { id, type, message })
+    // The credit and a viewer-gone are unsigned and ephemeral. An error naming one would be stored by the relay as a system message
+    // (it has no route for them), so they are dropped here after the log line, and nothing is remembered for them.
+    if (type === 'term.ack' || type === 'term.closed') return
     this.noteNewer(raw)
     if (!id) {
       ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), 'bad_frame', message))
@@ -223,6 +278,11 @@ export class Inbound {
     if (frame.type === 'history.request') return this.onHistoryFrame({ raw, frame, receivedAt: ctx.clock.now() })
     if (frame.type === 'media.fetch') return this.onMediaFetchFrame({ raw, frame, receivedAt: ctx.clock.now() })
     if (frame.type === 'app.request') return this.onAppFrame({ raw, frame, receivedAt: ctx.clock.now() })
+    // the terminal view: signed open/resume/close are checked like any owner frame; the credit and a viewer-gone are not signed
+    if (frame.type === 'term.open' || frame.type === 'term.resume' || frame.type === 'term.close')
+      return termFrames.onTermFrame.call(this, { raw, frame, receivedAt: ctx.clock.now() })
+    if (frame.type === 'term.ack') return ctx.term?.ack(frame.term_id, frame.upto)
+    if (frame.type === 'term.closed') return ctx.term?.viewerGone(frame.term_id, frame.why)
     // A revoke must beat any read already waiting on the read queue: apply it on arrival, ahead of the main queue (which
     // can be blocked behind the agent). The queued handler below still posts the notice and acks; revoking twice is a no-op.
     // No seen-id skip: a redelivered old revoke can only hit the id it named, and a revoked id is a permanent tombstone
@@ -230,6 +290,7 @@ export class Inbound {
     if (frame.type === 'device.revoked') {
       try {
         ctx.devices.revoke(frame.device_id, new Date(ctx.clock.now()).toISOString())
+        ctx.term?.endDevice(frame.device_id) // its terminal views end with it
       } catch (e) {
         ctx.log.error('early device revoke failed', { error: (e as Error).message })
       }
@@ -246,11 +307,12 @@ export class Inbound {
     }
     const consumable = CONSUMABLE.has(frame.type)
     if (consumable || OTHER_DURABLE.has(frame.type)) {
-      if (ctx.store.hasSeen(frame.id)) {
+      if (this.isSeen(frame.id)) {
         if (frame.type === 'session.control' || frame.type === 'thread.session.control')
           ctx.session.resend(frame.control_id) // the stored result, not a second run
         if (frame.type === 'agent.recover') resendAgentRecover(ctx, frame.control_id)
         if (frame.type === 'undo.request') resendUndoRequest(ctx, frame.control_id)
+        if (frame.type === 'plugin.add.request') resendPluginAdd(ctx, frame.control_id)
         // not sent: no ack, so the relay replays it again
         if (REFUSAL_MUST_ARRIVE.has(frame.type) && !this.resendRefusal(frame.id, frame.type)) return
         this.ack(frame.id, consumable ? 'consumed' : 'delivered')
@@ -330,7 +392,7 @@ export class Inbound {
           it.owner.ok &&
           (it.frame as Of<'message'>).intent !== 'run' &&
           this.isStale(it) &&
-          !this.ctx.store.hasSeen(msgId) &&
+          !this.isSeen(msgId) &&
           !inBacklog.has(msgId)
         ) {
           inBacklog.add(msgId)
@@ -417,6 +479,9 @@ export class Inbound {
     const now = ctx.clock.now()
     ctx.store.markSeen(it.frame.id, now, outcome)
     for (const id of extraIds) ctx.store.markSeen(id, now, outcome)
+    // the store has them now: only a hand-over whose store write failed stays in the in-memory note
+    this.handedOver.delete(it.frame.id)
+    for (const id of extraIds) this.handedOver.delete(id)
     this.inflight.delete(it.frame.id)
     if (CONSUMABLE.has(it.frame.type)) this.ack(it.frame.id, 'consumed')
     else if (OTHER_DURABLE.has(it.frame.type)) this.ack(it.frame.id, 'delivered')
@@ -449,13 +514,18 @@ export class Inbound {
   }
 
   /** error{ref, code} to the relay, then consumed, so the frame does not sit in the replay buffer for a week. */
-  reject(
+  reject(...args: Parameters<Inbound['tryReject']>): void {
+    this.tryReject(...args)
+  }
+
+  /** `reject`, saying whether it settled: false when the refusal could not be sent and the relay will replay the frame. */
+  tryReject(
     it: Item,
     code: ErrorCodeT,
     message: string,
     extraIds: string[] = [],
     fields?: Array<{ path: string; message: string }>,
-  ) {
+  ): boolean {
     const sent = this.ctx.transport.sendEphemeral(errorFrame(this.ctx.clock.now(), code, message, it.frame.id, fields))
     if (!sent && REFUSAL_MUST_ARRIVE.has(it.frame.type)) {
       // The relay told the phone "done" when it queued this tap, or acked this message and the app shows it as sent, so
@@ -467,9 +537,10 @@ export class Inbound {
         code,
       })
       this.inflight.delete(it.frame.id)
-      return
+      return false
     }
     this.done(it, extraIds, `rejected:${code}`)
+    return true
   }
 
   // ---- owner frames --------------------------------------------------------------------------------------------
@@ -495,7 +566,7 @@ export class Inbound {
     return { ok: true, deviceId }
   }
 
-  async ownerFailed(it: Item, why: Extract<OwnerCheck, { ok: false }>) {
+  async ownerFailed(it: Item, why: Extract<OwnerCheck, { ok: false }>): Promise<void> {
     const { ctx } = this
     ctx.log.security('owner frame dropped', {
       type: it.frame.type,
@@ -507,16 +578,21 @@ export class Inbound {
     // refused all the same). Say so plainly, and raise no forged-signature alarm to the agent or the owner.
     // An ephemeral read that failed is answered and forgotten: nothing lands in seen_ids (a relay or a stolen session
     // could otherwise grow it by 30 junk frames a second for 8 days, each costing a signature check).
-    const refuse = (code: ErrorCodeT, message: string) => {
-      if (!EPHEMERAL_READ.has(it.frame.type)) return this.reject(it, code, message)
+    // true when the refusal is settled (sent, or an ephemeral read forgotten); false when it was held back for the relay's replay
+    const refuse = (code: ErrorCodeT, message: string): boolean => {
+      if (!EPHEMERAL_READ.has(it.frame.type)) return this.tryReject(it, code, message)
       ctx.transport.sendEphemeral(errorFrame(ctx.clock.now(), code, message, it.frame.id))
       this.inflight.delete(it.frame.id)
+      return true
     }
     if (why.reason === 'stale_ts') {
       const stamp = Date.parse((it.raw.relay as { received_at?: string } | undefined)?.received_at ?? '')
-      return refuse('stale', clockOffMessage(Date.parse(it.frame.ts), ctx.clock.now(), stamp))
+      refuse('stale', clockOffMessage(Date.parse(it.frame.ts), ctx.clock.now(), stamp))
+      return
     }
-    refuse('sig_invalid', 'signature check failed')
+    // A refusal the socket could not carry is replayed by the relay and decided again then. The agent is told on that pass
+    // only, so a replayed frame never makes a second notice.
+    if (!refuse('sig_invalid', 'signature check failed')) return
     const now = ctx.clock.now()
     this.sigNotices = this.sigNotices.filter((t) => now - t < SIG_NOTICE_WINDOW_MS)
     if (this.sigNotices.length >= SIG_NOTICE_LIMIT) return // a flood of forged frames must not flood the agent either
@@ -543,6 +619,7 @@ export class Inbound {
       case 'thread.session.control':
       case 'agent.recover':
       case 'undo.request':
+      case 'plugin.add.request':
       case 'config.patch': {
         const owner =
           it.owner ?? (await this.verifyOwner(it, f.type === 'undo.request' ? UNDO_REQUEST_MAX_AGE_MS : MAX_AGE_MS))
@@ -552,6 +629,7 @@ export class Inbound {
         if (f.type === 'thread.session.control') return onThreadSessionControl(this.ctx, f, () => this.done(it))
         if (f.type === 'agent.recover') return onAgentRecover(this.ctx, f, it.raw, () => this.done(it))
         if (f.type === 'undo.request') return onUndoRequest(this.ctx, f, () => this.done(it))
+        if (f.type === 'plugin.add.request') return onPluginAddRequest(this.ctx, f, () => this.done(it))
         if (f.type === 'message') return this.onMessage(it, f)
         if (f.type === 'card.resolve') return this.onCardResolve(it, f)
         if (f.type === 'session.control') return this.ctx.session.onControl(f, () => this.done(it))
@@ -661,6 +739,9 @@ export class Inbound {
 
   afterOwnerNotify(...args: Parameters<typeof messagesFrames.afterOwnerNotify>) {
     return messagesFrames.afterOwnerNotify.apply(this, args)
+  }
+  afterHandOver(...args: Parameters<typeof messagesFrames.afterHandOver>) {
+    return messagesFrames.afterHandOver.apply(this, args)
   }
   replyContext(...args: Parameters<typeof messagesFrames.replyContext>) {
     return messagesFrames.replyContext.apply(this, args)

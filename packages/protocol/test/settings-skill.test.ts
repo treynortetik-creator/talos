@@ -104,6 +104,7 @@ describe('talos-settings skill', () => {
       idle_park_min: 45,
       color: 'red',
       effort: 'low',
+      compact_window: 400000,
       model: 'opus',
       mcp_allow: ['github'],
       'session_opts.cwd': '/Users/example/Code/site/docs',

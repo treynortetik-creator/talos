@@ -1,19 +1,19 @@
 // Navigation chrome: bottom bar on phones (Threads · Needs you · Settings), sidebar on tablet/desktop.
 
-import { ownValue, type ThreadT } from '@talos-app/protocol'
+import { ownValue, TERM_VIEW_FEATURE, type ThreadT } from '@talos-app/protocol'
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { numberedThreads, threadChordLabel } from '../../lib/keymap.ts'
 import { getShell } from '../../lib/native/shell.ts'
 import { freshStatus, freshStatuses } from '../../lib/threadStatus.ts'
-import { useFeature } from '../../lib/v2Client.ts'
 import { cn } from '../../ui/cn.ts'
 import {
   IconBell,
   IconBook,
   IconBug,
   IconClock,
+  IconFile,
   IconSearch,
   IconSettings,
   IconSidebar,
@@ -26,6 +26,7 @@ import { Wordmark } from '../../ui/Wordmark.tsx'
 import { BUG_LABEL, bugPlacement } from '../bugreport/BugButton.tsx'
 import { openBugReport } from '../bugreport/store.ts'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
+import { THREAD_FILES_TITLE, useThreadFilesOn } from '../files/threadFilesLink.ts'
 import { useSchedulesDot, useSchedulesSync } from '../schedules/sync.ts'
 import { ThreadManageList } from './manage/ThreadManageList.tsx'
 import { SUB_TOGGLE_PAD, SubThreadToggle } from './SubThreadToggle.tsx'
@@ -144,7 +145,6 @@ export function Sidebar() {
   const statuses = useTalos((s) => s.statuses)
   const working = useTalos((s) => freshStatuses(s.statuses, Date.now()).some((x) => x.state === 'working'))
   const macOnline = useTalos((s) => s.presence.bridge_online)
-  const memoryFeature = useFeature('memory/1')
   const collapsed = useSidebarCollapsed()
   const search = useThreadSearch()
   const [editingRaw, setEditing] = useState(false)
@@ -178,6 +178,8 @@ export function Sidebar() {
       {n > 99 ? '99+' : n}
     </span>
   )
+  const filesOn = useThreadFilesOn()
+  const termViewListed = useTalos((s) => s.presence.features?.includes(TERM_VIEW_FEATURE) === true)
   /** The row's words: shown beside the icon, read aloud but not drawn on the rail. */
   const text = (label: string) => (collapsed ? <span className="sr-only">{label}</span> : label)
   const tip = (label: string) => (collapsed ? { title: label } : {})
@@ -374,16 +376,22 @@ export function Sidebar() {
         )}
       </nav>
       <div className={cn('border-t border-chrome-line p-2', collapsed ? 'pr-2.5 pl-1' : 'pr-3')}>
-        {memoryFeature !== 'off' && (
-          <NavLink to="/memory" className={link} {...tip('Memory')}>
+        <NavLink to="/memory" className={link} {...tip('Nyx')}>
+          <span className="grid size-7 place-items-center">
+            <IconBook width={20} height={20} />
+          </span>
+          {text('Nyx')}
+        </NavLink>
+        {filesOn && (
+          <NavLink to="/files" className={link} {...tip(THREAD_FILES_TITLE)}>
             <span className="grid size-7 place-items-center">
-              <IconBook width={20} height={20} />
+              <IconFile width={20} height={20} />
             </span>
-            {text('Memory')}
+            {text(THREAD_FILES_TITLE)}
           </NavLink>
         )}
-        {/* The agent's terminal is a native view of the Mac app: there is no such screen in a browser or on the phone. */}
-        {getShell() && (
+        {/* The agent's terminal: a native view in the Mac app; in a browser and on the phone the read-only view, once the Mac lists it. */}
+        {(getShell() || termViewListed) && (
           <NavLink to="/terminal" className={link} {...tip('Terminal')}>
             <span className="grid size-7 place-items-center">
               <IconTerminal width={20} height={20} />

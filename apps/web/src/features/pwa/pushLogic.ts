@@ -1,5 +1,5 @@
-// Pure helpers shared by the service worker and the tests. The service worker never needs message text: the push
-// payload only ever carries fixed templates (spec 3.7).
+// Pure helpers shared by the service worker and the tests. The payload is a fixed template, or for a reply the thread name
+// and a short preview the relay put in the same title and body fields (spec 3.7); the worker shows whichever it gets.
 import { PushPayload, type PushPayloadT } from '@talos-app/protocol'
 
 export type ShownNotification = {

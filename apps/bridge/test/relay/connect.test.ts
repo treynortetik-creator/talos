@@ -23,8 +23,11 @@ import {
   OTHER_SERVICE_ID,
   PROJECT_ID,
   RELAY_SERVICE_ID,
+  useWorldCleanup,
   world,
 } from './helpers.ts'
+
+useWorldCleanup()
 
 const file = (home: string) => join(home, 'relay-connect.json')
 const stored = (w: ReturnType<typeof world>) => [...w.secrets.data.entries()]

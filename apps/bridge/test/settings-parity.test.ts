@@ -8,6 +8,8 @@
 // switch now writes it ON (`enabled: true`), the switch as the owner was shown it (writeSwitchOnFirstUse); an explicit value is kept.
 // Another changed on purpose (2026-11-19, voice input archived: docs/archived/voice.md): agent.voice and agent.voice_persona are not settings
 // any more (the config still accepts and ignores them), so their entries are gone, and the example config's thread rows lost voice_context.
+// Another changed on purpose (2026-11-25, browser notification message text): the notifications section gained web_message_text (on by default).
+// Another changed on purpose (2026-11-26, Nyx): the config gained a `memory` section; memory.nyx_url is the owner's setting (https only, no default).
 // Refresh only on purpose: WRITE_GOLDEN=1 bun test apps/bridge/test/settings-parity.test.ts
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

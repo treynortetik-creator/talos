@@ -43,6 +43,15 @@
     ],
     "PreToolUse": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/permission-pre.sh\"; [ -f \"$f\" ] || exit 0; exec sh \"$f\""
+          }
+        ]
+      },
+      {
         "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
@@ -104,6 +113,18 @@
             "type": "command",
             "timeout": 3600,
             "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/permission-relay.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$f\""
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "f=\"$CLAUDE_PROJECT_DIR/hooks/notification-relay.py\"; [ -f \"$f\" ] || exit 0; command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$f\""
           }
         ]
       }

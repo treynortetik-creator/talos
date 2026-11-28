@@ -592,6 +592,23 @@ wait "$HUBPID" 2>/dev/null; HUBPID=""
 OUT="$(CLAUDE_PROJECT_DIR="$SB/no-such-agent" TALOS_APP_HOME="$TH" sh -c "$CMD" 2>&1 <<<"$CALL")"; RC=$?
 { [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "the registered command with the script missing: exit 0, no output (the settings never wedge a session)" || no "missing-script case wrong" "rc=$RC out=$OUT"
 
+# ---- the PreToolUse companion (permission-pre.sh): registered for every tool, and the registered command leaves its record
+python3 - "$KIT/templates/dot-claude/settings.json" <<'PY' && ok "the settings template registers permission-pre.sh on PreToolUse for every tool, with a short timeout, through exec sh" || no "template PreToolUse registration wrong"
+import json, sys
+t = json.load(open(sys.argv[1]))
+es = [e for e in t["hooks"]["PreToolUse"] if any("permission-pre.sh" in h["command"] for h in e["hooks"])]
+assert len(es) == 1 and "matcher" not in es[0], es
+h = es[0]["hooks"][0]
+assert h["type"] == "command" and h["timeout"] == 5 and h["command"].rstrip().endswith('exec sh "$f"'), h
+PY
+PCMD="$(python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); print([h["command"] for e in t["hooks"]["PreToolUse"] for h in e["hooks"] if "permission-pre.sh" in h["command"]][0])' "$KIT/templates/dot-claude/settings.json")"
+cp "$KIT"/hooks/*.sh "$AG/hooks/"; PH="$SB/pre-home"; mkdir -p "$PH/run"
+PREIN='{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_1"}'
+OUT="$(CLAUDE_PROJECT_DIR="$AG" TALOS_APP_HOME="$PH" sh -c "$PCMD" 2>&1 <<<"$PREIN")"; RC=$?
+{ [ "$RC" = 0 ] && [ -z "$OUT" ] && [ "$(ls "$PH/run/pretool" | wc -l | tr -d ' ')" = 1 ]; } && ok "the registered PreToolUse command, run through sh, prints nothing and leaves one record" || no "PreToolUse command wrong" "rc=$RC out=$OUT"
+OUT="$(CLAUDE_PROJECT_DIR="$SB/no-such-agent" TALOS_APP_HOME="$PH" sh -c "$PCMD" 2>&1 <<<"$PREIN")"; RC=$?
+{ [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "the PreToolUse command with the script missing: exit 0, no output" || no "PreToolUse missing-script case wrong" "rc=$RC out=$OUT"
+
 # an existing settings.json from before this hook: settings-merge adds it and touches nothing else
 MA="$SB/merge"; mkdir -p "$MA/.claude" "$MA/templates/dot-claude" "$MA/hooks" "$MA/scripts"
 cp "$KIT/templates/dot-claude/settings.json" "$MA/templates/dot-claude/settings.json"; cp "$KIT/scripts/settings-merge.py" "$MA/scripts/"; cp "$KIT"/hooks/*.py "$MA/hooks/"
@@ -610,5 +627,20 @@ assert n["permissions"]["allow"] == ["Bash(git status:*)"]
 assert "permission-relay.py" in n["hooks"]["PermissionRequest"][0]["hooks"][0]["command"] and n["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"] == 3600
 PY
 
+MB="$SB/merge2"; mkdir -p "$MB/.claude" "$MB/templates/dot-claude" "$MB/hooks" "$MB/scripts"
+cp "$KIT/templates/dot-claude/settings.json" "$MB/templates/dot-claude/settings.json"; cp "$KIT/scripts/settings-merge.py" "$MB/scripts/"; cp "$KIT"/hooks/*.py "$KIT"/hooks/*.sh "$MB/hooks/"
+python3 - "$MB" <<'PY'
+import json, sys
+t = json.load(open(sys.argv[1] + "/templates/dot-claude/settings.json"))
+t["hooks"]["PreToolUse"] = [e for e in t["hooks"]["PreToolUse"] if not any("permission-pre.sh" in h["command"] for h in e["hooks"])]
+json.dump(t, open(sys.argv[1] + "/.claude/settings.json", "w"), indent=2)
+PY
+out="$(cd "$MB" && python3 scripts/settings-merge.py --apply 2>&1)"
+python3 - "$MB" <<'PY' && <<<"$out" grep -q 'permission-pre.sh' && ok "settings-merge adds the PreToolUse registration to an older settings.json" || no "settings-merge did not add the PreToolUse hook" "$out"
+import json, sys
+n = json.load(open(sys.argv[1] + "/.claude/settings.json"))
+es = [e for e in n["hooks"]["PreToolUse"] if any("permission-pre.sh" in h["command"] for h in e["hooks"])]
+assert len(es) == 1 and es[0]["hooks"][0]["timeout"] == 5, es
+PY
 echo "  permission-relay: PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

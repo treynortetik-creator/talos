@@ -127,7 +127,7 @@ test.describe('review fixes', () => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     const card = page.locator('[data-card-state="pending"]')
     await expect(card).toContainText(/Tue Oct 6, 7:30 AM( EDT)?/)
     await expect(card).not.toContainText('2026-10-06T07:30')
@@ -140,7 +140,7 @@ test.describe('review fixes', () => {
     await expect(page.getByTestId('schedule-detail')).toContainText('Full permissions, nobody watching')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Nightly sync 2')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.locator('[data-card-state="pending"]')).toContainText('Full permissions, nobody watching')
   })
 
@@ -226,9 +226,59 @@ test.describe('detail', () => {
     await expect(sheet).toContainText('Run Daily summary now? It runs with full permissions.')
     await expect(sheet).toContainText('It already ran today at 7:31 AM. Run again?')
     await sheet.getByRole('button', { name: 'Run again' }).click()
+    // the frame is signed and recorded a moment after the tap: wait for it instead of reading the list at once
+    await expect.poll(async () => (await sent(page)).some((x) => x.type === 'schedule.run_now')).toBe(true)
     const f = (await sent(page)).filter((x) => x.type === 'schedule.run_now').at(-1)
     expect(f).toMatchObject({ schedule_id: 'daily-summary', again: true, where: 'default' })
     expect(await verifyOwnerFrame(f as Record<string, unknown>, await jwk(page))).toBe(true)
+  })
+
+  test('the "Started." bar sits above Run now, Pause and Edit on a phone', async ({ page }) => {
+    test.skip(!phone(page), 'on a wider screen the buttons are in the side panel, not under the bar')
+    await open(page, '/schedules/daily-summary')
+    // a job with limited tools that has not run today and is not due today: one tap, no sheet
+    await page.evaluate(() => {
+      window.__talos.store.setState((s) => ({
+        schedules: {
+          ...s.schedules,
+          snapshot: s.schedules.snapshot && {
+            ...s.schedules.snapshot,
+            schedules: s.schedules.snapshot.schedules.map((j) =>
+              j.id === 'daily-summary'
+                ? {
+                    ...j,
+                    permissions: 'restricted',
+                    allowed_tools: ['Read'],
+                    today: 'pending',
+                    last_run: null,
+                    next_run: null,
+                  }
+                : j,
+            ),
+          },
+        },
+      }))
+    })
+    await page.getByRole('button', { name: 'Run now' }).click()
+    const notice = page.getByTestId('schedules-notice')
+    await expect(notice).toContainText('Started.')
+    const n = await notice.boundingBox()
+    const bar = await page.getByTestId('action-bar').boundingBox()
+    expect(n && bar && n.y + n.height <= bar.y).toBe(true)
+    // and the bar's own buttons are tappable: nothing is on top of them
+    for (const name of ['Run now', 'Pause', 'Edit']) {
+      const b = page.getByRole('button', { name, exact: true })
+      const box = await b.boundingBox()
+      const top = await page.evaluate(
+        ([x, y]) =>
+          document
+            .elementFromPoint(x as number, y as number)
+            ?.closest('[data-testid]')
+            ?.getAttribute('data-testid'),
+        [(box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + (box?.height ?? 0) / 2],
+      )
+      expect(top, name).not.toBe('schedules-notice')
+    }
   })
 
   test('Run now refused shows the bridge words', async ({ page }) => {
@@ -274,11 +324,11 @@ test.describe('create and edit', () => {
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('Set up a scheduled job: ')
   })
 
-  test('Edit sends only the touched fields; Review change shows the card bound to the revision', async ({ page }) => {
+  test('Edit sends only the touched fields; Save shows the card bound to the revision', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     const patch = (await sent(page)).filter((f) => f.type === 'schedule.patch').at(-1) as {
       change: { op: string; id: string; base_etag: string; set: Record<string, unknown> }
     }
@@ -305,7 +355,7 @@ test.describe('create and edit', () => {
   test('nothing changed is not sent', async ({ page }) => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByRole('alert').filter({ hasText: 'Nothing changed.' })).toBeVisible()
     expect((await sent(page)).filter((f) => f.type === 'schedule.patch')).toHaveLength(0)
   })
@@ -315,7 +365,7 @@ test.describe('create and edit', () => {
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     // widen it: read-only -> full is what makes a card high-risk
     await page.getByLabel('Full permissions').check()
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     const card = page.locator('[data-card-state="pending"]')
     await expect(card).toBeVisible()
     const risk = await page.evaluate(() => window.__talos.store.getState().cards.at(-1)?.risk)
@@ -332,7 +382,7 @@ test.describe('create and edit', () => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()
     await page.evaluate(() => {
       const c = window.__talos
@@ -350,7 +400,7 @@ test.describe('create and edit', () => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()
     await page.evaluate(() => {
       const c = window.__talos
@@ -392,7 +442,7 @@ test.describe('create and edit', () => {
     await expect(page.getByTestId('background-note')).toContainText(
       'macOS can block background runs after Claude Code updates.',
     )
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     const patch = (await sent(page)).filter((f) => f.type === 'schedule.patch').at(-1) as {
       change: { op: string; draft: Record<string, unknown> }
     }
@@ -411,7 +461,7 @@ test.describe('create and edit', () => {
 
   test('a missing name or prompt is shown under its field', async ({ page }) => {
     await open(page, '/schedules/new')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByText('Give the job a name.')).toBeVisible()
     await expect(page.getByText('Say what the job should do.')).toBeVisible()
     expect((await sent(page)).filter((f) => f.type === 'schedule.patch')).toHaveLength(0)
@@ -745,7 +795,7 @@ test.describe('screenshots', () => {
     await open(page, '/schedules/daily-summary')
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Name').fill('Morning summary')
-    await page.getByRole('button', { name: 'Review change' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.locator('[data-card-state="pending"]')).toBeVisible()
     await shot('approval-card')
   })

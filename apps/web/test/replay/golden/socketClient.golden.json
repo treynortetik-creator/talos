@@ -20,7 +20,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -145,8 +145,8 @@
             "attachments": [],
             "via": "app",
             "created_at": "2026-10-28T15:00:00.000Z",
-            "seq": 1,
-            "receipt": "sent"
+            "receipt": "sent",
+            "seq": 1
           },
           {
             "id": "m_<id2>",
@@ -198,7 +198,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -349,7 +349,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -514,7 +514,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -787,7 +787,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -892,7 +892,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1004,7 +1004,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1127,7 +1127,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1193,7 +1193,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1369,7 +1369,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1485,7 +1485,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },
@@ -1541,7 +1541,7 @@
             "version": "0.0.0",
             "standalone": true,
             "platform": "replay",
-            "features": ["features-64/1"]
+            "features": ["features-64/1", "quiet-lines/1"]
           }
         }
       },

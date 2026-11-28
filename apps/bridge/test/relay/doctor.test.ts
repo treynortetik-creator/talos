@@ -1,7 +1,9 @@
 // doctor: the `relay release` row points at `relay connect` or `relay update`; a `relay connect` row only when connected.
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { cli, connectProject, type World, world } from './helpers.ts'
+import { cli, connectProject, useWorldCleanup, type World, world } from './helpers.ts'
+
+useWorldCleanup()
 
 type Row = { name: string; level: string; detail: string }
 const rows = async (w: World): Promise<Row[]> => {

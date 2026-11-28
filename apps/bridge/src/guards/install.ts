@@ -24,6 +24,7 @@ import { parseArgs } from 'node:util'
 import { claudeConfigDir } from '../claude-dir.ts'
 import type { BridgeEnv } from '../config.ts'
 import { ensureDir } from '../fsutil.ts'
+import { BUN_CACHE_OFF } from '../mcp-config.ts'
 import { say } from '../owner-words.ts'
 import { realFileSync } from '../real-file.ts'
 import { mainLaunchArgs } from './main-launch.ts'
@@ -86,7 +87,7 @@ export function hookCommand(bun: string, checkout: string, rulesFile: string, sh
   }
   const b = JSON.stringify(bun)
   const cli = JSON.stringify(join(checkout, 'apps', 'bridge', 'src', 'cli.ts'))
-  return `[ -f ${b} ] && [ -x ${b} ] && [ -f ${cli} ] && exec ${b} ${cli} guard-hook --config ${JSON.stringify(rulesFile)} --sha ${sha} || printf '%s\\n' '${GUARD_HOOK_GONE_JSON}'`
+  return `[ -f ${b} ] && [ -x ${b} ] && [ -f ${cli} ] && ${BUN_CACHE_OFF.name}=${BUN_CACHE_OFF.value} exec ${b} ${cli} guard-hook --config ${JSON.stringify(rulesFile)} --sha ${sha} || printf '%s\\n' '${GUARD_HOOK_GONE_JSON}'`
 }
 
 /** The tools the hook is registered for (the PreToolUse matcher). */

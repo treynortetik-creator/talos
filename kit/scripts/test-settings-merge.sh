@@ -12,7 +12,7 @@ ok(){ PASS=$((PASS+1)); }
 no(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 A="$SB/agent"; mkdir -p "$A/.claude" "$A/templates/dot-claude" "$A/hooks" "$A/scripts"
 cp "$KIT/templates/dot-claude/settings.json" "$A/templates/dot-claude/settings.json"
-cp "$KIT/scripts/settings-merge.py" "$A/scripts/"; cp "$KIT"/hooks/*.py "$A/hooks/"
+cp "$KIT/scripts/settings-merge.py" "$A/scripts/"; cp "$KIT"/hooks/*.py "$KIT"/hooks/*.sh "$A/hooks/"
 # a "1.1.2-style" file: only some hooks, plus the user's own permissions, a custom hook and a Chronos absolute hook
 python3 - "$A" <<'PY'
 import json, sys
@@ -42,7 +42,7 @@ assert any("echo mine" in h["command"] for e in new["hooks"]["UserPromptSubmit"]
 assert any("chronos-session-start" in h["command"] for e in new["hooks"]["SessionStart"] for h in e["hooks"]), "the Chronos hook was lost"
 import re
 def scripts(d):
-    return {(ev, re.search(r"hooks/([\w.-]+\.py)", h["command"]).group(1)) for ev, es in d["hooks"].items() for e in es for h in e["hooks"] if "hooks/" in h["command"] and "$CLAUDE_PROJECT_DIR" in h["command"]}
+    return {(ev, re.search(r"hooks/([\w.-]+\.(?:py|sh))", h["command"]).group(1)) for ev, es in d["hooks"].items() for e in es for h in e["hooks"] if "hooks/" in h["command"] and "$CLAUDE_PROJECT_DIR" in h["command"]}
 assert scripts(t) <= scripts(new), scripts(t) - scripts(new)
 assert "PreCompact" in new["hooks"]
 PY

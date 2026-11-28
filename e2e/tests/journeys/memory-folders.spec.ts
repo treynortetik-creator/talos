@@ -1,18 +1,14 @@
+// gate-reads: apps/bridge/src/memory/roots.ts apps/web/src/lib/socketMemoryFolders.ts
 // Journey: picking Memory's folders in Settings. Real relay, real bridge, real browser. The Mac has an agent folder with two
 // folders and Memory switched off; the owner ticks one in Settings > Memory folders and saves. memory.json now names it,
-// Memory browsing is on, and the Memory screen lists its note (owner, 2026-11-15: before, only `talos-app memory init` in a
-// terminal could do this).
+// Memory browsing is on (the agent's notes lookup reads it). The phone's memory browser is gone: notes are read in Nyx.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, signedIn, test } from '../../harness/fixtures.ts'
 
 test.setTimeout(150_000)
 
-test('memory-folders: pick a folder in Settings; Memory turns on and lists its note', async ({
-  stack,
-  page,
-  context,
-}) => {
+test('memory-folders: pick a folder in Settings; memory browsing turns on', async ({ stack, page, context }) => {
   const agentDir = join(stack.root, 'agent')
   mkdirSync(join(agentDir, 'notes'), { recursive: true })
   mkdirSync(join(agentDir, 'journal'), { recursive: true })
@@ -41,12 +37,5 @@ test('memory-folders: pick a folder in Settings; Memory turns on and lists its n
     const cfg = JSON.parse(readFileSync(join(stack.home, 'memory.json'), 'utf8'))
     expect(cfg).toMatchObject({ enabled: true, roots: [{ path: 'notes' }] })
     expect(JSON.parse(readFileSync(join(stack.home, 'config.json'), 'utf8')).memory_browser).toBe(true)
-  })
-
-  await test.step('Memory lists the note from the picked folder', async () => {
-    await expect(async () => {
-      await page.goto(`${stack.origin}/memory`)
-      await expect(page.getByRole('button', { name: /^Hello note/ })).toBeVisible({ timeout: 4000 })
-    }).toPass({ timeout: 45_000 })
   })
 })

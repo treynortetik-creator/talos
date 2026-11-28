@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { bridgeChildEnv } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startTestRelay, type TestRelay } from '../core/harness.ts'
 
@@ -79,14 +80,16 @@ function cli(
   args: string[],
 ): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((done) => {
-    const child = spawn('bun', ['run', CLI, ...args], {
+    const argv = ['bun', 'run', CLI, ...args]
+    const child = spawn(argv[0] as string, argv.slice(1), {
       cwd: join(REPO, 'apps/bridge'),
-      env: {
-        ...process.env,
+      // the Mac's folder is the CLI's test root: HOME, the inbox and the Claude folder are inside it, never the real ones
+      env: bridgeChildEnv(argv, {
         TALOS_APP_HOME: m.home,
+        TALOS_TEST_ROOT: m.root,
         TALOS_APP_RELAY_URL: r.httpBase,
         PATH: `${m.bin}:${process.env.PATH}`,
-      },
+      }).env,
     })
     let out = ''
     let err = ''

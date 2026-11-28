@@ -180,7 +180,7 @@ function Pane({
 }
 
 function FilesBody({ threadId, collapsed, canFold }: { threadId: string; collapsed: boolean; canFold: boolean }) {
-  // the pages and files sent in Talos, across every thread: the thread's folder on the Mac is under Memory
+  // the pages and files sent in Talos, across every thread: the thread's folder on the Mac is Thread files (/files)
   return (
     <>
       <TitleBar threadId={threadId} pane="library" collapsed={collapsed} canFold={canFold} note={SENT_TEXT.subtitle} />

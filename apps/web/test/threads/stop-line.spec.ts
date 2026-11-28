@@ -222,7 +222,8 @@ test('after a stop the strip shows, and Undo sends the last owner message again,
   await stopButton(page).click()
   const strip = page.getByTestId('stopped-strip')
   await expect(strip).toBeVisible()
-  await expect(strip).toHaveAttribute('role', 'status')
+  // no live role of its own (it appears already filled, which a screen reader skips): the announcer says it
+  await expect(strip).not.toHaveAttribute('role', 'status')
   await expect(strip).toContainText('Your message is kept.')
   // above the message box, inside 320 px
   const sb = await box(strip)

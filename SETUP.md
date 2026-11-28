@@ -136,7 +136,7 @@ tuned, never deletes anything in an agent folder, and a second run only does wha
 - **Kit options pass straight through to the kit installer** (`kit/install.sh`): `--with-vault DIR` (a private vault),
   `--with-memory-search`, `--with-reranker`, `--with-voice`, `--with-qwen-voice`, `--with-parakeet`, `--with-diarize`,
   `--global-pointer`, `--embed-model small`. All are off by default except memory search: a new agent gets semantic memory
-  search and the phone's memory browser (memory/ and wiki/) with no flag; `--no-memory-search` skips the search. The reranker
+  search (memory/ and wiki/) with no flag; `--no-memory-search` skips the search. The reranker
   model (about 571 MB) comes with the search by default too, except on a computer with under 3 GiB of memory; `--no-reranker`
   skips it. An agent
   that already exists is not changed. See [`kit/README.md`](kit/README.md), "Optional extras".
@@ -156,8 +156,11 @@ prompt). It keeps macOS privacy grants from resetting after every rebuild. It is
 The relay is a small always-on server that connects your phone to your Mac. The click-by-click walkthrough is in
 [`docs/SETUP.md`](docs/SETUP.md), "Step 2. Create the relay on Railway"; the variable list is in `.env.example`. In short:
 
-1. [YOU] In Railway: New Project, Deploy from GitHub repo, pick your fork. It builds `apps/relay/Dockerfile` from `railway.json`.
-   The first start fails with "Invalid relay environment". That is expected.
+1. [YOU] In Railway: New Project, Deploy from GitHub repo, pick your fork. Then, in the service's Settings, set the Dockerfile
+   path to `apps/relay/Dockerfile`, the healthcheck path to `/healthz` and the watch paths, as listed in
+   [`docs/deploy-railway.md`](docs/deploy-railway.md), "Dashboard settings": services are configured in the Railway dashboard,
+   and a new service cannot read them from the repository. The first start fails with "Invalid relay environment". That is
+   expected.
 2. [YOU] Settings, Networking, Generate Domain, target port `8080`. That address (`https://<something>.up.railway.app`) is your
    relay address. **Pick it once**: passkeys are tied to it.
 3. [YOU] Add a Volume mounted at `/data`. Turn on daily backups for it. Leave "sleep when idle" off.
@@ -324,9 +327,11 @@ voice-cloning one needs a recording of a voice you have the right to clone.
 
 **CHECKPOINT 9.3:** `bash ~/talos-agent/scripts/stt.sh <an audio file>` prints a transcript.
 
-### 9.4 Memory browser and search
+### 9.4 Memory folders and search
 
-[YOU] (or the agent asks you first) `memory init` asks y/N for each folder, and `memory on` turns the browser on:
+The phone no longer browses memory: notes are read in Nyx (the app's Nyx screen links to it). These folders are what the
+agent's notes lookup reads. [YOU] (or the agent asks you first) `memory init` asks y/N for each folder, and `memory on` turns
+the lookup on:
 
 ```bash
 talos-app memory init --agent-dir ~/talos-agent
@@ -339,7 +344,7 @@ talos-app memory reindex
 [YOU] `memory init` asks y/N for each folder to share. It is read-only and never shows dotfiles, keys or `.env` files.
 [`docs/MEMORY.md`](docs/MEMORY.md).
 
-**CHECKPOINT 9.4:** the app's memory view lists the folders you chose and nothing else; search finds a phrase you know is there.
+**CHECKPOINT 9.4:** `talos-app memory show` lists the folders you chose and nothing else; search finds a phrase you know is there.
 
 ### 9.5 Approvals on the phone for risky commands
 

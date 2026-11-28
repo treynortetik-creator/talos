@@ -61,7 +61,8 @@ struct DevThreadFenceTests {
     for r in mainDeny + WorkerFence.extraDeny + WorkerFence.deniedTools + ["Bash(claude plugin:*)"] { #expect(denyOff.contains(r), "\(r)") }
     #expect(denyOff.contains { $0.hasPrefix("Edit(/") && $0.hasSuffix("/.claude/**)") }, "the settings-file deny stays")
     let hooks = try #require(jsonObject(open.settingsJSON)?["hooks"] as? [String: Any])
-    #expect((hooks["PreToolUse"] as? [Any])?.count == 1, "the guards' hook stays")
+    let pre = hooks["PreToolUse"] as? [[String: Any]]
+    #expect(pre?.count == 2 && pre?.first?["matcher"] as? String == "Bash" && pre?.last?["matcher"] == nil, "the guards' hook stays, the record hook is added")
     #expect((hooks["PermissionRequest"] as? [Any])?.count == 1, "the permission hook stays")
     // the rest of the spec is the same start
     func bare(_ s: WorkerSpec) -> [String] { LaunchSpecHash.argvWithoutPrompt(s.argv, token: s.promptToken).argv }

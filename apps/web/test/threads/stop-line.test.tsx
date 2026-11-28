@@ -14,12 +14,17 @@ import {
 } from '../../src/features/threads/StoppedStrip.tsx'
 import { ThreadScreen } from '../../src/features/threads/ThreadScreen.tsx'
 import { WorkingLineView } from '../../src/features/threads/WorkingLine.tsx'
+import { resetAnnouncerForTests } from '../../src/lib/announce.ts'
 import { ClientProvider } from '../../src/lib/client.ts'
 import type { FakeClient } from '../../src/lib/fakeClient.ts'
 import { renderWith, setup } from '../cards/helpers.tsx'
 
+const announcerSays = () =>
+  Array.from(document.querySelectorAll('#talos-announcer [aria-live="polite"]'), (r) => r.textContent).filter(Boolean)
+
 afterEach(() => {
   cleanup()
+  resetAnnouncerForTests()
   vi.useRealTimers()
 })
 for (const k of ['hasPointerCapture', 'setPointerCapture', 'releasePointerCapture'] as const)
@@ -172,7 +177,9 @@ describe('the working line (screen)', () => {
     act(() => c.session.patch({ busy: true, turn_id: 'turn_1' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Stop your agent' }))
     const strip = await screen.findByTestId('stopped-strip')
-    expect(strip.getAttribute('role')).toBe('status')
+    // no live role of its own (it appears already filled, which a screen reader skips): the announcer says it
+    expect(strip.getAttribute('role')).toBeNull()
+    await waitFor(() => expect(announcerSays()).toEqual(['Stopped Talos. Undo is available']))
     expect(strip.textContent).toContain('Stopped Talos. Your message is kept.')
     expect(within(strip).getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
@@ -259,6 +266,21 @@ describe('the Stopped strip', () => {
       reply_to: 'm_prev',
     })
     expect(screen.queryByTestId('stopped-strip')).toBeNull()
+  })
+
+  it.each([
+    ['sent', 'Message sent again'],
+    ['queued', "Saved. It sends when you're back online."],
+    ['held_unpinned', 'Saved. It sends once this device is approved.'],
+  ] as const)('Undo says what happened to the resend: %s', async (state, words) => {
+    const c = setup()
+    setMessages(c, mine())
+    vi.spyOn(c, 'sendMessage').mockResolvedValue({ clientMsgId: 'm_again', state })
+    strip(c)
+    act(() => offerStopped(c, 'general'))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(announcerSays()).toContain(words))
+    expect(announcerSays().filter((w) => w !== words && w.startsWith('Message sent'))).toEqual([])
   })
 
   it('two taps before the re-render send once (the guard, not the unmount)', async () => {

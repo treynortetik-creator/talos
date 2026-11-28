@@ -666,3 +666,65 @@ describe('WP-S2 relay: WP-S1 captures replayed through the real relay (merge gat
     )
   }
 })
+
+// ---- form_save ----------------------------------------------------------------------------------------------------------
+
+describe('WP-S2 relay: schedule.patch form_save', () => {
+  const change = { op: 'delete', id: JOB.id, base_etag: `sha256:${'0'.repeat(64)}` }
+
+  it(
+    "forwards the owner's signed frame to the Mac with form_save and the signature exactly as sent: the relay drops nothing",
+    async () => {
+      const { app, bridge } = await world()
+      const sent = await app.sendSchedule('schedule.patch', { change, thread_id: 'general', form_save: true })
+      await waitFor(
+        () => bridge?.rec.frames.some((r) => r.direction === 'in' && r.raw.id === sent.id) === true,
+        4000,
+        'the patch reached the Mac',
+      )
+      const got = bridge?.rec.frames.find((r) => r.direction === 'in' && r.raw.id === sent.id)?.raw as Record<
+        string,
+        unknown
+      >
+      const { relay: _added, ...rest } = got // the relay's own stamp is the only thing it adds
+      expect(rest).toEqual(sent)
+      expect(got.form_save).toBe(true)
+    },
+    t(30_000),
+  )
+
+  it(
+    'still refuses a field it does not know (it never quietly drops one), so the signed text and what the Mac reads cannot differ',
+    async () => {
+      const { app, bridge } = await world()
+      const sent = await app.sendSchedule('schedule.patch', { change, thread_id: 'general', bogus_field: true })
+      const err = await app.expectFrame('error', (e) => e.ref === sent.id, { direction: 'in' })
+      expect(err.code).toBe('bad_frame')
+      expect(bridge?.rec.frames.some((r) => r.direction === 'in' && r.raw.id === sent.id)).toBe(false)
+    },
+    t(30_000),
+  )
+})
+
+describe('WP-S2 relay: the ack of a direct Save', () => {
+  it(
+    'passes an ack that says applied to the app that sent the patch, key and all',
+    async () => {
+      const { app, bridge } = await world()
+      const sent = await app.sendSchedule('schedule.patch', {
+        change: { op: 'delete', id: JOB.id, base_etag: `sha256:${'0'.repeat(64)}` },
+        thread_id: 'general',
+        form_save: true,
+      })
+      await waitFor(
+        () => bridge?.rec.frames.some((r) => r.direction === 'in' && r.raw.id === sent.id) === true,
+        4000,
+        'the patch reached the Mac',
+      )
+      bridge?.send({ type: 'ack', ref: sent.id, applied: true })
+      const got = await app.expectFrame('ack', (a) => a.ref === sent.id, { direction: 'in' })
+      expect((got as { applied?: boolean }).applied).toBe(true)
+    },
+    t(30_000),
+  )
+})

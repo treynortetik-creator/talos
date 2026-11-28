@@ -17,7 +17,7 @@ import { peerSendTool } from './peer.ts'
 import { permissionMode } from './permission-mode.ts'
 import { readInboundTool } from './read-inbound.ts'
 import { restartMain } from './restart-main.ts'
-import { schedulePropose, scheduleRunDone, scheduleRunStart, schedulesList } from './schedules.ts'
+import { schedulePropose, scheduleRerun, scheduleRunDone, scheduleRunStart, schedulesList } from './schedules.ts'
 import { SCREEN_TOOL_RECORDS } from './screen.ts'
 import { attach, reply } from './send.ts'
 import { threadSession } from './sessions.ts'
@@ -44,6 +44,7 @@ export const TOOL_RECORDS: readonly ToolRecord[] = [
   schedulePropose,
   scheduleRunStart,
   scheduleRunDone,
+  scheduleRerun,
   wakeMe,
   configPropose,
   settingsRead,

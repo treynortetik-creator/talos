@@ -66,4 +66,46 @@ describe('recover buttons', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Recovery needs the Mac app running'))
     expect(recoverFrames(c)).toHaveLength(0)
   })
+
+  const setStatus = (
+    c: ReturnType<typeof setup>,
+    state: 'working' | 'idle' | 'needs_you',
+    since = new Date().toISOString(),
+  ) => c.store.setState((s) => ({ statuses: { ...s.statuses, general: { thread_id: 'general', state, since } } }))
+
+  it('mid-task it says plainly that the agent is working and offers Restart now or Cancel; nothing is sent first', async () => {
+    const c = setup()
+    setStatus(c, 'working')
+    renderWith(<AgentSettingsSection readOnly={false} />, c)
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart agent' }))
+    expect((await screen.findByRole('status')).textContent).toContain('The agent is working on a task.')
+    expect(recoverFrames(c)).toHaveLength(0)
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('button', { name: 'Restart now' })).toBeNull()
+    expect(recoverFrames(c)).toHaveLength(0)
+    await userEvent.click(screen.getByRole('button', { name: 'Restart agent' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart now' }))
+    await waitFor(() => expect(recoverFrames(c)).toHaveLength(1))
+  })
+
+  it('idle, or waiting on the owner, restarts at once with nothing asked', async () => {
+    for (const state of ['idle', 'needs_you'] as const) {
+      const c = setup()
+      setStatus(c, state)
+      renderWith(<AgentSettingsSection readOnly={false} />, c)
+      await userEvent.click(await screen.findByRole('button', { name: 'Restart agent' }))
+      await waitFor(() => expect(recoverFrames(c)).toHaveLength(1))
+      expect(screen.queryByRole('button', { name: 'Restart now' })).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('an old working row is still working: the Mac said so, and the app does not guess it away', async () => {
+    const c = setup()
+    setStatus(c, 'working', new Date(Date.now() - 7 * 3_600_000).toISOString())
+    renderWith(<AgentSettingsSection readOnly={false} />, c)
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart agent' }))
+    expect(await screen.findByRole('button', { name: 'Restart now' })).toBeTruthy()
+    expect(recoverFrames(c)).toHaveLength(0)
+  })
 })

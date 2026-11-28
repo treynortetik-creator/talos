@@ -63,3 +63,21 @@ afterAll(() => {
   removeTestTempDirs()
   for (const dir of runFolders) rmSync(dir, { recursive: true, force: true })
 })
+
+// The real clock is ONE object for the whole process (src/clock.ts), and a single-process `bun test` shares it across every file.
+// On 2026-11-27 a test set `ctx.clock.now = () => real() + 20_000` on it and never put it back: every later file's bridge then read
+// supervisor heartbeats 20 s stale, and 241 tests failed far from the cause. It is frozen here, so a test that tries to change it
+// throws at that line; a test that needs other time passes its own clock (startHarness({ clock })). The check after each test
+// names any change that got past the freeze.
+import { afterEach } from 'bun:test'
+import { realClock } from '../src/clock.ts'
+
+const REAL_CLOCK = { now: realClock.now, setTimeout: realClock.setTimeout, clearTimeout: realClock.clearTimeout }
+Object.freeze(realClock)
+afterEach(() => {
+  const changed = (Object.keys(REAL_CLOCK) as (keyof typeof REAL_CLOCK)[]).filter((k) => realClock[k] !== REAL_CLOCK[k])
+  if (changed.length > 0)
+    throw new Error(
+      `this test changed realClock.${changed.join(', realClock.')}: pass a clock of its own (startHarness({ clock })) instead`,
+    )
+})

@@ -62,7 +62,9 @@ export function readInbound(ctx: BridgeContext, thread: string): ReadInboundResu
       if (notes.length) msg.notes = notes
     }
     messages.push(msg)
-    if (row.message_id.startsWith('m_')) ctx.transport.sendEphemeral(receiptFrame(now, row.message_id, 'seen'))
+    // a message sent again (`<id>~retry~<record>`) is the owner's ORIGINAL to the phone: the receipt names the id the phone knows
+    const shown = row.message_id.replace(/~retry~.*$/, '')
+    if (shown.startsWith('m_')) ctx.transport.sendEphemeral(receiptFrame(now, shown, 'seen'))
   }
   const cursor = reported.get(ctx) ?? { since: now - 10 * 60_000 }
   const handled = store.handledByMainSince(thread, cursor.since)

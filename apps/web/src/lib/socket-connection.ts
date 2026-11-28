@@ -1,11 +1,12 @@
 // The WebSocket: connect, hello/ready, ping and pong, reconnect backoff, the session probe, and the wire send
 // helper.
-import { newId, newUlid, parseFrame, WIDE_FEATURES_FEATURE, WS_CLOSE } from '@talos-app/protocol'
+import { newId, newUlid, parseFrame, QUIET_LINES_FEATURE, WIDE_FEATURES_FEATURE, WS_CLOSE } from '@talos-app/protocol'
 import { NoAnswerError, TalosClientError } from './client.ts'
 import { endReasonOf, HttpError } from './http.ts'
 import { releaseAllAcks } from './reloadHold.ts'
 import { MAX_CLOCK_OFFSET_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
+import { armStable } from './socket-stable.ts'
 import { unknownOfFrame, unknownOfOpenCards, unknownOfParsed, unknownOfReady } from './unknownFrames.ts'
 
 /** Why the link drops, for the console (owner, 2026-11-15): every close with its code and reason, counted for this page. */
@@ -20,6 +21,9 @@ function noteDrop(code: number, reason: string, wasReady: boolean) {
   )
   ;(globalThis as { __talosDrops?: typeof drops }).__talosDrops = drops
 }
+
+/** The close code this client logs for a dial it gave up on (the relay's own 4408 is its handshake limit; 4000 is the keepalive's). */
+const DIAL_TIMEOUT_CODE = 4001
 
 /** How long after a 1012 close the client keeps retrying on the short delay before the normal backoff resumes. */
 const RESTART_WINDOW_MS = 30_000
@@ -53,7 +57,18 @@ export function createSocketConnection(c: SocketCtx) {
     const sock = new WS(wsUrl())
     c.ws = sock
     c.ready = false
+    c.dialAt = now()
+    // The handshake timer: from here until `ready`, whether the socket is still connecting or open and waiting. A dial that
+    // hangs gets no close event from the browser for minutes; the bridge has the same rule (relay-client.ts).
+    c.dialTimer = setTimeout(() => {
+      c.dialTimer = null
+      if (c.closed || c.ws !== sock || c.ready) return
+      // Already closing: the server's own close (a 4401 or 4403 must still stop the session) is on its way and wins.
+      if (sock.readyState === WS?.CLOSING || sock.readyState === WS?.CLOSED) return
+      giveUpOn(sock, DIAL_TIMEOUT_CODE, 'no handshake', false)
+    }, c.handshakeGiveUpMs)
     sock.onopen = () => {
+      if (c.ws !== sock) return
       sock.send(
         JSON.stringify({
           v: 1,
@@ -65,7 +80,7 @@ export function createSocketConnection(c: SocketCtx) {
           last_seq: store.getState().lastSeq,
           visible: isVisible(),
           // this build reads a features list of up to FEATURES_MAX: the relay then sends the bridge's whole list
-          client: { ...info, features: [WIDE_FEATURES_FEATURE] },
+          client: { ...info, features: [WIDE_FEATURES_FEATURE, QUIET_LINES_FEATURE] },
         }),
       )
     }
@@ -96,6 +111,13 @@ export function createSocketConnection(c: SocketCtx) {
       if (frame.type === 'pong') {
         c.lastPong = now()
         c.pongs++
+        // The answer to the probe of this socket (its own nonce: a frame the browser held while the page slept proves nothing).
+        if (c.probeNonce !== null && frame.nonce === c.probeNonce) endProbe()
+        // The answer to the latest keepalive ping: what the stable reset counts as proof that the link was alive (below).
+        if (c.keepaliveNonce !== null && frame.nonce === c.keepaliveNonce) {
+          c.answeredPingAt = c.keepaliveSentAt
+          c.answeredAt = now()
+        }
         return
       }
       if (frame.type === 'ready') {
@@ -109,11 +131,16 @@ export function createSocketConnection(c: SocketCtx) {
           // The screens read it from the store: a card's expiry is the relay's time, not this device's.
           if ((store.getState().clockOffset ?? 0) !== c.clockOffset) set(() => ({ clockOffset: c.clockOffset }))
         }
+        if (c.dialTimer) clearTimeout(c.dialTimer)
+        c.dialTimer = null
         c.ready = true
         c.connection++
-        c.attempt = 0
+        armStable(c, sock) // the backoff starts over only if this link lasts (below), not now
         c.restartUntil = 0
         c.lastPong = now()
+        c.keepaliveNonce = null
+        c.answeredPingAt = 0
+        c.answeredAt = 0
         set(() => ({ connection: 'online' }))
         setMeta({ retryAt: null, authFailed: false, authReason: null, lastCloseCode: null })
         c.dispatch(frame)
@@ -131,10 +158,8 @@ export function createSocketConnection(c: SocketCtx) {
       c.dispatch(frame)
     }
     sock.onclose = (ev) => {
-      // Every frame the relay sent on it has arrived: an inbox change still unanswered there goes out again. Not for the
-      // close the wake probe runs by hand: that socket may still be open, and its grace covers it.
-      if (c.closedByHand.has(sock)) c.closedByHand.delete(sock)
-      else c.inboxSocketClosed(sock)
+      // Every frame the relay sent on it has arrived: an inbox change still unanswered there goes out again.
+      c.inboxSocketClosed(sock)
       if (c.ws !== sock) return
       const wasReady = c.ready
       c.ws = null
@@ -177,15 +202,55 @@ export function createSocketConnection(c: SocketCtx) {
 
   function startPing(ms: number) {
     stopPing()
+    c.pingMs = ms
     c.pingTimer = setInterval(() => {
       if (!canSend()) return
       if (now() - c.lastPong > ms * 2.5) {
-        c.ws?.close()
+        if (c.ws) giveUpOn(c.ws, 4000, 'no answer to the keepalive', true)
         return
       }
-      send({ type: 'ping', nonce: newId('m').slice(2, 14) })
+      const nonce = newId('m').slice(2, 14)
+      c.keepaliveNonce = nonce
+      c.keepaliveSentAt = now()
+      send({ type: 'ping', nonce })
     }, ms)
   }
+  /**
+   * The link is dead: the keepalive heard nothing for 2.5 ping intervals, or a dial got no `ready` within HANDSHAKE_GIVE_UP_MS.
+   * `code` and `reason` are what the console log and `lastCloseCode` say about it. Closing it is not enough: a dead socket stays CLOSING
+   * for tens of seconds (a phone that slept), and while it is still `c.ws` the page reads "online" with nothing behind it and
+   * no new socket is dialled. So the drop path runs here, now: the socket stops being ours, what waits on it is told, and a
+   * new dial is scheduled. The browser's own close, whenever it comes, finds a socket that is no longer current and is ignored.
+   */
+  function giveUpOn(sock: WebSocket, code: number, reason: string, wasReady: boolean) {
+    if (c.ws !== sock) return
+    c.ws = null
+    releaseAllAcks() // what was written to it will be written again on the next socket, which takes its own holds
+    // Left open while inbox changes sent on it wait for their answer (a closing socket drops every frame).
+    if (!c.inboxLetGo(sock))
+      try {
+        sock.close()
+      } catch {}
+    socketGone(sock)
+    noteDrop(code, reason, wasReady)
+    setMeta({ lastCloseCode: code })
+    scheduleReconnect()
+  }
+
+  function endProbe() {
+    if (c.wakeTimer) clearTimeout(c.wakeTimer)
+    c.wakeTimer = null
+    c.probeNonce = null
+  }
+  /** The probe, the handshake timer and the stable timer belong to one socket: they end when it does (it closed, was replaced, went offline, or the client closed). */
+  function clearLinkTimers() {
+    endProbe()
+    if (c.dialTimer) clearTimeout(c.dialTimer)
+    c.dialTimer = null
+    if (c.stableTimer) clearTimeout(c.stableTimer)
+    c.stableTimer = null
+  }
+
   function stopPing() {
     if (c.pingTimer) clearInterval(c.pingTimer)
     c.pingTimer = null
@@ -219,6 +284,7 @@ export function createSocketConnection(c: SocketCtx) {
   function socketGone(sock: WebSocket | null) {
     c.ready = false
     stopPing()
+    clearLinkTimers()
     c.inboxSocketGone(sock)
     rejectAllPending(new NoAnswerError('internal', 'Connection lost'))
     // A history page is sent back to the socket that asked for it: with that socket gone it will not come. Failing the
@@ -240,4 +306,5 @@ export function createSocketConnection(c: SocketCtx) {
   c.send = send
   c.socketGone = socketGone
   c.stopPing = stopPing
+  c.clearLinkTimers = clearLinkTimers
 }

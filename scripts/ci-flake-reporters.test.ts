@@ -10,7 +10,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { chromium } from '@playwright/test'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv } from './ci-test-env'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -175,6 +177,47 @@ describe('under ci-local every Chromium goes straight to localhost, past any pro
       for (const p of await browsers(path, false))
         expect(p.args, `${p.name}, outside ci-local`).not.toContain('--no-proxy-server')
     })
+  }
+
+  // Chromium on macOS shows notifications in the real Notification Center: push and Notification specs put banners on the
+  // owner's desktop. `NativeNotifications` off keeps the APIs but not the banners. Playwright launches Chromium with its own
+  // `--disable-features=<list>` first, and Chromium keeps only the LAST of a repeated switch: a second switch from a config would
+  // switch Playwright's defaults back on. So the config sends ONE switch, with Playwright's list and ours merged. The test reads
+  // the real argv: a stand-in executable records what Playwright launches it with, without starting a browser.
+  const launchedArgs = async (args: string[]) => {
+    const d = temp()
+    const out = join(d, 'argv')
+    const exe = join(d, 'chrome')
+    writeFileSync(exe, `#!/bin/sh\nprintf '%s\\n' "$@" > '${out}'\nexit 1\n`, { mode: 0o755 })
+    await chromium.launch({ executablePath: exe, headless: true, args }).catch(() => undefined)
+    return lines(out)
+  }
+  /** The features Chromium ends up with disabled: the list of the last --disable-features switch on the command line. */
+  const disabled = (argv: string[]) => {
+    const last = argv.filter((a) => a.startsWith('--disable-features=')).at(-1)
+    return last ? last.slice('--disable-features='.length).split(',') : []
+  }
+  for (const path of ['../apps/web/playwright.config.ts', '../e2e/playwright.config.ts']) {
+    it(
+      `${path}: Chromium keeps notifications inside the browser, and keeps Playwright's own disabled features`,
+      async () => {
+        const defaults = disabled(await launchedArgs([]))
+        expect(defaults, "Playwright's own list").toContain('HttpsUpgrades')
+        for (const ci of [true, false])
+          for (const p of await browsers(path, ci)) {
+            const features = p.args.filter((a) => a.startsWith('--disable-features='))
+            if (p.browser !== 'chromium') {
+              expect(features, p.name).toEqual([])
+              continue
+            }
+            expect(features, `${p.name} (ci-local: ${ci}): ONE switch`).toHaveLength(1)
+            const effective = disabled(await launchedArgs(p.args))
+            expect(effective, `${p.name} (ci-local: ${ci})`).toContain('NativeNotifications')
+            for (const f of defaults) expect(effective, `${p.name} (ci-local: ${ci})`).toContain(f)
+          }
+      },
+      scaled(60_000),
+    )
   }
 
   it("no spec replaces its project's launchOptions without the flag: a spec's test.use({ launchOptions }) replaces them whole", () => {

@@ -91,7 +91,7 @@ function machine(extra: Record<string, string> = {}) {
       script,
       `CI_NONCE="$$-$RANDOM-$(date +%s)"; CI_HELD="" CI_SLOT="" CI_MARKER=""
 CI_LOCAL_LIB="${join(here, 'ci-local')}"; CACHE="${cache}"; LOCKS="${locks}"
-CI_SLOTS=3 CI_MAX_LOAD=0 CI_POLL=\${CI_POLL:-0.1} CI_LOCK_TIMEOUT=\${CI_LOCK_TIMEOUT:-60} CI_LOCK_GRACE=30
+CI_SLOTS=\${CI_SLOTS:-3} CI_MAX_LOAD=0 CI_POLL=\${CI_POLL:-0.1} CI_LOCK_TIMEOUT=\${CI_LOCK_TIMEOUT:-60} CI_LOCK_GRACE=30
 . "${LOCKS_SH}"
 trap 'ci_release_all' EXIT
 ci_acquire_slot "$LOCKS" "${name}" || exit 1
@@ -140,6 +140,83 @@ ${waitForFile(`${cache}/${name}.go`)}
     const flag = (f: string) => () => writeFileSync(join(cache, `${name}.${f}`), '')
     return { ...t, fold: flag('fold'), resume: flag('resume') }
   }
+  // a CI run whose jobs are lists of units, as ci-local.sh's are: it takes a run slot, keeps a run record (runs/<nonce>/jobs, results/) and
+  // starts each job as a background subshell with CI_JOBNAME set. A job's unit is one hold of CI's suites slot (ci_mutex; 'quiet' is
+  // ci_mutex_all with the quiet group marked, as check's is). A unit writes <name>.<job>.<i>.in, waits for <name>.<job>.<i>.go and
+  // writes <name>.<job>.<i>.out; a job that has run all its units leaves its result. <name>.done says the run ended with every result.
+  // late: jobs that ask for their first hold only when the test writes <name>.<job>.start (so the order of the asking is the test's)
+  // chained: [first, second]: second is not started until first has ended, and is marked idle meanwhile (start_jobs, the Swift pair)
+  const yieldRun = (
+    name: string,
+    jobs: Record<string, string[]>,
+    more: Record<string, string> = {},
+    chained?: string[],
+    late: string[] = [],
+  ) => {
+    const script = join(cache, `${name}.yield.sh`)
+    const units = (j: string) =>
+      jobs[j]
+        ?.map(
+          (k, i) =>
+            `${k === 'quiet' ? 'ci_mutex_all' : 'ci_mutex'} "$LOCKS" suites ${k === 'quiet' ? 'quiet_unit' : 'unit'} ${j} ${i + 1}`,
+        )
+        .join('\n') ?? ''
+    const body = Object.keys(jobs)
+      .map((j) => {
+        const wait =
+          chained && chained[1] === j
+            ? `${waitForFile(`$RESULTS/${chained[0]}`, { step: 0.1 })}; ci_fold_resume "$RESULTS" ${j} "$LOCKS"`
+            : ''
+        return `( CI_JOBNAME=${j}\n${late.includes(j) ? waitForFile(`${cache}/${name}.${j}.start`, { keepWhile: 'kill -0 $$' }) : ''}\n${wait}\n${units(j)}\necho "0 1 ok" > "$RESULTS/${j}.part" && mv "$RESULTS/${j}.part" "$RESULTS/${j}" ) &`
+      })
+      .join('\n')
+    writeFileSync(
+      script,
+      `CI_NONCE="$$-$RANDOM-$(date +%s)"; CI_HELD="" CI_SLOT="" CI_MARKER=""
+CI_LOCAL_LIB="${join(here, 'ci-local')}"; CACHE="${cache}"; LOCKS="${locks}"
+CI_SLOTS=\${CI_SLOTS:-3} CI_MAX_LOAD=0 CI_POLL=0.1 CI_LOCK_TIMEOUT=\${CI_LOCK_TIMEOUT:-60} CI_LOCK_GRACE=30
+. "${LOCKS_SH}"
+trap 'ci_release_all' EXIT
+ci_acquire_slot "$LOCKS" "${name}" || exit 1
+RD="$CACHE/runs/$CI_NONCE"; RESULTS="$RD/results"; mkdir -p "$RESULTS"
+printf '%s\\n' ${Object.keys(jobs).join(' ')} > "$RD/jobs"
+${chained ? `ci_fold_wait "$RESULTS" ${chained[1]}` : ''}
+unit() {
+  echo "$1.$2" >> "$CACHE/${name}.order"
+  echo in > "$CACHE/${name}.$1.$2.in"
+  ${waitForFile(`${cache}/${name}.$1.$2.go`, { keepWhile: 'kill -0 $$' })}
+  echo out > "$CACHE/${name}.$1.$2.out"
+}
+quiet_unit() { ci_quiet_begin "$LOCKS"; unit "$@"; local rc=$?; ci_quiet_end "$LOCKS" $rc; return $rc; }
+echo "$$" > "${cache}/${name}.ran"
+${body}
+wait
+echo done > "${cache}/${name}.done"
+`,
+    )
+    const c = spawn('bash', [script], { env: { ...env, ...more } })
+    tags.set(c, name)
+    const t = track(c)
+    return {
+      ...t,
+      startJob: (j: string) => writeFileSync(join(cache, `${name}.${j}.start`), ''),
+      goUnit: (j: string, i: number) => writeFileSync(join(cache, `${name}.${j}.${i}.go`), ''),
+      started: (j: string, i: number) => existsSync(join(cache, `${name}.${j}.${i}.in`)),
+      finished: (j: string, i: number) => existsSync(join(cache, `${name}.${j}.${i}.out`)),
+      order: () =>
+        existsSync(join(cache, `${name}.order`))
+          ? readFileSync(join(cache, `${name}.order`), 'utf8')
+              .trim()
+              .split('\n')
+          : [],
+      result: (j: string) => {
+        const d = join(cache, 'runs')
+        const run = existsSync(d) ? readdirSync(d)[0] : undefined
+        const f = run ? join(d, run, 'results', j) : ''
+        return f && existsSync(f) ? readFileSync(f, 'utf8').trim() : null
+      },
+    }
+  }
   const has = (f: string) => existsSync(join(cache, f))
   const alerts = () =>
     existsSync(join(cache, 'alerts')) ? readdirSync(join(cache, 'alerts')).filter((f) => f.endsWith('.txt')) : []
@@ -154,7 +231,7 @@ ${waitForFile(`${cache}/${name}.go`)}
     writeFileSync(join(lock, 'owner'), `${dead}\n\n${dead}-x-1\n`)
     writeFileSync(join(lock, 'what'), 'a crashed holder\n')
   }
-  return { cache, env, locks, until, ran, has, gate, ci, foldRun, alerts, status, queue, fakeHolder }
+  return { cache, env, locks, until, ran, has, gate, ci, foldRun, yieldRun, alerts, status, queue, fakeHolder }
 }
 
 describe('gate and CI take turns', () => {
@@ -475,6 +552,9 @@ describe('gate and CI take turns', () => {
       await m.until(() => /a push run is on/.test(s.err()))
       const g = m.gate('g1') // queues after it, and waits for the push run that holds
       await m.until(() => m.queue('suites').length === 1)
+      // wait until the scheduled run has looked at the queue with the gate in it: a look that began before the gate queued can still end with
+      // the run taking the slot the push run frees (the gate arrived in the middle of that look), and a loaded machine makes that look seconds long
+      await m.until(() => /gates that are queued go before this run/.test(s.err()))
       p.go()
       await m.until(() => m.ran('g1')) // the scheduled run did not take the free machine under the gate
       expect(m.ran('runS')).toBe(false)
@@ -971,6 +1051,287 @@ echo +C >> "${log}"; sleep 0.2; echo -C >> "${log}"
       }
     })
   })
+  describe('a CI run lets the heavy lock go between whole holds when a gate waits, and takes its place back after it', () => {
+    const quiet = (ms = 500) => sleep(ms) // timing-ok: a negative window, the gate must not have started
+    it('a gate that waits goes at the next boundary: it does not wait for the rest of the run, and the run finishes with every unit run', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      expect(m.ran('g1')).toBe(false) // the unit that is on is never cut short
+      run.goUnit('a', 1)
+      await m.until(() => m.ran('g1')) // the boundary: the gate has the machine, the job's next hold has not begun
+      expect(run.started('a', 2)).toBe(false)
+      expect(run.err()).toMatch(/a gate/)
+      await quiet()
+      expect(run.started('a', 2)).toBe(false) // it waits, it is not killed
+      g.go()
+      expect(await g.done).toBe(0)
+      await m.until(() => run.started('a', 2)) // its place back in line, after the gate
+      run.goUnit('a', 2)
+      await m.until(() => run.started('a', 3))
+      run.goUnit('a', 3)
+      expect(await run.done).toBe(0)
+      expect(run.order()).toEqual(['a.1', 'a.2', 'a.3'])
+      expect([1, 2, 3].every((i) => run.finished('a', i))).toBe(true)
+      expect(run.result('a')).toBe('0 1 ok') // the same result as with no gate
+    })
+
+    it('with no gate waiting nothing yields: the next unit starts at once', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      run.goUnit('a', 1)
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      expect(run.err()).not.toMatch(/lets go|a gate/)
+    })
+
+    it("it never yields inside a quiet (exclusive) group: the gate waits for the whole group, and goes before the job's next hold", async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['quiet', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      expect(existsSync(join(m.locks, 'quiet-group'))).toBe(true)
+      const g = m.gate('g1')
+      await m.until(() => /quiet group/.test(g.err()) || /CI runs hold the machine/.test(g.err()))
+      await quiet()
+      expect(m.ran('g1')).toBe(false)
+      expect(run.finished('a', 1)).toBe(false) // still going, and not stopped
+      run.goUnit('a', 1)
+      await m.until(() => m.ran('g1'))
+      expect(run.finished('a', 1)).toBe(true) // the group ran to its end first
+      expect(run.started('a', 2)).toBe(false)
+      g.go()
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+    })
+
+    it("an exclusive hold that has taken only some of CI's slots lets them go and yields: nothing of it has begun", async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit'], b: ['quiet'] }, {}, undefined, ['b'])
+      await m.until(() => run.started('a', 1)) // a holds one of CI's two slots
+      run.startJob('b') // now the quiet group asks, behind it
+      const slot2 = join(m.locks, 'mutex-suites-2')
+      await m.until(() => existsSync(join(slot2, 'owner'))) // the quiet group asked for both, took the free one and waits for the other
+      expect(run.started('b', 1)).toBe(false)
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      await m.until(() => !existsSync(join(slot2, 'owner'))) // it let its slot go: nothing of it has begun
+      expect(existsSync(join(m.locks, 'quiet-group'))).toBe(false)
+      run.goUnit('a', 1)
+      await m.until(() => m.ran('g1')) // a's hold ended: the gate goes, the quiet group does not begin
+      await quiet()
+      expect(run.started('b', 1)).toBe(false)
+      g.go()
+      await m.until(() => run.started('b', 1)) // after the gate, the whole group
+      run.goUnit('b', 1)
+      expect(await run.done).toBe(0)
+      expect(run.order()).toEqual(['a.1', 'b.1'])
+    })
+
+    it('a gate that waits for a starved CI run is no reason to yield: the run goes on, the starved run takes its slot, then the gate', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] }, { CI_SLOTS: '1' })
+      await m.until(() => run.started('a', 1))
+      const starved = m.ci('r3', { CI_SLOTS: '1', CI_TURN_PASS_MAX: '0' }) // queued for the one run slot, starved at once
+      await m.until(() => m.queue('admit').length === 1)
+      const g = m.gate('g1') // goes behind the starved run
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('a', 1)
+      await m.until(() => run.started('a', 2)) // no yield: it would wait for a gate that waits for the run that waits for it
+      expect(m.ran('g1')).toBe(false)
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      await m.until(() => m.ran('r3'))
+      expect(m.ran('g1')).toBe(false)
+      starved.go()
+      expect(await starved.done).toBe(0)
+      await m.until(() => m.ran('g1'))
+      g.go()
+      expect(await g.done).toBe(0)
+    })
+
+    it("a job that yields does not hold up another run's exclusive group: its ticket is set aside, and the group goes, so the gate is not waiting for a cycle", async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] })
+      const other = m.yieldRun('runB', { b: ['quiet'] }, { CI_TURN_PASS_MAX: '0' }, undefined, ['b']) // never yields: busy until its group is done
+      await m.until(() => run.started('a', 1) && m.ran('runB'))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('a', 1) // a asks for its second hold and yields, its ticket the older one
+      await m.until(() => /a gate waits for the machine/.test(run.err()))
+      other.startJob('b') // the quiet group asks now: it must not wait for the ticket of a job that yields
+      await m.until(() => other.started('b', 1))
+      expect(run.started('a', 2)).toBe(false)
+      expect(m.ran('g1')).toBe(false) // the group is a hold: the gate waits for it
+      other.goUnit('b', 1)
+      expect(await other.done).toBe(0)
+      await m.until(() => m.ran('g1')) // runB is over, runA is between holds
+      g.go()
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+    })
+
+    it('the run holds the machine while another of its jobs is in the middle of a hold: the gate waits for that one too, and no more', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'], b: ['unit'] })
+      await m.until(() => run.started('a', 1) && run.started('b', 1))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('a', 1) // a is at its boundary and yields, b is still in a hold
+      await quiet()
+      expect(m.ran('g1')).toBe(false)
+      expect(run.started('a', 2)).toBe(false)
+      run.goUnit('b', 1) // b's hold ends and it has no more: the whole run is between holds
+      await m.until(() => m.ran('g1'))
+      g.go()
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+    })
+
+    it('a job that has not begun, behind another job of its group (the Swift pair), does not hold the run busy', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { desktop: ['unit', 'unit'], mobile: ['unit'] }, {}, ['desktop', 'mobile'])
+      await m.until(() => run.started('desktop', 1))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('desktop', 1)
+      await m.until(() => m.ran('g1')) // mobile waits behind desktop: idle, not busy
+      expect(run.started('desktop', 2)).toBe(false)
+      g.go()
+      await m.until(() => run.started('desktop', 2))
+      run.goUnit('desktop', 2)
+      await m.until(() => run.started('mobile', 1))
+      run.goUnit('mobile', 1)
+      expect(await run.done).toBe(0)
+      expect(run.result('mobile')).toBe('0 1 ok')
+    })
+
+    it('the cap on gates (CI_TURN_PASS_MAX, 2) bounds how many pass the run: the third waits until the run has ended', async () => {
+      const m = machine({ CI_TURN_PASS_MAX: '2' })
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      const gates = ['g1', 'g2', 'g3'].map((n) => ({ n, g: m.gate(n) }))
+      await m.until(() => gates.every(({ g }) => /CI runs hold the machine/.test(g.err())))
+      run.goUnit('a', 1)
+      await m.until(() => gates.filter(({ n }) => m.ran(n)).length === 2) // two passes
+      await quiet()
+      const passed = gates.filter(({ n }) => m.ran(n))
+      const [third] = gates.filter(({ n }) => !m.ran(n))
+      expect(third).toBeDefined()
+      passed[0]?.g.go() // a gate slot is free, but the run has been passed twice: it holds the turn from now on
+      expect(await passed[0]?.g.done).toBe(0)
+      await quiet()
+      expect(m.ran(third?.n ?? '')).toBe(false)
+      expect(run.started('a', 2)).toBe(false) // the run goes on after the gate that still holds: nothing of it is stopped
+      passed[1]?.g.go()
+      expect(await passed[1]?.g.done).toBe(0)
+      await m.until(() => run.started('a', 2))
+      await quiet()
+      expect(m.ran(third?.n ?? '')).toBe(false) // the run is on again: the third gate waits for it
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      await m.until(() => m.ran(third?.n ?? ''))
+      third?.g.go()
+      expect(await third?.g.done).toBe(0)
+    })
+
+    it('a gate is one pass for the run however many of its jobs yield: two jobs yielding, two gates pass (CI_TURN_PASS_MAX 2), the third waits', async () => {
+      const m = machine({ CI_TURN_PASS_MAX: '2' })
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'], b: ['unit', 'unit'] })
+      await m.until(() => run.started('a', 1) && run.started('b', 1))
+      const gates = ['g1', 'g2', 'g3'].map((n) => ({ n, g: m.gate(n) }))
+      await m.until(() => gates.every(({ g }) => /CI runs hold the machine/.test(g.err())))
+      run.goUnit('a', 1)
+      run.goUnit('b', 1) // both jobs are at their boundary and yield
+      await m.until(() => gates.filter(({ n }) => m.ran(n)).length === 2) // each gate one pass, not one for each job
+      await quiet()
+      expect(gates.filter(({ n }) => m.ran(n))).toHaveLength(2)
+      for (const { n, g } of gates) if (m.ran(n)) g.go()
+      await m.until(() => run.started('a', 2) && run.started('b', 2))
+      run.goUnit('a', 2)
+      run.goUnit('b', 2)
+      expect(await run.done).toBe(0)
+      const third = gates.find(({ n }) => !m.ran(n))
+      await m.until(() => m.ran(third?.n ?? ''))
+      third?.g.go()
+    })
+
+    it('a cap of 0 gates never yields: the run goes on, and the gate waits for it', async () => {
+      const m = machine({ CI_TURN_PASS_MAX: '0' })
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('a', 1)
+      await m.until(() => run.started('a', 2))
+      expect(m.ran('g1')).toBe(false)
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      await m.until(() => m.ran('g1'))
+      g.go()
+    })
+
+    it('the cap in seconds (CI_TURN_PASS_MAX_S) bounds it too: a gate that comes after it has run out waits for the run', async () => {
+      const m = machine({ CI_TURN_PASS_MAX_S: '2' })
+      const run = m.yieldRun('runA', { a: ['unit', 'unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      const g1 = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g1.err()))
+      run.goUnit('a', 1)
+      await m.until(() => m.ran('g1')) // within the cap: it passed
+      await sleep(2600) // timing-ok: the cap is in real seconds here, the time it runs out
+      const g2 = m.gate('g2')
+      await m.until(() => /CI runs hold the machine/.test(g2.err()))
+      await quiet()
+      expect(m.ran('g2')).toBe(false)
+      g1.go()
+      await m.until(() => run.started('a', 2))
+      expect(m.ran('g2')).toBe(false)
+      run.goUnit('a', 2)
+      await m.until(() => run.started('a', 3))
+      run.goUnit('a', 3)
+      expect(await run.done).toBe(0)
+      await m.until(() => m.ran('g2'))
+      g2.go()
+    })
+
+    it('with the turns off nothing yields', async () => {
+      const m = machine({ CI_TURN: '0' })
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] })
+      await m.until(() => run.started('a', 1))
+      const g = m.gate('g1')
+      await m.until(() => m.ran('g1')) // no turns: the gate does not wait for the run
+      run.goUnit('a', 1)
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      g.go()
+      expect(run.err()).not.toMatch(/a gate/)
+    })
+
+    it('a yield does not run out the lock timeout: the job is not "not tested" for having waited for a gate', async () => {
+      const m = machine()
+      const run = m.yieldRun('runA', { a: ['unit', 'unit'] }, { CI_LOCK_TIMEOUT: '2' })
+      await m.until(() => run.started('a', 1))
+      const g = m.gate('g1')
+      await m.until(() => /CI runs hold the machine/.test(g.err()))
+      run.goUnit('a', 1)
+      await m.until(() => m.ran('g1'))
+      await sleep(3000) // timing-ok: longer than the lock timeout the job has (2 s)
+      g.go()
+      await m.until(() => run.started('a', 2))
+      run.goUnit('a', 2)
+      expect(await run.done).toBe(0)
+      expect(run.err()).not.toMatch(/timed out/)
+    })
+  })
+
   // The starvation cap on its own: tickets written by hand (living pids), the clock handed in (CI_TURN_NOW), ci_turn_check called directly.
   // No process waits and nothing sleeps. A ticket's name is the second it came: T0 is the CI run's, 1000 s later is the gate's.
   describe('the starvation cap: a CI run waits behind gates until 2 of them have passed it or it has waited 1800 s', () => {

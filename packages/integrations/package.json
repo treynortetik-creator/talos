@@ -8,7 +8,7 @@
     "./catalog": "./src/setup-catalog.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../../scripts/typecheck.mjs",
     "test": "vitest run"
   },
   "dependencies": {

@@ -33,6 +33,12 @@ export type SocketClientOptions = {
   isVisible?: () => boolean
   /** How long a queued frame waits before the flush is tried again after a send that could not be saved (default 10 s). */
   flushRetryMs?: number
+  /** How long the probe, when the page comes back, waits for the relay's pong before the socket is replaced (default 10 s). */
+  wakeProbeMs?: number
+  /** How long a dial (connecting, or open and waiting for `ready`) may take before the client itself gives up on it (default HANDSHAKE_GIVE_UP_MS, 20 s). */
+  handshakeGiveUpMs?: number
+  /** How long a dial must have run before a page-back trigger may replace it (default DIAL_GIVE_UP_MS, 15 s). */
+  dialGiveUpMs?: number
   /** How long a socket let go of may still deliver an inbox answer before its changes go out again (default 2 s). */
   inboxAnswerGraceMs?: number
   isOnline?: () => boolean

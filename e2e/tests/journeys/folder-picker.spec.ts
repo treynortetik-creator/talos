@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/folders/* apps/web/src/lib/socketFolders.ts
 // Journey: choosing a thread's folder instead of typing it. Real relay, real bridge (a fake Claude drives it), real browser.
 //   open the thread's settings -> Choose… -> the folder browser lists the Mac's folders (names only, no dot-folders, never
 //   ~/.ssh) -> pick Projects/alpha -> Use this folder -> the Mac wrote it into config.json -> the field and the chip show it.

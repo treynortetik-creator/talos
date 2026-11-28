@@ -17,6 +17,14 @@ export type TerminalSessionsState = {
   resume: Record<string, ResumeResult>
   /** The shell switched the tab itself (Ctrl+digit while its terminal held the keyboard). `n` makes a repeat count. */
   selectRequest: { id: string; n: number } | null
+  /**
+   * A tab an "Open terminal" action asked for before the screen was open (or before the list was there): the screen picks it once
+   * it can, and clears it, so it never pulls the owner back to it later. (A `selectRequest` from before the screen opened is not
+   * for it, so this is kept apart.)
+   */
+  wanted: string | null
+  want(id: string): void
+  clearWanted(): void
   setItems(items: TerminalSessionItemT[]): void
   setResume(threadId: string, outcome: ResumeOutcome): void
   clearResume(threadId: string): void
@@ -28,6 +36,9 @@ export const useTerminalSessions = create<TerminalSessionsState>((set, get) => (
   items: null,
   resume: {},
   selectRequest: null,
+  wanted: null,
+  want: (id) => set({ wanted: id }),
+  clearWanted: () => set({ wanted: null }),
   setItems: (items) =>
     set((st) => {
       // an answer belongs to the state the tab was in: once the tab has moved on, the answer is old news
@@ -50,7 +61,7 @@ export const useTerminalSessions = create<TerminalSessionsState>((set, get) => (
       return { resume: rest }
     }),
   requestSelect: (id) => set((st) => ({ selectRequest: { id, n: (st.selectRequest?.n ?? 0) + 1 } })),
-  reset: () => set({ items: null, resume: {}, selectRequest: null }),
+  reset: () => set({ items: null, resume: {}, selectRequest: null, wanted: null }),
 }))
 
 /** The words under a Resume button after the shell answered. Same sentences the Terminals window uses. */

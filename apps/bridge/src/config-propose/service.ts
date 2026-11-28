@@ -56,6 +56,7 @@ import { cardActionNotification, systemNotification } from '../notify.ts'
 import { say } from '../owner-words.ts'
 import { isPeerAddressCard } from '../peer/address-ask.ts'
 import { isPermissionModeCard } from '../permission-mode.ts'
+import { isSessionErrorCard } from '../router/session-error-cards.ts'
 import { isUpdateResendCard } from '../router/update-resend.ts'
 import { isScreenAllowCard } from '../screen-consent.ts'
 import { assertFrameFits } from '../transport.ts'
@@ -250,6 +251,7 @@ export class ConfigProposals {
           !isScreenAllowCard(r.binding) &&
           !isPermissionModeCard(r.binding) &&
           !isUpdateResendCard(r.binding) &&
+          !isSessionErrorCard(r.binding) &&
           !isPeerAddressCard(r.binding),
       )
     if (pending.length >= MAX_PENDING_CONFIG_CARDS)
@@ -435,6 +437,7 @@ export class ConfigProposals {
         isScreenAllowCard(row.binding) ||
         isPermissionModeCard(row.binding) ||
         isUpdateResendCard(row.binding) ||
+        isSessionErrorCard(row.binding) ||
         isPeerAddressCard(row.binding)
       )
         continue

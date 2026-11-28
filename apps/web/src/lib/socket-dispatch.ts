@@ -4,7 +4,7 @@ import { type AttachmentRefT, type Frame, type MessageT, parseFrame } from '@tal
 import type { SocketCtx } from './socket-ctx.ts'
 import { onAppUpdate, onCardCreate, onCardUpdate, onInboxItem, onInboxUpdate } from './socket-frames-cards.ts'
 import { onCatchupBatch, onCatchupReset, onCatchupSummary, onHistoryPage, onReady } from './socket-frames-catchup.ts'
-import { onMessageStored, onReceipt, onReply, onTranscript } from './socket-frames-chat.ts'
+import { onMessageStored, onQuietLines, onReceipt, onReply, onTranscript } from './socket-frames-chat.ts'
 import type { FrameContext } from './socket-frames-context.ts'
 import { onAck, onDevicePinned, onError } from './socket-frames-delivery.ts'
 import {
@@ -49,6 +49,8 @@ export function createSocketDispatch(c: SocketCtx) {
         return onTranscript(frameCtx, frame)
       case 'receipt':
         return onReceipt(frameCtx, frame)
+      case 'quiet.lines':
+        return onQuietLines(frame)
       case 'status':
         return onStatus(frameCtx, frame)
       case 'presence':

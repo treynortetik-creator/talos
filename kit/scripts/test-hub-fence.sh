@@ -79,6 +79,15 @@ out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=work
 out="$(printf '%s' "$CALL" | env "${HOOKENV[@]}" TALOS_TEST_SANDBOX= TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_PERMISSION_HOOK_WAIT_S="$(scale 3)" python3 "$KIT/hooks/permission-relay.py" 2>/dev/null)"
 [ "$(got)" != 0 ] && ok || no "without TALOS_TEST_SANDBOX the permission hook no longer reaches its hub"
 
+# the Notification hook: the same fence (nothing leaves the sandbox), and the same reach for an owner
+rm -f "$APP/got.jsonl"
+NCALL='{"hook_event_name":"Notification","notification_type":"elicitation_dialog","cwd":"/srv/proj","session_id":"abc"}'
+out="$(printf '%s' "$NCALL" | env "${HOOKENV[@]}" TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_NOTIFICATION_HOOK_WAIT_S="$(scale 1)" python3 "$KIT/hooks/notification-relay.py" 2>/dev/null)"
+[ "$(got)" = 0 ] && [ -z "$out" ] && ok || no "notification-relay reached the decoy hub from outside its test sandbox" "output: $out"
+printf '%s' "$NCALL" | env "${HOOKENV[@]}" TALOS_TEST_SANDBOX= TALOS_APP_PERM_HOOK_SOURCE=worker TALOS_NOTIFICATION_HOOK_WAIT_S="$(scale 1)" python3 "$KIT/hooks/notification-relay.py" >/dev/null 2>&1
+[ "$(got)" != 0 ] && ok || no "without TALOS_TEST_SANDBOX the notification hook no longer reaches its hub"
+rm -f "$APP/got.jsonl"
+
 # ---- the tripwire: a test that seals nothing refuses to run
 err="$( ( . "$KIT/scripts/_test-env.sh"; export TALOS_APP_HOME="$APP"; talos_test_sandbox "$D/sb" ) 2>&1 >/dev/null )"; rc=$?
 [ "$rc" = 3 ] && ok || no "the tripwire exits 3 when TALOS_APP_HOME is outside the sandbox (got $rc)"
@@ -119,7 +128,7 @@ for f in sorted(glob.glob(os.path.join(d, "test-*.sh"))) + [os.path.join(d, "sel
     sets_home = re.search(r"(^|;)\s*(export\s+)?HOME=", text, re.M) is not None
     if sets_home and "talos_test_sandbox" not in text:
         print("  FAIL %s sets HOME but never calls talos_test_sandbox" % name); bad += 1
-    if not sets_home and name not in ("self-test.sh", "test-hub-fence.sh") and any(re.search(r"(action-rules|permission-relay)\.py", l) and re.search(r"python|HOOK=", l) for l in lines):
+    if not sets_home and name not in ("self-test.sh", "test-hub-fence.sh") and any(re.search(r"(action-rules|permission-relay|notification-relay)\.py", l) and re.search(r"python|HOOK=", l) for l in lines):
         # a script that sets no HOME but pins TALOS_APP_HOME inside its sandbox may call it too
         if "talos_test_sandbox" not in text:
             print("  FAIL %s never sets HOME but mentions a hub hook" % name); bad += 1

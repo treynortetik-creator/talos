@@ -2,7 +2,7 @@
 // SupervisorController.workerOptions is): the same inputs give the same plan, so the report says what the supervisor would do.
 import type { MainLaunchConfig } from '@talos-app/protocol'
 import { readOsSandboxSwitch } from '../guards/os-sandbox.ts'
-import { threadFenceOn } from './worker-config.ts'
+import { autoContinueAtLimitOn, threadFenceOn } from './worker-config.ts'
 import { claudeJsonHome } from './worker-mcp.ts'
 import { managedSettingsDir } from './worker-policy.ts'
 import type { WorkerDeps } from './worker-types.ts'
@@ -59,6 +59,8 @@ export function supervisorPlan(d: SupervisorPlanDeps): WorkerDeps['plan'] {
       // the developer thread fence, read again at each start (off only when config.json says so)
       threadFence: () => threadFenceOn(d.home),
       osSandbox: () => osSandboxForStart(d.home, d.audit),
+      // the owner's continue-at-limit switch, read again at each start (a boolean there; else the config default)
+      autoContinue: () => autoContinueAtLimitOn(d.home),
       launchEnv: () => d.launchCfg()?.env,
       claudeDir,
       // where Claude Code reads .claude.json: CLAUDE_CONFIG_DIR when set (even to ~/.claude itself), else the home folder

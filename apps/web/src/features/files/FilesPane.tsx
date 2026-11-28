@@ -5,6 +5,7 @@ import { type AttachmentRefT, FILES_WORDING } from '@talos-app/protocol'
 import { type KeyboardEvent, useRef } from 'react'
 import { cn } from '../../ui/cn.ts'
 import { IconBack, IconChevron, IconFile } from '../../ui/icons.tsx'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { Markdown } from '../threads/Markdown.tsx'
 import { useMediaSrc } from '../threads/media.ts'
 import { CodeView } from './CodeView.tsx'
@@ -34,6 +35,7 @@ export function FilesPane({ b, layout }: { b: FilesBrowser; layout: 'pane' | 'sh
             placeholder="Filter"
             value={b.filter}
             onChange={(e) => b.setFilter(e.target.value)}
+            onKeyDown={searchBoxKeys({ value: b.filter, onClear: () => b.setFilter('') })}
             className={cn(
               'w-full rounded-button border border-line bg-bg px-2.5 text-sm text-text placeholder:text-text-3 focus-visible:outline-2 focus-visible:outline-focus',
               layout === 'pane' ? 'h-8' : 'h-11',

@@ -20,8 +20,10 @@ import { REPO_DIR } from '../version.ts'
 import type { SchedulerAdapter } from './adapter.ts'
 import { AdapterError, type AdapterMeta, ChronosAdapter } from './chronos-adapter.ts'
 import { ClosedAdapter } from './closed-adapter.ts'
+import { chronosRefusal, testRootOf } from './test-root.ts'
 
 export const DISCOVERY_TIMEOUT_MS = 5000
+let refusalLogged = false
 /** The whole discovery's budget: stays well inside the app's SCHEDULES_ANSWER_MS (test/schedules/discovery-budget). */
 export const DISCOVERY_TOTAL_MS = 10_000
 
@@ -160,6 +162,8 @@ export async function discover(
     scutilBin?: string
     /** Test seam: the Chronos in this checkout (default apps/chronos/bin/chronos). */
     bundledChronos?: string
+    /** One line to the bridge's log (the refusal of a Chronos outside the test folder). */
+    log?: (msg: string, fields?: Record<string, unknown>) => void
   },
 ): Promise<Discovered> {
   const timeoutMs = deps.timeoutMs ?? DISCOVERY_TIMEOUT_MS
@@ -178,10 +182,25 @@ export async function discover(
     return { adapter: new ClosedAdapter('off', closedInfo()), state: 'off' }
 
   const childEnv = { path: env.pathDirs.join(':'), home: env.userHome, ...(env.tz ? { tz: env.tz } : {}) }
-  const candidates = env.chronosBin ? [env.chronosBin] : chronosCandidates(env, deps.bundledChronos)
+  let candidates = env.chronosBin ? [env.chronosBin] : chronosCandidates(env, deps.bundledChronos)
+  // A test harness (TALOS_TEST_ROOT) allows only a Chronos under its own folder; the owner's real one is never asked.
+  const testRoot = testRootOf(env)
+  const refused = (bin: string) =>
+    testRoot !== undefined && chronosRefusal(bin, testRoot, { home: childEnv.home, config: env.chronosConfig }) !== null
+  if (testRoot !== undefined) {
+    const kept = candidates.filter((b) => !refused(b))
+    if (kept.length < candidates.length && !refusalLogged) {
+      refusalLogged = true
+      deps.log?.('a Chronos outside the test folder was refused; the scheduler stays off', {
+        refused: candidates.length - kept.length,
+      })
+    }
+    candidates = kept
+  }
   let legacy: string | undefined
   let unanswered = false
   for (const bin of candidates) {
+    if (refused(bin)) continue // the same check again, right before any program is started
     if (!isExecutable(bin)) continue
     if (left() === 0) {
       unanswered = true // a candidate we had no time left to ask
@@ -190,6 +209,7 @@ export async function discover(
     const probe = new ChronosAdapter({
       bin,
       config: env.chronosConfig,
+      testRoot,
       timeoutMs: Math.min(timeoutMs, left()),
       chronosNow: deps.chronosNow ?? (() => env.chronosNow),
       env: childEnv,
@@ -200,6 +220,7 @@ export async function discover(
         const adapter = new ChronosAdapter({
           bin,
           config: env.chronosConfig,
+          testRoot,
           timeoutMs: env.schedulerTimeoutMs,
           chronosNow: deps.chronosNow ?? (() => env.chronosNow),
           env: childEnv,

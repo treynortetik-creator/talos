@@ -18,6 +18,7 @@ import {
   TabsList,
   TabsTrigger,
 } from '../../ui/index.ts'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { Mascot } from '../../ui/Mascot.tsx'
 import { Meander } from '../../ui/Meander.tsx'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
@@ -268,6 +269,7 @@ function HomeScreenInner({ navigate }: { navigate: NavigateFunction }) {
             placeholder="Search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={searchBoxKeys({ value: query, onClear: () => setQuery('') })}
           />
           {missed ? (
             <Button

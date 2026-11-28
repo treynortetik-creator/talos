@@ -5,7 +5,16 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { ChannelMeta, type JwkP256T } from '@talos-app/protocol'
-import { FakeApp, FakeClaude, FakeRelay, loadExampleConfig, sleep, t, waitFor } from '@talos-app/testkit'
+import {
+  bridgeChildEnv,
+  FakeApp,
+  FakeClaude,
+  FakeRelay,
+  loadExampleConfig,
+  sleep,
+  t,
+  waitFor,
+} from '@talos-app/testkit'
 import { RELAY_RESTART_NOTICE } from '../src/bridge.ts'
 import { readGoodStarts } from '../src/good-starts.ts'
 import { listVersions } from '../src/last-good.ts'
@@ -476,9 +485,16 @@ describe('stdio server', () => {
   test('a missing config makes the process exit with a readable message instead of hanging', async () => {
     const relay = await new FakeRelay().start()
     const home = tempHome('talos-server-')
-    const proc = Bun.spawn(['bun', 'run', join(BRIDGE_DIR, 'src', 'server.ts')], {
+    const argv = ['bun', 'run', join(BRIDGE_DIR, 'src', 'server.ts')]
+    const child = bridgeChildEnv(argv, {
+      TALOS_APP_HOME: home,
+      TALOS_TEST_ROOT: home,
+      TALOS_APP_RELAY_URL: relay.httpUrl,
+      TALOS_APP_BRIDGE: '1',
+    })
+    const proc = Bun.spawn(argv, {
       cwd: BRIDGE_DIR,
-      env: { ...process.env, TALOS_APP_HOME: home, TALOS_APP_RELAY_URL: relay.httpUrl, TALOS_APP_BRIDGE: '1' },
+      env: child.env,
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -501,9 +517,16 @@ const real = await import(${JSON.stringify(join(BRIDGE_DIR, 'src', 'tools', 'ind
 mock.module(${JSON.stringify(join(BRIDGE_DIR, 'src', 'tools', 'index.ts'))}, () => ({ ...real, toolTableProblems: () => ['agent tool "reply" has no tool'] }))
 `,
     )
-    const proc = Bun.spawn(['bun', 'run', '--preload', preload, join(BRIDGE_DIR, 'src', 'server.ts')], {
+    const argv = ['bun', 'run', '--preload', preload, join(BRIDGE_DIR, 'src', 'server.ts')]
+    const child = bridgeChildEnv(argv, {
+      TALOS_APP_HOME: home,
+      TALOS_TEST_ROOT: home,
+      TALOS_APP_RELAY_URL: relay.httpUrl,
+      TALOS_APP_BRIDGE: '1',
+    })
+    const proc = Bun.spawn(argv, {
       cwd: BRIDGE_DIR,
-      env: { ...process.env, TALOS_APP_HOME: home, TALOS_APP_RELAY_URL: relay.httpUrl, TALOS_APP_BRIDGE: '1' },
+      env: child.env,
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',

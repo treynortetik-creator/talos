@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../../scripts/typecheck.mjs",
     "start": "bun run $PWD/src/server.ts",
     "test": "TMPDIR=\"$(mktemp -d \"${TMPDIR:-/tmp}/tbrun-XXXXXX\")\" bun test --timeout 30000",
     "cli": "bun run $PWD/src/cli.ts",

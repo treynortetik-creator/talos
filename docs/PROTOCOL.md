@@ -232,6 +232,70 @@ its envelope and snapshot, and advertises `agents/1` in `ready.features`; the br
 read it as a strict enum, so the bridge publishes only `SESSION_CAPABILITIES_V1` (`wireSessionState`); newer
 capabilities ride elsewhere (the agents panel's in `AgentsSnapshot.can_stop`).
 
+## The terminal stream (a read-only view of the agent's pane)
+
+`term.*` frames carry the web app's and the iPhone app's read-only look at the agent's tmux pane (Main's, or a thread's own session).
+It is a stream of its own beside the chat path, and **unsequenced**: no `relay.seq`, no catch-up, no outbox, no push, never stored (not
+even encrypted), never re-sent when the Mac says hello again. The relay routes it like the ephemeral reads, except as a subscription:
+one `term_id` is bound to one app socket and the one device behind it, from the signed open until the view ends. Bridge and relay list
+`term-view/1` (`ready.features` and the bridge's hello); the frames are in `packages/protocol/src/frames-term.ts`. Every schema is strict,
+with no `.default()`, so a frame that parses is exactly what was sent.
+
+| Frame         | Direction                       | Signed         | Body                                                                              |
+| ------------- | ------------------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `term.open`   | app to Mac                      | owner (`osig`) | `term_id`, `tier` (only `view`), `target` (`main` or a thread id), `cols`, `rows` |
+| `term.resume` | app to Mac                      | owner          | `term_id`, `from` (a byte offset)                                                 |
+| `term.close`  | app to Mac                      | owner          | `term_id`                                                                         |
+| `term.ack`    | app to Mac                      | no             | `term_id`, `upto` (a byte offset): the credit, and the page's sign of life        |
+| `term.opened` | Mac to app                      | no             | `term_id`, `tier`, the pane's `cols` and `rows`, `idle_s`, `max_s`                |
+| `term.key`    | Mac to app                      | no             | `term_id`, `at`, `bytes_b64`: a picture, at most 128 KiB raw                      |
+| `term.out`    | Mac to app                      | no             | `term_id`, `at`, `bytes_b64`: pane output, at most 16 KiB raw                     |
+| `term.closed` | Mac to app, and the relay's own | no             | `term_id`, `why`                                                                  |
+- **Bytes.** The pane's own bytes, base64url without padding in a JSON string. The page decodes them as UTF-8 in streaming mode, so a
+  code point split across two frames is held, never mangled. `at` is the absolute byte offset in the pane's output stream: a `term.out`
+  carries the bytes from `at`; a `term.key` is a picture that is exact for `at` (clear the screen, draw it, and the stream goes on from
+  `at`). `term.ack{upto}` and `term.resume{from}` count in the same offsets. The Mac keeps the last 256 KiB of output per watched pane
+  in memory, shared by its viewers; a joiner, or a resume from an offset that has fallen out of that ring, gets a `term.key`: the
+  screen and up to 1,000 lines of history (`capture-pane -p -e -J -S -1000`), colour kept. A keyframe is never over 128 KiB: the oldest history goes first, then the longest rows are cut at a character boundary outside any
+  escape sequence; it restores the pane's alternate screen, cursor visibility and scroll region, and a second one inside two seconds
+  waits for the gap (a viewer that needs one again and again is closed with `keyframe`). A `term.opened` sent again for the same view
+  means the pane's size changed on the Mac (its own window): the page resizes and a fresh `term.key` follows.
+- **Flow control.** Per viewer, at most 8 frames or 64 KiB not yet acked. When the window is full the Mac stops sending but never stops
+  reading the pane: the ring keeps filling, and if it has passed the viewer's offset the next frame is a fresh `term.key` (a skip
+  ahead), so a slow phone never stalls the agent. The relay checks the same window on what it forwards, and the socket: a socket with
+  more than 512 KiB waiting, or a Mac that sends past the window, gets `term.closed{why:'lag'}` once and no more output for that id
+  until the page sends `term.resume{from}`. The view stays open at the Mac, and no other viewer is affected. A `term.key` moves the
+  credit to its own offset. The page sends `term.ack` every few frames, and every 30 s while it is on screen (the Mac closes a view
+  after 10 minutes without a word from the page, and after 60 minutes in all).
+- **Limits.** 4 views open at once on the relay. One `term_id` per open, never reused. The relay answers an open at once with
+  `error{mac_offline}` when the Mac is away, and with `term.closed{why:'unsupported'}` when the Mac does not list `term-view/1`.
+- **Why a view ends** (`term.closed{why}`, a word and not a closed list): `closed`, `idle`, `max`, `lag` (resumable, see above),
+  `no_pane`, `pane_gone`, `resized`, `socket_closed`, `restart`, `mac_offline`, `unsupported`, `too_many`, `refused`, `revoked` (the
+  device that opened it was revoked: the Mac ends its views at once, or within a second of output when the revoke was made in the
+  devices file), `keyframe` (a picture could not be made small enough, or the page needed new ones again and again). When the viewing
+  socket closes, the relay sends the Mac `term.closed{why:'socket_closed'}` (it cannot sign a `term.close` for the owner), and the view
+  ends there; watching again is a new tap and a new `term_id`. When the Mac goes away the relay ends every view and says
+  `term.closed{why:'mac_offline'}` to each socket; a bridge restart closes everything.
+- **Checks at the Mac.** `term.open`, `term.resume` and `term.close` are verified like every owner frame: a pinned, unrevoked device, a
+  signature over the raw JSON, `ts` within two minutes (the phone's clock skew allowed), and an id never seen before. The id goes in the
+  persistent seen-id store, so the same bytes never reopen a view, not even after a restart. Only the device that opened a view may
+  resume or close it. Output goes only to the socket that delivered the verified open.
+- **Choices made in piece 1 that differ from the first plan.** (1) The relay cannot sign an owner `term.close`, so when the viewing
+  socket closes it sends the Mac an unsigned `term.closed{why:'socket_closed'}`. (2) A change of the pane's size on the Mac (its own
+  window) re-sends `term.opened` and a fresh `term.key`; the view does not close. (3) After a socket drop the old view cannot be
+  resumed: watching again is a new tap and a new `term_id`; `term.resume` serves the lag case on a live socket. (4) Any `term.ack`
+  moves the idle time on, and the page sends one every 30 s while it is visible. (5) There is no line in Main yet, only the audit row.
+
+- **No typing path.** This tier has no frame that writes to the pane, and the Mac's client is a control-mode client that ignores size
+  (`tmux -C attach -f ignore-size`: it asks not to size the window; the flag alone does not keep the size when the view is the only client, so the
+  size is protected by the allowlist below, which refuses `refresh-client`). It is not attached `-r`: a read-only client makes every plain
+  `send-keys` on the session fail, which silently broke the agent's own automatic keys while someone watched. Read-only rests on the
+  bridge instead: the client's stdin has one writer, which throws before writing anything but `capture-pane` and `display-message` with
+  the exact formats the view uses (no key, paste, buffer, resize or chained command can pass). A tmux that refuses `-f` fails the view
+  (`unsupported`); there is no fallback to an attach that could resize. The renderer's replies (cursor reports and the like) are dropped on the page.
+- **Audit.** One row per view in the bridge's history store: tier, device, target, open and close times, why, and byte and frame counts.
+  Never content.
+
 ## Errors and close codes
 
 `bad_frame`, `unauthorized`, `stepup_required`, `stepup_invalid`, `card_not_pending`, `card_expired`,
@@ -272,7 +336,7 @@ base62 chars (connection, a capability). Frame ids are bare ULIDs.
 | `bridge-auth.ts`                    | Ed25519 challenge and HTTP signature helpers, key id, rotation signature                                                                                                    |
 | `untrusted.ts`                      | `wrapExternal`, `sanitizeExternal`, `stripSpecialTokens`, `sanitizeMetaValue`                                                                                               |
 | `quiet-window.ts`                   | `isQuiet`, `nextQuietEnd` (Intl, any IANA zone, DST-safe)                                                                                                                   |
-| `push.ts`                           | `PushPayload`, `buildPushPayload` (fixed templates, no free text field), `badgeCount` (the one app-icon number)                                                             |
+| `push.ts`                           | `PushPayload`, `buildPushPayload` (fixed templates, no free text field; `push-words.ts` adds a browser reply's preview), `badgeCount` (the one app-icon number)             |
 | `fingerprint.ts`                    | `fingerprintWords(device_id)`: four PGP words for pin confirmation                                                                                                          |
 | `http.ts`                           | Request and response schemas and a route table for spec 3.8                                                                                                                 |
 | `native.ts`                         | Native-shell JS bridge messages (page <-> Mac/iPhone web view), strict zod; fixtures in `fixtures/native/`                                                                  |

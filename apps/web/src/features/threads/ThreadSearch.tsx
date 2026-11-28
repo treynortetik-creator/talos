@@ -1,5 +1,5 @@
 // Search inside the thread list (the sidebar and the phone menu): the row with the magnifier, + and the pencil turns into a
-// search box, and the results take the place of the threads until Escape or the cross puts the list back.
+// search box, and the results take the place of the threads until Escape on an empty box or the cross puts the list back (Escape with text clears it first, ui/keys.ts).
 import type { SearchHitT } from '@talos-app/protocol'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -7,6 +7,7 @@ import { useTalos } from '../../lib/client.ts'
 import { clockTime, dayLabel } from '../../lib/format.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconClose, IconPencil, IconSearch } from '../../ui/icons.tsx'
+import { ESCAPE_BOX, searchBoxKeys } from '../../ui/keys.ts'
 import { MIN_CHARS, segments } from '../search/logic.ts'
 import { useSearchHits } from '../search/useSearchHits.ts'
 import { NewThread } from './ThreadSettings.tsx'
@@ -60,7 +61,7 @@ export function ThreadTools({
   if (search.searching)
     return (
       <div className="flex items-center gap-1">
-        <label data-thread-search="" className="relative min-w-0 flex-1">
+        <label className="relative min-w-0 flex-1">
           <IconSearch
             width={16}
             height={16}
@@ -77,11 +78,8 @@ export function ThreadTools({
             maxLength={200}
             value={search.query}
             onChange={(e) => search.setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape') return
-              e.stopPropagation()
-              search.stop()
-            }}
+            {...ESCAPE_BOX}
+            onKeyDown={searchBoxKeys({ value: search.query, onClear: () => search.setQuery(''), onClose: search.stop })}
             className="min-h-11 w-full appearance-none rounded-button border border-chrome-line bg-transparent pr-2 pl-9 [&::-webkit-search-cancel-button]:hidden text-sm text-on-chrome placeholder:text-on-chrome-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
           />
         </label>

@@ -79,9 +79,9 @@
     },
     {
       "file": "11-errors.json",
-      "steps": 11,
-      "frames": 25,
-      "notifications": 2,
+      "steps": 10,
+      "frames": 20,
+      "notifications": 1,
       "tool_calls": 0
     },
     {
@@ -95,7 +95,7 @@
       "file": "13-states-and-health.json",
       "steps": 8,
       "frames": 20,
-      "notifications": 2,
+      "notifications": 3,
       "tool_calls": 2
     },
     {

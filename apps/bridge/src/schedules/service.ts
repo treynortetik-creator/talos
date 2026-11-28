@@ -52,9 +52,11 @@ import {
   runNowDay,
   stale,
   startProbe,
+  startRunNow,
   withRuns,
 } from './service-frames.ts'
 import { agentOrigin, baseOf, changeFromArgs, toolPropose, tooOldFor } from './service-propose.ts'
+import { checkRepairs, jobFailed, repairDay, repairedSince, toolRerun } from './service-repair.ts'
 import {
   chronosLimits,
   closeRun,
@@ -150,7 +152,6 @@ export class ScheduleService {
   healthSig = ''
   pendingAlerts: Array<{ kind: 'job_failed' | 'scheduler_stuck'; key: string }> = []
   wasStuck = false
-  runNowAt = new Map<string, number>()
   /** Proposal times per lane: 'main', or a thread session's thread id. One looping lane cannot use up another's hour. */
   proposalAt = new Map<string, number[]>()
   probing = false
@@ -411,6 +412,7 @@ export class ScheduleService {
       clockIso: () => this.iso(),
       ...(this.deps.chronosNow ? { chronosNow: this.deps.chronosNow } : {}),
       onProblem: (e) => this.onProblem(e),
+      log: (m, f) => this.log(m, f),
       ...(this.deps.discoveryTimeoutMs ? { timeoutMs: this.deps.discoveryTimeoutMs } : {}),
     })
     if (d.unanswered) this.unansweredAt = this.now()
@@ -863,6 +865,24 @@ export class ScheduleService {
     return runNowDay.call(this, ...a)
   }
 
+  startRunNow(...a: Parameters<typeof startRunNow>) {
+    return startRunNow.call(this, ...a)
+  }
+  jobFailed(...a: Parameters<typeof jobFailed>) {
+    return jobFailed.call(this, ...a)
+  }
+  checkRepairs(...a: Parameters<typeof checkRepairs>) {
+    return checkRepairs.call(this, ...a)
+  }
+  repairedSince(...a: Parameters<typeof repairedSince>) {
+    return repairedSince.call(this, ...a)
+  }
+  repairDay(...a: Parameters<typeof repairDay>) {
+    return repairDay.call(this, ...a)
+  }
+  toolRerun(...a: Parameters<typeof toolRerun>) {
+    return toolRerun.call(this, ...a)
+  }
   onRunNow(...a: Parameters<typeof onRunNow>) {
     return onRunNow.call(this, ...a)
   }

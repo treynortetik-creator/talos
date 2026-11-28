@@ -25,6 +25,7 @@ Python 3.9 compatible, standard library only.
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -556,4 +557,438 @@ def deny_message(notes):
 def request_extras(call):
     """Extra fields for the request line: the session's permission mode as Claude Code names it, which the bridge reads only for "why it asked"."""
     mode = call.get("permission_mode")
-    return {"permission_mode": mode} if isinstance(mode, str) and 0 < len(mode) <= 30 else {}
+    out = {"permission_mode": mode} if isinstance(mode, str) and 0 < len(mode) <= 30 else {}
+    rules = session_offer(call)[1]
+    if rules:
+        out["suggest"] = {"rules": rules}      # "Allow for this session": only the words to show on the card; the hook prints its own copy
+    tid = pre_lookup(call)                     # the call's exact tool_use id, when exactly one PreToolUse record of this session fits
+    if tid:
+        out["tool_use_id"] = tid
+        for k, n in (("agent_id", 100), ("transcript_path", 1000)):
+            if isinstance(call.get(k), str) and 0 < len(call[k]) <= n:
+                out[k] = call[k]
+    return out
+
+
+# ---- "Allow for this session" (Wave 1, 1.10). Claude Code's hook input offers rules (`permission_suggestions`). A plain rule that
+# names what it allows (a Bash command pattern, say) can be offered on the phone as a third choice; when the owner's signed tap says
+# "session", the hook prints ITS OWN stored copy of the offer with the destination forced to "session". The bridge is only ever told
+# the words to show: it cannot name a rule. The offer is Claude Code's text and comes from the model's own command, so it is
+# refused whole (never cut, never cleaned) unless it is exactly what can be shown. The same checks are in the protocol package
+# (permission.ts cleanSessionRules) and the bridge runs them again: neither side trusts the other.
+SESSION_RULES_MAX = 3
+SESSION_TOOL_MAX = 64
+SESSION_CONTENT_MAX = 160
+_SESSION_BLANKS = {0xA0, 0x1680, 0x202F, 0x205F, 0x3000} | set(range(0x2000, 0x200B))
+_SESSION_INVISIBLE = (
+    {0x34F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}
+    | set(range(0x334, 0x339)) | set(range(0x180B, 0x1810)) | set(range(0x2060, 0x2070))
+    | set(range(0xFE00, 0xFE10)) | set(range(0xFFF0, 0xFFFC)) | set(range(0xE0000, 0xE0080)) | set(range(0xE0100, 0xE01F0))
+)
+
+
+def _session_unsafe(text):
+    """True when the text has anything that draws differently from its bytes: control, format, surrogate, private-use or
+    unassigned characters, line separators, invisible fillers, gap-padding blanks, or a run of more than three combining marks."""
+    import unicodedata
+    run = 0
+    for ch in text:
+        cp = ord(ch)
+        cat = unicodedata.category(ch)
+        if cat in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") or cp in _SESSION_BLANKS or cp in _SESSION_INVISIBLE:
+            return True
+        run = run + 1 if cat.startswith("M") else 0
+        if run > 3:
+            return True
+    return False
+
+
+def _session_literal(content):
+    """True when the rule's content names something: a literal character (not a blank, `*`, `?`, `:` or `/`) before its first
+    wildcard, looking past a `domain:` prefix. Only wildcards (`*`, `:*`, `* *`, `domain:*`, `//**`) allow a whole tool: never offered."""
+    import re
+    body = re.sub(r"^domain:", "", content, flags=re.I)
+    m = re.search(r"[*?]", body)
+    lead = body if m is None else body[:m.start()]
+    return any(not (c.isspace() or c in "*?:/") for c in lead)
+
+
+def session_rules_hash(rules):
+    """What the owner signs for "Allow for this session": the sha256 of the canonical list of {content, tool} the button shows. The
+    protocol package computes the same (permission.ts sessionRulesHash); a test makes them agree. `rules` is [{"tool", "content"}]."""
+    import hashlib
+    body = json.dumps([{"tool": r["tool"], "content": r["content"]} for r in rules], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def session_chosen(msg, decision, req):
+    """True when the owner chose "for this session": an allow, `session` exactly true, and the hash they signed is the hash of the rules
+    THIS hook offered (so a rewritten button, an older answer with no hash, or a hub that names nothing gets a plain allow)."""
+    rules = (req.get("suggest") or {}).get("rules")
+    return bool(decision == "allow" and msg.get("session") is True and rules and msg.get("session_hash") == session_rules_hash(rules))
+
+
+def session_grant(call, req):
+    """The extra part of the allow answer when the owner chose it: this hook's OWN copy of Claude Code's offer, destination "session"."""
+    updates = session_offer(call)[0]
+    return {"updatedPermissions": updates} if req.get("_session") and updates else {}
+
+
+def session_offer(call):
+    """(updates, rules) for the offer Claude Code made in this hook call, or (None, None). `updates` is what the hook prints on a
+    "session" answer: each kept addRules/allow suggestion, its destination forced to "session". `rules` is the flat
+    [{"tool", "content"}] list the bridge shows on the card. Entries of any other kind (setMode, addDirectories, deny or ask rules,
+    replaceRules) are left out. A kept entry with anything off about it refuses the whole offer: a rule with no content (a
+    whole-tool allow, or content that is only wildcards), another tool's rule, text over a limit, unknown keys, hidden characters, more than SESSION_RULES_MAX in all."""
+    try:
+        sugg = call.get("permission_suggestions")
+        tool = call.get("tool_name")
+        if not isinstance(sugg, list) or not isinstance(tool, str):
+            return None, None
+        updates, rules = [], []
+        for entry in sugg:
+            if not isinstance(entry, dict) or entry.get("type") != "addRules" or entry.get("behavior") != "allow":
+                continue
+            if not set(entry) <= {"type", "rules", "behavior", "destination"}:
+                return None, None
+            raw = entry.get("rules")
+            if not isinstance(raw, list) or not raw:
+                return None, None
+            kept = []
+            for r in raw:
+                if not isinstance(r, dict) or set(r) != {"toolName", "ruleContent"}:
+                    return None, None
+                name, content = r["toolName"], r["ruleContent"]
+                if not isinstance(name, str) or not isinstance(content, str) or name != tool:
+                    return None, None
+                if not name or len(name) > SESSION_TOOL_MAX or not content.strip() or len(content) > SESSION_CONTENT_MAX:
+                    return None, None
+                if _session_unsafe(name) or _session_unsafe(content) or not _session_literal(content):
+                    return None, None
+                kept.append({"toolName": name, "ruleContent": content})
+                rules.append({"tool": name, "content": content})
+            updates.append({"type": "addRules", "rules": kept, "behavior": "allow", "destination": "session"})
+        if not rules or len(rules) > SESSION_RULES_MAX:
+            return None, None
+        return updates, rules
+    except Exception:
+        return None, None
+
+
+# ---- "the prompt is over" (Wave 1, after hook-wins). Claude Code stops a PermissionRequest hook (SIGTERM) when the prompt is answered
+# anywhere... but the live check showed it is NOT sent for a terminal Yes or No (only Esc stops the hook), and a plain `kill` looks the same, so a
+# stop says nothing: it is only traced. The one thing the hook can KNOW is that Claude Code itself is gone (`parent`): every prompt of that session is
+# over, and it sends the hub one last line, `perm_over`, before it exits. A SIGKILL, a crash, the hook's own wait running out, the hub closing, a stop
+# or the call's own tool_result turning up (the bridge reads the transcript for the exact id instead) says nothing, and the prompt is kept open.
+# Never a decision.
+OVER_WHY = ("parent",)
+
+
+def trace(why):
+    """With TALOS_PERMISSION_HOOK_TRACE=<file> (a probe for a live check; off otherwise): one line when the request has gone out whole (`sent`), and one for why the hook ended."""
+    path = os.environ.get("TALOS_PERMISSION_HOOK_TRACE")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("%d %s\n" % (int(time.time()), why))
+    except Exception:
+        pass
+
+
+def ended(sock, req, why):
+    """The hook is ending without an answer, for `why`. Traces it, and tells the hub when it KNOWS the prompt is over (OVER_WHY). Returns None."""
+    trace(why)
+    # only once the request is out whole (`_out`, set after the send): a signal in the middle of a large send must not put a line into a half frame
+    if why in OVER_WHY and req.get("_out"):
+        try:
+            sock.settimeout(1.0)
+            sock.sendall((json.dumps({"t": "perm_over", "id": req["id"], "why": why}) + "\n").encode("ascii"))
+        except Exception:
+            pass
+    return None
+
+
+def on_over(sock, req):
+    """Claude Code stopping the hook (SIGTERM, or SIGHUP when its terminal goes) is told to the hub, then the hook exits quietly."""
+    import signal
+
+    def handler(signum, _frame):
+        ended(sock, req, "term" if signum == signal.SIGTERM else "hup")
+        sys.exit(0)
+
+    for name in ("SIGTERM", "SIGHUP"):
+        try:
+            signal.signal(getattr(signal, name), handler)
+        except Exception:
+            pass
+
+
+# ---- The transcript watcher (moved here from permission-relay.py, which is at its size limit), with a probe: with TALOS_PERMISSION_HOOK_TRACE=<file>
+# set it writes what it SEES (never a value): whether the hook input has `agent_id` and a transcript path, the records it read, when it armed (with
+# the message id), when it gave up, and for a record whose tool name matches but whose input does not, the sorted key NAMES of both inputs and, per
+# shared key, only "same" or "differs" with the two lengths. Only top-level `user` and `assistant` records are read: a copy of a message inside
+# another record (an `api-request-blob`, say) is not the conversation.
+_KEY_OK = re.compile(r"[A-Za-z0-9_.-]{1,40}$")
+
+
+def _key(k):
+    return k if isinstance(k, str) and _KEY_OK.match(k) else "?"
+
+
+def _keys(d):
+    return sorted(_key(k) for k in d)[:20] if isinstance(d, dict) else []
+
+
+def _len(v):
+    try:
+        return len(json.dumps(v, sort_keys=True, default=str))
+    except Exception:
+        return -1
+
+
+def _shape(hook_in, tx_in):
+    """Key names of both inputs, and per shared key only same/differs (with the two lengths when it differs). Never a value."""
+    if not isinstance(hook_in, dict) or not isinstance(tx_in, dict):
+        return "keys_hook=%s keys_tx=%s shared:" % (",".join(_keys(hook_in)), ",".join(_keys(tx_in)))
+    parts = []
+    for k in sorted(hook_in):
+        if k in tx_in:
+            parts.append("%s=same" % _key(k) if hook_in[k] == tx_in[k] else "%s=differs(%d/%d)" % (_key(k), _len(hook_in[k]), _len(tx_in[k])))
+    return "keys_hook=%s keys_tx=%s shared: %s" % (",".join(_keys(hook_in)), ",".join(_keys(tx_in)), " ".join(parts))
+
+
+class Watcher:
+    """True once the session transcript holds the tool_result of THIS call: the prompt is over, however it ended.
+
+    The call is the transcript's tool_use block with this tool name and input that has no tool_result yet. When more than one
+    such block exists (two identical calls at once, in one assistant entry or in separate ones) the hook cannot tell which result
+    is its own, so the watcher stays off for good and only Claude Code ending the hook closes the card. Ambiguity is checked
+    on every look, so a second identical call that shows up later also turns it off."""
+
+    TAIL = 2 * 1024 * 1024
+
+    def __init__(self, call):
+        p = call.get("transcript_path")
+        self.path = p if isinstance(p, str) and p else None
+        self.name = call.get("tool_name")
+        self.input = call.get("tool_input", {})
+        self.pending = {}            # id -> message id, of matching tool_use blocks with no result yet
+        self.mine = None
+        self.off = self.path is None
+        self.offset = 0
+        self.started = False
+        self.tries = 0
+        self.near = {}               # id -> shape, of tool_use blocks whose name matched but whose input did not
+        self.said = set()
+        self._say("in", "in: agent_id=%s transcript=%s tool_input_keys=%s" % (
+            "yes" if call.get("agent_id") else "no", "yes" if self.path else "no", ",".join(_keys(self.input))))
+
+    def _say(self, once, text):
+        """One trace line per state change (`once` names it); never raises."""
+        try:
+            if once not in self.said:
+                self.said.add(once)
+                trace(text)
+        except Exception:
+            pass
+
+    def _scan(self, data, first=False):
+        """Folds the transcript lines in `data` into the pending set. True when a result for `mine` was seen (and still unambiguous)."""
+        finished = False
+        read, skipped = {"user": 0, "assistant": 0}, {}
+        for raw in data.splitlines():
+            try:
+                d = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue
+            if not isinstance(d, dict):
+                continue
+            msg = d.get("message") if isinstance(d.get("message"), dict) else {}
+            content = msg.get("content")
+            blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+            ty = d.get("type")
+            if ty not in ("user", "assistant"):
+                if any(b.get("type") in ("tool_use", "tool_result") for b in blocks):
+                    skipped[_key(ty) if ty is not None else "none"] = skipped.get(_key(ty) if ty is not None else "none", 0) + 1
+                continue
+            read[ty] += 1
+            mid = msg.get("id") if ty == "assistant" and isinstance(msg.get("id"), str) else None
+            for block in blocks:
+                if block.get("type") == "tool_use" and block.get("name") == self.name and isinstance(block.get("id"), str):
+                    if block.get("input") == self.input:
+                        self.pending[block["id"]] = mid
+                    elif block["id"] not in self.near:
+                        self.near[block["id"]] = _shape(self.input, block.get("input"))
+                elif block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending:
+                    if block["tool_use_id"] == self.mine:
+                        finished = True
+                    del self.pending[block["tool_use_id"]]
+            if len(self.pending) > 1 and not self.off:
+                self.off = True      # two identical calls open: whose result is whose cannot be told
+                self._say("off", "W: off ambiguous n=%d" % len(self.pending))
+        if first:
+            self._say("read", "W: read user=%d assistant=%d skipped=%s" % (
+                read["user"], read["assistant"], ",".join("%s:%d" % (k, skipped[k]) for k in sorted(skipped)) or "none"))
+        return finished and not self.off
+
+    def done(self):
+        try:
+            if self.off:
+                return False
+            size = os.path.getsize(self.path)
+            if not self.started:
+                self.tries += 1
+                if self.tries > 15:          # the transcript never showed the call: rely on Claude Code ending the hook
+                    self.off = True
+                    self._say("off", "W: off not-found-in-15-looks near=%d" % len(self.near))
+                    return False
+                with open(self.path, "rb") as fh:
+                    fh.seek(max(0, size - self.TAIL))
+                    data = fh.read()
+                self.pending = {}
+                self._scan(data, first=self.tries == 1)
+                if len(self.pending) == 1:
+                    self.mine = next(iter(self.pending))
+                    self.started = True
+                    self.offset = size
+                    mid = self.pending[self.mine]
+                    self._say("armed", "W: armed msg=%s uses=%d from=assistant.message.content" % (
+                        _key(mid[-10:]) if mid else "none", sum(1 for m in self.pending.values() if m == mid)))
+                elif not self.pending and self.near:
+                    self._say("near", "W: input-differs " + next(iter(self.near.values())))
+                return False
+            if size <= self.offset:
+                return False
+            with open(self.path, "rb") as fh:
+                fh.seek(self.offset)
+                chunk = fh.read(min(size - self.offset, 4 * 1024 * 1024))
+            self.offset += len(chunk)
+            return self._scan(chunk)
+        except Exception:
+            return False
+
+
+# ---- The PreToolUse records (kit/hooks/permission-pre.sh) and the lookup that gives a prompt its call's tool_use_id.
+# permission-pre.sh leaves an empty file per tool call in <app home>/run/pretool named `<key>.<session>.<agent or ->.<tool_use id>.<epoch>`,
+# `<key>` being the POSIX cksum of the tool name and the RAW tool_input text. This hook takes the id of its own call only when exactly ONE record of its
+# own session (and subagent), younger than ten minutes and not yet finished (no tool_result in the transcript), has the same key. Anything else: no id,
+# and the hook behaves as before. The bridge then watches the transcript for that exact id (apps/bridge/src/permission/transcript-watch.ts).
+PRE_MAX_AGE_S = 120
+_CK = []
+
+
+def posix_cksum(data):
+    """`cksum` (POSIX): CRC-32, polynomial 0x04C11DB7, MSB first, over the bytes and then the length (low byte first), complemented. Returns "crc-length"."""
+    if not _CK:
+        for i in range(256):
+            c = i << 24
+            for _ in range(8):
+                c = ((c << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if c & 0x80000000 else (c << 1) & 0xFFFFFFFF
+            _CK.append(c)
+    crc = 0
+    for b in data:
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CK[((crc >> 24) ^ b) & 0xFF]
+    n = len(data)
+    while n:
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CK[((crc >> 24) ^ (n & 0xFF)) & 0xFF]
+        n >>= 8
+    return "%d-%d" % ((~crc) & 0xFFFFFFFF, len(data))
+
+
+def _top_raw(text):
+    """{top-level key: the RAW text of its value} of one JSON object, exactly as written (no re-serialising)."""
+    dec = json.JSONDecoder()
+    i = text.index("{") + 1
+    out = {}
+    while True:
+        while text[i] in " \t\r\n,":
+            i += 1
+        if text[i] == "}":
+            return out
+        key, i = dec.raw_decode(text, i)
+        while text[i] in " \t\r\n:":
+            i += 1
+        _val, j = dec.raw_decode(text, i)
+        out[key] = text[i:j]
+        i = j
+
+
+def pre_key(raw):
+    """The record key of the call in this hook input text (a PreToolUse or a PermissionRequest): cksum of `<tool name>\\n<raw tool_input>`, or None."""
+    try:
+        top = _top_raw(raw)
+        name, ti = top["tool_name"], top["tool_input"]
+        if len(name) < 2 or name[0] != '"' or name[-1] != '"':
+            return None
+        data = (name[1:-1] + "\n" + ti).encode("utf-8")
+        return posix_cksum(data) if len(data) <= 4000000 else None
+    except Exception:
+        return None
+
+
+def _call_transcript(call):
+    """The file that holds this call's results: the session's transcript, or a subagent's own file beside it."""
+    tp, sid, agent = call.get("transcript_path"), call.get("session_id"), call.get("agent_id")
+    if not (isinstance(tp, str) and tp and isinstance(sid, str)):
+        return None
+    if isinstance(agent, str) and agent:
+        return os.path.join(os.path.dirname(tp), sid, "subagents", "agent-%s.jsonl" % agent)
+    return tp
+
+
+def _finished(path, ids):
+    """The ids among `ids` that have a tool_result in a top-level user record near the end of the transcript (the call is over)."""
+    done = set()
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 2 * 1024 * 1024))
+            data = fh.read()
+        for raw in data.splitlines():
+            if not any(i.encode("ascii", "ignore") in raw for i in ids):
+                continue
+            try:
+                rec = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue
+            if not isinstance(rec, dict) or rec.get("type") != "user":
+                continue
+            content = (rec.get("message") or {}).get("content") if isinstance(rec.get("message"), dict) else None
+            for b in content if isinstance(content, list) else []:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in ids:
+                    done.add(b["tool_use_id"])
+    except Exception:
+        pass
+    return done
+
+
+def pre_lookup(call):
+    """The tool_use id of THIS call, or None. See the block comment above."""
+    try:
+        sid, agent = call.get("session_id"), call.get("agent_id")
+        key = pre_key(call.get("_raw") or "")
+        if not key or not isinstance(sid, str) or not sid:
+            return None
+        ag = agent if isinstance(agent, str) and agent else "-"
+        home = os.environ.get("TALOS_APP_HOME") or os.path.join(os.path.expanduser("~"), ".config", "talos", "app")
+        now = time.time()
+        cands, other = set(), 0
+        for nm in os.listdir(os.path.join(home, "run", "pretool")):
+            p = nm.split(".")
+            if len(p) != 5 or p[0] != key or p[1] != sid or not p[4].isdigit() or len(p[4]) > 10:
+                continue
+            if not (now - PRE_MAX_AGE_S <= int(p[4]) <= now + 60):
+                continue
+            if p[2] == ag:
+                cands.add(p[3])
+            else:
+                other += 1                     # a fresh record of this session and call under ANOTHER agent label
+        path = _call_transcript(call)
+        open_ = sorted(cands - (_finished(path, cands) if path and cands else set()))
+        mine = len(open_) == 1 and other == 0  # a main call and a subagent doing the same thing at once: neither knows which record is its own
+        trace("pre: id=%s matches=%d open=%d other=%d" % (open_[0][-6:] if mine else "none", len(cands), len(open_), other))
+        return open_[0] if mine else None
+    except Exception:
+        return None

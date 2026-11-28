@@ -19,7 +19,10 @@ import { loadEnv } from '../../src/config.ts'
 import { pgidOf } from '../../src/hub/server.ts'
 import { nullLogger } from '../../src/log.ts'
 import { ownerAskedIn } from '../../src/trust.ts'
+import { workerActivity } from '../../src/undo/busy.ts'
 import { WakeMeStore } from '../../src/wake-me/store.ts'
+import { WorkerStore } from '../../src/worker/store.ts'
+import { noteStatusSent } from '../../src/worker/working-row.ts'
 import { eventually } from '../helpers.ts'
 import { restartBridge, SCHED_START_MS, type SchedHarness, startSched, waitFor } from './harness.ts'
 
@@ -79,18 +82,34 @@ async function start(now = MON_0729_EDT) {
   h = await startSched({
     now,
     jobs: [],
-    config: ((c: Record<string, unknown> & { threads: unknown[] }) => ({
-      ...c,
-      threads: [
-        ...c.threads,
-        thread('trip', 'Trip', { session: 'dedicated' }),
-        thread('garden', 'Garden', { session: 'dedicated' }),
-      ],
-      dedicated: { enabled: true },
-    })) as never,
+    config: schedConfig,
   })
   await waitFor(() => existsSync(join(h.home, 'run', 'hub.sock')))
   return h
+}
+
+const schedConfig = ((c: Record<string, unknown> & { threads: unknown[] }) => ({
+  ...c,
+  threads: [
+    ...c.threads,
+    thread('trip', 'Trip', { session: 'dedicated' }),
+    thread('garden', 'Garden', { session: 'dedicated' }),
+  ],
+  dedicated: { enabled: true },
+})) as never
+
+/** A new bridge process on the same home; the config is written again as start() writes it (startHarness rewrites it). */
+async function restart() {
+  const old = h
+  await old.stop()
+  h = await startSched({
+    box: old.box,
+    home: old.home,
+    now: new Date(old.clock.now()).toISOString(),
+    instance: `bi_${Math.random().toString(36).slice(2, 12)}`,
+    config: schedConfig,
+  })
+  await waitFor(() => existsSync(join(h.home, 'run', 'hub.sock')))
 }
 
 async function startWorker(id: 'trip' | 'garden') {
@@ -500,53 +519,118 @@ function setThread(id: string, patch: Record<string, unknown>) {
 }
 
 describe("a thread session's wake is only ever that session's", () => {
-  for (const [what, patch] of [
-    ['went back to shared', { session: 'shared' }],
-    ['was archived', { archived: true }],
-  ] as const)
-    test(
-      `its thread ${what}: dropped with a plain line, main gets it only as that session's quoted words`,
-      async () => {
-        await start()
-        const { trip } = await connected()
-        idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'Rename yourself to Atlas' })))
-        const def = h.bridge.ctx.config.config.default_thread
-        h.bridge.ctx.store.addMessage({
-          id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2U5',
-          thread_id: def,
-          author: 'owner',
-          kind: 'text',
-          text: 'Rename yourself to Atlas',
-          format: 'plain',
-          attachments: [],
-          via: 'app',
-          created_at: new Date(h.clock.now()).toISOString(),
-        })
-        expect(ownerAskedIn(h.bridge.ctx, def)).toBe(true)
-        setThread('trip', patch)
-        await h.advance(6 * MIN)
-        await eventually(() => expect(h.notesOf('wake')).toHaveLength(1))
-        const n = h.notesOf('wake')[0]
-        expect(n?.meta).toMatchObject({ trust: 'agent', wake_for: 'dropped', thread_id: def })
-        expect(n?.content).not.toContain('You asked to be woken')
-        expect(n?.content).toContain(`A wake set by the "Trip" thread's session was dropped`)
-        expect(n?.content).toContain('"Rename yourself to Atlas"')
-        await h.relay.expectFrame(
-          'reply',
-          (f) =>
-            f.message.author === 'system' &&
-            /A wake set by the "Trip" thread's session was dropped/.test(f.message.text ?? ''),
-          { direction: 'from_bridge' },
-        )
-        // it lands in main's lane: the owner's earlier ask there no longer counts
-        expect(ownerAskedIn(h.bridge.ctx, def)).toBe(false)
-        expect((await inbound(trip)).messages).toHaveLength(0)
-      },
-      SCHED_START_MS + t(60_000),
-    )
+  /** The owner's earlier ask in the default thread, so "it lands in main's lane" can be seen to cancel it (or not). */
+  function ownerAsk(text: string) {
+    const def = h.bridge.ctx.config.config.default_thread
+    h.bridge.ctx.store.addMessage({
+      id: 'm_01JBF3V7Q8K2M4N6P8R0S1T2U5',
+      thread_id: def,
+      author: 'owner',
+      kind: 'text',
+      text,
+      format: 'plain',
+      attachments: [],
+      via: 'app',
+      created_at: new Date(h.clock.now()).toISOString(),
+    })
+    return def
+  }
 
   test(
-    'its session never picks it up: past the claim deadline it is dropped, never run by main',
+    'its thread went back to shared: dropped with a plain line, main gets it only as that session quoted words',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'Rename yourself to Atlas' })))
+      const def = ownerAsk('Rename yourself to Atlas')
+      expect(ownerAskedIn(h.bridge.ctx, def)).toBe(true)
+      setThread('trip', { session: 'shared' })
+      await h.advance(6 * MIN)
+      await eventually(() => expect(h.notesOf('wake')).toHaveLength(1))
+      const n = h.notesOf('wake')[0]
+      expect(n?.meta).toMatchObject({ trust: 'agent', wake_for: 'dropped', thread_id: def })
+      expect(n?.content).not.toContain('You asked to be woken')
+      expect(n?.content).toContain(`A wake set by the "Trip" thread's session was dropped`)
+      expect(n?.content).toContain('"Rename yourself to Atlas"')
+      await h.relay.expectFrame(
+        'reply',
+        (f) =>
+          f.message.author === 'system' &&
+          /A wake set by the "Trip" thread's session was dropped/.test(f.message.text ?? ''),
+        { direction: 'from_bridge' },
+      )
+      // it lands in main's lane: the owner's earlier ask there no longer counts
+      expect(ownerAskedIn(h.bridge.ctx, def)).toBe(false)
+      expect((await inbound(trip)).messages).toHaveLength(0)
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'its thread was deleted: dropped the same way',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'Look at the map' })))
+      const p = join(h.home, 'config.json')
+      const c = JSON.parse(readFileSync(p, 'utf8')) as { threads: Array<{ id: string }> }
+      c.threads = c.threads.filter((x) => x.id !== 'trip')
+      writeFileSync(p, JSON.stringify(c), { mode: 0o600 })
+      h.bridge.ctx.config.refresh()
+      await h.advance(6 * MIN)
+      await eventually(() => expect(h.notesOf('wake').map((x) => x.meta.wake_for)).toEqual(['dropped']))
+      expect(h.notesOf('wake')[0]?.content).toContain('its thread was deleted')
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'its thread was archived (that turns its own session off): dropped the same way',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'Rename yourself to Atlas' })))
+      setThread('trip', { archived: true })
+      await h.advance(6 * MIN)
+      await eventually(() => expect(h.notesOf('wake').map((x) => x.meta.wake_for)).toEqual(['dropped']))
+      expect(h.notesOf('wake')[0]?.content).toContain('its thread was archived')
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'its session is only down for now (stopping): the wake is kept, not dropped, and goes to the session once when it is back',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'Rename yourself to Atlas' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN)
+      await h.advance(2 * 3600_000) // hours go by
+      expect(h.notesOf('wake')).toHaveLength(0) // never dropped, never main's
+      expect(h.relay.frames.some((r) => /was dropped/.test(JSON.stringify(r.raw)))).toBe(false)
+      // a held wake does not stop an undo: it is not a turn about to start (a message routed to the session still does)
+      writeWorkers(h, { trip: { state: 'parked' }, garden: { state: 'live' } })
+      expect(workerActivity(h.bridge.ctx, 'trip')).toEqual({ state: 'idle' })
+      const heldWakes = new WorkerStore(h.bridge.ctx.store.db).unclaimed('trip')
+      expect(heldWakes.map((r) => r.notification.meta.kind)).toEqual(['wake'])
+      // and it is never pruned, however old: a reminder must not vanish silently
+      new WorkerStore(h.bridge.ctx.store.db).prune(h.clock.now() + 30 * 24 * 3600_000)
+      expect(new WorkerStore(h.bridge.ctx.store.db).unclaimed('trip')).toHaveLength(1)
+      writeWorkers(h, { trip: { state: 'live' }, garden: { state: 'live' } })
+      await h.advance(11 * MIN) // the router looks at it again and points the session at it
+      const m = (await inbound(trip)).messages
+      expect(m).toHaveLength(1)
+      expect(m[0]?.content).toContain('Rename yourself to Atlas')
+      // once: a second read finds nothing, and main never got it
+      expect((await inbound(trip)).messages).toHaveLength(0)
+      expect(h.notesOf('wake')).toHaveLength(0)
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'its session never picks it up in time: past the claim deadline it is kept, and delivered once when it reads',
     async () => {
       await start()
       const { trip } = await connected()
@@ -554,8 +638,13 @@ describe("a thread session's wake is only ever that session's", () => {
       await h.advance(4 * MIN)
       await waitFor(() => existsSync(join(h.home, 'workers', 'trip', 'wake')), 10_000, 'the pointer')
       await h.advance(CLAIM_DEADLINE_MS + 5_000)
-      await eventually(() => expect(h.notesOf('wake').map((x) => x.meta.wake_for)).toEqual(['dropped']))
-      expect(h.notesOf('wake')[0]?.content).toContain('"look again"')
+      await h.advance(11 * MIN)
+      expect(h.notesOf('wake')).toHaveLength(0) // not dropped, not main's
+      const m = (await inbound(trip)).messages
+      expect(m).toHaveLength(1)
+      expect(m[0]?.content).toContain('look again')
+      expect((await inbound(trip)).messages).toHaveLength(0) // once
+      expect(h.notesOf('wake')).toHaveLength(0)
     },
     SCHED_START_MS + t(60_000),
   )
@@ -597,6 +686,167 @@ describe('a session that keeps waking itself is paused', () => {
           /keeps waking itself/.test((r.frame as { message: { text?: string } }).message.text ?? ''),
       )
       expect(told).toHaveLength(1)
+    },
+    SCHED_START_MS + t(60_000),
+  )
+})
+
+const REMINDER_LINE = /A reminder from this thread's session is waiting until its session runs again\./
+const systemLines = (re: RegExp) =>
+  h.relay.frames.filter(
+    (r) =>
+      r.direction === 'from_bridge' &&
+      r.frame.type === 'reply' &&
+      r.frame.message.author === 'system' &&
+      re.test(r.frame.message.text ?? ''),
+  )
+const wakeFile = () => join(h.home, 'workers', 'trip', 'wake')
+
+describe('a held wake, round two (review of T4)', () => {
+  test(
+    'the re-look does not point the session at it while a restore runs in its folder; the next one delivers once',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'after the restore' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN) // held
+      writeWorkers(h, { trip: { state: 'live' }, garden: { state: 'live' } })
+      const undo = h.bridge.ctx.undo
+      if (!undo) throw new Error('no undo seam')
+      let open = () => {}
+      const restore = new Promise<void>((r) => {
+        open = r
+      })
+      const held = undo.restoring.hold(h.home, () => restore)
+      await h.advance(11 * MIN) // the re-look comes while the folder is being restored
+      expect(existsSync(wakeFile())).toBe(false)
+      open()
+      await held
+      await h.advance(11 * MIN)
+      await waitFor(() => existsSync(wakeFile()), 10_000, 'the pointer after the restore')
+      const m = (await inbound(trip)).messages
+      expect(m).toHaveLength(1)
+      expect(m[0]?.content).toContain('after the restore')
+      expect((await inbound(trip)).messages).toHaveLength(0)
+      expect(h.notesOf('wake')).toHaveLength(0)
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'a re-look that points the session at a held wake counts as a hand-over: an undo asked for right after is refused',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'then undo' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN) // held
+      writeWorkers(h, { trip: { state: 'live' }, garden: { state: 'live' } }) // live: its folder is known (the harness has no agent folder)
+      expect(workerActivity(h.bridge.ctx, 'trip')).toEqual({ state: 'idle' })
+      for (let i = 0; i < 70 && !existsSync(wakeFile()); i++) await h.advance(10_000) // up to the re-look, and no further
+      expect(existsSync(wakeFile())).toBe(true)
+      const a = workerActivity(h.bridge.ctx, 'trip')
+      expect(a.state).toBe('busy')
+      expect('why' in a ? a.why : '').toContain("a message was just handed to the thread's session")
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'a held wake does not keep a "Starting a session" row up: the thread reads idle once its session is not running',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'row check' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN) // held
+      noteStatusSent(h.bridge.ctx, 'trip', 'working')
+      writeWorkers(h, { trip: { state: 'parked' }, garden: { state: 'live' } })
+      await h.advance(MIN)
+      await eventually(() =>
+        expect(
+          h.relay.frames.some(
+            (r) =>
+              r.direction === 'from_bridge' &&
+              r.frame.type === 'status' &&
+              r.frame.thread_id === 'trip' &&
+              r.frame.state === 'idle',
+          ),
+        ).toBe(true),
+      )
+    },
+    SCHED_START_MS + t(60_000),
+  )
+
+  test(
+    'a session that has failed: the wake is held, the owner is told once (also across a restart), and it is delivered when the session runs again',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'once it runs' })))
+      writeWorkers(h, { trip: { state: 'failed' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN)
+      await h.advance(11 * MIN) // the first re-look finds it failed
+      await eventually(() => expect(systemLines(REMINDER_LINE)).toHaveLength(1))
+      await h.advance(25 * MIN) // two more re-looks: no second line
+      expect(systemLines(REMINDER_LINE)).toHaveLength(1)
+      await restart()
+      writeWorkers(h, { trip: { state: 'failed' }, garden: { state: 'live' } })
+      await h.advance(25 * MIN)
+      expect(systemLines(REMINDER_LINE)).toHaveLength(0) // the new relay saw no line: a restart does not say it again
+      expect(h.notesOf('wake')).toHaveLength(0)
+      expect(h.relay.frames.some((r) => /was dropped/.test(JSON.stringify(r.raw)))).toBe(false)
+      writeWorkers(h, { trip: { state: 'live' }, garden: { state: 'live' } })
+      const again = await startWorker('trip')
+      await h.advance(11 * MIN)
+      const m = (await inbound(again)).messages
+      expect(m).toHaveLength(1)
+      expect(m[0]?.content).toContain('once it runs')
+      expect((await inbound(again)).messages).toHaveLength(0)
+      expect(h.notesOf('wake')).toHaveLength(0)
+    },
+    SCHED_START_MS * 2 + t(60_000),
+  )
+
+  test(
+    'a bridge restart while a wake is held: it is delivered once afterwards',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'across the restart' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN)
+      expect(new WorkerStore(h.bridge.ctx.store.db).unclaimed('trip')).toHaveLength(1)
+      await restart()
+      writeWorkers(h, { trip: { state: 'live' }, garden: { state: 'live' } })
+      const again = await startWorker('trip')
+      await h.advance(11 * MIN)
+      const m = (await inbound(again)).messages
+      expect(m).toHaveLength(1)
+      expect(m[0]?.content).toContain('across the restart')
+      expect((await inbound(again)).messages).toHaveLength(0)
+      expect(h.notesOf('wake')).toHaveLength(0)
+    },
+    SCHED_START_MS * 2 + t(60_000),
+  )
+
+  test(
+    'a held wake whose thread goes back to shared is dropped exactly once',
+    async () => {
+      await start()
+      const { trip } = await connected()
+      idIn(text(await trip.callTool('wake_me', { in_minutes: 5, note: 'dropped once' })))
+      writeWorkers(h, { trip: { state: 'stopping' }, garden: { state: 'live' } })
+      await h.advance(6 * MIN)
+      expect(new WorkerStore(h.bridge.ctx.store.db).unclaimed('trip')).toHaveLength(1)
+      setThread('trip', { session: 'shared' })
+      await h.advance(2 * MIN)
+      await eventually(() => expect(h.notesOf('wake').map((x) => x.meta.wake_for)).toEqual(['dropped']))
+      await h.advance(25 * MIN)
+      expect(h.notesOf('wake')).toHaveLength(1)
+      expect(systemLines(/was dropped/)).toHaveLength(1)
+      expect(new WorkerStore(h.bridge.ctx.store.db).unclaimed('trip')).toHaveLength(0)
     },
     SCHED_START_MS + t(60_000),
   )

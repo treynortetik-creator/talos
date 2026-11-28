@@ -22,7 +22,7 @@ import {
 } from './client.ts'
 import { type ConnectionMeta, createMetaStore } from './connectionMeta.ts'
 import { createHttp } from './http.ts'
-import { INBOX_ANSWER_GRACE_MS } from './socket-constants.ts'
+import { DIAL_GIVE_UP_MS, HANDSHAKE_GIVE_UP_MS, INBOX_ANSWER_GRACE_MS, WAKE_PROBE_MS } from './socket-constants.ts'
 import type {
   InboxOutcome,
   InboxPatch,
@@ -143,9 +143,31 @@ export type SocketCtx = {
   connection: number
   saveTimer: ReturnType<typeof setTimeout> | null
   probing: boolean
+  /** The probe of the live socket (a ping asked, its pong not yet back): while set, a new trigger joins it instead of asking again. */
   wakeTimer: ReturnType<typeof setTimeout> | null
-  /** Sockets whose close the wake probe runs by hand: they have not closed, so their inbox answers may still come. */
-  closedByHand: WeakSet<WebSocket>
+  /** The nonce the pending probe's pong must carry. Null when no probe is pending. */
+  probeNonce: string | null
+  /** Starts over the reconnect backoff when this socket has stayed up STABLE_MS. */
+  stableTimer: ReturnType<typeof setTimeout> | null
+  /** The nonce and send time of the latest keepalive ping, and the send and arrival time of the last one answered. */
+  keepaliveNonce: string | null
+  keepaliveSentAt: number
+  answeredPingAt: number
+  answeredAt: number
+  /** How long the page-back probe waits for its pong (WAKE_PROBE_MS; shorter in tests). */
+  wakeProbeMs: number
+  /** How long a dial may take from the start to `ready` before the client gives up on it (HANDSHAKE_GIVE_UP_MS; shorter in tests). */
+  handshakeGiveUpMs: number
+  /** How long a dial must have run before a page-back trigger may replace it (DIAL_GIVE_UP_MS). */
+  dialGiveUpMs: number
+  /** The handshake timer of the current dial: from the dial start until `ready`, cleared by every way the socket ends. */
+  dialTimer: ReturnType<typeof setTimeout> | null
+  /** The relay's ping interval for this link (ms): a link that answered within 2.5 of them is alive (the keepalive's own measure). */
+  pingMs: number
+  /** When a trigger last dialled at once with no socket (ms): coming back to the page does it at most once per EAGER_DIAL_MS. */
+  lastEagerDialAt: number
+  /** When the current socket was dialled (ms): a dial that is still not up after the probe window is replaced on a trigger. */
+  dialAt: number
   inboxAnswerGraceMs: number
   /** Ends the inbox changes' wait on sockets let go of (client.close()). */
   inboxForget: () => void
@@ -270,6 +292,10 @@ export type SocketCtx = {
   onOffline: () => void
   onVisibility: () => void
   onActivity: (e?: Event) => void
+  onFocus: () => void
+  onPageShow: (e?: Event) => void
+  /** Ends the probe and the stable timer of the socket that is going (socket-connection.ts). */
+  clearLinkTimers: () => void
 }
 
 /** The settings, the stores and the starting value of every variable. The parts then fill in their functions. */
@@ -343,7 +369,19 @@ export function createSocketCtx(opts: SocketClientOptions): SocketCtx {
     saveTimer: null,
     probing: false,
     wakeTimer: null,
-    closedByHand: new WeakSet(),
+    probeNonce: null,
+    stableTimer: null,
+    dialAt: 0,
+    pingMs: 25_000,
+    keepaliveNonce: null,
+    keepaliveSentAt: 0,
+    answeredPingAt: 0,
+    answeredAt: 0,
+    wakeProbeMs: opts.wakeProbeMs ?? WAKE_PROBE_MS,
+    handshakeGiveUpMs: opts.handshakeGiveUpMs ?? HANDSHAKE_GIVE_UP_MS,
+    dialGiveUpMs: opts.dialGiveUpMs ?? DIAL_GIVE_UP_MS,
+    dialTimer: null,
+    lastEagerDialAt: 0,
     inboxAnswerGraceMs: opts.inboxAnswerGraceMs ?? INBOX_ANSWER_GRACE_MS,
     lastReportAt: 0,
     lastPointer: null,

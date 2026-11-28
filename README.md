@@ -115,21 +115,21 @@ tuned is never overwritten); `--yes` skips the prompt.
 
 ## What is in the repository
 
-| Path                           | What                                                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `packages/protocol`            | Frames, models, zod schemas, signatures, HTTP route table. The single source of truth.                            |
-| `packages/testkit`             | `FakeRelay`, `FakeBridge`, `FakeApp`, `FakeClaude`, fake clock, fixtures, contract tests.                         |
-| `packages/integrations`        | Webhook verifiers, normalizers, pollers, setup specs. `@talos-app/integrations/catalog` is the browser-safe part. |
-| `apps/relay`                   | The hosted relay (Hono on Node 24, SQLite). `Dockerfile` builds the deployable image.                             |
-| `apps/web`                     | The PWA (React 19, Vite, Tailwind 4).                                                                             |
-| `apps/bridge`                  | The Mac bridge (Bun, MCP stdio server `talos-app`) and the `talos-app` command.                                   |
-| `apps/desktop`                 | The Mac menu-bar app (Swift): runs the agent, shows bridge status. Optional. See `docs/desktop.md`.               |
-| `apps/mobile`                  | The iPhone app (Capacitor shell around the web app). See `docs/ios.md`.                                           |
-| `e2e`                          | End-to-end suite: the built relay, the built app and the real bridge together.                                    |
-| `railway.json`, `.env.example` | Deploy settings and every environment variable the relay reads.                                                   |
-| `third_party`                  | Vendored reference code with licences (read-only). See `THIRD_PARTY_NOTICES.md`.                                  |
-| `examples`                     | Generic agent configs.                                                                                            |
-| `kit`                          | The agent kit: config, hooks, rules and scripts for a Claude Code agent folder. See `kit/README.md`.              |
+| Path                    | What                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `packages/protocol`     | Frames, models, zod schemas, signatures, HTTP route table. The single source of truth.                            |
+| `packages/testkit`      | `FakeRelay`, `FakeBridge`, `FakeApp`, `FakeClaude`, fake clock, fixtures, contract tests.                         |
+| `packages/integrations` | Webhook verifiers, normalizers, pollers, setup specs. `@talos-app/integrations/catalog` is the browser-safe part. |
+| `apps/relay`            | The hosted relay (Hono on Node 24, SQLite). `Dockerfile` builds the deployable image.                             |
+| `apps/web`              | The PWA (React 19, Vite, Tailwind 4).                                                                             |
+| `apps/bridge`           | The Mac bridge (Bun, MCP stdio server `talos-app`) and the `talos-app` command.                                   |
+| `apps/desktop`          | The Mac menu-bar app (Swift): runs the agent, shows bridge status. Optional. See `docs/desktop.md`.               |
+| `apps/mobile`           | The iPhone app (Capacitor shell around the web app). See `docs/ios.md`.                                           |
+| `e2e`                   | End-to-end suite: the built relay, the built app and the real bridge together.                                    |
+| `.env.example`          | Lists every environment variable the relay reads (its Railway settings: `docs/deploy-railway.md`).                |
+| `third_party`           | Vendored reference code with licences (read-only). See `THIRD_PARTY_NOTICES.md`.                                  |
+| `examples`              | Generic agent configs.                                                                                            |
+| `kit`                   | The agent kit: config, hooks, rules and scripts for a Claude Code agent folder. See `kit/README.md`.              |
 
 ## Working in the repo
 

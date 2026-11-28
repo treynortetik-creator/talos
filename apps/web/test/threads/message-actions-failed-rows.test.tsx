@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '../../src/features/composer/Composer.tsx'
 import { useComposerStore } from '../../src/features/composer/composerStore.ts'
 import { MessageView } from '../../src/features/threads/MessageView.tsx'
+import { resetAnnouncerForTests } from '../../src/lib/announce.ts'
 import { ClientProvider, type TalosClient } from '../../src/lib/client.ts'
 import { createMetaStore, MetaProvider } from '../../src/lib/connectionMeta.ts'
 import { createMemoryStorage } from '../../src/lib/storage.ts'
@@ -13,8 +14,12 @@ import { StorageProvider } from '../../src/lib/storageContext.tsx'
 import { setup } from '../cards/helpers.tsx'
 
 beforeEach(() => useComposerStore.setState({ chips: {}, replyTo: {}, prefill: {}, dropped: {} }))
+const announcerSays = () =>
+  Array.from(document.querySelectorAll('#talos-announcer [aria-live="polite"]'), (r) => r.textContent).filter(Boolean)
+
 afterEach(() => {
   cleanup()
+  resetAnnouncerForTests()
   vi.unstubAllGlobals()
 })
 
@@ -199,7 +204,9 @@ describe('the Copy button in the meta line', () => {
       expect(screen.getByTestId('msg-copy-note').textContent).toBe('')
       fireEvent.click(btn)
       await waitFor(() => expect(write).toHaveBeenCalledWith('The venue is booked for Saturday.'))
-      expect((await screen.findByText('Copied')).getAttribute('role')).toBe('status')
+      // the note is plain text now; the announcer says it
+      expect((await screen.findByText('Copied')).getAttribute('role')).toBeNull()
+      await waitFor(() => expect(announcerSays()).toEqual(['Copied']))
       expect(screen.getByTestId('msg-copy-note').className).not.toContain('sr-only')
       await act(async () => {
         vi.advanceTimersByTime(2100)

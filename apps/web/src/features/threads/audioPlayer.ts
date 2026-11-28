@@ -15,6 +15,7 @@ import {
   recordAudioTrace,
   STALL_TRACE_MS,
 } from '../problems/audioTrace.ts'
+import { claimDecodeRetry, resetDecodeRetry } from './audioDecodeRetry.ts'
 import {
   __resetPositionsForTests,
   clearSavedPositions,
@@ -69,17 +70,7 @@ export type AudioState = {
 
 type RowHandle = { src: string; onError: () => void }
 
-/** The screen a path belongs to: a thread and its sub-pages are one screen, every other path is its own. */
-export function screenOf(pathname: string): string {
-  const m = /^\/t\/([^/]+)/.exec(pathname)
-  return m ? `/t/${m[1]}` : pathname
-}
-
-/**
- * Paths that show a thread without naming it: `/card/:id` renders the thread the card belongs to, and `/open/:ref` redirects to
- * one. Moving to or from them is not leaving the screen (a clip playing in the thread goes on); the next real route decides.
- */
-export const isTransientPath = (pathname: string): boolean => /^\/(card|open)\//.test(pathname)
+export { isTransientPath, screenOf } from './audioPaths.ts'
 
 export const SAVE_EVERY_MS = 5000
 export const SEEK_STEP_S = 10
@@ -337,9 +328,17 @@ function onTime(): void {
 function onError(): void {
   const it = state.item
   if (!it || state.failed) return // a stop() cleared the source, or this failure was told already (a rejected play(), then the element's own event)
+  const code = el?.error?.code ?? 0
+  trace('media-error', { mediaError: code })
+  if (el && claimDecodeRetry(`${it.key} ${state.src}`, code)) {
+    // A decode error on bytes that are fine: the same source once more at this spot, and on if he was listening. Once per clip.
+    const listening = wanted // what he wants now: a Pause still in flight (its event not here yet) is not undone
+    reloadSource(el, 'decode', listening)
+    if (listening) startPlayback(undefined, true)
+    return
+  }
   wanted = false
   disarmStallWatch()
-  trace('media-error', { mediaError: el?.error?.code ?? 0 })
   savePosition()
   // A row says it through its rehydrate line; a clip with no row registered (the Files sheet) says it as a refusal.
   set({ failed: true, playing: false, refused: !rows.has(it.key), buffering: false })
@@ -635,15 +634,16 @@ function pauseElement(a: HTMLAudioElement): void {
 
 /**
  * The last try: the source again at the same spot (as `rowSrcChanged` does). The audio route is given back and taken anew, but
- * only on a page that can be seen: a hidden page cannot take it back, so it keeps what it has.
+ * only on a page that can be seen: a hidden page cannot take it back, so it keeps what it has. `takeRoute` false (a clip that is
+ * not wanted playing) leaves the route as it is.
  */
-function reloadSource(a: HTMLAudioElement): void {
-  trace('reload')
+function reloadSource(a: HTMLAudioElement, detail?: string, takeRoute = true): void {
+  trace('reload', detail ? { detail } : {})
   const at = Number.isFinite(a.currentTime) ? a.currentTime : state.cur
   nudgePausePending = !a.paused
   pauseElement(a)
   pendingSeek = at > 0 ? at : null
-  if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+  if (takeRoute && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
     getPlatform().audioSession.set('auto')
     routeState = 'none'
   }
@@ -760,6 +760,7 @@ export function open(
     return
   }
   if (cur) savePosition() // flush the clip he is leaving
+  resetDecodeRetry()
   disarmStallWatch()
   endedBySleep = false
   startGen++
@@ -880,6 +881,7 @@ export function stop(): void {
     pauseElement(a)
   }
   disarmStallWatch()
+  resetDecodeRetry()
   nudges = 0
   nudgePausePending = false
   finished = false

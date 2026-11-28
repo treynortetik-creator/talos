@@ -206,7 +206,7 @@ extension WorkerManager {
   /// Waits for the arrow to show: the same dialog with the highlighted row one step on. A read that fails while Claude redraws is looked at
   /// again; a different dialog, or the row anywhere else but where it was, ends it.
   private func moved(_ id: String, _ offer: DialogOffer, _ key: DialogKey, from: Int) -> Bool {
-    let until = awake() + Self.echoWait
+    let until = awake() + options.echoWait
     repeat {
       usleep(Self.echoPoll)
       guard let fresh = lookAtDialog(id) else { continue }

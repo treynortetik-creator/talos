@@ -1,5 +1,5 @@
 // What the app sees before the Mac has synced its first `config.sync`. Generic on purpose: no personal data.
-import type { AgentConfigT } from '@talos-app/protocol'
+import { type AgentConfigT, AUTO_CONTINUE_AT_LIMIT_DEFAULT, PUSH_TEXT_DEFAULT } from '@talos-app/protocol'
 
 export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   version: 1,
@@ -31,7 +31,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   default_thread: 'general',
   timezone: 'UTC',
   quiet_window: null,
-  notifications: { master: true, show_thread_names: 'fixed_only' },
+  notifications: { master: true, show_thread_names: 'fixed_only', web_message_text: PUSH_TEXT_DEFAULT },
   work: {
     label: 'Work systems',
     ask_note: 'Ask your IT team before connecting these.',
@@ -43,8 +43,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfigT = {
   session_models: ['default', 'opus', 'sonnet', 'haiku'],
   memory_browser: true,
   media_keep_days: null,
+  memory: {},
   dev: { thread_fence: true, note_lookup: true },
   settings_lock: false,
+  auto_continue_at_limit: AUTO_CONTINUE_AT_LIMIT_DEFAULT,
   always_allow: [],
   peers: [],
 }

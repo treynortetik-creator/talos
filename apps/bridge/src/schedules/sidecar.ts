@@ -79,6 +79,25 @@ export function withMainMark(n: Pick<RunNote, 'ran_in_main_for' | 'summary'>): s
   return n.summary ? `${mark} ${n.summary}`.slice(0, 280) : mark
 }
 
+/**
+ * The day's one repair of a failed job (service-repair.ts). The key is `repair|<job>|<owner's local date>`: its existence is the count,
+ * so a restart cannot give a second one. `deadline_at` is when the owner is told if no good run has followed the wake.
+ */
+export type Repair = {
+  job: string
+  name: string
+  day: string
+  /** The run key of the failure that woke Main (for the alert's key). */
+  ds: string
+  status: string
+  woke_at: number
+  deadline_at: number
+  /** waiting: Main was woken and the deadline is open. repaired: a good run followed. alerted: the owner was told instead. */
+  state: 'waiting' | 'repaired' | 'alerted'
+  /** When Main's one rerun was started (schedule_rerun): a second call for the same repair is refused. */
+  rerun_at?: number
+}
+
 export type SidecarData = {
   adapter: string
   jobs: Record<string, { thread_id: string | null; memory?: true; epoch?: string }>
@@ -89,6 +108,8 @@ export type SidecarData = {
   notified: Record<string, number>
   /** Background runs whose result and notepad were already taken into a job's memory, so a restart never counts one twice. job.run id -> at */
   ingested: Record<string, number>
+  /** The day's one repair of a failed job, with its deadline. key -> entry. A sidecar an older bridge wrote has none. */
+  repairs: Record<string, Repair>
 }
 
 const empty = (): SidecarData => ({
@@ -99,6 +120,7 @@ const empty = (): SidecarData => ({
   runs: {},
   notified: {},
   ingested: {},
+  repairs: {},
 })
 
 export class Sidecar {
@@ -343,6 +365,32 @@ export class Sidecar {
     })
   }
 
+  /** The job's repair that is still waiting, whatever day it began on: at most one is open at a time. */
+  waitingRepairOf(job: string): [string, Repair] | undefined {
+    return Object.entries(this.data.repairs).find(([, r]) => r.job === job && r.state === 'waiting')
+  }
+  repairOf(key: string): Repair | undefined {
+    return this.data.repairs[key]
+  }
+  /** Writes the entry; false when the gate said no or the disk refused (memory is then as it was), so the caller does not act on a count the file lacks. */
+  setRepair(key: string, r: Repair): boolean {
+    if (!this.canWrite()) return false
+    const before = this.data.repairs[key]
+    this.data.repairs[key] = r
+    return this.commit(() => {
+      if (before === undefined) delete this.data.repairs[key]
+      else this.data.repairs[key] = before
+    })
+  }
+  clearRepair(key: string): void {
+    if (!(key in this.data.repairs)) return
+    const before = this.data.repairs[key] as Repair
+    delete this.data.repairs[key]
+    this.commit(() => {
+      this.data.repairs[key] = before
+    })
+  }
+
   /** Was this background run of this job already taken into its memory? (Keyed by job and run: two jobs never share a run.) */
   ingested(job: string, runId: string): boolean {
     return `${job}.${runId}` in this.data.ingested
@@ -376,6 +424,8 @@ export class Sidecar {
     drop(this.data.runs, (r) => r.at < cut)
     drop(this.data.notified, (at) => at < cut)
     drop(this.data.ingested, (at) => at < cut)
+    // a waiting repair is never dropped: its deadline is still to come (and is two hours, far inside the retention)
+    drop(this.data.repairs, (r) => r.woke_at < cut && r.state !== 'waiting')
     const runs = Object.entries(this.data.runs)
     if (runs.length > MAX_RUNS) {
       runs.sort((a, b) => a[1].at - b[1].at)

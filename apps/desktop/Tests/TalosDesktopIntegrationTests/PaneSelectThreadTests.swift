@@ -125,10 +125,12 @@ struct PaneSelectThreadTests {
     defer { r.teardown(); keys.remove() }
     r.mgr.tune { $0.cardLifetime = 6 }
     let o = try offered(r)
+    let ranOutAt = Date().addingTimeInterval(6)  // the offer was made before this line, so its 6 s are up by then
     try r.writeAnswer(o, owner: owner, choice: 1, control: "ctl_1")
     #expect(r.wait(20) { r.resultControl() == "ctl_1" })
     #expect(r.result?["outcome"] as? String == "pressed", "\(String(describing: r.result))")
-    usleep(9_000_000)
+    // timing-ok: a negative window, nothing to wait for: from the offer's end to five rig ticks (0.2 s each) past it
+    usleep(UInt32(max(0, ranOutAt.addingTimeInterval(1).timeIntervalSinceNow) * 1_000_000))
     #expect(r.offer == nil || r.offer?.id == o.id, "an answered question was offered again: \(String(describing: r.offer))")
   }
 

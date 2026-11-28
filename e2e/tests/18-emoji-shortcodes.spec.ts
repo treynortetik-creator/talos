@@ -1,3 +1,4 @@
+// gate-reads: apps/web/src/lib/emoji-shortcodes.json
 // `:shortcode:` emoji in an agent reply, driven through the real agent reply tool, the relay and the built web app: desktop and phone width, light and dark.
 import { enrollDevice, expect, signedIn, test } from '../harness/fixtures.ts'
 

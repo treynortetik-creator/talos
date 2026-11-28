@@ -46,6 +46,8 @@ export function createClientSession(
       if (typeof window !== 'undefined') {
         window.addEventListener('online', c.onOnline)
         window.addEventListener('offline', c.onOffline)
+        window.addEventListener('focus', c.onFocus)
+        window.addEventListener('pageshow', c.onPageShow)
         document.addEventListener('visibilitychange', c.onVisibility)
         window.addEventListener('pagehide', c.onPageHide)
         document.addEventListener('visibilitychange', c.onHiddenFlush)
@@ -94,12 +96,13 @@ export function createClientSession(
       if (c.closed) return
       if (c.retryTimer) clearTimeout(c.retryTimer)
       c.retryTimer = null
-      c.attempt = 0
+      // The backoff is not zeroed: a person's Retry dials at once, but a link that keeps failing keeps its wait (STABLE_MS).
       if (c.ws && c.ws.readyState !== WS?.CLOSED) {
         // Let go of before its close event: that handler ignores a socket that is no longer the current one, so what
         // it would have done (stop the ping, fail the requests still waiting on this socket) is done here.
         const gone = c.ws
         c.ws = null
+        releaseAllAcks() // what was written to it will be written again on the next socket, which takes its own holds
         // Left open while inbox changes sent on it wait for their answer: a closing socket drops every frame.
         if (!c.inboxLetGo(gone))
           try {
@@ -124,7 +127,7 @@ export function createClientSession(
       if (c.saveTimer) clearTimeout(c.saveTimer)
       c.saveTimer = null
       c.stopPing()
-      if (c.wakeTimer) clearTimeout(c.wakeTimer)
+      c.clearLinkTimers() // the probe and the stable timer
       if (c.flushRetryTimer) clearTimeout(c.flushRetryTimer)
       c.flushRetryTimer = null
       writtenOn.clear()
@@ -139,6 +142,8 @@ export function createClientSession(
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', c.onOnline)
         window.removeEventListener('offline', c.onOffline)
+        window.removeEventListener('focus', c.onFocus)
+        window.removeEventListener('pageshow', c.onPageShow)
         document.removeEventListener('visibilitychange', c.onVisibility)
         window.removeEventListener('pagehide', c.onPageHide)
         document.removeEventListener('visibilitychange', c.onHiddenFlush)

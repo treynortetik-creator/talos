@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { classifySkips, failureReport, KNOWN_SKIPS, runScript } from './kit-run.ts'
+import { classifySkips, failureReport, KNOWN_SKIPS, kitLaneScripts, runScript } from './kit-run.ts'
 
 const dirs: string[] = []
 function scratch(): string {
@@ -80,6 +80,34 @@ describe('runScript', () => {
     const childPid = Number(readFileSync(pidFile, 'utf8').trim())
     for (let i = 0; i < 20 && alive(childPid); i++) await new Promise((res) => setTimeout(res, 50))
     expect(alive(childPid)).toBe(false)
+  })
+})
+
+describe('kitLaneScripts', () => {
+  it("lists every test-*.sh and always self-test.sh, the kit's own install-then-check gate, which a kit change must not outrun", () => {
+    const dir = scratch()
+    for (const f of ['test-b.sh', 'test-a.sh', 'helper.sh', 'test-c.txt']) writeFileSync(join(dir, f), 'exit 0\n')
+    expect(kitLaneScripts(dir)).toEqual(['self-test.sh', 'test-a.sh', 'test-b.sh'])
+    expect(kitLaneScripts(join(import.meta.dirname, '../kit/scripts'))).toContain('self-test.sh')
+  })
+
+  it('a failing self-test.sh, or a missing one, fails the lane: every member runs and each non-zero exit shows', async () => {
+    const dir = scratch()
+    writeFileSync(join(dir, 'test-a.sh'), 'exit 0\n')
+    const lane = async () => {
+      const codes: Record<string, number | null> = {}
+      for (const name of kitLaneScripts(dir)) {
+        const r = await runScript(join(dir, name), { cwd: dir, timeoutMs: 5000, env: envFor({}), tmpRoot: scratch() })
+        codes[name] = r.code
+      }
+      return codes
+    }
+    writeFileSync(join(dir, 'self-test.sh'), 'echo "  FAIL  a check"\nexit 1\n')
+    expect(await lane()).toEqual({ 'self-test.sh': 1, 'test-a.sh': 0 })
+    rmSync(join(dir, 'self-test.sh'))
+    expect((await lane())['self-test.sh']).not.toBe(0) // deleting it does not drop it from the lane
+    writeFileSync(join(dir, 'self-test.sh'), 'exit 0\n')
+    expect(await lane()).toEqual({ 'self-test.sh': 0, 'test-a.sh': 0 })
   })
 })
 

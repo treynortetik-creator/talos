@@ -25,13 +25,13 @@ shown off. An explicit `enabled: false` stays off. The agent's settings row read
 
 ## Data (WP-OC0, `packages/protocol/src/thread-sessions.ts`)
 
-| Field                   | Meaning                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Thread.session`        | `shared` (absent = shared) or `dedicated`                                                                                                                                                                                                                                                                                                                                                                         |
-| `Thread.session_opts`   | `cwd` (absolute, default the agent folder), `model` (`inherit` or an alias, set with `--model` at launch, never `/model`), `effort`, `idle_park_min` (5-720, default 30), `mcp_allow` (optional list of MCP server names, see "Leads and the fence"), `ops_read` (optional boolean, Mac only, see "Reading the problem folder from a thread"). A `worktree` key from an older config is ignored (removed 2026-11) |
-| `AgentConfig.dedicated` | `enabled` (default **false**), `max_live` (1-6, default 3), `governor` {`five_hour` 80, `weekly` 85, `park_all` 95, `off` false}                                                                                                                                                                                                                                                                                  |
-| `SessionState.scope`    | `main` (absent) or `{thread_id}`: which session a `session.state` describes                                                                                                                                                                                                                                                                                                                                       |
-| `SessionKind`           | gains `thread` for the Sessions view                                                                                                                                                                                                                                                                                                                                                                              |
+| Field                   | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Thread.session`        | `shared` (absent = shared) or `dedicated`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `Thread.session_opts`   | `cwd` (absolute, default the agent folder), `model` (`inherit` or an alias, set with `--model` at launch, never `/model`), `effort`, `idle_park_min` (5-720, default 30), `compact_window` (optional, 100000-1000000 tokens or null: the session starts with `CLAUDE_CODE_AUTO_COMPACT_WINDOW` set to it, in the process env and in the worker's `--settings` env, since the owner's user settings env would otherwise win; a change restarts the session at the next safe point; unset or a bad value means the session follows the owner's other sessions, the shell or user settings value; an agent sets it through a settings card, there is no screen for it yet), `mcp_allow` (optional list of MCP server names, see "Leads and the fence"), `ops_read` (optional boolean, Mac only, see "Reading the problem folder from a thread"). A `worktree` key from an older config is ignored (removed 2026-11) |
+| `AgentConfig.dedicated` | `enabled` (default **false**), `max_live` (1-6, default 3), `governor` {`five_hour` 80, `weekly` 85, `park_all` 95, `off` false}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `SessionState.scope`    | `main` (absent) or `{thread_id}`: which session a `session.state` describes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SessionKind`           | gains `thread` for the Sessions view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 - The switch is a signed `config.patch` (`threads` was already allowlisted; `dedicated` is added). No card, no step-up.
 - `threadSessionMode(config, id)` is the one place that decides: `dedicated` only when `dedicated.enabled`, the thread
   asks for it, and it may have one. The default thread, `general`, `inbox`, `system` threads and archived threads are
@@ -713,6 +713,33 @@ is read as well); and the location of `${CLAUDE_PLUGIN_DATA}`. _What the documen
 plugin servers and the connectors Claude Code fetches itself (hence the explicit switches above and the plugin servers copied into the
 file), and whether `mcp__<x>__*` in a deny list stops the server from connecting at all (hence `deniedMcpServers` for the two that matter).
 
+**Plugins for the agent and its threads ("Add plugin to agent", `apps/bridge/src/plugins/`).** A thread session runs in its own folder with
+`--setting-sources=user`, so it loads the USER-scope plugins of the agent's config folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`: `plugins/installed_plugins.json`
+and `settings.json` `enabledPlugins`) and nothing from the agent folder's own project settings or `.mcp.json` (it is handed only that folder's `talos-app`
+entry, `talosOnlyMcpConfig`). A plugin enabled only in the agent folder's project settings therefore reaches Main and never a thread. The owner's request
+(`plugin.add.request`, signed, from Settings > Session > Plugins; result `plugin.add.result`; relay feature `plugin-add/1`) makes the bridge put ONE card
+(kind `config`, payload `plugin_add`) in the default thread: the plugin and marketplace, the hook EVENTS the plugin carries (read from its marketplace copy
+when that is on this computer, else "not checked"; only plain event names are ever shown), the exact command, and, for a `PermissionRequest` or `PreToolUse`
+hook, "This plugin can approve tool calls without asking your phone." One tick (his signed tap), no second box, a warning and never a refusal. On the tap the
+BRIDGE runs `claude plugin install <name>@<marketplace> --scope user` with `CLAUDE_CONFIG_DIR` set to the agent's folder (never a shell: argv, names checked
+against `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` first), makes sure it is on at user scope (`claude plugin enable`), and ends the card in words (never the command's own
+output). On a Talos distro (`kitAnchor()` is not `home`) nothing is installed from the phone: the request is refused with a plain reason, again at the tap.
+The install is not awaited under the card's lane barrier (it can take minutes), and an install in flight when the bridge stops is ended in words (`recover`).
+Main and every thread then load it: the enabled-plugin set is part of a session's launch (`WorkerLaunched.plugins`, `supervisor/worker-launch.ts`), so a running
+thread session restarts through the normal park AFTER ITS TURN, never by cutting one. With an `mcp_allow` list a plugin that has no MCP server (skills,
+commands, agents, hooks) is no longer switched off (`planWorkerMcp`; one with servers not on the list still is). For each thread that HAS a list, the plugin's
+servers are offered as `plugin:<name>:<server>` through the ordinary settings proposal (`config_propose`: a card, or direct by its own rules). Approval-hook
+plugins load in thread sessions as in Main (Pantheon 2026-11-26: capability over safety, warnings not refusals); nothing is forced off. The Settings plugin
+list shows "Can approve tool calls without asking your phone" under each ENABLED plugin that has such a hook (`inventory.plugins[].approves_tool_calls`, set by
+the bridge from the plugin's files, never taken from the mod). The folder is MAIN's config folder (`mainClaudeDir(Main's environment)`: the login shell's environment plus `supervisor.json` `env`, as the supervisor builds it:
+`plugins/main-config-dir.ts`); the install is told `CLAUDE_CONFIG_DIR` only when Main sets it, and runs with a short environment allowlist, one at a time, in a
+process group that a timeout kills. A plugin counts as "no MCP server" (kept on under a list) only when it declares none in ANY form (no `.mcp.json`, no
+`mcpServers` of any type in plugin.json or in its marketplace entry, and a plugin.json that can be read); a plugin whose hooks cannot be read (not JSON, over
+1 MB, a link out of its folder) is treated as MAY APPROVE. The bridge's own read of Main's plugins decides the Settings flag, whatever the mod's list says
+(`approvingPlugins`, cached by file times). `plugin-add/1` is the BRIDGE's feature (handshake.ts). A set that cannot be read (a plugin file present but not
+JSON) is "not known", never "no plugins" (no restart for nothing). A plugin installed but off gets only `claude plugin enable <key> --scope user`. The Mac
+supervisor's half is Delphi's (`plugin-supervisor-swift.md`); what to try on a real Claude Code is `plugin-live-check.md`.
+
 **The Talos home deny on every dedicated worker.** The `--settings` file the Mac writes for a thread session carries `Read`, `Grep`,
 `Glob`, `Edit`, `Write` and `NotebookEdit` denies on the whole Talos home (`//<home>/**` and `//<home>`, in the spelling given and in
 lower case: the lead fence's spelling), with no exception and no `!` rule. It is added after the optional guards' settings are merged
@@ -1208,6 +1235,66 @@ opened, nothing pressed with each reason, and a popup press).
   same build.
 - `NATIVE_APPROVABLE_KINDS` does not include `dialog`: a notification opens the app, and a notification Approve of a dialog card is
   refused by the relay and the bridge.
+
+## A thread session that stopped on an API error or a refusal
+
+The bridge tells the owner, in that thread, when a dedicated thread session's turn ended on an API error or a refusal. It reads the
+session's transcript (`<Claude config>/projects/<folder>/<session>.jsonl`), never the screen. The words are all in
+`router/session-error-words.ts` (provisional).
+
+- **What Claude Code writes.** A final failure is an `assistant` record with `isApiErrorMessage: true` and an `error` kind
+  (`invalid_request`, `rate_limit`, `server_error`, `authentication_failed`, `billing_error`, `model_not_found`, `max_output_tokens`, ...). A refusal is
+  the same record with `message.stop_reason: "refusal"` (and `stop_details.category`), preceded by a `system` record `model_refusal_no_fallback`; it
+  carries `error: "invalid_request"`, so it is classified FIRST. A retry is only a `system` record, subtype `api_error`; a recovered one is followed by
+  ordinary assistant records. The record's text is never used or shown.
+- **When it counts** (`router/session-error-watch.ts`, ticked with the router every 10 s). The LAST `user` or `assistant` record of the main chain is such an
+  assistant record, the file has been quiet for 8 s, the session is up and not busy, and it is no usage limit (`usage_limit_reached`, or Claude Code's own
+  wait: another path owns those). Not noticed: recovered retries, an Esc, a cut turn, a record something followed, a refusal a fallback model took over, a
+  subagent's record, an error the owner already ended by hand, one older than this bridge's watch by more than an hour. One episode per record uuid,
+  remembered in the store across restarts.
+- **What the owner gets** (`router/session-error-cards.ts`). A signed-out session: one plain line. Anything else: a `config` card made by the bridge with
+  Clear session and Retry (the order depends on the kind; a refusal or a too-big conversation puts Clear session first, since asking again fails the same
+  way), or Clear session and Dismiss when the bridge holds no message to send again. If the card cannot be sent, the plain words are posted.
+- **The taps** (only the owner's signed `card.resolve` in the app, `inbound-cards.ts`). Clear session is `controlThreadSession(... 'fresh', 'owner')`; Retry
+  sends the owner's last held message once more, marked (`main-resend.ts` `redelivered(n, 'retry')`), once per failed record. A card for an old session, or one
+  for a thread that has gone on since the failure (the transcript's last record is no longer the failed one), does nothing and says so; a newer card
+  for the same thread expires the older one. Retry offers only the newest message handed to the thread, if it is an owner message sent after the
+  last good answer; each Retry sends its own copy (`<id>~retry~<failed record>`) and says "sent" only when the thread's session holds it. If the session has not yet read the original (the error came before its `read_inbound`), the original is retired (claimed and settled as the session's own, `worker/store.ts supersede`) so `read_inbound` returns the copy alone and the agent answers once; it is given back if the copy cannot be queued. A card that did nothing (a stale tap, a busy or stopped session, a message no longer held) sends `ran: false`, so the app's headline is its own words ("This has moved on; nothing was done.") rather than "Couldn't change it · Ask Talos to retry". Before sending it asks the router where the message would go: a session that is stopping or failed, a start the usage limits block, or a thread that is no longer its own sends nothing ("the thread's session isn't running right now"); if the router ever hands it to main after all, the card says so and the retried key is set. With no good answer in the part of the transcript read, only a message sent within the hour and after the session started can be the failed one. The payload hash binds the thread, the session, the failed record and what each button does.
+- Tests: `apps/bridge/test/session-error-watch.test.ts`, `session-error-cards.test.ts`; fixtures `test/fixtures/transcripts/` (real records with every string
+  replaced; the refusal pair is Claude Code 2.1.332's).
+
+## A quiet thread session: "Open its terminal"
+
+When a dedicated thread session read the owner's message, has posted nothing since, and its pane has been idle for five minutes, the bridge
+posts ONE system row in the thread where he asked: "<thread name> has been quiet for 5 minutes and isn't doing anything. Open its terminal to
+see what's going on." (`router/quiet-words.ts`, final wording), with an `open_terminal` action for that session's thread.
+
+- **Said nothing / pane idle, in code** (`router/quiet-watch.ts`, plain checks, no text read): an open claim (`worker/store.ts openClaims`) of an owner
+  text or file at least five minutes old, with no agent message, card or hand-off answer since (`answeredIn`); workers.json says the session is
+  `live` (not busy, starting or parked), has no `needs_you`, no `dialog` and no `limit_wait`, its `last_active_at` is at least five minutes old (no
+  idle clock: nothing), and the supervisor file is fresh. A run that already ended is `reportUnanswered`'s notice, not this one.
+- **Once**: a kv key `quiet_notice:<claimed message id>` is set before the post, so a restart or a slow send never repeats it; two open messages of one
+  thread give one row; a newer message left unanswered later gets its own.
+- **Main is not covered**: it has no entry in workers.json, so the bridge has no idle clock for it. It needs one optional field
+  (`supervisor.main_last_active_at`, protocol plus both supervisors): a later change.
+- **The action** is `Message.actions` (protocol `MessageAction`, one kind: `open_terminal` with a thread). It is client-side only: no signature, no
+  authority, nothing sent. The field is optional and read with a catch, so an older app shows the text alone. The relay carries the message as it
+  came (live and from its history). The web app (`SystemRowActions.tsx`) draws a fixed-label "Open terminal" button only where
+  `canOpenTerminal()` (`features/terminal/openTerminal.ts`) is true, today the Mac app, whose Terminal screen then opens on that thread's tab
+  (`useTerminalSessions.want`, picked once the tab list has it). On the phone and in a browser the row is its text. **When the remote terminal
+  viewer lands, `openTerminal.ts` is the one place to change.** No Swift change: the Mac app renders this web UI.
+- **Pane lines (in the app only; the owner's rule: capability over safety)**: the last three non-blank rows just above Claude's input box, each cut
+  to 100 characters, run through the shared `redact()` plus an email mask (`sanitizePaneLines`, protocol `quiet-lines.ts`: redacted before the cut,
+  control and invisible characters removed). The path: the supervisor (Linux: `supervisor/pane-lines.ts`, kept on the idle clock by `noteScreen`)
+  publishes them as `quiet_lines` on the thread's workers.json entry ONLY while the pane has been idle for four minutes (a minute before the bridge
+  decides) and not busy, so they sit in that snapshot file for as short a time as possible and go the moment the pane changes (the file is
+  rewritten, never a history; it already carries pane text in `dialog.subject`). The bridge reads `quiet_lines` of the session when it posts the
+  notice, cleans them again (it does not trust a supervisor of another kind) and sends them in a SEPARATE EPHEMERAL frame `quiet.lines`
+  (`message_id` of the notice, `thread_id`, `lines`), after the notice. The notice's own text, its stored copy, its push and the relay's outbox
+  never hold them. Gates: the bridge sends the frame only to a relay that listed `quiet-lines/1`; the relay sends it only to app sockets whose hello
+  listed `quiet-lines/1` (so an older app never sees an unknown frame), and never stores or replays it. The web app keeps the lines in memory by the
+  notice's id (`features/threads/quietLines.ts`), draws them under the row (`QuietLines.tsx`) as plain text, and loses them on reload. A Mac supervisor
+  without the Swift half writes no `quiet_lines`, so nothing is sent and the row is the notice alone (spec for the Swift half: Delphi).
 
 ## Work packages (numbering as in the spec, section 10)
 

@@ -6,10 +6,10 @@ import { randomBytes } from 'node:crypto'
 import { accessSync, constants, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import {
+  AUTO_CONTINUE_AT_LIMIT_DEFAULT,
   dedicatedSettings,
   SPEC_HASH_PATTERN,
   ThreadSessionOpts,
-  ThreadSessionOptsStrict,
   threadSessionMode,
   workerMcpConfigPath,
 } from '@talos-app/protocol'
@@ -43,7 +43,7 @@ import {
   STATE_FILES,
   STATE_HOOK,
 } from './worker-hook.ts'
-import { workerLaunch } from './worker-launch.ts'
+import { unreadOpts, workerLaunch } from './worker-launch.ts'
 import {
   claudeJsonHome,
   planWorkerMcp,
@@ -91,7 +91,7 @@ import {
   workerSystemPromptPath,
 } from './worker-spec.ts'
 import { effectiveOpts, ownOpts, subLaunch } from './worker-subthreads.ts'
-import type { UnreadOpt, WorkerDeps } from './worker-types.ts'
+import type { WorkerDeps } from './worker-types.ts'
 import type { WorkerPlan, WorkerThread } from './workers.ts'
 
 type RawThread = {
@@ -150,6 +150,7 @@ export function dedicatedThreads(raw: unknown, agentDir: string): WorkerThread[]
         parentCwd: sub.shares ? null : (sub.parentCwd ?? (sub.ownCwd && !sub.refusal ? agentDir : null)),
         name: typeof t.name === 'string' ? t.name : null,
         idleParkMin: opts.success ? opts.data.idle_park_min : ThreadSessionOpts.parse({}).idle_park_min,
+        ...(opts.success && opts.data.compact_window !== undefined ? { compactWindow: opts.data.compact_window } : {}),
         ...(eff.mcpAllow !== undefined ? { mcpAllow: eff.mcpAllow } : {}),
         sub: {
           parentId: sub.parentId,
@@ -172,26 +173,12 @@ export function dedicatedThreads(raw: unknown, agentDir: string): WorkerThread[]
       parentCwd: null,
       name: typeof t.name === 'string' ? t.name : null,
       idleParkMin: o.idle_park_min,
+      ...(o.compact_window !== undefined ? { compactWindow: o.compact_window } : {}),
       ...(mcpAllow !== undefined ? { mcpAllow } : {}),
       ...unreadOpts(t.session_opts, opts.success),
     })
   }
   return out
-}
-
-const LAUNCH_FIELDS = ['cwd', 'model', 'effort'] as const
-
-/**
- * Which launch fields of a thread's session_opts cannot be read (each falls back to its default when read): the whole object when
- * it is not one. A field that is absent is not unread: its default is what the owner chose.
- */
-function unreadOpts(raw: unknown, isObject: boolean): { optsUnread?: UnreadOpt[] } {
-  if (!isObject) return { optsUnread: ['session_opts'] }
-  const o = (raw ?? {}) as Record<string, unknown>
-  const bad = LAUNCH_FIELDS.filter(
-    (k) => o[k] !== undefined && !ThreadSessionOptsStrict.shape[k].safeParse(o[k]).success,
-  )
-  return bad.length > 0 ? { optsUnread: bad } : {}
 }
 
 /**
@@ -268,6 +255,11 @@ export type PlannerInputs = {
    * ceiling), the guards and the deny on other sessions' settings and hooks stay.
    */
   threadFence?: () => boolean
+  /**
+   * The owner's "continue at the usage limit" switch (config.json auto_continue_at_limit), read at each start. Absent: the config
+   * default. Written into the session's settings as Claude Code's own `autoContinueAtUsageLimit`, true or false.
+   */
+  autoContinue?: () => boolean
   /**
    * The opt-in OS sandbox switch (config.json `os_sandbox`), read at each start: true only when the owner turned it on. Absent: off.
    * On, each start is preflighted (guards/os-sandbox.ts) and the session's settings carry the sandbox; a start that cannot is refused.
@@ -461,7 +453,8 @@ function startSwitches(i: PlannerInputs, thread: string, folder: string, dry: bo
     { talosHome: i.talosHome, userHome: i.userHome, folder, claudeDir: i.claudeDir },
     dry,
   )
-  return 'refusal' in sb ? sb : { threadFence, osSandbox: sb.pieces, unreadable: on === 'kept_on' }
+  const autoContinueAtLimit = i.autoContinue?.() ?? AUTO_CONTINUE_AT_LIMIT_DEFAULT
+  return 'refusal' in sb ? sb : { threadFence, osSandbox: sb.pieces, autoContinueAtLimit, unreadable: on === 'kept_on' }
 }
 
 /**
@@ -647,6 +640,7 @@ export function workerPlanner(given: PlannerInputs) {
         parentCwd,
         model: p.thread.model,
         effort: p.thread.effort,
+        compactWindow: p.thread.compactWindow,
         nonce: p.nonce,
         permissionFlag,
         preamble: workerPreamble(i.agentDir, p.thread.id),
@@ -664,12 +658,14 @@ export function workerPlanner(given: PlannerInputs) {
         settingsAsk: [...new Set([...parentRules.ask, ...narrowing.ask, ...sessionRules.ask])],
         settingsDeny: [...new Set([...parentRules.deny, ...narrowing.deny, ...sessionRules.deny])],
         osSandbox: sw.osSandbox,
+        autoContinueAtLimit: sw.autoContinueAtLimit,
       }
       const spec = buildWorkerSpec(inputs) // checks the sandbox block too (validateSpec's osSandbox)
       validateSpec(spec, {
         talosHome: i.talosHome,
         parentDeny: parentRules.deny,
         threadFence: inputs.threadFence !== false,
+        autoContinueAtLimit: sw.autoContinueAtLimit,
         main,
         claudePath: claude,
         cwd: folder,

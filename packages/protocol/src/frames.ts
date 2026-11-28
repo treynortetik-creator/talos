@@ -13,6 +13,19 @@ import { FilesPutFrame, FilesPutResultFrame } from './frames-files-put.ts'
 import { FilesSentFrame, FilesSentListFrame } from './frames-files-sent.ts'
 import { MemoryGraphFrame, MemoryGraphResultFrame } from './frames-memory-graph.ts'
 import { MemoryFoldersFrame, MemoryFoldersResultFrame, MemoryRootsSetFrame } from './frames-memory-roots.ts'
+import {
+  TERM_APP_FRAME_TYPES,
+  TERM_BRIDGE_FRAME_TYPES,
+  TERM_OWNER_FRAME_TYPES,
+  TermAckFrame,
+  TermClosedFrame,
+  TermCloseFrame,
+  TermKeyFrame,
+  TermOpenedFrame,
+  TermOpenFrame,
+  TermOutFrame,
+  TermResumeFrame,
+} from './frames-term.ts'
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS } from './fts-query.ts'
 import { HealthBeat } from './health.ts'
 import {
@@ -47,8 +60,15 @@ import {
   ThreadStatus,
 } from './models.ts'
 import { PeerMessage, PeerName } from './peer.ts'
+import {
+  PLUGIN_ADD_BRIDGE_FRAME_TYPES,
+  PLUGIN_ADD_OWNER_FRAME_TYPES,
+  PluginAddRequestFrame,
+  PluginAddResultFrame,
+} from './plugin-add.ts'
 import { Problem } from './problems.ts'
 import { NativeActWire } from './push-rich.ts'
+import { QUIET_LINES_BRIDGE_FRAME_TYPES, QuietLinesFrame } from './quiet-lines.ts'
 import { RunBlockRef } from './run.ts'
 import {
   RunId,
@@ -209,7 +229,16 @@ export const PongFrame = frame('pong', { nonce: z.string().max(64) })
  * re-sends all unconsumed ones in `relay.seq` order. The bridge dedupes on `id` when it notifies.
  */
 export const AckStage = z.enum(['delivered', 'consumed'])
-export const AckFrame = frame('ack', { ref: Ulid, seq: z.number().int().optional(), stage: AckStage.optional() })
+/**
+ * `applied: true` on the ack of a schedule.patch means the Mac applied a Save from the owner's own schedule form: there is no card
+ * to wait for. Other peers ignore the key (an ack is not strict), and an app from before it sees a plain ack.
+ */
+export const AckFrame = frame('ack', {
+  ref: Ulid,
+  seq: z.number().int().optional(),
+  stage: AckStage.optional(),
+  applied: z.literal(true).optional(),
+})
 
 /**
  * bridge -> relay, optional hint: "re-send these unconsumed frame ids". The relay re-sends the ones it still holds (in
@@ -511,8 +540,19 @@ export const ScheduleDetailFrame = frame('schedule.detail', {
   detail: ScheduleDetail,
   report: ScheduleReport.nullable(),
 })
-/** Writes nothing: the bridge validates and answers with a `card.create` (kind 'schedule'). */
-export const SchedulePatchFrame = ownerFrame('schedule.patch', { change: ScheduleChange, thread_id: ThreadId })
+/**
+ * Writes nothing: the bridge validates and answers with a `card.create` (kind 'schedule').
+ * `form_save: true` means "Save in my own schedule form": the owner pressed Save there, and a create or update applies at once
+ * instead of waiting for a tap on its card. It is one more field of the signed frame, so the device signature covers it
+ * (`ownerSignedString` keeps every field but `osig`, `relay` and `stepup_token`): nothing but the owner's device can add it, and
+ * adding or removing it after signing breaks the signature. A bridge from before this field refuses the whole frame (the frame is
+ * strict), so the app sends it again without the field.
+ */
+export const SchedulePatchFrame = ownerFrame('schedule.patch', {
+  change: ScheduleChange,
+  thread_id: ThreadId,
+  form_save: z.literal(true).optional(),
+})
 export const ScheduleRunNowFrame = ownerFrame('schedule.run_now', {
   schedule_id: ScheduleId,
   again: z.boolean(),
@@ -1155,6 +1195,9 @@ export const frameSchemas = {
   'agent.recover.result': AgentRecoverResultFrame,
   'undo.request': UndoRequestFrame,
   'undo.request.result': UndoRequestResultFrame,
+  'plugin.add.request': PluginAddRequestFrame,
+  'plugin.add.result': PluginAddResultFrame,
+  'quiet.lines': QuietLinesFrame,
   'workers.status': WorkersStatusFrame,
   'session.agents': SessionAgentsFrame,
   'health.beat': HealthBeatFrame,
@@ -1195,6 +1238,14 @@ export const frameSchemas = {
   'app.request': AppRequestFrame,
   'app.response': AppResponseFrame,
   'app.update': AppUpdateFrame,
+  'term.open': TermOpenFrame,
+  'term.resume': TermResumeFrame,
+  'term.close': TermCloseFrame,
+  'term.ack': TermAckFrame,
+  'term.opened': TermOpenedFrame,
+  'term.key': TermKeyFrame,
+  'term.out': TermOutFrame,
+  'term.closed': TermClosedFrame,
 } as const
 
 export type FrameType = keyof typeof frameSchemas
@@ -1213,8 +1264,10 @@ export const OWNER_FRAME_TYPES = [
   ...THREAD_SESSION_OWNER_FRAME_TYPES,
   ...AGENT_RECOVER_OWNER_FRAME_TYPES,
   ...UNDO_OWNER_FRAME_TYPES,
+  ...PLUGIN_ADD_OWNER_FRAME_TYPES,
   ...V2_READ_OWNER_FRAME_TYPES,
   ...APP_OWNER_FRAME_TYPES,
+  ...TERM_OWNER_FRAME_TYPES,
 ] as const satisfies readonly FrameType[]
 
 /** Frames that are stored durably and acked (3.4 "durable" column). */
@@ -1282,8 +1335,10 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,
     ...UNDO_OWNER_FRAME_TYPES,
+    ...PLUGIN_ADD_OWNER_FRAME_TYPES,
     ...V2_READ_OWNER_FRAME_TYPES,
     ...APP_OWNER_FRAME_TYPES,
+    ...TERM_APP_FRAME_TYPES,
   ],
   relay_to_app: [
     ...COMMON,
@@ -1316,8 +1371,11 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
     ...UNDO_BRIDGE_FRAME_TYPES,
+    ...PLUGIN_ADD_BRIDGE_FRAME_TYPES,
+    ...QUIET_LINES_BRIDGE_FRAME_TYPES,
     ...V2_READ_RESPONSE_FRAME_TYPES,
     ...APP_BRIDGE_FRAME_TYPES,
+    ...TERM_BRIDGE_FRAME_TYPES,
   ],
   bridge_to_relay: [
     ...COMMON,
@@ -1342,8 +1400,11 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...THREAD_SESSION_BRIDGE_FRAME_TYPES,
     ...AGENT_RECOVER_BRIDGE_FRAME_TYPES,
     ...UNDO_BRIDGE_FRAME_TYPES,
+    ...PLUGIN_ADD_BRIDGE_FRAME_TYPES,
+    ...QUIET_LINES_BRIDGE_FRAME_TYPES,
     ...V2_READ_RESPONSE_FRAME_TYPES,
     ...APP_BRIDGE_FRAME_TYPES,
+    ...TERM_BRIDGE_FRAME_TYPES,
     'health.beat',
     'attest.response',
   ],
@@ -1368,8 +1429,11 @@ export const DIRECTION_TYPES: Record<Direction, readonly FrameType[]> = {
     ...THREAD_SESSION_OWNER_FRAME_TYPES,
     ...AGENT_RECOVER_OWNER_FRAME_TYPES,
     ...UNDO_OWNER_FRAME_TYPES,
+    ...PLUGIN_ADD_OWNER_FRAME_TYPES,
     ...V2_READ_OWNER_FRAME_TYPES,
     ...APP_OWNER_FRAME_TYPES,
+    ...TERM_APP_FRAME_TYPES,
+    'term.closed', // the relay's own: the page's socket closed, so the viewer is gone
     'share.item',
     'problem.item',
     'peer.message',

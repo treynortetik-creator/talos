@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS route_rewake (
   seen_live_at INTEGER,
   rewoken_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS wake_told (
+  message_id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS card_raisers (
   card_id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL,
@@ -66,6 +70,9 @@ export type RouteRow = {
 /** Rows older than this are pruned (claimed or not: the deadline is minutes, not days). */
 const ROUTE_RETENTION_MS = 7 * 24 * 3600_000
 
+/** `addRoute` with `supersedes`: the main session took the original first, so the copy is not queued (it would be answered twice). */
+export class SupersededByMain extends Error {}
+
 export class WorkerStore {
   constructor(private readonly db: Database) {
     db.exec(SCHEMA)
@@ -74,17 +81,26 @@ export class WorkerStore {
 
   // ---- routes and claims -----------------------------------------------------------------------------------------
 
-  /** False when the message was routed before (the row is never replaced). */
-  addRoute(r: RouteRow): boolean {
-    const res = this.db
-      .query(
-        `INSERT OR IGNORE INTO worker_routes(message_id, thread_id, notification_json, woke_at, deadline_at, cold)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(r.message_id, r.thread_id, JSON.stringify(r.notification), r.woke_at, r.deadline_at, r.cold ? 1 : 0)
+  /**
+   * False when the message was routed before (the row is never replaced). With `supersedes`, in the SAME transaction as the insert the message
+   * named is retired in favour of this one (see `supersede`): a crash can never leave the original retired and no copy.
+   */
+  addRoute(r: RouteRow, supersedes?: string): boolean {
+    const add = () => {
+      if (supersedes !== undefined && this.claimedBy(supersedes) === 'main') throw new SupersededByMain()
+      const res = this.db
+        .query(
+          `INSERT OR IGNORE INTO worker_routes(message_id, thread_id, notification_json, woke_at, deadline_at, cold)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(r.message_id, r.thread_id, JSON.stringify(r.notification), r.woke_at, r.deadline_at, r.cold ? 1 : 0)
+      if (res.changes === 1 && supersedes !== undefined) this.supersede(supersedes, r.thread_id, r.woke_at)
+      return res.changes === 1
+    }
+    const added = supersedes === undefined ? add() : this.db.transaction(add)()
     // routed while the session was warm (live or busy): that is a sighting, so a death before the next hub tick is still a death
-    if (res.changes === 1 && !r.cold) this.noteSeenLive(r.message_id, r.woke_at)
-    return res.changes === 1
+    if (added && !r.cold) this.noteSeenLive(r.message_id, r.woke_at)
+    return added
   }
 
   /** Atomically claims a message. True only for the first claimer. */
@@ -103,6 +119,19 @@ export class WorkerStore {
   release(messageId: string, by: 'main'): boolean {
     const res = this.db.query('DELETE FROM inbound_claims WHERE message_id = ? AND claimed_by = ?').run(messageId, by)
     return res.changes === 1
+  }
+
+  /**
+   * Retires a message the session has NOT read in favour of a copy that is sent again (router/session-error-cards.ts Retry): claimed as the
+   * session's own and settled, so `read_inbound` never returns it beside the copy (the agent would answer twice) and main's deadline cannot take
+   * it. False when someone already claimed it (it was read: the copy is then a real retry and nothing is retired).
+   */
+  supersede(messageId: string, thread: string, now: number): boolean {
+    return this.db.transaction(() => {
+      const took = this.claim(messageId, `worker:${thread}`, now)
+      if (took) this.settleClaims([messageId], now)
+      return took
+    })()
   }
 
   claimedBy(messageId: string): Claimer | undefined {
@@ -259,6 +288,14 @@ export class WorkerStore {
     return r ? toRoute(r) : undefined
   }
 
+  /** The newest routes of a thread, newest first (at most `limit`): what the owner last sent it (router/session-error-cards.ts picks the one to send again). */
+  latestRoutes(threadId: string, limit = 5): RouteRow[] {
+    const rows = this.db
+      .query('SELECT * FROM worker_routes WHERE thread_id = ? ORDER BY woke_at DESC, rowid DESC LIMIT ?')
+      .all(threadId, limit) as Record<string, unknown>[]
+    return rows.map(toRoute)
+  }
+
   // ---- the one re-wake of a message whose session died before it read it (router/rewake.ts) ----------------------------
 
   /** The session was live or busy while this message waited: the latest time, kept so a restart does not forget it. */
@@ -318,13 +355,28 @@ export class WorkerStore {
     return r?.thread_id
   }
 
+  /** True the first time it is asked for a held wake: the owner has not yet been told it waits for a session that cannot run. */
+  tellWakeOnce(messageId: string, now: number): boolean {
+    return (
+      this.db.query('INSERT OR IGNORE INTO wake_told (message_id, at) VALUES (?, ?)').run(messageId, now).changes === 1
+    )
+  }
+
   prune(now: number): void {
     const cut = now - ROUTE_RETENTION_MS
-    this.db.query('DELETE FROM worker_routes WHERE woke_at < ?').run(cut)
+    // a thread session's own wake that nobody has claimed is HELD for its session (wake-me/drop.ts): it is never pruned, or the
+    // reminder would vanish silently. It goes when the session claims it, or the thread is deleted or switched off (the router).
+    this.db
+      .query(
+        `DELETE FROM worker_routes WHERE woke_at < ? AND NOT (COALESCE(json_extract(notification_json, '$.meta.kind'), '') = 'wake'
+           AND message_id NOT IN (SELECT message_id FROM inbound_claims))`,
+      )
+      .run(cut)
     this.db.query('DELETE FROM inbound_claims WHERE at < ?').run(cut)
     this.db.query('DELETE FROM claim_settled WHERE at < ?').run(cut)
     this.db.query('DELETE FROM main_handover WHERE at < ?').run(cut)
     this.db.query('DELETE FROM card_raisers WHERE at < ?').run(cut)
+    this.db.query('DELETE FROM wake_told WHERE message_id NOT IN (SELECT message_id FROM worker_routes)').run()
     this.db.query('DELETE FROM route_rewake WHERE message_id NOT IN (SELECT message_id FROM worker_routes)').run()
   }
 }

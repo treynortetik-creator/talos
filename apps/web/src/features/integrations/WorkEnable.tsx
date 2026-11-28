@@ -78,7 +78,7 @@ export function WorkEnableDialog({
               </span>
               <span className="block">
                 {gate.retention === 'passthrough'
-                  ? 'Passthrough: nothing is kept online once it reaches your Mac, and anything undelivered after an hour is dropped.'
+                  ? 'Passthrough: nothing is kept online once it reaches your Mac. Until then your Talos server keeps it, up to 7 days.'
                   : `Buffered: your Talos server keeps events for up to ${days} until your Mac collects them.`}
               </span>
             </>

@@ -23,6 +23,7 @@ import type { AppConn, BridgeConn, HubDeps, Ref } from './hub-types.ts'
 import { FrameRejected, REF_TTL_MS } from './hub-types.ts'
 import type { ScheduleRouter } from './schedules.ts'
 import type { Store, StoredFrame } from './store.ts'
+import type { TermRouter } from './term.ts'
 import { mkFrame } from './util.ts'
 
 /** What the bridge-frame handlers use of Hub, and nothing else. Hub builds it in its constructor. */
@@ -34,6 +35,7 @@ export type BridgeFramesCtx = {
   historyFrameIds: Map<string, number>
   appRouter: AppRouter
   ephemeral: EphemeralRouter
+  term: TermRouter
   schedules: ScheduleRouter
   getConfig(): ReturnType<Store['getConfig']>
   setConfig(config: NonNullable<ReturnType<Store['getConfig']>>): void
@@ -79,6 +81,12 @@ export const bridgeFrames = {
       }
       case 'app.response':
         return this.appRouter.onResponse(frame, raw)
+      // the terminal stream (core/term.ts): only to the socket the view is bound to, never stored
+      case 'term.opened':
+      case 'term.key':
+      case 'term.out':
+      case 'term.closed':
+        return this.term.onBridge(frame, raw)
       case 'schedules.snapshot':
       case 'schedule.detail':
       case 'heartbeat.test_result':
@@ -95,6 +103,12 @@ export const bridgeFrames = {
         return bridgeFrames.forwardError.call(this, frame, raw)
       case 'receipt':
         return bridgeFrames.onReceipt.call(this, frame, raw)
+      case 'quiet.lines': {
+        // ephemeral: sent now to the apps that listed the feature, never stored, queued or counted
+        const text = JSON.stringify(raw)
+        for (const a of this.apps.values()) if (a.authed && !a.limited && a.quietLines) a.conn.send(text)
+        return
+      }
       case 'status': {
         store.setStatus(frame)
         this.clearThreadQueued(frame.thread_id)
@@ -412,6 +426,7 @@ export const bridgeFrames = {
   forwardError(this: BridgeFramesCtx, frame: FrameOf<'error'>, raw: Record<string, unknown>): void {
     if (!frame.ref) return
     if (this.ephemeral.onError(frame.ref, raw)) return // a read's error: to the asker or nowhere, never stored
+    if (this.term.onError(frame.ref, raw)) return // a terminal open's error: to the asker, never stored
     if (this.appRouter.onError(frame)) return // an app request's error: to the asker as a failed app.response
     // A history request's error (unsigned, forged, replayed): to the asker or nowhere, never stored as a system message.
     for (const h of this.historyReqs.values()) {

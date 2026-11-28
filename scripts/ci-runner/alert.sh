@@ -208,6 +208,8 @@ ci_alert_hostile() {
 
 # ---------- report: main's Linux report went red, or is green again ----------
 # Titan's Linux e2e (report-ci/browser-e2e, while CI_TITAN_BROWSER is e2e-shadow) is one of them too.
+# Titan's gating parts (image on, browser-e2e, check on) report a red of their own to report-ci/<part> too, and the Mac's run decides the
+# verdict: that red is Linux-only, and this is its one alert line. report-ci/image is read like the rest.
 # Linux-only reds that main's verdict (local-ci/*) does not see: Hestia's report-ci/linux, and check-titan's report-ci/check
 # while CI_TITAN_CHECK is shadow (on: its ci-part/check is folded into the verdict, so a red there is main's red; a commit with
 # one ends the look back). For each, the newest result in main's newest 20 commits (a failure is red, "passed on ..." green;
@@ -217,7 +219,7 @@ ci_alert_hostile() {
 # Run by the alert step and, for a report that ends after Lemnos's run, every 10 minutes by scripts/ci-alerts.sh watch.
 ci_report_alert() {
   local repo="${GITHUB_REPOSITORY:-${CI_REPO:-treynortetik-creator/talos-app}}" cache="${TALOS_CI_CACHE:-$HOME/.cache/talos-ci}" ctx f list
-  local sha rows st desc prev last first out now todo="report-ci/linux report-ci/check report-ci/browser-e2e" left err
+  local sha rows st desc prev last first out now todo="report-ci/linux report-ci/check report-ci/browser-e2e report-ci/image" left err
   err="$cache/.report-gh.err"
   mkdir -p "$cache" || return 1
   # GitHub unreadable is an error and an alert (ci_gh_problem, scripts/ci-runner/gh-account.sh), never a quiet "nothing to say"
@@ -232,8 +234,9 @@ ci_report_alert() {
       [ ! -f "$f" ] || read -r prev last first < "$f"
       IFS=$'\t' read -r st desc <<< "$(printf '%s\n' "$rows" | awk -F'\t' -v c="$ctx" '$1 == c { print $2 "\t" $3; exit }')"
       case "$st:$desc" in failure:*) st=red ;; "success:passed on "*) st=green ;; *) st="" ;; esac
-      # check-titan on (the plan's CI_TITAN_CHECK is not seen here): it posts ci-part/check, part of the verdict; older is stale
-      if [ "$ctx" = report-ci/check ] && printf '%s\n' "$rows" | grep -q '^ci-part/check'$'\t'; then st=on
+      # check-titan on (the plan's CI_TITAN_CHECK is not seen here): it posts ci-part/check, part of the verdict; older is stale.
+      # Its own report-ci/check beside it (a gating part says its red, or its green, there too) is the result and stands.
+      if [ -z "$st" ] && [ "$ctx" = report-ci/check ] && printf '%s\n' "$rows" | grep -q '^ci-part/check'$'\t'; then st=on
       elif [ -z "$st" ]; then [ "$sha" = "$last" ] || left="$left $ctx"; continue; fi # no result: the commit before, not past the last seen
       if [ "$st" = red ] && [ "$prev" != red ]; then
         first="$sha" out="main's LINUX REPORT is RED at ${sha:0:7}: $ctx (${desc:-no description}); report-only, not in main's verdict (local-ci/*)"

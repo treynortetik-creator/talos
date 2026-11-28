@@ -296,6 +296,8 @@ export type BridgeContext = {
   configProposals?: ConfigProposals
   /** Needs-you prompts: a card for a known dialog in a thread session (docs/OPTION-C.md). Live main session only. */
   dialogs?: DialogCards
+  /** An open AskUserQuestion mirrored as cards and answered through its hook (permission/question.ts): the live main bridge only. */
+  questions?: import('./permission/question.ts').QuestionAsks
   /** Screen helper consent: one card per app per Mac (screen-consent.ts). Live main session only. */
   screenConsent?: import('./screen-consent.ts').ScreenConsent
   /** Consent cards for a permission-mode change the owner has not said yes to (permission-mode.ts). Live main session only. */
@@ -324,10 +326,14 @@ export type BridgeContext = {
   memoryRoots?: import('./memory/roots.ts').MemoryRoots
   /** The bug reporter's read of versions, filed errors and the cleaned log tail (live main bridge only); absent = `bug.context` answers a fixed error. */
   bugContext?: BugContextSeam
+  /** The remote terminal's read-only view of the agent's pane (src/term): the live main bridge with tmux. Absent elsewhere. */
+  term?: import('./term/service.ts').TermService
   /** MCP apps (docs/APPS.md): present on a live bridge; it answers app requests with a fixed refusal while the feature is off. */
   apps?: AppService
   /** Problem reports (docs/ERRORS.md): the live main bridge files them; absent elsewhere. */
   problems?: import('./problems/service.ts').ProblemService
+  /** Tells Main what the bridge learned itself, once per key and across a restart (src/main-wake): the live main bridge only. */
+  mainWake?: import('./main-wake/service.ts').MainWake
   /** Linked agents (src/peer): `peer_send` and the inbound ledger. The live main bridge only. */
   peers?: import('./peer/service.ts').PeerService
   /** Option C worker mode (docs/OPTION-C.md): this process is the named thread's own session. */
@@ -341,8 +347,14 @@ export type BridgeContext = {
   undo?: import('./undo/route-point.ts').UndoSeam
   /** The undo card (undo/card.ts): the live main bridge only. */
   undoCards?: import('./undo/card.ts').UndoCards
+  /** The "waiting on you" notice for the gaps with no card (the Notification hook; permission/needs-you-notice.ts). */
+  needsYou?: import('./permission/needs-you-notice.ts').NeedsYouNotices
+  /** "Add plugin to agent": the card and the install on the owner's tap (plugins/agent-plugins.ts): the live main bridge only. */
+  agentPlugins?: import('./plugins/agent-plugins.ts').AgentPlugins
   /** The offer to send a turn an update cut off again (router/update-resend.ts): the live main bridge only. */
   updateResend?: import('./router/update-resend.ts').UpdateResendCards
+  /** The card for a thread session that stopped on an API error or a refusal (router/session-error-cards.ts): the live main bridge only. */
+  sessionErrors?: import('./router/session-error-cards.ts').SessionErrorCards
   /** Linked agents (peer/address-ask.ts): the ask that holds waiting messages when an agent's address changes. Live main bridge only. */
   peerAddressAsk?: import('./peer/address-ask.ts').PeerAddressAsk
   /** A message's undo point on its receipt and history rows (undo/marks.ts): the live main bridge only. */
@@ -383,6 +395,8 @@ export async function postSystemNotice(
     thread?: ThreadRef
     id?: string
     handoff?: MessageT['handoff']
+    /** Buttons the row offers (the quiet-agent notice's Open terminal): client-side only, no authority (protocol MessageAction). */
+    actions?: MessageT['actions']
     /** The agent changed a setting that decides which alerts reach the owner: pushed through quiet hours (frames.ts). */
     settingsChanged?: boolean
     /** A send made without a card because its kind is always allowed: pushed through quiet hours (always-allow.ts). */
@@ -404,6 +418,7 @@ export async function postSystemNotice(
     via: 'app',
     created_at: new Date(now).toISOString(),
     ...(opts.handoff ? { handoff: opts.handoff } : {}),
+    ...(opts.actions ? { actions: opts.actions } : {}),
   }
   ctx.store.addMessage(message)
   try {

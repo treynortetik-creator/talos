@@ -250,3 +250,67 @@ describe('socket schedules: a list request let go (the Mac went away) writes not
     expect(r.slice().snapshot).toBeNull()
   })
 })
+
+describe('socket schedules: Save in the schedule form (form_save)', () => {
+  const change = { op: 'delete', id: 'daily-digest', base_etag: base.schedules[0]?.etag as string } as const
+
+  it('sends form_save only when the form asks, and a plain patch is the old frame byte for byte', async () => {
+    const r = rig()
+    await r.c.proposeScheduleChange(change, 'general', { formSave: true })
+    await r.c.proposeScheduleChange(change, 'general')
+    expect(r.sent[0]).toMatchObject({ type: 'schedule.patch', form_save: true })
+    expect('form_save' in (r.sent[1] as object)).toBe(false)
+  })
+
+  it.each([
+    ['the relay (bad_frame at the root)', new TalosClientError('bad_frame', 'invalid schedule.patch frame at (root)')],
+    [
+      'the bridge (schedule_invalid, one field with no path)',
+      new TalosClientError('schedule_invalid', 'That request is not valid.', [
+        { path: '', message: 'invalid schedule.patch frame at (root)' },
+      ]),
+    ],
+  ])('an older %s turns the frame away: it is sent again without the field, with a new id', async (_n, refusal) => {
+    const r = rig()
+    r.d.sendAndWait.mockRejectedValueOnce(refusal)
+    const { clientRef } = await r.c.proposeScheduleChange(change, 'general', { formSave: true })
+    const [first, second] = r.d.sendAndWait.mock.calls.map((c) => c[0] as unknown as { id: string; form_save?: true })
+    expect(first).toMatchObject({ type: 'schedule.patch', form_save: true })
+    expect(second).toMatchObject({ type: 'schedule.patch' })
+    expect(second && 'form_save' in second).toBe(false)
+    expect(second?.id).not.toBe(first?.id)
+    expect(clientRef).toBe(second?.id)
+  })
+
+  it('a real problem with the change is not mistaken for an unknown field, and is not sent again', async () => {
+    const r = rig()
+    r.d.sendAndWait.mockRejectedValueOnce(
+      new TalosClientError('schedule_invalid', 'Some fields need a change.', [
+        { path: 'set.name', message: 'too long' },
+      ]),
+    )
+    await expect(r.c.proposeScheduleChange(change, 'general', { formSave: true })).rejects.toMatchObject({
+      code: 'schedule_invalid',
+    })
+    expect(r.d.sendAndWait).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('socket schedules: the Mac applied the Save (ack with applied)', () => {
+  const change = { op: 'delete', id: 'daily-digest', base_etag: base.schedules[0]?.etag as string } as const
+
+  it('an ack that says applied makes the result saved; a plain ack leaves it as a card to wait for', async () => {
+    const r = rig()
+    r.replyWith((f) => r.emit('ack', { ref: f.id, applied: true }))
+    expect(await r.c.proposeScheduleChange(change, 'general', { formSave: true })).toMatchObject({ saved: true })
+    const plain = rig()
+    const res = await plain.c.proposeScheduleChange(change, 'general', { formSave: true })
+    expect('saved' in res).toBe(false)
+  })
+
+  it("an applied ack for another frame is not this one's", async () => {
+    const r = rig()
+    r.replyWith(() => r.emit('ack', { ref: '01JAAAAAAAAAAAAAAAAAAAAAA1', applied: true }))
+    expect('saved' in (await r.c.proposeScheduleChange(change, 'general', { formSave: true }))).toBe(false)
+  })
+})

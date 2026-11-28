@@ -78,6 +78,9 @@ struct ProcessGroupKillTests {
     r.mgr.startTicking()
     try r.wake("trip")
     #expect(r.wait(10) { r.up("trip") }, "\(r.why("trip"))")
+    // the wake's pointer is typed and its Enter sent before the kill: a worker that still owes it is started again to be given it
+    // after a SIGKILL (the owed message is not lost), so it would be live and never parked (it lost that race under load)
+    #expect(r.wait(10) { r.typedLines.count == 1 && r.allEvents.contains(.pointer(thread: "trip")) }, "the pointer never went in: \(r.why("trip"))")
     gc = Int32((try? String(contentsOfFile: pidFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
     let pane = try #require(r.entry("trip")?.pane_pid)
     #expect(gc > 1 && ProcessInspect.basic(gc)?.pgid == pane, "control: the grandchild is in the pane's group")

@@ -15,6 +15,8 @@ import {
 import { z } from 'zod'
 import { AgentDriver, type AgentDriverOptions } from './agent-driver.ts'
 import { waitFor } from './frame-utils.ts'
+import { bridgeChildEnv } from './isolated-bridge-env.ts'
+import { type ChildLike, waitForChildGone, waitForPidToVanish } from './process-wait.ts'
 
 const ChannelNotification = z.object({
   method: z.literal('notifications/claude/channel'),
@@ -62,6 +64,7 @@ export class FakeClaude {
   private client: Client
   private transport: StdioClientTransport
   private opts: FakeClaudeOptions
+  private cleanupEnv: () => void
   private stderrText = ''
   /** Set in `agentDriver` mode. */
   readonly driver: AgentDriver | undefined
@@ -71,11 +74,14 @@ export class FakeClaude {
     this.driver = opts.agentDriver ? new AgentDriver(opts.agentDriver) : undefined
     this.client = new Client({ name: 'fake-claude', version: opts.clientVersion ?? '0.0.0' }, { capabilities: {} })
     this.autoReply = opts.autoReply ?? false
+    // a real bridge always gets an isolated env and never the real home (isolated-bridge-env.ts); any other command gets plain env
+    const childEnv = bridgeChildEnv(opts.args, opts.env ?? {})
+    this.cleanupEnv = childEnv.cleanup
     this.transport = new StdioClientTransport({
       command: opts.command,
       args: opts.args,
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
-      env: { ...(process.env as Record<string, string>), ...(opts.env ?? {}) },
+      env: childEnv.env,
       stderr: 'pipe',
     })
     this.client.setNotificationHandler(ChannelNotification, (n) => {
@@ -159,13 +165,47 @@ export class FakeClaude {
     this.transport.stderr?.on('data', (d) => {
       this.stderrText += d.toString()
     })
-    await this.client.connect(this.transport)
+    try {
+      await this.client.connect(this.transport)
+    } catch (e) {
+      // the process never came up, so nobody will call stop(): the transport goes, and the child's folder after the process
+      const proc = this.childProcess()
+      const pid = this.transport.pid
+      await this.client.close().catch(() => {})
+      await this.waitGone(proc, pid)
+      this.cleanupEnv()
+      throw e
+    }
     return this
   }
 
+  /** The SDK transport's own child-process object (it keeps it in `_process`, private), or undefined when it is not there. */
+  private childProcess(): ChildLike | undefined {
+    const p = (this.transport as unknown as { _process?: Partial<ChildLike> | undefined })._process
+    return p && typeof p.kill === 'function' && 'exitCode' in p && 'signalCode' in p ? (p as ChildLike) : undefined
+  }
+
+  /**
+   * Waits until the child has exited. By its process object when there is one (killed only while it has not exited); with none,
+   * by looking at its pid number for a bounded time, and never signalling it: a bare number may be another process by now.
+   */
+  private async waitGone(proc: ChildLike | undefined, pid: number | null): Promise<void> {
+    if (proc) await waitForChildGone(proc)
+    else if (pid) await waitForPidToVanish(pid)
+  }
+
   async stop(): Promise<void> {
-    await this.driver?.close()
-    await this.client.close()
+    // the SDK's close() does not wait for the process to exit: the folder it writes into is removed only once it has
+    // (read before close(): the SDK forgets its process object there)
+    const proc = this.childProcess()
+    const pid = this.transport.pid
+    try {
+      await this.driver?.close()
+      await this.client.close()
+    } finally {
+      await this.waitGone(proc, pid)
+      this.cleanupEnv()
+    }
   }
 
   get stderr() {

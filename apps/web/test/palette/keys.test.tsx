@@ -1,6 +1,6 @@
 // Every chord -> its table entry, in the browser and in the Mac app; Cmd/Ctrl chords still work while typing, plain keys never act
 // globally, letters match the layout (not the key's place), a Mac takes Cmd only and the rest take Ctrl only.
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { KeyEntry } from '../../src/lib/keymap.ts'
 import { useGlobalKeys } from '../../src/lib/useKeyboard.ts'
@@ -103,6 +103,22 @@ describe('chords', () => {
     for (const e of held) expect(e.defaultPrevented).toBe(true)
     down(window, { code: 'Digit2', key: '2', metaKey: true, repeat: true })
     expect(ids(fn)).toEqual(['thread2'])
+  })
+  it('a held Esc never runs Close, even from a field: the repeats of a key that just closed a dialog must not close the page behind it', () => {
+    const fn = vi.fn()
+    render(<Probe onAction={fn} />)
+    down(window, { code: 'Escape', key: 'Escape', repeat: true })
+    down(screen.getByLabelText('field'), { code: 'Escape', key: 'Escape', repeat: true })
+    expect(fn).not.toHaveBeenCalled()
+    down(window, { code: 'Escape', key: 'Escape' })
+    expect(ids(fn)).toEqual(['close'])
+  })
+  it('an input-method Esc (isComposing, or keyCode 229 after the composition ended) runs nothing', () => {
+    const fn = vi.fn()
+    render(<Probe onAction={fn} />)
+    down(window, { code: 'Escape', key: 'Escape', isComposing: true })
+    down(window, { code: 'Escape', key: 'Escape', keyCode: 229 })
+    expect(fn).not.toHaveBeenCalled()
   })
   it('a held key that is not a chord is left alone', () => {
     render(<Probe onAction={vi.fn()} mac />)

@@ -9,6 +9,7 @@ import { clockTime, dayLabel } from '../../lib/format.ts'
 import { useFeature } from '../../lib/v2Client.ts'
 import { IconClose, IconSearch } from '../../ui/icons.tsx'
 import { Button, Input } from '../../ui/index.ts'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import { HitRow } from './HitRow.tsx'
 import {
@@ -186,6 +187,7 @@ export function SearchScreen() {
               placeholder="Search messages…"
               value={text}
               onChange={(e) => setText(e.target.value)}
+              onKeyDown={searchBoxKeys({ value: text, onClear: () => setText('') })}
               maxLength={200}
               className="pr-11 pl-9"
             />

@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/bug-context/* apps/relay/src/core/bug-reports.ts apps/relay/src/core/bug-inbox.ts apps/web/src/features/bugreport/* apps/web/src/lib/socketBugs.ts
 // Journey: reporting a bug. Real relay, real bridge (a fake Claude drives it), real browser.
 //   open the palette -> Report a bug -> the picture of the screen -> Blur a region -> say what went wrong -> Preview shows the
 //   exact payload (the Mac's version, the cleaned log) -> Send -> the relay keeps the report (two encrypted files, a row) and

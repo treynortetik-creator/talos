@@ -344,7 +344,7 @@ describe('O2: card_expiring, one reminder about an hour before a card dies', () 
 })
 
 describe('O2: the reminder is a needs-you push, not a chat reply', () => {
-  it('a window someone is looking at swallows a reply but not card_expiring (a card waits on the owner)', async () => {
+  it('card_expiring goes out as a card push, and a reply is not held back by an open window', async () => {
     const c = fakeClock(utc5('08:00'))
     const r = await relayOn(c)
     const web = new NoopTransport()
@@ -354,18 +354,17 @@ describe('O2: the reminder is a needs-you push, not a chat reply', () => {
       log: r.relay.services.log,
       transport: web,
       config: () => cfgOf({ quiet_window: null }),
-      anyVisible: () => true,
     })
     await push.notify({ template: 'reply', thread_id: 'general' })
-    expect(web.sent).toHaveLength(0)
+    expect(web.sent).toHaveLength(1)
     await push.notify({
       template: 'card_expiring',
       thread_id: 'general',
       card_id: 'c_01JABCDEFGHJKMNPQRSTVWXYZ0',
       expires_at: new Date(c.now() + HOUR).toISOString(),
     })
-    expect(web.sent).toHaveLength(1)
-    expect(web.sent[0]?.payload.talos.kind).toBe('card')
+    expect(web.sent).toHaveLength(2)
+    expect(web.sent[1]?.payload.talos.kind).toBe('card')
   })
 })
 
@@ -457,7 +456,9 @@ describe('O7: one wake-up summary after the quiet window', () => {
     const b = await bridgeFor(r)
     await applyConfig(r, b)
     await quietReply(r, b, 'general', 2)
-    await applyConfig(r, b, { notifications: { master: false, show_thread_names: 'fixed_only' } })
+    await applyConfig(r, b, {
+      notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true },
+    })
     await gone(r, b)
     await advance(c, 8 * HOUR + 30 * 60_000, 30 * 60_000)
     await sleep(40)

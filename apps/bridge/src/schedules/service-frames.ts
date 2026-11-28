@@ -1,6 +1,7 @@
 // The owner frames (S3.4): list, get, patch, run now and control.
 // Moved out of service.ts unchanged; each function runs with `this` set to the ScheduleService.
 import {
+  type CardT,
   changeNeedsSchedulesV2,
   type ErrorCodeT,
   type Frame,
@@ -12,6 +13,7 @@ import {
   type ScheduleSnapshotT,
   type ScheduleT,
 } from '@talos-app/protocol'
+import { MAX_RESOLVE_AGE_MS } from '../cards-ledger.ts'
 import { errorFrame, scheduleAckFrame, scheduleDetailFrame, schedulesSnapshotFrame } from '../frames-out.ts'
 import { runNowProblem, TEST_REQUIRED_FIELD } from '../heartbeat/tested.ts'
 import { say } from '../owner-words.ts'
@@ -19,7 +21,7 @@ import type { ClosedAdapter } from './closed-adapter.ts'
 import { type Discovered, localZone } from './discovery.ts'
 import { proposerKey } from './kv-prune.ts'
 import type { ScheduleService } from './service.ts'
-import { MAIN_PROPOSER, NEEDS_V2, type Of, RUN_NOW_GAP_MS, STALE_MS } from './service-shared.ts'
+import { MAIN_PROPOSER, NEEDS_V2, type Of, STALE_MS } from './service-shared.ts'
 import { withMainMark } from './sidecar.ts'
 
 /** One verified owner schedule frame. Never throws; every path answers ack{ref} or error{ref}. */
@@ -164,9 +166,65 @@ export async function onPatch(this: ScheduleService, f: Of<'schedule.patch'>, d:
     clientRef: f.id,
   })
   if (!minted.ok) return this.err(minted.code ?? 'schedule_invalid', minted.error, f.id, minted.fields)
-  this.ack(f.id)
   this.ctx.store.kvSet(proposerKey(minted.card.id), MAIN_PROPOSER) // the owner's own form: recorded, so a missing row always means "unknown"
-  await this.publishCard(minted.card)
+  // "Save in my own schedule form" (`form_save`, a field the owner's device signed: nothing else can set it). A create or an
+  // update from that form, no older than the 10 minutes a tap on a card may wait (MAX_RESOLVE_AGE_MS, the ledger's rule on the
+  // owner's signed time; the 2 minutes of `stale()` belong to run now and control), is applied here without ever making a card
+  // the apps could show: no Approve button and no "needs you" for something he just chose to save. An older one, a delete, an
+  // adopt and the Turn on sheet keep the card, exactly as before.
+  const direct =
+    f.form_save === true &&
+    (f.change.op === 'create' || f.change.op === 'update') &&
+    this.now() - Date.parse(f.ts) <= MAX_RESOLVE_AGE_MS
+  if (!direct) {
+    this.ack(f.id)
+    await this.publishCard(minted.card)
+    return
+  }
+  await saveFromForm.call(this, f, minted.card)
+}
+
+/**
+ * The direct Save. The change is written first, then the ledger row (made by prepareCard, never sent to the relay) is resolved
+ * and finished, then the owner is told: `ack{applied}` or an error in words. Every check of the card path still ran (prepareCard),
+ * and the write still compares the job's revision with the one drawn (applyCardInner). A restart in the middle leaves the change
+ * written or not written, and no card either way; an unwritten one is the owner pressing Save again (a create on an existing
+ * id and an update on a moved revision are refused, so it can never be applied twice).
+ */
+export async function saveFromForm(this: ScheduleService, f: Of<'schedule.patch'>, card: CardT) {
+  const row = this.ctx.ledger.get(card.id)
+  if (!row) return this.err('scheduler_unavailable', 'The scheduler could not do that.', f.id)
+  let outcome: { ok: boolean; text: string } | null = null
+  const finish = async (ok: boolean, text: string) => {
+    outcome = { ok, text }
+    const nowMs = this.ctx.clock.now()
+    const r = this.ctx.ledger.resolve(
+      { card_id: card.id, action: 'primary', payload_hash: card.payload_hash, ts: new Date(nowMs).toISOString() },
+      nowMs,
+      { by: 'owner_form' },
+    )
+    this.ctx.expiry?.cancel(card.id)
+    this.log('schedule saved from the form', { card: card.id, ok })
+    await this.endCard(r.ok ? r.row : row, card.id, ok, text)
+  }
+  try {
+    await this.applyCardInner(row.binding, finish)
+  } catch (e) {
+    this.log('schedule apply failed', { card: card.id, error: (e as Error).message })
+    if (!outcome)
+      await finish(
+        false,
+        "The scheduler didn't answer in time, so this may or may not have been saved. Check it in Schedules, then try again.",
+      )
+  }
+  const done = outcome as { ok: boolean; text: string } | null
+  if (done?.ok) return this.ctx.transport.sendEphemeral({ ...scheduleAckFrame(this.now(), f.id), applied: true })
+  const conflict = /changed on your/i.test(done?.text ?? '')
+  this.err(
+    conflict ? 'schedule_conflict' : 'scheduler_unavailable',
+    done?.text ?? 'The scheduler could not do that.',
+    f.id,
+  )
 }
 
 /**
@@ -179,6 +237,60 @@ export function runNowDay(this: ScheduleService, job: ScheduleT): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(this.now()))
 }
 
+/** Why a job could not be started now: the owner's Run now shows it as an error frame, Main's `schedule_rerun` as the tool's answer. */
+export type RunNowOutcome =
+  | { ok: true }
+  | { ok: false; code: ErrorCodeT; message: string; fields?: Array<{ path: string; message: string }> }
+
+/**
+ * The rules of "run this job now", shared by the owner's Run now and Main's `schedule_rerun`: bounded by the claim, never a card.
+ * Held, already running, the heartbeat test gate, and where it may run.
+ */
+export async function startRunNow(
+  this: ScheduleService,
+  job: ScheduleT,
+  d: Discovered,
+  o: { where: Of<'schedule.run_now'>['where']; again: boolean },
+): Promise<RunNowOutcome> {
+  const refuse = (
+    code: ErrorCodeT,
+    message: string,
+    fields?: Array<{ path: string; message: string }>,
+  ): RunNowOutcome => ({ ok: false, code, message, ...(fields ? { fields } : {}) })
+  if (job.today === 'held') return refuse('held', 'The job is on hold because its files changed outside the app.')
+  if (job.today === 'running') return refuse('already_running', 'That job is already running.')
+  // A heartbeat is never an agent run: Run now always means "check now", in this bridge, whatever the job's runner says.
+  const isHeartbeat = heartbeatConfigFromMeta(job.meta) !== null
+  // ...and Run now is not a way round the test gate: a heartbeat that is OFF needs the same fresh pass that turning it on needs.
+  if (isHeartbeat) {
+    const needTest = runNowProblem(this.ctx.paths.home, this.now(), job)
+    if (needTest) return refuse('schedule_invalid', needTest, [{ path: TEST_REQUIRED_FIELD, message: needTest }])
+  }
+  const sessionable = isHeartbeat || (job.permissions !== 'restricted' && job.kind === 'claude')
+  if (!isHeartbeat && o.where === 'session' && (!sessionable || job.runner === 'both'))
+    return refuse('schedule_read_only', "That job can't run in the live session (read-only or restricted).")
+  const inSession = isHeartbeat || job.runner === 'session' || o.where === 'session'
+  if (inSession) {
+    if (!sessionable) return refuse('schedule_read_only', "That job can't run in the live session.")
+    const ds = this.runNowDay(job)
+    const r = await this.offer(job.id, ds, null, null, 'run_now', o.again)
+    if (!r.ok) {
+      if (r.testRequired)
+        return refuse('schedule_invalid', r.testRequired, [{ path: TEST_REQUIRED_FIELD, message: r.testRequired }])
+      return refuse(
+        r.code === 'held' ? 'held' : r.code,
+        r.code === 'held' ? 'The job is on hold.' : 'The scheduler refused that job.',
+      )
+    }
+  } else {
+    const r = await d.adapter.startHeadless(job.id, { again: o.again })
+    if (!r.ok) {
+      return refuse(r.code, r.message)
+    }
+  }
+  return { ok: true }
+}
+
 /** Run now (S3.3 "Run now in the session", S8.3): bounded by the claim, never a card. */
 export async function onRunNow(this: ScheduleService, f: Of<'schedule.run_now'>, d: Discovered) {
   if (this.stale(f)) return this.err('stale', 'That request is too old. Try again.', f.id)
@@ -187,50 +299,9 @@ export async function onRunNow(this: ScheduleService, f: Of<'schedule.run_now'>,
   if (ro) return this.err('schedule_read_only', ro, f.id)
   const job = snap.schedules.find((s) => s.id === f.schedule_id)
   if (!job) return this.err('schedule_not_found', `No scheduled job "${f.schedule_id}".`, f.id)
-  const last = this.runNowAt.get(job.id)
-  if (last !== undefined && this.now() - last < RUN_NOW_GAP_MS)
-    return this.err('rate_limited', 'That job was just started. Give it a couple of minutes.', f.id)
-  if (job.today === 'held')
-    return this.err('held', 'The job is on hold because its files changed outside the app.', f.id)
-  if (job.today === 'running') return this.err('already_running', 'That job is already running.', f.id)
-  // A heartbeat is never an agent run: Run now always means "check now", in this bridge, whatever the job's runner says.
-  const isHeartbeat = heartbeatConfigFromMeta(job.meta) !== null
-  // ...and Run now is not a way round the test gate: a heartbeat that is OFF needs the same fresh pass that turning it on needs.
-  if (isHeartbeat) {
-    const needTest = runNowProblem(this.ctx.paths.home, this.now(), job)
-    if (needTest)
-      return this.err('schedule_invalid', needTest, f.id, [{ path: TEST_REQUIRED_FIELD, message: needTest }])
-  }
-  const sessionable = isHeartbeat || (job.permissions !== 'restricted' && job.kind === 'claude')
-  if (!isHeartbeat && f.where === 'session' && (!sessionable || job.runner === 'both'))
-    return this.err('schedule_read_only', "That job can't run in the live session (read-only or restricted).", f.id)
-  const inSession = isHeartbeat || job.runner === 'session' || f.where === 'session'
-  this.runNowAt.set(job.id, this.now())
-  if (inSession) {
-    if (!sessionable) return this.err('schedule_read_only', "That job can't run in the live session.", f.id)
-    const ds = this.runNowDay(job)
-    const r = await this.offer(job.id, ds, null, null, 'run_now', f.again)
-    if (!r.ok) {
-      this.runNowAt.delete(job.id)
-      if (r.testRequired)
-        return this.err('schedule_invalid', r.testRequired, f.id, [
-          { path: TEST_REQUIRED_FIELD, message: r.testRequired },
-        ])
-      return this.err(
-        r.code === 'held' ? 'held' : r.code,
-        r.code === 'held' ? 'The job is on hold.' : 'The scheduler refused that job.',
-        f.id,
-      )
-    }
-    this.ack(f.id)
-  } else {
-    const r = await d.adapter.startHeadless(job.id, { again: f.again })
-    if (!r.ok) {
-      this.runNowAt.delete(job.id)
-      return this.err(r.code, r.message, f.id)
-    }
-    this.ack(f.id)
-  }
+  const r = await this.startRunNow(job, d, { where: f.where, again: f.again })
+  if (!r.ok) return this.err(r.code, r.message, f.id, r.fields)
+  this.ack(f.id)
   await this.refresh()
 }
 

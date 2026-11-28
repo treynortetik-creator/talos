@@ -93,7 +93,7 @@ function backgroundJobs(ctx: BridgeContext): SessionActivity {
   return { state: 'idle' }
 }
 
-function workerActivity(ctx: BridgeContext, lead: string): SessionActivity {
+export function workerActivity(ctx: BridgeContext, lead: string): SessionActivity {
   const file = new WorkersReader(ctx.paths.home).read()
   if (ctx.undo?.handOvers.recent(workerFolder(ctx, file, lead), ctx.clock.now()))
     return { state: 'busy', why: `${STOP_FIRST}: a message was just handed to the thread's session.` }
@@ -104,8 +104,9 @@ function workerActivity(ctx: BridgeContext, lead: string): SessionActivity {
   const entry: WorkerEntryT | undefined = file.threads[lead]
   if (entry && WORKER_BUSY.has(entry.state))
     return { state: 'busy', why: `${STOP_FIRST}: the thread's session is ${entry.state}.` }
-  // a message routed to it and not picked up yet: its turn is about to start
-  if (new WorkerStore(ctx.store.db).unclaimed(lead).length)
+  // a message routed to it and not picked up yet: its turn is about to start. (A held wake is not that: it waits for a session that
+  // is not running, and says nothing about a turn.)
+  if (new WorkerStore(ctx.store.db).unclaimed(lead).some((r) => r.notification.meta.kind !== 'wake'))
     return { state: 'busy', why: `${STOP_FIRST}: a message is waiting for the thread's session.` }
   return { state: 'idle' }
 }
@@ -163,6 +164,11 @@ export class RestoringRoots {
       this.active.delete(root)
       done()
     }
+  }
+
+  /** Is a restore running now in a folder that overlaps `folder`? */
+  isActive(folder: string | undefined): boolean {
+    return !!folder && this.overlapping(realFolder(folder)).length > 0
   }
 
   /** Resolves once no restore runs in a folder that overlaps `folder`. */

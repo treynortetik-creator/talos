@@ -52,8 +52,10 @@ struct WorkerUnknownCoreTests {
     #expect(TmuxCommands.parseClientActivity("") == [])
     #expect(TmuxCommands.parseClientActivity("1793400000\n") == [1_793_400_000])
     #expect(TmuxCommands.parseClientActivity("1793400000\n1793400005\n") == [1_793_400_000, 1_793_400_005])
+    // an empty row is a control-mode client (the remote terminal view): skipped, never "can't be read"
+    #expect(TmuxCommands.parseClientActivity("\n") == [])
+    #expect(TmuxCommands.parseClientActivity("\n1793400005\n") == [1_793_400_005])
     // a client we can't read is not "nobody is typing"
-    #expect(TmuxCommands.parseClientActivity("\n") == nil)
     #expect(TmuxCommands.parseClientActivity("soon\n") == nil)
     #expect(TmuxCommands.parseClientActivity("1793400000\nsoon\n") == nil)
   }

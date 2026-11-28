@@ -60,7 +60,6 @@ async function rig(over: Partial<AgentConfigT> = {}) {
   r.runtime.store.putPushDevice({ deviceId: dev.deviceId, token: TOKEN, env: 'sandbox' })
   r.runtime.store.putSub({ endpoint: 'https://push.example/one', keys: { p256dh: 'a', auth: 'b' } })
   const web = new NoopTransport()
-  let visible = false
   const cfg: AgentConfigT = { ...DEFAULT_AGENT_CONFIG, ...over }
   const push = new CorePush({
     store: r.runtime.store,
@@ -68,7 +67,6 @@ async function rig(over: Partial<AgentConfigT> = {}) {
     log: quietLog,
     transport: web,
     config: () => cfg,
-    anyVisible: () => visible,
     apns: createApnsSender({
       config: { keyId: 'KEYID12345', teamId: 'TEAMID1234', keyP8: key.p8, bundleId: 'com.example.talos' },
       clock,
@@ -76,37 +74,34 @@ async function rig(over: Partial<AgentConfigT> = {}) {
       authority: () => fake.url,
     }),
   })
-  return { fake, push, web, setVisible: (v: boolean) => (visible = v), clock }
+  return { fake, push, web, clock }
 }
 
-describe('D24: an approval is not swallowed by a visible window', () => {
-  it('needs_you goes to the phone (APNs and web) while a desktop window is visible; a reply does not', async () => {
+describe('an approval and a reply both reach the phone whatever else is open', () => {
+  it('needs_you and reply go out on APNs and web with no presence input at all', async () => {
     const x = await rig()
-    x.setVisible(true)
     await x.push.notify({ template: 'reply', thread_id: 'general' })
-    expect(x.fake.requests).toHaveLength(0)
-    expect(x.web.sent).toHaveLength(0)
-    await x.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
     expect(x.fake.requests).toHaveLength(1)
     expect(x.web.sent).toHaveLength(1)
-    // other chat templates still respect a visible window
+    await x.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
+    expect(x.fake.requests).toHaveLength(2)
+    expect(x.web.sent).toHaveLength(2)
     await x.push.notify({ template: 'overnight', count: 3 })
-    expect(x.fake.requests).toHaveLength(1)
+    expect(x.fake.requests).toHaveLength(3)
   })
 
   it('the quiet window, the master switch and a thread set to off still hold needs_you (quiet is owner call O7)', async () => {
     const quiet = await rig({ quiet_window: { start: '09:00', end: '11:00' }, timezone: 'Etc/GMT+5' })
-    quiet.setVisible(true)
     await quiet.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
     expect(quiet.fake.requests).toHaveLength(0)
 
-    const master = await rig({ notifications: { master: false, show_thread_names: 'fixed_only' } })
-    master.setVisible(true)
+    const master = await rig({
+      notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true },
+    })
     await master.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
     expect(master.fake.requests).toHaveLength(0)
 
     const off = await rig({ threads: DEFAULT_AGENT_CONFIG.threads.map((t) => ({ ...t, notify: 'off' as const })) })
-    off.setVisible(true)
     await off.push.notify({ template: 'needs_you', thread_id: 'general', card_id: CARD })
     expect(off.fake.requests).toHaveLength(0)
   })

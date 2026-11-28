@@ -1,11 +1,10 @@
 // The Terminal screen, inside the Mac app's own window: a strip of tabs (Main and every thread that has its own session) over the
 // raw Claude CLI terminal. The terminal is a native view on this Mac that the app lays over the empty space under the strip: the
 // page only says where the space is and which session it shows (`terminal_view`), and asks for a parked thread to start
-// (`terminal_resume`). Nothing here touches the client or the relay; a browser or the phone app has no shell, so the route sends
-// them back to Home.
+// (`terminal_resume`). Nothing here touches the client or the relay; a browser or the phone app has no native view, so the route shows
+// them the read-only view of the agent's pane (remote/RemoteTerminalScreen.tsx), loaded only when that screen opens.
 import { TERMINAL_RECT_MAX, type TerminalSessionItemT } from '@talos-app/protocol'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Navigate } from 'react-router'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ShellBridge } from '../../lib/native/bridge.ts'
 import { getShell } from '../../lib/native/shell.ts'
 import { Button } from '../../ui/button.tsx'
@@ -225,7 +224,7 @@ function Screen({ bridge }: { bridge: ShellBridge }) {
   // No list yet (an older Mac app, or the first moment): Main alone, as this screen always was, and no strip.
   const items = useMemo(() => (listed && listed.length > 0 ? listed : [MAIN]), [listed])
   const hasStrip = listed !== null && listed.length > 0
-  const [picked, setPicked] = useState(rememberedTab)
+  const [picked, setPicked] = useState(() => useTerminalSessions.getState().wanted ?? rememberedTab())
   // A remembered tab that is gone (the thread was archived) falls back to Main without forgetting the owner's last pick.
   const current = items.find((i) => i.id === picked) ?? items.find((i) => i.id === 'main') ?? items[0] ?? MAIN
   const tabs = useRef(new Map<string, HTMLButtonElement>())
@@ -246,6 +245,19 @@ function Screen({ bridge }: { bridge: ShellBridge }) {
     seenSelect.current = selectRequest.n
     if (items.some((i) => i.id === selectRequest.id)) pick(selectRequest.id)
   }, [selectRequest])
+
+  // An "Open terminal" action asked for this tab (messageActions): picked as soon as the list has it, then forgotten
+  const wanted = useTerminalSessions((s) => s.wanted)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new wish or a new list matters
+  useEffect(() => {
+    if (!wanted) return
+    if (items.some((i) => i.id === wanted)) pick(wanted)
+    else if (!hasStrip) return // no list yet: keep waiting for it
+    // picked, or a list is here and has no such tab (the thread has none): either way the wish is over, so it can never pull the owner later
+    useTerminalSessions.getState().clearWanted()
+  }, [wanted, items, hasStrip])
+  // leaving the screen ends any wish too: the next ordinary visit opens the owner's remembered tab
+  useEffect(() => () => useTerminalSessions.getState().clearWanted(), [])
 
   // Ctrl+1..9 pick a tab. This screen's own chord: it runs before (and instead of) "open thread N", which the same keys do elsewhere.
   useEffect(() => {
@@ -332,8 +344,15 @@ function Screen({ bridge }: { bridge: ShellBridge }) {
   )
 }
 
+const RemoteTerminalScreen = lazy(() => import('./remote/RemoteTerminalScreen.tsx'))
+
 export function TerminalScreen() {
   const shell = getShell()
-  if (!shell) return <Navigate to="/" replace />
+  if (!shell)
+    return (
+      <Suspense fallback={null}>
+        <RemoteTerminalScreen />
+      </Suspense>
+    )
   return <Screen bridge={shell.bridge} />
 }

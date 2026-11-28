@@ -27,6 +27,15 @@ const CORE = [
   'talos_mod_sync',
 ]
 const SCHEDULES = ['schedules_list', 'schedule_propose', 'schedule_run_start', 'schedule_run_done', 'wake_me']
+// main only: a thread session cannot repair a job (schedule_rerun is not one of its tools)
+const MAIN_SCHEDULES = [
+  'schedules_list',
+  'schedule_propose',
+  'schedule_run_start',
+  'schedule_run_done',
+  'schedule_rerun',
+  'wake_me',
+]
 const APPS = ['app_show', 'app_result', 'list_apps']
 
 describe('which tools each kind of session lists, in order', () => {
@@ -34,7 +43,7 @@ describe('which tools each kind of session lists, in order', () => {
     expect(names(TOOLS)).toEqual(CORE)
     expect(names(ALL_TOOLS)).toEqual([
       ...CORE,
-      ...SCHEDULES,
+      ...MAIN_SCHEDULES,
       'config_propose',
       'settings_read',
       'set_thread_instructions',
@@ -85,7 +94,7 @@ describe('which tools each kind of session lists, in order', () => {
   test('toolsFor: scheduler on, scheduler off, apps on, worker', () => {
     const on = [
       ...CORE,
-      ...SCHEDULES,
+      ...MAIN_SCHEDULES,
       'config_propose',
       'settings_read',
       'set_thread_instructions',

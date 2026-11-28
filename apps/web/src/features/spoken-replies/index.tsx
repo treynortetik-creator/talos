@@ -61,7 +61,8 @@ function SpokenReplies({ readOnly }: { readOnly: boolean }) {
       </select>
       <p className="m-0 text-sm text-text-2">
         When a reply is spoken, your Mac reads it with its speech command. Always still sends text if your Mac has no
-        speech command set. Never is overridden by Driving mode, which speaks every reply until it ends.
+        speech command set. Never is overridden by Driving mode, which speaks every reply until it ends. Replies that
+        come with a spoken version always include audio.
       </p>
       {error && (
         <p role="alert" className="m-0 text-sm text-danger">

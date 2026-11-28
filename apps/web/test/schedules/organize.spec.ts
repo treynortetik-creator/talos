@@ -87,7 +87,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await toggle(page, 'trip').click()
       await page.getByRole('button', { name: 'Edit Packing check' }).click()
       await page.getByLabel('Name').fill('Packing list')
-      await page.getByRole('button', { name: 'Review change' }).click()
+      await page.getByRole('button', { name: 'Save', exact: true }).click()
       const card = page.locator('[data-card-state="pending"]')
       await expect(card).toContainText('Change scheduled job: Packing list')
       await expect(card).toContainText('your form')

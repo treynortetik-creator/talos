@@ -1,6 +1,6 @@
 // The thread-session numbers and the MCP allow list's fixed parts have one source, packages/protocol, and the Mac app's Swift
 // must say the same (P3d3). These read the Swift sources and fail when either side drifts.
-// gate-reads: apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift apps/desktop/Tests/TalosDesktopCoreTests/SpecHashTests.swift apps/desktop/Tests/TalosDesktopCoreTests/ThreadStateHookTests.swift
+// gate-reads: apps/desktop/Tests/TalosDesktopCoreTests/WorkerHookTests.swift apps/desktop/Tests/TalosDesktopCoreTests/SpecHashTests.swift apps/desktop/Tests/TalosDesktopCoreTests/ThreadStateHookTests.swift apps/desktop/Tests/TalosDesktopCoreTests/WorkerPreToolTests.swift
 import { describe, expect, it } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,8 @@ import {
   CAP_HOLD_MS,
   CLAIM_DEADLINE_COLD_MS,
   CLAIM_DEADLINE_MS,
+  COMPACT_WINDOW_MAX,
+  COMPACT_WINDOW_MIN,
   DIALOG_CARD_WAIT_MS,
   DIALOG_TTL_S,
   folderSame,
@@ -43,7 +45,9 @@ import {
   workerMcpConfigPath,
   workerUsagePath,
 } from '@talos-app/protocol'
+import { COMPACT_WINDOW_ENV, compactWindowEnv } from '../../src/supervisor/compact-window.ts'
 import { LAUNCH_SPEC_EXCLUDED_ENV, STRIP_RULES_ENTRY } from '../../src/supervisor/launch-spec.ts'
+import { PRE_TOOL_SCRIPT, preToolHookCommand, preToolInto } from '../../src/supervisor/pretool-hook.ts'
 import { seedThreadState, threadStateTemplate } from '../../src/supervisor/thread-state-seed.ts'
 import { UPDATE_KEYS_QUIET_S, UPDATE_RELEASE_POLL_S } from '../../src/supervisor/update-restart.ts'
 import {
@@ -653,5 +657,64 @@ describe('the thread-state hook is the Mac’s', () => {
     expect(manager).toContain('seedThreadState(id, name: s.name)')
     expect(start).toContain('worker_state_seed_failed thread=')
     expect(swift('TalosSupervisor/WorkerLaunchPlan.swift')).not.toContain('seedThreadState')
+  })
+})
+
+describe('the thread compact point (compact_window)', () => {
+  const underscored = (n: number) => String(n).replace(/\B(?=(\d{3})+$)/g, '_')
+  it('the Mac has the same variable, the same range, one hash for both, and reads it where the bridge does', () => {
+    const spec = swift('TalosDesktopCore/WorkerSpec.swift')
+    expect(COMPACT_WINDOW_ENV).toBe('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
+    expect(spec).toContain(`["${COMPACT_WINDOW_ENV}": String(n)]`)
+    expect(spec).toContain(
+      `compactWindowRange = ${underscored(COMPACT_WINDOW_MIN)}...${underscored(COMPACT_WINDOW_MAX)}`,
+    )
+    expect(compactWindowEnv(COMPACT_WINDOW_MIN)).toEqual({ [COMPACT_WINDOW_ENV]: String(COMPACT_WINDOW_MIN) })
+    expect(compactWindowEnv(COMPACT_WINDOW_MIN - 1)).toEqual({})
+    // in the --settings env too, on both sides, only when set (the owner's user settings env would win over the process env)
+    expect(spec).toContain('if !compact.isEmpty { settings["env"] = compact }')
+    expect(swift('../../bridge/src/supervisor/worker-spec.ts')).toContain('...compactWindowEnv(i.compactWindow) }')
+    // in the hash on both sides: never excluded
+    expect(LAUNCH_SPEC_EXCLUDED_ENV as readonly string[]).not.toContain(COMPACT_WINDOW_ENV)
+    expect(swift('TalosDesktopCore/LaunchSpecHash.swift')).not.toMatch(/excludedEnv[^\n]*AUTO_COMPACT/)
+    // the same session_opts key on both sides, and the launch comparison names it the same way
+    expect(swift('TalosDesktopCore/SubThreads.swift')).toContain('o?["compact_window"]')
+    expect(swift('TalosDesktopCore/LaunchChange.swift')).toContain('changed.append("compact_window")')
+  })
+})
+
+// The PreToolUse hook (the tool_use id record the permission hook looks its call up by): the Mac runs the same script text, in the
+// same clean `env -i` command, with the same entry shape (no matcher, timeout 5), as pretool-hook.ts.
+describe('the PreToolUse hook is the Mac’s', () => {
+  const pre = swift('TalosDesktopCore/WorkerPreTool.swift')
+  it('the script text is the same, line for line', () => {
+    const m = /static let script = #"""\n([\s\S]*?)\n"""#/.exec(pre)
+    expect(m?.[1]).toBe(PRE_TOOL_SCRIPT)
+  })
+  it('the command is built the same way', () => {
+    expect(pre).toContain(
+      '"exec /usr/bin/env -i HOME=\\(WorkerHook.quote(home)) PATH=/usr/bin:/bin TALOS_APP_HOME=\\(WorkerHook.quote(talosHome)) /bin/sh -c \\(WorkerHook.quote(script))"',
+    )
+    const cmd = preToolHookCommand({ home: '/home/alex', talosHome: '/home/alex/.talos' })
+    expect(
+      cmd.startsWith(
+        "exec /usr/bin/env -i HOME='/home/alex' PATH=/usr/bin:/bin TALOS_APP_HOME='/home/alex/.talos' /bin/sh -c '",
+      ),
+    ).toBe(true)
+    // the Swift quote is the same single-quote escape as the TS one
+    expect(readFileSync(join(SRC, 'TalosDesktopCore/WorkerHook.swift'), 'utf8')).toContain(
+      `static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\\\''") + "'" }`,
+    )
+  })
+  it('the entry: no matcher, timeout 5, added after the others, a non-list left alone', () => {
+    const hooks: Record<string, unknown> = {}
+    preToolInto(hooks, { home: '/home/alex', talosHome: '/home/alex/.talos' })
+    const [entry] = hooks.PreToolUse as Record<string, unknown>[]
+    expect(entry?.matcher).toBeUndefined()
+    expect(((entry?.hooks ?? []) as { timeout: number }[])[0]?.timeout).toBe(5)
+    expect(pre).toContain('"timeout": 5')
+    expect(pre).toContain('entries.append(')
+    expect(pre).toContain('if let existing = hooks["PreToolUse"], !(existing is [Any]) { return }')
+    expect(swift('TalosDesktopCore/WorkerSpec.swift')).toContain('WorkerPreTool.add(to: &hooks, session: session)')
   })
 })

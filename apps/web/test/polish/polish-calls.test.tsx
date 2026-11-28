@@ -1,4 +1,4 @@
-// Owner-approved polish calls (2026-10-31): row ages, FAB ring, memory header, Connection/Health split, Health error
+// Owner-approved polish calls (2026-10-31): FAB ring, Connection/Health split, Health error
 // state, search hint, inbox avatars, one "Driving mode" label.
 import { PROTOCOL_VERSION } from '@talos-app/protocol'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
@@ -201,13 +201,5 @@ describe('Inbox avatars in a thread timeline', () => {
       '/t/general',
     )
     await waitFor(() => expect(document.querySelector('[data-source-avatar="icon"]')).not.toBeNull())
-  })
-})
-
-describe('Memory row ages', () => {
-  it('shortAge is what the memory list calls', async () => {
-    const src = await import('../../src/features/memory/index.tsx?raw')
-    expect(src.default).toContain('shortAge(e.mtime)')
-    expect(src.default).not.toContain('relativeTime(e.mtime)')
   })
 })

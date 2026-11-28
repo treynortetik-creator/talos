@@ -58,8 +58,12 @@ export type WorkerThread = {
   name?: string | null
   /** Minutes of no activity before the session is parked (session_opts.idle_park_min; DEFAULT_IDLE_PARK_MIN when none). */
   idleParkMin?: number
+  /** session_opts.compact_window: tokens to compact at; absent = the same as the owner's other sessions. */
+  compactWindow?: number
   /** session_opts.mcp_allow: absent = no list (the session gets what Claude Code gives it); a list, even empty = strict. */
   mcpAllow?: string[]
+  /** The plugins switched on at the owner's user scope now (`<name>@<marketplace>`, from the config folder): part of the launch, so a change restarts the session after its turn. Absent: not read. */
+  plugins?: string[]
   /**
    * Session options that are there but cannot be read: 'session_opts' (not an object at all), or the launch fields whose value
    * cannot be read (a hand-edited typo, a newer build's value). Each such field is its default, never a reason to restart.
@@ -119,6 +123,8 @@ export type WorkerDeps = {
   mainSignedIn?(): boolean
   /** The sign-in link of the supervisor's own sign-in (signin.ts), for the thread line, while one is waiting on the owner. */
   signInLink?: (() => string | null) | undefined
+  /** The owner's "continue at the usage limit" switch now (config.json auto_continue_at_limit), for the usage-limit line. */
+  autoContinue?: (() => boolean) | undefined
   hostFor(threadId: string): WorkerHost
   /** The dedicated threads; null when config.json cannot be read (the last good list is kept). */
   threads(): WorkerThread[] | null

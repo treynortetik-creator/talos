@@ -82,6 +82,8 @@ const base = z.object({
   RELAY_KIND: z.enum(['hosted', 'self']).default('self'),
   /** Oldest app version this relay asks for in its descriptor. Advisory: the app shows an update notice, nothing enforces it. */
   MIN_APP_VERSION: z.string().regex(SEMVER, { message: 'must be x.y.z' }).default('0.0.0'),
+  /** Key for the short hashes that stand in for client addresses in logs. Default: derived from DATA_KEY. */
+  RELAY_LOG_HASH_KEY: z.string().min(16).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   // ---- v2 features (docs/V2-FEATURES.md V1.4) ----------------------------------------------------------------------
   /** Optional ntfy topic (`https://`): a phone push that doesn't depend on Web Push. */

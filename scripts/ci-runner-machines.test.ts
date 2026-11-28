@@ -58,7 +58,7 @@ function setup(tools: Record<string, string> = {}) {
   writeFileSync(
     fakeLocal,
     `#!/bin/bash
-{ echo "args: $*"; for v in CI_STATUS_PREFIX CI_REMOTE_PARTS CI_REMOTE_JOBS CI_ATTEMPT_URL CI_RUN_ID CI_STATUS_URL TALOS_FUZZ_MS CI_FALLBACK_NOTES CI_BROWSER_MAC_PART CI_PUSH_BEFORE CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_BROWSER_E2E_SHADOW CI_PART_E2E_WORKERS CI_CHECK_PART CI_CHECK_WAIT CI_WORKERS; do echo "$v=\${!v}"; done; } > "${calls}"\n`,
+{ echo "args: $*"; for v in CI_STATUS_PREFIX CI_REMOTE_PARTS CI_REMOTE_JOBS CI_ATTEMPT_URL CI_RUN_ID CI_STATUS_URL TALOS_FUZZ_MS CI_FALLBACK_NOTES CI_BROWSER_MAC_PART CI_PUSH_BEFORE CI_BROWSER_E2E_PART CI_BROWSER_E2E_WAIT CI_BROWSER_E2E_SHADOW CI_PART_E2E_WORKERS CI_CHECK_PART CI_CHECK_WAIT CI_WORKERS CI_TITAN_PART; do echo "$v=\${!v}"; done; } > "${calls}"\n`,
   )
   const bin = join(T, 'bin')
   mkdirSync(bin)
@@ -720,6 +720,40 @@ describe('ci-runner.sh run on Titan, and Lemnos when image is on Titan', () => {
     for (const bad of ['image,check', 'browser,image', 'x', 'browser-mac', 'browser', 'image,browser', 'browser-e2e'])
       expect(s.run('run', { ...push(s.real), CI_PLAN_SHA: s.real, CI_REMOTE_JOBS: bad }).code, bad).toBe(1)
     expect(s.run('run', { ...push(s.real), CI_REMOTE_JOBS: 'image' }).code).toBe(1)
+  })
+})
+
+// A Titan part that gates (image on, browser-e2e and check as ci-part) is told so (CI_TITAN_PART=1): its red is Linux's, said as "not
+// tested" and reported to report-ci/, and Lemnos runs the part itself (ci-local.sh, report). Never a shadow, a shard or Lemnos's own.
+describe('ci-runner.sh run: which runs are told they are a gating Titan part (CI_TITAN_PART)', () => {
+  const run = (s: ReturnType<typeof setup>, jobs: string, prefix: string) =>
+    s.run('run', {
+      ...push(s.real),
+      CI_PLAN_SHA: s.real,
+      CI_RUN_JOBS: jobs,
+      CI_RUN_PREFIX: prefix,
+      CI_ATTEMPT_URL: ATTEMPT,
+      CI_STATUS_URL: `${ATTEMPT}titan`,
+    })
+  // one test for each run: six ci-runner runs in one test took 40 s under the push gate's load, over the 30 s of a test
+  it.each([
+    ['image', 'local-ci', true],
+    ['browser-e2e', 'ci-part', true],
+    ['check', 'ci-part', true],
+    ['image', 'report-ci', false],
+    ['browser-e2e', 'report-ci', false],
+    ['check', 'report-ci', false],
+  ] as const)('%s under %s/ is %s told it is a gating Titan part (CI_TITAN_PART)', (jobs, prefix, told) => {
+    const s = setup()
+    expect(run(s, jobs, prefix).code, `${jobs} ${prefix}`).toBe(0)
+    expect(s.called(), `${jobs} ${prefix}`).toContain(`CI_TITAN_PART=${told ? '1' : ''}\n`)
+  })
+  it("Lemnos's own run and a bridge shard are not told, whatever the environment had", () => {
+    const s = setup()
+    expect(s.run('run', { ...push(s.real), CI_PLAN_SHA: s.real, CI_TITAN_PART: '1' }).code).toBe(0)
+    expect(s.called()).toContain('CI_TITAN_PART=\n')
+    expect(run(s, 'bridge-shard-1', 'ci-part').code).toBe(0)
+    expect(s.called()).toContain('CI_TITAN_PART=\n')
   })
 })
 

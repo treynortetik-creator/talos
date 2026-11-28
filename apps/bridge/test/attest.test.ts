@@ -589,12 +589,14 @@ describe('talos-app rotate', () => {
 describe('a real bridge behind the fake relay', () => {
   let h: Harness | undefined
   afterEach(async () => h?.stop())
+  // timing-ok: the harness start's own waits scale with the machine; only the feature-list line changed here
   test("answers with the key in bridge.key and the origin of its relay URL; the phone's check passes; hello lists attest/1 last", async () => {
     h = await startHarness()
     const hello = h.relay.frames.find((r) => r.direction === 'from_bridge' && r.frame.type === 'hello')?.frame as {
       client: { features: string[] }
     }
-    expect(hello.client.features.at(-1)).toBe(ATTEST_FEATURE)
+    // attest/1 is last of the always-on features; the optional terminal view (term-view/1) follows it, after everything else
+    expect(hello.client.features.filter((f) => f !== 'term-view/1').at(-1)).toBe(ATTEST_FEATURE)
     const sent = h.relay.sendToBridge({ type: 'attest.request', nonce: NONCE }, { durable: false })
     await waitFor(
       () => h?.relay.frames.some((r) => r.direction === 'from_bridge' && r.frame.type === 'attest.response') ?? false,

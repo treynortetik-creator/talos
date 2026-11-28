@@ -411,7 +411,13 @@ describe('bridge-run keeps its relay port', () => {
         expect(t).toMatch(/\$ talos-app errors list\n\(exit 0\)/)
         // the signed call reached the relay that came up on the new port (it answers; the report id is not there)
         expect(t).toMatch(/\$ talos-app errors requeue-bug-report abc\n\(exit 2\)/)
-        expect(s.starts()).toHaveLength(2)
+        // One start per try, and every start before the last is gone. The fake taker takes only the first port, but the second port
+        // is picked and released before the relay binds it, and a parallel test's port-0 bind can take it in that gap: then the
+        // script retries once more (3 tries at most). Two starts is the usual count, never exactly two by right.
+        const n = s.starts().length
+        expect(n).toBeGreaterThanOrEqual(2)
+        expect(n).toBeLessThanOrEqual(3)
+        expect(t.match(/# relay port \d+ did not work/g)).toHaveLength(n - 1)
         for (const p of s.starts()) await expectGone(p)
         expect(s.w.leftovers('talos-verify-bridge-')).toEqual([])
       } finally {

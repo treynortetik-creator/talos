@@ -1,6 +1,6 @@
 # Memory search
 
-Clio, Talos's memory system, is how the agent finds things in its notes. It searches two ways. The first is always on and needs nothing. The second is set up by
+Nyx, Talos's memory service, is how the agent finds things in its notes. It searches two ways. The first is always on and needs nothing. The second is set up by
 default for a new agent (the root `./install.sh`, the Mac app's Create, Windows Setup) and can be skipped with
 `--no-memory-search`; an agent from before that default adds it with `bash scripts/memory/setup.sh`.
 

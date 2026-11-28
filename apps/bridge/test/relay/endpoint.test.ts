@@ -4,7 +4,9 @@ import { describe, expect, test } from 'bun:test'
 import { loadEnv } from '../../src/config.ts'
 import { RAILWAY_ENDPOINT, Railway, railwayTestSeam } from '../../src/relay/railway.ts'
 import { feedDeps, RELEASE_FEED_URL, releaseFeedTestSeam } from '../../src/release-feed.ts'
-import { cli, connectProject, world } from './helpers.ts'
+import { cli, connectProject, useWorldCleanup, world } from './helpers.ts'
+
+useWorldCleanup()
 
 /** A listener standing in for an attacker's: it records every request that reaches it. */
 function listener() {

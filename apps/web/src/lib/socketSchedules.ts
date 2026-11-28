@@ -19,6 +19,7 @@ import type { SchedulesClient, SchedulesSlice } from './schedulesClient.ts'
 
 export const NO_ANSWER_MS = SCHEDULES_ANSWER_MS
 type AnswerType = 'schedules.snapshot' | 'schedule.detail' | 'heartbeat.test_result'
+type ListenType = AnswerType | 'ack'
 
 /** A patch the Mac has not acked within NO_ANSWER_MS (20 s); its card may still arrive (`clientRef`). */
 export class SlowPatch extends TalosClientError {
@@ -30,11 +31,22 @@ export class SlowPatch extends TalosClientError {
   }
 }
 
+/**
+ * A strict `schedule.patch` turned away at its root: the relay says "invalid schedule.patch frame at (root)" (code bad_frame), the
+ * bridge the same words as one field with no path (code schedule_invalid). Only a key the receiver does not know is refused there:
+ * a real problem with the change names its own field.
+ */
+export function refusedForUnknownField(e: unknown): boolean {
+  if (!(e instanceof TalosClientError) || (e.code !== 'bad_frame' && e.code !== 'schedule_invalid')) return false
+  if (e.fields?.some((f) => f.path !== '')) return false
+  return /schedule\.patch frame at \(root\)/.test([e.message, ...(e.fields ?? []).map((f) => f.message)].join(' '))
+}
+
 export type SocketSchedulesDeps = {
   /** Signs, sends and waits for `ack` or `error` (card.resolve's path). The frame may carry its own `id`. */
   sendAndWait(frame: Record<string, unknown>): Promise<unknown>
   /** Subscribe to a frame the relay routes back to this socket. */
-  on(type: AnswerType, cb: (f: Record<string, unknown>) => void): () => void
+  on(type: ListenType, cb: (f: Record<string, unknown>) => void): () => void
   getSlice(): SchedulesSlice
   setSlice(next: Partial<SchedulesSlice>): void
   /** The connected bridge's advertised features (`presence.features`), undefined when none were sent. */
@@ -183,18 +195,42 @@ export function createSocketSchedules(d: SocketSchedulesDeps): SchedulesClient {
       d.setSlice({ details: { ...d.getSlice().details, [id]: out.detail } })
       return out
     },
-    async proposeScheduleChange(change: ScheduleChangeT, threadId) {
+    async proposeScheduleChange(change: ScheduleChangeT, threadId, opts) {
       gate()
-      const id = newUlid()
+      const attempt = async (formSave: boolean): Promise<{ id: string; saved: boolean }> => {
+        const id = newUlid()
+        // the Mac applied a Save from the form at once: its ack says so (there is no card)
+        let saved = false
+        const off = d.on('ack', (f) => {
+          if (f.ref === id && f.applied === true) saved = true
+        })
+        try {
+          await wait({
+            id,
+            type: 'schedule.patch',
+            change,
+            thread_id: threadId,
+            ...(formSave ? { form_save: true } : {}),
+          })
+        } catch (e) {
+          // Slow, not failed: the card the Mac mints late still carries client_ref = this id, so the caller can keep watching
+          if (e instanceof TalosClientError && e.message === 'no_answer') throw new SlowPatch(id)
+          throw e
+        } finally {
+          off()
+        }
+        return { id, saved }
+      }
+      let r: { id: string; saved: boolean }
       try {
-        await wait({ id, type: 'schedule.patch', change, thread_id: threadId })
+        r = await attempt(opts?.formSave === true)
       } catch (e) {
-        // Slow, not failed: the card the Mac mints late still carries client_ref = this id, so the caller can keep watching
-        if (e instanceof TalosClientError && e.message === 'no_answer') throw new SlowPatch(id)
-        throw e
+        // A bridge or relay from before `form_save` turns the whole strict frame away: send the old frame, which shows the card.
+        if (opts?.formSave === true && refusedForUnknownField(e)) r = await attempt(false)
+        else throw e
       }
       // the bridge answers with a card.create whose payload.client_ref is this frame's id
-      return { clientRef: id }
+      return { clientRef: r.id, ...(r.saved ? { saved: true as const } : {}) }
     },
     async runScheduleNow(id, opts) {
       gate()

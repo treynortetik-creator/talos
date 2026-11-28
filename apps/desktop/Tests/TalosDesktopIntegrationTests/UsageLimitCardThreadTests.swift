@@ -66,6 +66,14 @@ struct UsageLimitCardThreadTests {
     #expect(keys.keys.isEmpty)
   }
 
+  /// The window a pressed key gets to show on the pane is the product's two seconds unless a test widens it (the rig does, by `waitScale`).
+  @Test func aKeyGetsTwoSecondsToShowUnlessATestWidensIt() {
+    let o = WorkerManager.Options(
+      talosHome: "/home/alex/.talos-app", agentDir: "/home/alex/agent", claudePath: "/home/alex/bin/claude",
+      permissionFlag: "--dangerously-skip-permissions", tmux: "/usr/bin/tmux", tmuxConf: "/dev/null")
+    #expect(o.echoWait == 2)
+  }
+
   // MARK: a signed tap
 
   @Test func waitForResetIsOneEscapeAndNothingElse() throws {

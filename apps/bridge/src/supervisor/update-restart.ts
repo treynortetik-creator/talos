@@ -173,6 +173,11 @@ export class UpdateRestarts {
   private async quiet(w: WorkerRuntime): Promise<boolean> {
     if (w.entry.state !== 'live' || w.turnWait || stuck(w) || w.owed.pending || w.heldFor) return false
     if (w.notes.needsYou !== null || w.notes.promptWatch.current !== null || w.entry.dialog !== undefined) return false
+    // Claude Code's own wait at a usage limit is armed in this process: a restart would end it (limit-wait.ts)
+    if (this.m.slots.limitWaitActive(w)) {
+      this.m.slots.parkSkipped(w, 'update')
+      return false
+    }
     const host = w.host
     if (!host || (await this.m.slots.isBusy(w))) return false
     if ((this.m.slots.background(w)?.count ?? 1) > 0) return false // work running, or a table that could not be read

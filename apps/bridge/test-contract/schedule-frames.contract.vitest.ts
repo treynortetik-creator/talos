@@ -1,7 +1,6 @@
 // defineScheduleFramesContract against the REAL bridge process (bun, stdio) with FakeRelay + FakeApp at the far end and the
 // real Chronos CLI behind it (docs/SCHEDULES.md S9, WP-S1).
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -13,6 +12,7 @@ import {
   mkFrame,
 } from '@talos-app/testkit'
 import { ChronosBox, draft } from '../test/schedules/chronos-box.ts'
+import { bridgeEnv, sweepAtEnd } from './bridge-env.ts'
 
 const BRIDGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -24,7 +24,10 @@ defineScheduleFramesContract('real bridge (bun, stdio) + real Chronos', {
     const box = new ChronosBox(new Date().toISOString())
     box.configure({ sessionRunner: 'talos', approvalRequired: true })
     box.create(draft(), new Date().toISOString())
-    const home = mkdtempSync(join(tmpdir(), 'talos-sched-contract-'))
+    // the box folder is this bridge's test root: its home, HOME and Chronos are all inside it, and box.dispose() removes them together
+    const root = box.dir
+    sweepAtEnd(root)
+    const home = join(root, 'bridge-home')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'config.json'), JSON.stringify(loadExampleConfig('default')), { mode: 0o600 })
     writeFileSync(
@@ -49,12 +52,7 @@ defineScheduleFramesContract('real bridge (bun, stdio) + real Chronos', {
       command: 'bun',
       args: ['run', join(BRIDGE_DIR, 'src', 'server.ts')],
       cwd: BRIDGE_DIR,
-      env: {
-        TALOS_APP_HOME: home,
-        TALOS_APP_RELAY_URL: relay.httpUrl,
-        TALOS_APP_BRIDGE: '1',
-        TALOS_APP_CHRONOS_BIN: box.bin,
-      },
+      env: bridgeEnv(home, relay.httpUrl, root, { HOME: box.home, TALOS_APP_CHRONOS_BIN: box.bin }),
     }).start()
     await relay.rec.expectFrame('ready', () => true, { direction: 'to_bridge' })
     return {

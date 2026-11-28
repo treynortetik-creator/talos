@@ -26,6 +26,7 @@ import { useWriteBlock } from '../settings/offline.ts'
 import { PendingWakes } from '../thread-sessions/PendingWakes.tsx'
 import { useWorkersStatus, WORKER_STATE_TEXT } from '../thread-sessions/store.ts'
 import { connectionRefusalOf } from '../threads/manage/useThreadPatch.ts'
+import { AddPlugin } from './AddPlugin.tsx'
 import {
   CTX_LAST_KNOWN_TEXT,
   compactTokens,
@@ -41,6 +42,7 @@ import {
   usedPct,
   WARN_USED_PCT,
 } from './logic.ts'
+import { PLUGIN_WEB_WORDS } from './pluginWords.ts'
 import { type Outcome, useSessionController } from './store.ts'
 import { useThreadContext } from './threadContext.ts'
 
@@ -518,18 +520,30 @@ function McpTab({ inventory }: { inventory: SessionInventoryT | undefined }) {
   )
 }
 
-function PluginsTab({ inventory }: { inventory: SessionInventoryT | undefined }) {
-  if (!inventory || inventory.plugins.length === 0)
-    return <p className="m-0 py-3 text-sm text-text-2">No plugins listed.</p>
+export function PluginsTab({ inventory }: { inventory: SessionInventoryT | undefined }) {
   return (
-    <ul className="m-0 list-none divide-y divide-line p-0 py-1">
-      {inventory.plugins.map((p) => (
-        <li key={p.name} className="flex min-h-11 items-center justify-between gap-3 py-2">
-          <span className="min-w-0 truncate text-sm font-medium">{p.name}</span>
-          <Badge tone={p.enabled ? 'ok' : 'neutral'}>{p.enabled ? 'Enabled' : 'Off'}</Badge>
-        </li>
-      ))}
-    </ul>
+    <>
+      {!inventory || inventory.plugins.length === 0 ? (
+        <p className="m-0 py-3 text-sm text-text-2">No plugins listed.</p>
+      ) : (
+        <ul className="m-0 list-none divide-y divide-line p-0 py-1">
+          {inventory.plugins.map((p) => (
+            <li key={p.name} className="flex min-h-11 items-center justify-between gap-3 py-2">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">{p.name}</span>
+                {p.approves_tool_calls && (
+                  <span className="block text-xs text-warn" data-testid="plugin-approves">
+                    {PLUGIN_WEB_WORDS.approvesLine}
+                  </span>
+                )}
+              </span>
+              <Badge tone={p.enabled ? 'ok' : 'neutral'}>{p.enabled ? 'Enabled' : 'Off'}</Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+      <AddPlugin />
+    </>
   )
 }
 

@@ -137,6 +137,7 @@ const MAC_ONLY_TEXT = [
   'could not ask the Mac app to check for a new version', // and its failure, the same guard
   'The Mac app re-pins it', // and says what to do without it
   'No scheduler is installed on this Mac. Tell the owner', // NO_SCHEDULER_TEXT, the Mac's branch of noSchedulerText()
+  'On a Mac, the Talos app runs thread sessions', // MAC_SUPERVISE_LINE, printed only on a Mac (cmdSupervise, platform darwin)
   'macOS or Linux (or a WSL distro you set up yourself): bun upgrade', // bun-floor.ts: names each platform, one line each
   'the Mac may be busy', // a scheduler that does not answer is Chronos
   'Your Mac is already making audio', // BUSY_MESSAGE, the Mac's branch

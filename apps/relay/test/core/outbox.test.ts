@@ -303,7 +303,9 @@ describe('alarms', () => {
     relay = await startTestRelay({ clock: c })
     relay.runtime.store.putSub(sub())
     const owner = await bridgeFrom(relay, c, '198.51.100.5')
-    await syncConfig(relay, c, owner.sock, { notifications: { master: false, show_thread_names: 'fixed_only' } })
+    await syncConfig(relay, c, owner.sock, {
+      notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true },
+    })
     expect(relay.runtime.hub.agentConfig()?.notifications.master).toBe(false)
     await bridgeFrom(relay, c, '203.0.113.9')
     await bridgeFrom(relay, c, '198.51.100.5', true)
@@ -394,37 +396,44 @@ describe('push rules', () => {
   }
   const bodies = () => (relay as TestRelay).transport.sent.map((s) => s.payload.notification.body)
 
-  it('sends when no socket is visible, with a fixed template and no message text', async () => {
+  it('sends a reply with the thread name and a preview of the reply', async () => {
     const { app, bridge } = await setup()
-    bridge.reply('general', 'the launch code is hunter2')
+    bridge.reply('general', 'the launch window opens at nine')
     await app.expectFrame('reply')
     await pushes(1)
-    expect(bodies()).toEqual(['New reply in General'])
+    expect(bodies()).toEqual(['the launch window opens at nine'])
+    expect((relay as TestRelay).transport.sent[0]?.payload.notification.title).toBe('General')
+  })
+
+  it('a secret in a reply never reaches the push (a password line, through the real hub)', async () => {
+    const { app, bridge } = await setup()
+    bridge.reply('general', 'the launch code: password=hunter2 ok')
+    await app.expectFrame('reply')
+    await pushes(1)
     expect(JSON.stringify((relay as TestRelay).transport.sent)).not.toContain('hunter2')
   })
 
   it(
-    'stays silent while an app socket is visible, and sends again once it is hidden',
+    'a reply still pushes to the phone while an app socket (a Mac window) is visible',
     async () => {
       const { app, bridge } = await setup()
       app.send({ type: 'visibility', state: 'visible' })
       await waitFor(() => (relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'visible')
       bridge.reply('general', 'one')
       await app.expectFrame('reply', (f) => f.message.text === 'one')
-      // timing-ok: negative window: no push while an app socket is visible
-      await sleep(t(150))
-      expect(bodies()).toEqual([])
+      await pushes(1)
+      expect(bodies()).toEqual(['one'])
       app.send({ type: 'visibility', state: 'hidden' })
       await waitFor(() => !(relay as TestRelay).runtime.hub.anyVisible(), WAIT_MS, 'hidden')
       bridge.reply('general', 'two')
       await app.expectFrame('reply', (f) => f.message.text === 'two')
-      await pushes(1)
-      expect(bodies()).toEqual(['New reply in General'])
+      await pushes(2)
+      expect(bodies()).toEqual(['one', 'two'])
     },
     t(90_000),
   )
 
-  describe('a visible screen only mutes pushes while someone is there', () => {
+  describe('the relay still tracks who is at a screen (scheduler alerts use it), and no reply push depends on it', () => {
     const isPresent = () => (relay as TestRelay).runtime.hub.anyVisible()
     async function visibleSetup() {
       const c = clock()
@@ -437,20 +446,18 @@ describe('push rules', () => {
       return { c, app, bridge }
     }
 
-    it('a visible screen nobody touches stops muting after 60 s and the phone gets the push', async () => {
+    it('a visible screen nobody touches stops counting as present after 60 s; the phone gets the push before and after', async () => {
       const { c, app, bridge } = await visibleSetup()
       expect(isPresent()).toBe(true)
       bridge.reply('general', 'one')
       await app.expectFrame('reply', (f) => f.message.text === 'one')
-      // timing-ok: negative window: no push for a reply that just arrived
-      await sleep(t(150))
-      expect(bodies()).toEqual([]) // just arrived: someone is there
+      await pushes(1) // someone is there, and the phone is told anyway
       await advance(c, 61_000, 20_000)
       expect(isPresent()).toBe(false)
       bridge.reply('general', 'two')
       await app.expectFrame('reply', (f) => f.message.text === 'two')
-      await pushes(1)
-      expect(bodies()).toEqual(['New reply in General'])
+      await pushes(2)
+      expect(bodies()).toEqual(['one', 'two'])
     })
 
     it('activity reports (visibility frames while visible) keep the screen counted as present', async () => {
@@ -464,9 +471,8 @@ describe('push rules', () => {
       }
       bridge.reply('general', 'still here')
       await app.expectFrame('reply', (f) => f.message.text === 'still here')
-      // timing-ok: negative window: no push while someone is present
-      await sleep(t(150))
-      expect(bodies()).toEqual([])
+      await pushes(1)
+      expect(bodies()).toEqual(['still here'])
     })
 
     it('an older app that never reports activity mutes for at most one window after its last visibility change', async () => {
@@ -491,9 +497,8 @@ describe('push rules', () => {
       await advance(c, 30_000, 10_000)
       bridge.reply('general', 'thirty seconds later')
       await app.expectFrame('reply', (f) => f.message.text === 'thirty seconds later')
-      // timing-ok: negative window: no push thirty seconds on
-      await sleep(t(150))
-      expect(bodies()).toEqual([])
+      await pushes(1)
+      expect(bodies()).toEqual(['thirty seconds later'])
     })
 
     it('a hidden screen is never present, however recent its last frame', async () => {
@@ -515,7 +520,7 @@ describe('push rules', () => {
     bridge.reply('general', 'morning')
     await app.expectFrame('reply', (f) => f.message.text === 'morning')
     await pushes(1)
-    expect(bodies()).toEqual(['New reply in General'])
+    expect(bodies()).toEqual(['morning'])
   })
 
   it('honours the per-thread notify setting and the master switch', async () => {
@@ -540,7 +545,12 @@ describe('push rules', () => {
     expect(left).toBeGreaterThan(0)
     bridge.send({
       type: 'config.sync',
-      config: { ...base, rev: 2, threads, notifications: { master: false, show_thread_names: 'fixed_only' } },
+      config: {
+        ...base,
+        rev: 2,
+        threads,
+        notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true },
+      },
       rev: 2,
     })
     await app.expectFrame('config.sync', (f) => f.rev === 2)

@@ -10,19 +10,37 @@ export function fillArgv(argv: string[], vars: Record<string, string>): string[]
   return argv.map((a) => a.replace(/\{(in|out|text)\}/g, (m, k: string) => vars[k] ?? m))
 }
 
-export async function runArgv(argv: string[], timeoutMs: number): Promise<ExecResult> {
+export async function runArgv(
+  argv: string[],
+  timeoutMs: number,
+  /** The child's whole environment (default: this process's). */
+  env?: Record<string, string>,
+  /** Run in a process group of its own and kill the whole group on a timeout (an install that starts helpers). */
+  group = false,
+): Promise<ExecResult> {
   const [cmd, ...args] = argv
   if (!cmd) return { ok: false, reason: 'spawn' }
   let proc: ReturnType<typeof Bun.spawn>
   try {
-    proc = Bun.spawn([cmd, ...args], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+    proc = Bun.spawn([cmd, ...args], {
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      ...(env ? { env } : {}),
+      ...(group ? { detached: true } : {}),
+    })
   } catch {
     return { ok: false, reason: 'spawn' }
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => {
-      proc.kill('SIGKILL')
+      try {
+        if (group) process.kill(-proc.pid, 'SIGKILL')
+        else proc.kill('SIGKILL')
+      } catch {
+        proc.kill('SIGKILL')
+      }
       resolve('timeout')
     }, timeoutMs)
   })

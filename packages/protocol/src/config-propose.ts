@@ -494,7 +494,16 @@ const issueText = (i: { path: ReadonlyArray<PropertyKey>; message: string } | un
   i ? `${i.path.length ? `${i.path.map(String).join('.')}: ` : ''}${i.message}` : 'not a valid value'
 
 /** The fields of its own thread that a thread's session may change: the low ones (name, topic, icon, colour, alerts, idle time, effort). */
-const OWN_FIELDS: readonly ThreadField[] = ['name', 'topic', 'icon', 'color', 'notify', 'idle_park_min', 'effort']
+const OWN_FIELDS: readonly ThreadField[] = [
+  'name',
+  'topic',
+  'icon',
+  'color',
+  'notify',
+  'idle_park_min',
+  'effort',
+  'compact_window',
+]
 
 const noMove =
   "A thread's own session can't move its thread under or out of another thread. The owner does that in the thread's settings. Nothing was proposed."

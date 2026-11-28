@@ -17,8 +17,9 @@ import Foundation
 ///   restarts sessions, a login environment that drifts does not.
 public enum LaunchSpecHash {
   /// Never in the spec: the values that differ at every launch. The nonce (its file is never one of `files` either); the session id
-  /// rides in argv and is dropped with its flag.
-  public static let excludedEnv: Set<String> = ["TALOS_APP_WORKER_NONCE"]
+  /// rides in argv and is dropped with its flag; and the two names a start sets only to resume a cut turn (`CutTurn.resumeEnv`): that
+  /// start is the same launch as an ordinary one, so it must not read as a changed spec and restart sessions on update.
+  public static let excludedEnv: Set<String> = ["TALOS_APP_WORKER_NONCE", "CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_RESUME_REASON"]
   static let sessionFlags = ["--resume", "-r", "--session-id"]
   /// The spec's name for the strip rule.
   public static let stripRulesEntry = "env-strip-rules"

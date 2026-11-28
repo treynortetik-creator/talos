@@ -17,6 +17,13 @@ const WORKER_NOTICES = 'apps/bridge/src/supervisor/worker-notices.ts'
 const LINUX_USAGE_LIMIT = 'apps/bridge/src/supervisor/usage-limit.ts'
 
 const ALLOWED: Allowed[] = [
+  // the owner asked for this one: the [Open terminal] button on the quiet notice opens the agent's terminal in the Mac app
+  {
+    file: 'apps/web/src/features/threads/messageActionWords.ts',
+    line: "open_terminal: 'Open terminal'",
+    why: 'owner 11/26 06:47 asked for an Open terminal button',
+    row: 'owner asked for it',
+  },
   // screen text that is only matched
   {
     file: 'apps/desktop/Sources/TalosDesktopCore/DialogMatcher.swift',

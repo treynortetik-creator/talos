@@ -12,7 +12,10 @@ step_vitest() {
   # every other run leaves out that second run of the kit suites (scripts/kit-tests.test.ts).
   # --retry=0: no test runs twice, whatever the commit's own config says (the owner's rule: no retries anywhere; scripts/ci-no-retries.test.ts).
   # The flake reporter (ours, not the commit's) stays: it writes a test that passed only on a retry to CI_FLAKE_FILE, and none can now.
-  TALOS_KIT_FULL_SELF_TEST="$FULL" pnpm test --maxWorkers="$CI_WORKERS" ${skip[@]+"${skip[@]}"} \
+  # The WSL distro's tests (vitest.config.ts, OFF_PUSH_LANE) are off the push lanes: they run on Linux (Titan), in the nightly and on --full.
+  local lane=""
+  if [ "$(uname -s)" = Linux ] || [ "$FULL" != 0 ] || [ "${CI_NIGHTLY:-}" = 1 ]; then lane=1; fi
+  TALOS_LINUX_LANE="$lane" TALOS_KIT_FULL_SELF_TEST="$FULL" pnpm test --maxWorkers="$CI_WORKERS" ${skip[@]+"${skip[@]}"} \
     --retry=0 --reporter=default --reporter="$ROOT/scripts/ci-flake-vitest.ts" --reporter="$ROOT/scripts/ci-test-results-vitest.ts" "$@"
 }
 # The installer's core tests once more with a corepack pnpm first on PATH (scripts/corepack-install-tests.sh, as `pnpm
@@ -34,12 +37,145 @@ step_corepack_install() {
 # The two halves of the bridge suite (test-parallel.ts). A commit forked before that runner existed has only the plain one, so
 # the first half does nothing and the second runs all of it.
 BUN_RUNNER=apps/bridge/scripts/test-parallel.ts SLOW_PREFIX=test/schedules/
+# ---------- reusing the gate's result (docs/CI-LOCAL.md, "Reusing the gate's result") ----------
+# gate.sh writes down a whole bridge suite that passed on exactly one commit (rec_end there: <cache>/gate-results/<sha>/bun-all, key=value
+# lines, "end" last). When the gate that landed a commit ran the whole bridge suite (any change under apps/bridge/), this run's two
+# bridge steps, which together are that same suite split in two (--only and --skip of one prefix), need not run it again. Every one of
+# these must hold, and any doubt runs the step as ever, saying why (reuse_no):
+#   - this run may reuse at all: the first local-ci run of this commit on this machine (a rerun, a --full run, which is every dispatch and
+#     the nightly, the hostile run, a part or report-only run and an owner's off switch never reuse: a rerun that a gate's green answered
+#     would turn a red CI run into a green with no test run), and CI_REUSE / <cache>/reuse-off is not 0 / there
+#   - the record is the gate's own file: a regular file, not a link, owned by this user, nobody else may write it nor the folders
+#     above it; whole (first line, "end" last, every key once)
+#   - the same commit, the same tree (read from git here, not from the record), checked out here, the same step and the same command
+#   - on this machine, as this user, not older than CI_REUSE_MAX_AGE (a day) and not from the future
+#   - a time factor (the tests' budgets) no higher than this run's, the same heavy slots, bun, and every knob that changes what a test does: TALOS_*, BUN_*,
+#     NODE_OPTIONS, TZ and the hostile flags, as hashes, equal both ways except this run's and the gate's own bookkeeping
+#   - the same CI: the gate runs this suite with CI=true (env CI=true in gate.sh), as the runner does, because under it bun refuses a
+#     committed .only and a missing snapshot, which a plain local run passes and no lint catches; a run whose CI differs does not reuse
+#   - the record and its folder were made before this run began (ctime, which no one can backdate: the commit's own install and build
+#     scripts, run by this user after it began, cannot make one), and nothing else wrote them since
+# Not compared, because the tests are meant to be hermetic against them: the rest of the environment (PATH, TMPDIR, the Claude session
+# variables of a builder's shell) and the tools' versions but bun's.
+REUSE_MAX_AGE="${CI_REUSE_MAX_AGE:-86400}"
+REUSE_ENV_IGNORED="TALOS_MACHINE TALOS_HELD_LOCKS TALOS_HEAVY_SLOT TALOS_TEST_TMUX_PREFIX TALOS_SHARED_LOCK_HELD TALOS_CI_SLOT_RUN TALOS_CI_NESTED TALOS_TEST_JUNIT_DIR TALOS_TEST_TIME_FACTOR BUN_INSTALL BUN_INSTALL_CACHE_DIR"
+GATE_BUN_ALL='bun run scripts/test-parallel.ts' # the command gate.sh ran for its bun-all step
+reuse_sha() { perl -MDigest::SHA=sha256_hex -e 'local $/; print sha256_hex(scalar(<STDIN>) // "")'; }
+reuse_no() { # reuse_no <gate step> <this run's step> <why>: said in the log, false
+  echo "ci-local: not reusing the gate's result for $1 ($2): $3"
+  return 1
+}
+reuse_off_why() { # why this run never reuses, or nothing
+  if [ "${CI_REUSE:-1}" != 1 ]; then echo "CI_REUSE is not 1 (it is '${CI_REUSE}'): reuse is off"
+  elif [ -e "$CACHE/reuse-off" ]; then echo "the reuse-off file is there"
+  elif [ "${CI_HOSTILE:-}" = 1 ]; then echo "a hostile run never reuses"
+  elif [ -n "${CI_NIGHTLY:-}" ]; then echo "the nightly never reuses"
+  elif [ "$FULL" != 0 ]; then echo "a --full run (every dispatch, and the nightly) asks for every test"
+  elif [ "${CI_STATUS_PREFIX:-local-ci}" != local-ci ]; then echo "this is not a local-ci run (${CI_STATUS_PREFIX})"
+  elif [ "${REUSE_FIRST_RUN:-0}" != 1 ]; then echo "this commit ran here before, and a rerun tests everything again"
+  fi
+}
+reuse_val() { # reuse_val <key>: the record's value for it, when it has exactly one line for the key
+  awk -v k="$1" 'index($0, k "=") == 1 { n++; v = substr($0, length(k) + 2) } END { if (n == 1) print v; else exit 1 }' "$REUSE_REC"
+}
+reuse_env_now() { # NAME=<sha256 of the value> for each knob this process has, in the record's order
+  local v
+  for v in $(compgen -e | LC_ALL=C sort); do
+    case "$v" in TALOS_* | BUN_* | NODE_OPTIONS | TZ | CI_HOSTILE | CI_NIGHTLY) ;; *) continue ;; esac
+    case " $REUSE_ENV_IGNORED " in *" $v "*) continue ;; esac
+    printf '%s=%s\n' "$v" "$(printf '%s' "${!v}" | reuse_sha)"
+  done
+}
+reuse_env_rec() { sed -n 's/^env\.//p' "$REUSE_REC" | awk -F= -v ig=" $REUSE_ENV_IGNORED " 'index(ig, " " $1 " ") == 0' | LC_ALL=C sort; }
+reuse_gate_step() { # reuse_gate_step <gate step> <the command the gate ran> <this run's step>: 0 when the gate's result stands in for it
+  local id="$1" cmd="$2" what="$3" why dir f at now tree gate slots tf stamp d k
+  why="$(reuse_off_why)"
+  [ -z "$why" ] || { reuse_no "$id" "$what" "$why"; return 1; }
+  [ "${#SHA}" = 40 ] || { reuse_no "$id" "$what" "no commit sha"; return 1; }
+  dir="$CACHE/gate-results/$SHA" f="$dir/$id" REUSE_REC="$dir/$id"
+  [ -e "$f" ] || [ -L "$f" ] || { reuse_no "$id" "$what" "the gate left none for this commit"; return 1; }
+  # the gate's own file: not a link, this user's, nobody else may write it, its folder or the folder of folders
+  # (the record and its folder also: made before this run began, by their ctime)
+  perl -e 'sub ok { my ($p, $t, $before) = @_; my @s = lstat($p) or return 0; return 0 if -l _; return 0 if $t eq "d" ? !-d _ : !-f _; return 0 if $s[4] != $<; return 0 if $s[2] & 022; return 0 if defined $before && $s[10] > $before; 1 }
+    exit(ok($ARGV[0], "f", $ARGV[3]) && ok($ARGV[1], "d", $ARGV[3]) && ok($ARGV[2], "d") ? 0 : 1)' "$f" "$dir" "$CACHE/gate-results" "${T_SLOT:-$(date +%s)}" ||
+    { reuse_no "$id" "$what" "the record is not the gate's own file (a link, or another user's, or others can write it or its folders, or it was written after this run began)"; return 1; }
+  [ "$(head -1 "$f")" = "talos-gate-result v1" ] && [ "$(tail -1 "$f")" = end ] ||
+    { reuse_no "$id" "$what" "the record is partial or not the gate's format"; return 1; }
+  for k in step cmd sha tree gate at machine uid ci time_factor heavy_slots bun; do
+    reuse_val "$k" > /dev/null || { reuse_no "$id" "$what" "the record lacks $k, or has it twice"; return 1; }
+  done
+  [ "$(reuse_val step)" = "$id" ] || { reuse_no "$id" "$what" "the record is for another step"; return 1; }
+  [ "$(reuse_val cmd)" = "$cmd" ] || { reuse_no "$id" "$what" "the gate ran another command ($(reuse_val cmd))"; return 1; }
+  [ "$(git rev-parse HEAD 2>/dev/null)" = "$SHA" ] || { reuse_no "$id" "$what" "this checkout is not the commit"; return 1; }
+  [ "$(reuse_val sha)" = "$SHA" ] || { reuse_no "$id" "$what" "the record is for another commit"; return 1; }
+  tree="$(git rev-parse "$SHA^{tree}" 2>/dev/null)"
+  [ -n "$tree" ] && [ "$(reuse_val tree)" = "$tree" ] || { reuse_no "$id" "$what" "the record is for another tree"; return 1; }
+  at="$(reuse_val at)"
+  case "$at" in '' | *[!0-9]* | ???????????????*) reuse_no "$id" "$what" "the record has no usable time"; return 1 ;; esac
+  now="$(date +%s)"
+  [ $((now - 10#$at)) -ge -60 ] && [ $((now - 10#$at)) -le "$REUSE_MAX_AGE" ] ||
+    { reuse_no "$id" "$what" "the record is older than $REUSE_MAX_AGE s, or from the future (at $at, now $now)"; return 1; }
+  [ "$(reuse_val machine)" = "$(hostname -s 2>/dev/null)" ] || { reuse_no "$id" "$what" "the record is from another machine"; return 1; }
+  [ "$(reuse_val uid)" = "$(id -u)" ] || { reuse_no "$id" "$what" "the record is another user's"; return 1; }
+  [ "$(reuse_val ci)" = "${CI:-}" ] || { reuse_no "$id" "$what" "another CI variable (here '${CI:-}', the gate's '$(reuse_val ci)')"; return 1; }
+  tf="$(awk -v n="${TALOS_TEST_TIME_FACTOR:-}" 'BEGIN { print (n ~ /^[0-9]+(\.[0-9]+)?$/ && n + 0 >= 1) ? n + 0 : 1 }')"
+  # A higher factor gives every test a longer budget, so a pass at a higher factor proves less. The gate's factor may be lower than
+  # this run's or equal (its tests had budgets as tight as these or tighter: this run would pass too), never higher. The factor
+  # follows the machine's load (scripts/talos-machine.sh), so the two differ often and equal-only would almost never reuse.
+  # Known limit: a test that waits t(ms) and asserts nothing happened has a longer window at a higher factor. Those windows scale with
+  # the machine's speed (a loaded machine is slower), so a shorter window at a lower factor is the same strength for its machine and is taken as equal.
+  gtf="$(reuse_val time_factor)"
+  case "$gtf" in '' | *[!0-9.]* | *.*.* | .* | *.) reuse_no "$id" "$what" "the record's time factor is not a number ('$gtf')"; return 1 ;; esac
+  awk -v g="$gtf" -v h="$tf" 'BEGIN { exit (g + 0 >= 1 && g + 0 <= h + 0) ? 0 : 1 }' ||
+    { reuse_no "$id" "$what" "another time factor (the gate's $gtf, this run's $tf: the gate's must be 1 or more and no higher than this run's, or its tests had longer budgets)"; return 1; }
+  slots="${TALOS_HEAVY_SLOTS:-$(head -1 "$CACHE/heavy-slots" 2>/dev/null)}"
+  [ "$(reuse_val heavy_slots)" = "${slots//[!0-9]/}" ] || { reuse_no "$id" "$what" "another number of heavy slots"; return 1; }
+  [ "$(reuse_val bun)" = "${RUN_BUN:-none}" ] || { reuse_no "$id" "$what" "another bun (here ${RUN_BUN:-none}, the gate's $(reuse_val bun))"; return 1; }
+  if [ "$(reuse_env_now)" != "$(reuse_env_rec)" ]; then
+    d="$(diff <(reuse_env_now) <(reuse_env_rec) | sed -n 's/^[<>] \([^=]*\)=.*/\1/p' | LC_ALL=C sort -u | tr '\n' ' ')"
+    reuse_no "$id" "$what" "another environment (a knob that changes what a test does differs: ${d% })"
+    return 1
+  fi
+  gate="$(reuse_val gate)"
+  case "$gate" in '' | *[!0-9A-Za-z-]*) reuse_no "$id" "$what" "the record names no gate"; return 1 ;; esac
+  stamp="$(perl -e '@t = gmtime($ARGV[0]); printf "%04d-%02d-%02dT%02d:%02d:%02dZ", $t[5] + 1900, $t[4] + 1, @t[3, 2, 1, 0]' "$((10#$at))")"
+  echo "ci-local: reused the gate's result for $id (gate $gate, $stamp) in place of $what: the same commit ${SHA:0:7} and tree ${tree:0:7}, the same command ($cmd), on $WHERE, $((now - 10#$at)) s old; not run again here"
+  printf '%s\t%s\t%s\t%s\n' "$id" "$what" "$gate" "$stamp" >> "$(reuse_file)"
+}
+# the job's file of the steps it took from the gate ("<gate step>\t<its step>\t<gate>\t<time>"), beside its flake file in the run's results; report() reads it
+reuse_file() { if [ -n "${CI_FLAKE_FILE:-}" ]; then printf '%s\n' "${CI_FLAKE_FILE%.flaky}.reused"; else echo /dev/null; fi; }
+reuse_prepare() { # once per run, before its jobs: the gate's results older than any a run reads are swept, and REUSE_FIRST_RUN says whether this
+  # commit ran here before (a log of an earlier run of it counts: a rerun moves it to prev/)
+  [ ! -d "$CACHE/gate-results" ] || find "$CACHE/gate-results" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -rf {} + 2>/dev/null
+  REUSE_FIRST_RUN=1
+  [ -z "$(ls "$LOGS/$SHORT"-*.log "$LOGS/prev/$SHORT"-*.log 2>/dev/null)" ] || REUSE_FIRST_RUN=0
+}
+reuse_report() { # reuse_report <job>: a line of the run's output for each step the job took from the gate; REUSE_SAYS is the words for its status
+  local f="$RESULTS/$1.reused"
+  REUSE_SAYS=""
+  [ -s "$f" ] || return 0
+  REUSE_SAYS=", reused the gate's $(cut -f1 "$f" | sort -u | tr '\n' ' ' | sed 's/ $//; s/ /, /g') ($(cut -f2 "$f" | sort -u | sed 's/^step_bun_//' | tr '\n' '+' | sed 's/+$//'); gate $(head -1 "$f" | cut -f3))"
+  awk -F'\t' -v j="$1" '{ print "  ~ " j ": reused the gate'"'"'s result for " $1 " (gate " $3 ", " $4 ") in place of " $2 }' "$f"
+}
+reuse_timings() { # the reused=<job>:<gate step>[+<gate step>],... column of timings.tsv, or reused=-
+  local f out=""
+  for f in "$RESULTS"/*.reused; do
+    [ -s "$f" ] || continue
+    out="${out:+$out,}$(basename "$f" .reused):$(cut -f1 "$f" | sort -u | tr '\n' '+' | sed 's/+$//')"
+  done
+  echo "reused=${out:--}"
+}
 # No failed file runs once more: the runner is never given --retry-failed (scripts/ci-no-retries.test.ts).
 step_bun_schedules() {
-  [ ! -f "$BUN_RUNNER" ] || bun run "$BUN_RUNNER" --jobs "$CI_SCHED_JOBS" --only "$SLOW_PREFIX"
+  [ -f "$BUN_RUNNER" ] || return 0
+  ! reuse_gate_step bun-all "$GATE_BUN_ALL" step_bun_schedules || return 0
+  bun run "$BUN_RUNNER" --jobs "$CI_SCHED_JOBS" --only "$SLOW_PREFIX"
 }
 step_bun_rest() {
-  if [ -f "$BUN_RUNNER" ]; then bun run "$BUN_RUNNER" --jobs "$CI_WORKERS" --skip "$SLOW_PREFIX"; else pnpm test:bun; fi
+  if [ -f "$BUN_RUNNER" ]; then
+    ! reuse_gate_step bun-all "$GATE_BUN_ALL" step_bun_rest || return 0
+    bun run "$BUN_RUNNER" --jobs "$CI_WORKERS" --skip "$SLOW_PREFIX"
+  else pnpm test:bun; fi
 }
 # Chronos's own suite (apps/chronos), by Chronos's own runner: tests/run.sh runs each test file by itself, as Chronos has always run
 # it (a bare `python3 -m unittest` in apps/chronos finds no test). Its tests wait on real clocks and processes, so it runs in the
@@ -184,7 +320,7 @@ job_linux() {
   run "$log" bun run "$BUN_RUNNER" --jobs 2 --only test/permission-hook.test.ts &&
   run "$log" bun run "$BUN_RUNNER" --jobs 2 --only test/secrets-store.test.ts &&
   run "$log" bun run "$BUN_RUNNER" --jobs 2 --only test/history-corrupt.test.ts &&
-  run "$log" pnpm exec vitest run --project scripts scripts/windows-distro.test.ts --retry=0 &&
+  run "$log" env TALOS_LINUX_LANE=1 pnpm exec vitest run --project scripts scripts/windows-distro.test.ts --retry=0 &&
   run "$log" step_linux_only_scripts
 }
 # The script tests that only run on Linux (they skip on every Mac, so CI on Lemnos never runs them): picked by their own skip
@@ -273,6 +409,8 @@ check_today() {
     if [ -n "$bad" ]; then not_run "$log" "pnpm $bad failed" "$s"; continue; fi
     run "$log" pnpm "$s" || { rc=1; bad="$s"; }
   done
+  local pre_ok=0
+  [ "$rc" != 0 ] || pre_ok=1
   if [ "$rc" != 0 ]; then suites_not_run "$log" "pnpm $bad failed"; fi
   if [ "$rc" = 0 ]; then
     suites_then_audit "$log" || rc=1
@@ -282,10 +420,21 @@ check_today() {
       echo "not tested: the suites lock was not had in time on $WHERE" | tee -a "$log" > "$RESULTS/check.refused"
     fi
   fi
+  # The nightly's second look, after the suites and the audit so that a red one never hides them: the typecheck is tsgo by default
+  # (scripts/typecheck.mjs), and one tsc pass a day shows a checker difference within a day. It turns the nightly red.
+  if [ "$pre_ok" = 1 ] && [ "${CI_NIGHTLY:-}" = 1 ]; then
+    for s in typecheck typecheck:mod; do
+      TALOS_TYPECHECK=tsc run "$log" pnpm "$s" || { rc=1; echo "FAILED: pnpm $s (tsc, the nightly's second look)" >> "$log"; break; }
+    done
+  fi
   # with parts on other machines (CI_REMOTE_PARTS) their tests are not here: the file says which, so a shadow join knows
   local elsewhere=""
   if [ -f "$RESULTS/parts-wanted" ]; then
     elsewhere="$(while read -r p m; do grep -qx "$p" "$RESULTS/parts-taken" 2>/dev/null || printf '%s:%s ' "$p" "$m"; done < "$RESULTS/parts-wanted")"
+  fi
+  # the bridge suite reused from the gate (reuse_gate_step) ran no test here: its per-test file says so, as for a part elsewhere
+  if [ -s "$(reuse_file)" ] && cut -f1 "$(reuse_file)" | grep -qx bun-all; then
+    for _p in bridge-shard-1 bridge-shard-2; do case " $elsewhere" in *" $_p:"*) ;; *) elsewhere="$elsewhere $_p:gate" ;; esac; done
   fi
   # shellcheck disable=SC2086 # <part>:<machine> words, one argument each
   check_tests_file "$log" $elsewhere

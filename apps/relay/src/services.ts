@@ -109,9 +109,9 @@ export type RichPushInput = {
 
 export interface PushService {
   /**
-   * Builds the fixed-template payload (never message text) and sends it to every subscription of the owner. `opts.rich` is
-   * the text a phone that registered a grant may read: it is sealed to that phone's key and never put in the alert, in a
-   * web push or in a log. What it resolves to is the implementation's (CorePush says how many sends were accepted).
+   * Builds the fixed-template payload and sends it to every subscription of the owner. `opts.rich` is the text of a reply
+   * or card: a phone that registered a grant gets it sealed to that phone's key, and a browser reply push gets a one-line,
+   * redacted preview of it (unless the owner turned that off), encrypted to the browser. It never goes into an APNs alert or a log. What it resolves to is the implementation's (CorePush says how many sends were accepted).
    */
   notify(intent: PushIntent, opts?: { rich?: RichPushInput }): Promise<unknown>
 }

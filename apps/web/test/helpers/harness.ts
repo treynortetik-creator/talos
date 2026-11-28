@@ -73,6 +73,8 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
   let sharedPasskey = false
   let failures = 0
   let wsBlocked = false
+  let silenceNext = false // the next accepted /ws upgrade never gets its answer back to the page
+  let silencedUpgrades = 0
   let vapid = ''
   let relayPort = 0
   let origin = ''
@@ -401,6 +403,13 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
     )
     if (head.length) up.write(head)
     socket.pipe(up)
+    if (silenceNext) {
+      // A handshake that hangs: the relay gets the upgrade, but nothing it sends reaches the page, not the 101 and not its own 4408 close after its 10 s handshake limit: the page sits in CONNECTING until the client gives up.
+      silenceNext = false
+      silencedUpgrades++
+      up.resume()
+      return
+    }
     up.pipe(socket)
   })
 
@@ -487,6 +496,22 @@ export async function startHarness(relayOpts: FakeRelayOptions = {}) {
     /** Refuse (or allow again) new `/ws` upgrades, to simulate an unreachable server. */
     blockWs(blocked: boolean) {
       wsBlocked = blocked
+    },
+    /** The next `/ws` dial hangs: nothing the relay sends on it reaches the page (so the browser sits in CONNECTING) until the client drops it. Later dials are whole. */
+    silenceNextWs() {
+      silenceNext = true
+    },
+    /** How many dials `silenceNextWs` has black-holed so far. */
+    silencedWsCount() {
+      return silencedUpgrades
+    },
+    /** Swallow everything the relay sends on the app sockets open NOW (they stay open, for good): a dead link with no close. A later socket is whole. */
+    silenceOpenWs() {
+      for (const s of sockets) {
+        if (s.remotePort !== relayPort) continue // the page-side socket of a tunnel: only the half connected to the relay is cut
+        s.unpipe() // nothing it receives reaches the page any more ...
+        s.resume() // ... and it keeps reading, so the link stays open and quiet, as a dead one does
+      }
     },
     /** Forget every session, as an expired cookie would: `/api/me` and `/ws` answer 401 from now on. */
     expireSessions() {

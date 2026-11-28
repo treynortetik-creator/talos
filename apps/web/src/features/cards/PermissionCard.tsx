@@ -6,13 +6,15 @@
 // call (permissionCardAllowsPrimary, the same function the bridge re-checks). Hidden and direction-changing characters are shown
 // as visible markers. Deny is always there. What Claude wants to run is ALWAYS on the card's face (the start of the call and its
 // "Ends with:" line), never inside a disclosure: the explanation is an extra sentence, never a stand-in for the call, and Allow
-// does not wait for it. Only the whole body is behind Details. No Always allow here: a permission rule needs Claude Code's own suggestion first
-// (phase 2). Everything is plain text. There is no Edit and no revise.
+// does not wait for it. Only the whole body is behind Details. No Always allow here. A third button, "Allow ... for the rest of this session", shows only on a card the hook raised
+// when Claude Code offered a plain rule that has content (`session_allow`, checked again here); it signs the same Allow with `session`.
+// Everything is plain text. There is no Edit and no revise.
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   type CardT,
   cardExpiryMs,
   cleanDenyNote,
+  cleanSessionRules,
   EXPLAIN_FAILED_TEXT,
   type ExplainShown,
   explainChip,
@@ -24,6 +26,8 @@ import {
   PERMISSION_TOO_LONG_BODY,
   permissionCallTail,
   permissionCardAllowsPrimary,
+  type SessionRuleT,
+  sessionAllowWords,
 } from '@talos-app/protocol'
 import { type ReactNode, type Ref, useEffect, useState } from 'react'
 import { enterApproval } from '../../lib/approvalOpen.ts'
@@ -51,6 +55,8 @@ type Props = {
   error: string | null
   timeZone: string
   onAllow: () => void
+  /** Allow, and the same kind of call for the rest of this session (signed `session`). Offered only on a card with a clean `session_allow`. */
+  onAllowSession?: (() => void) | undefined
   onDeny: () => void
   /** Deny with the owner's cleaned words (undefined: nothing left to say, a plain Deny). Offered only on a card with `deny_note`. */
   onDenyWithNote?: ((note: string | undefined) => void) | undefined
@@ -72,6 +78,7 @@ export function PermissionCardLive(props: Props) {
   const preview = [...body].length > PREVIEW_CHARS ? `${[...body].slice(0, PREVIEW_CHARS).join('')}…` : body
   const shown = explainShown(card.explain, card.created_at, now)
   const mismatch = shown.kind === 'ready' && shown.explain.mismatch
+  const sessionWords = sessionWordsOf(card, allowable, mismatch, props.onAllowSession)
   const call = (
     <>
       <p className="mt-2 text-xs font-semibold uppercase tracking-[var(--tracking-caps)] text-text-2">The call</p>
@@ -153,6 +160,9 @@ export function PermissionCardLive(props: Props) {
           </>
         ) : null}
       </div>
+      {sessionWords && props.onAllowSession ? (
+        <SessionButton words={sessionWords} busy={busy} onClick={props.onAllowSession} />
+      ) : null}
       {card.deny_note && props.onDenyWithNote ? <DenyNote busy={busy} onSend={props.onDenyWithNote} /> : null}
       <p className="mt-2 font-mono text-xs text-text-2" data-testid="card-expiry">
         Expires {formatClock(new Date(cardExpiryMs(card)).toISOString(), timeZone)} if untouched
@@ -256,6 +266,38 @@ function ExplainBlock({ shown }: { shown: ExplainShown }) {
 // A call Claude gave no description for (empty, or only spaces) says so, never a bare heading. The protocol already shows a
 // line break or tab as a mark (⏎ ⇥) and an invisible character as [U+XXXX], so any other value has something to show.
 const NO_DESCRIPTION_TEXT = 'No description given'
+/**
+ * The words of the third button, or null when there is none. The rules are Claude Code's own text, so they are checked again here
+ * (the same checks as the hook and the bridge), and each must be for the tool this card is about: a rule that is not exactly what
+ * the card is for, or has any hidden character, shows no button.
+ */
+function sessionWordsOf(card: CardT, canAllow: boolean, mismatch: boolean, onAllowSession: unknown): string | null {
+  if (!onAllowSession || !canAllow || mismatch) return null
+  const rules = sessionRulesShown(card)
+  return rules ? sessionAllowWords(rules) : null
+}
+
+/** The rules the third button shows, checked again here and each for this card's own tool; null when there is none to show. The owner signs the hash of exactly these. */
+export function sessionRulesShown(card: CardT): SessionRuleT[] | null {
+  const rules = cleanSessionRules(card.session_allow?.rules)
+  const tool = (card.payload as { tool_name?: unknown } | null | undefined)?.tool_name
+  return rules && typeof tool === 'string' && rules.every((r) => r.tool === tool) ? rules : null
+}
+
+function SessionButton({ words, busy, onClick }: { words: string; busy: boolean; onClick: () => void }) {
+  return (
+    <Button
+      variant="outline"
+      className="mt-2 h-auto w-full whitespace-normal py-2 text-left [overflow-wrap:anywhere]"
+      disabled={busy}
+      onClick={onClick}
+      data-card-session=""
+    >
+      {revealHidden(words)}
+    </Button>
+  )
+}
+
 function SummaryBlock({ label, value }: { label: string; value: string }) {
   const blank = /^ *$/.test(value)
   return (
@@ -290,6 +332,7 @@ function ApprovalSheet({
   busy,
   error,
   onAllow,
+  onAllowSession,
   onDeny,
   onDenyWithNote,
   onClose,
@@ -298,6 +341,7 @@ function ApprovalSheet({
 }: Props & { summaryValue: string | undefined; onClose: () => void }) {
   const shown = explainShown(card.explain, card.created_at, now)
   const mismatch = shown.kind === 'ready' && shown.explain.mismatch
+  const sessionWords = sessionWordsOf(card, true, mismatch, onAllowSession)
   const vv = useVisualViewport()
   const body = card.body ?? ''
   useEffect(() => enterApproval(), [])
@@ -372,6 +416,9 @@ function ApprovalSheet({
                 {mismatch ? 'Allow anyway' : card.primary_label}
               </Button>
             </div>
+            {sessionWords && onAllowSession ? (
+              <SessionButton words={sessionWords} busy={busy} onClick={onAllowSession} />
+            ) : null}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

@@ -1,6 +1,7 @@
-import { buildPushPayload, PUSH_TEMPLATES } from '@talos-app/protocol'
+import { buildPushPayload, PUSH_TEMPLATES, withPushWords } from '@talos-app/protocol'
 import { describe, expect, it } from 'vitest'
 import {
+  notificationForPush,
   notificationFromPayload,
   parsePush,
   safeNavigateTarget,
@@ -96,5 +97,35 @@ describe('push logic', () => {
     expect(viewingPushThread(push('general'), [win('https://evil.example/t/general')], o)).toBe(false)
     expect(viewingPushThread(push(), [win(`${o}/t/general`)], o)).toBe(false) // an opaque (Apple) payload names no thread
     expect(viewingPushThread({ junk: true }, [win(`${o}/t/general`)], o)).toBe(false)
+  })
+})
+
+describe('a push with real words', () => {
+  const cfg = {
+    agent: { name: 'Talos' },
+    notifications: { show_thread_names: 'all' as const },
+    threads: [{ id: 'general', name: 'General', kind: 'fixed' as const }],
+  }
+  const generic = buildPushPayload({ template: 'reply', thread_id: 'general' }, cfg)
+
+  it('shows the thread name and the preview, and asks to be heard again', () => {
+    const n = notificationForPush(withPushWords(generic, { thread: 'General', text: 'Lunch is at noon.' }))
+    expect(n.title).toBe('General')
+    expect(n.options.body).toBe('Lunch is at noon.')
+    expect(n.options.renotify).toBe(true)
+    expect(n.options.data).toMatchObject({ navigate: '/t/general', kind: 'reply', thread_id: 'general' })
+  })
+
+  it("a payload from a relay that sends no words still shows today's fixed text", () => {
+    const n = notificationForPush(generic)
+    expect(n.title).toBe('Talos')
+    expect(n.options.body).toBe('New reply in General')
+  })
+
+  it('a payload that breaks the limits is not shown as words: the fixed fallback, never the text', () => {
+    const tooLong = { ...generic, notification: { ...generic.notification, body: 'x'.repeat(500) } }
+    const n = notificationForPush(tooLong)
+    expect(n.options.body).toBe('You have an update.')
+    expect(JSON.stringify(n)).not.toContain('xxxxx')
   })
 })

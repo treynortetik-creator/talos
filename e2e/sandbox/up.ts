@@ -544,7 +544,9 @@ export async function status(id: string): Promise<Record<string, unknown>> {
     },
     tmux: {
       socket: rec.tmux.socket,
-      watch: `${rec.tmux.bin} -L ${rec.tmux.socket} attach -r -t =${MAIN_SESSION}`,
+      // Not `attach -r`: a read-only client makes every plain `send-keys` on the session fail (the agent's own keys), and counts as the
+      // owner at the keyboard. A capture of the screen is a look that does neither.
+      watch: `${rec.tmux.bin} -L ${rec.tmux.socket} capture-pane -p -e -J -S -200 -t =${MAIN_SESSION}:`,
     },
     home: rec.home,
     agent_dir: rec.agent_dir,

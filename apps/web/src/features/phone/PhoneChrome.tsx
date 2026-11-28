@@ -1,4 +1,4 @@
-// Phone chrome mounted once in the shell: the left menu (every thread, inbox, schedules, memory, settings), the session
+// Phone chrome mounted once in the shell: the left menu (every thread, inbox, schedules, Nyx, settings), the session
 // drawer on the right, and the edge swipes that open them. Renders nothing at tablet width and up.
 
 import { ownValue, type ThreadT } from '@talos-app/protocol'
@@ -14,14 +14,16 @@ import {
   IconBug,
   IconClock,
   IconClose,
+  IconFile,
   IconMic,
   IconSettings,
   IconThreads,
 } from '../../ui/icons.tsx'
-import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
+import { keepEscapeInBox, Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/index.ts'
 import { ThreadIcon } from '../../ui/ThreadIcon.tsx'
 import { Wordmark } from '../../ui/Wordmark.tsx'
 import { openBugReport } from '../bugreport/store.ts'
+import { THREAD_FILES_TITLE, useThreadFilesOn } from '../files/threadFilesLink.ts'
 import { useSchedulesDot } from '../schedules/sync.ts'
 import { useMediaQuery } from '../settings/useMedia.ts'
 import { ThreadEditor } from '../threads/manage/ThreadEditor.tsx'
@@ -61,11 +63,6 @@ function closeFrom(which: Exclude<PhonePanel, null>, o: boolean) {
  *  is still sliding out must not count: the button is the way in, never an outside tap. */
 export function keepOnOpenerTap(e: Event) {
   if ((e.target as Element | null)?.closest?.('[data-phone-opener]')) e.preventDefault()
-}
-
-/** Escape in the thread search box belongs to the box (it restores the list), not to the menu around it. */
-function keepOnSearchEscape(e: KeyboardEvent) {
-  if (document.activeElement?.closest('[data-thread-search]')) e.preventDefault()
 }
 
 export const PHONE_QUERY = '(max-width: 767px)'
@@ -135,8 +132,8 @@ export function PhoneChrome() {
           data-testid="phone-menu"
           onCloseAutoFocus={returnFocus('menu')}
           onPointerDownOutside={keepOnOpenerTap}
-          // Escape in the search box puts the thread list back; the menu itself stays
-          onEscapeKeyDown={keepOnSearchEscape}
+          // Escape in the search box clears it or puts the thread list back; the menu itself stays
+          onEscapeKeyDown={keepEscapeInBox}
           className="frieze drawer-anim border-chrome-line bg-chrome p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-on-chrome"
         >
           <MenuBody onClose={() => set(null)} onEditThread={(t) => setEditing({ id: t.id, open: true })} />
@@ -191,6 +188,7 @@ function SessionStatus({ threadId }: { threadId: string }) {
 }
 
 function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread: (t: ThreadT) => void }) {
+  const filesOn = useThreadFilesOn()
   const agent = useAgentName()
   const threads = useVisibleThreads()
   const unread = useTalos((s) => s.unread)
@@ -200,7 +198,6 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
   const openSubs = useOpenSubThreads()
   const current = /^\/t\/([^/]+)/.exec(useLocation().pathname)?.[1]
   const needs = useNeedsYouCount()
-  const memory = useFeature('memory/1')
   const driving = useFeature('driving/1')
   const schedulesDot = useSchedulesDot()
   const link = ({ isActive }: { isActive: boolean }) =>
@@ -337,10 +334,14 @@ function MenuBody({ onClose, onEditThread }: { onClose: () => void; onEditThread
         )}
       </nav>
       <div className="mt-auto border-t border-chrome-line p-2">
-        {memory !== 'off' && (
-          <NavLink to="/memory" className={link} onClick={onClose}>
-            <IconBook width={20} height={20} />
-            Memory
+        <NavLink to="/memory" className={link} onClick={onClose}>
+          <IconBook width={20} height={20} />
+          Nyx
+        </NavLink>
+        {filesOn && (
+          <NavLink to="/files" className={link} onClick={onClose}>
+            <IconFile width={20} height={20} />
+            {THREAD_FILES_TITLE}
           </NavLink>
         )}
         <NavLink to="/settings" className={link} onClick={onClose}>

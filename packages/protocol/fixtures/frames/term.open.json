@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "term.open",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T44D",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "term_id": "tm_01JBF3V7Q8K2M4N6P8R0S2T44C",
+  "tier": "view",
+  "target": "main",
+  "cols": 120,
+  "rows": 40,
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "_DwTMnDdp-_w_DkzhG8FoYJ6nqSdkYvuc05S5yyik-OgvZCmWq-HnCcrttNWcm2ftLZT8g1F9iYdyWx_inpVxQ"
+}

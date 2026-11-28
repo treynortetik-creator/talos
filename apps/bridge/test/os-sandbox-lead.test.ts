@@ -73,7 +73,7 @@ function leadFolder(parent = 'leads') {
   writeFileSync(paths(talosHome).configJson, JSON.stringify({ ...cfg, os_sandbox: true }))
   const start = (trusted: typeof TRUSTED | null = TRUSTED) =>
     prepareOsSandbox(
-      { talosHome, userHome, folder: dir, claudeDir, trusted },
+      { talosHome, userHome, folder: dir, claudeDir, trusted, writableRoots: [] },
       { ownerExcludes: () => [], write: () => {} },
     )
   return { talosHome, userHome, dir, claudeDir, start }
@@ -97,10 +97,10 @@ describe('a lead folder made by `lead init --sandbox`, with the extra lock on', 
     expect(settings.sandbox.allowUnsandboxedCommands).toBe(false)
   })
 
-  test('a hook script edited by one byte is refused, naming it', () => {
+  test('a hook script edited by one byte is refused, naming the hook', () => {
     const w = leadFolder()
     appendFileSync(join(w.dir, '.claude', 'hooks', 'board-stop.sh'), '#')
-    expect(refusal(w.start())).toContain('board-stop.sh')
+    expect(refusal(w.start())).toContain('the Stop hook (number 1)')
     expect(refusal(w.start())).toContain("which is not the kit's own")
   })
 
@@ -181,11 +181,12 @@ describe('a lead folder with a space in its path', () => {
     expect(folderKitProblem(w.dir)).toBeNull()
   })
 
-  test('a hook edited by one byte is still refused, naming the hook as written', () => {
+  test('a hook edited by one byte is still refused, naming the hook', () => {
     const w = spaced()
     appendFileSync(join(w.dir, '.claude', 'hooks', 'board-stop.sh'), '#')
     const why = refusal(w.start())
-    expect(why).toContain('"$CLAUDE_PROJECT_DIR"/.claude/hooks/board-stop.sh')
+    expect(why).toContain('the Stop hook (number 1)')
+    expect(why).not.toContain('board-stop.sh')
     expect(why).toContain("which is not the kit's own")
   })
 
@@ -322,5 +323,30 @@ describe('a word that is not a path the kit owns, or that the environment decide
       '$CLAUDE_PROJECT_DIRS/../trip/.claude/hooks/board-stop.sh', // a longer name is not the project variable
     ])
       expect(run(c) ?? `ALLOWED ${c}`, c).toContain("which is not the kit's own")
+  })
+})
+
+// R1291: the lines `lead init` really writes start alone; a bare word the shell would run from the folder, in front of one, does not.
+describe('the lead’s own hook lines against a bare word', () => {
+  const run = (command: string) => {
+    const w = leadFolder()
+    writeFileSync(
+      join(w.dir, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+    )
+    return refusal(w.start())
+  }
+  test('each hook line the lead settings write starts alone, and is refused after a bare word', () => {
+    const w = leadFolder()
+    const settings = JSON.parse(readFileSync(join(w.dir, '.claude', 'settings.json'), 'utf8')) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    }
+    const lines = Object.values(settings.hooks).flatMap((gs) => gs.flatMap((g) => g.hooks.map((h) => h.command)))
+    expect(lines.length).toBeGreaterThanOrEqual(2)
+    for (const line of lines) {
+      expect(run(line), line).toBeNull()
+      for (const lead of ['bash evil', 'sh evil', 'node evil', 'bun evil', 'python3 evil', '. evil', 'source evil'])
+        expect(run(`${lead}; ${line}`) ?? `ALLOWED ${lead}`, `${lead}; ${line}`).toContain("which is not the kit's own")
+    }
   })
 })

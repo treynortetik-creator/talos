@@ -79,7 +79,7 @@ const approve = async (x: Harness, card: CardT) => x.app.resolveCard(card, 'prim
 const noCardMinted = (x: Harness) => expect(cards(x).filter((c) => c.kind === 'config')).toHaveLength(0)
 
 describe('what the list is', () => {
-  test('the agent rows are the ones the table turns on (twenty-two), none of them a device, key, enrollment or security setting', () => {
+  test('the agent rows are the ones the table turns on (twenty-three), none of them a device, key, enrollment or security setting', () => {
     expect([...AGENT_CONFIG_ALLOWLIST]).toEqual([
       'agent.name',
       'owner.display_name',
@@ -91,6 +91,7 @@ describe('what the list is', () => {
       'notifications.show_thread_names',
       'voice_notes.reply_with_voice',
       'voice_notes.driving_until',
+      'work.thread',
       'work.label',
       'work.ask_note',
       'session_models',
@@ -100,19 +101,13 @@ describe('what the list is', () => {
       'dev.thread_fence',
       'dev.note_lookup',
       'os_sandbox',
+      'auto_continue_at_limit',
       'settings_lock',
       'dedicated',
       'theme',
     ])
     // what proves who the owner is, or opens a door off the Mac, stays the owner's (the relay's passkey rows among them)
-    for (const refused of [
-      'permission_relay',
-      'work.enabled',
-      'work.thread',
-      'work.retention',
-      'trust_mode',
-      'bug_webhook_url',
-    ])
+    for (const refused of ['permission_relay', 'work.enabled', 'work.retention', 'trust_mode', 'bug_webhook_url'])
       expect(AGENT_CONFIG_REFUSED as readonly string[]).toContain(refused)
     for (const p of AGENT_CONFIG_ALLOWLIST) expect(p).not.toMatch(/device|key|enroll|passkey|secret|token|stepup/i)
   })

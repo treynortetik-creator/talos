@@ -30,6 +30,7 @@ export const OWN_THREAD_FIELDS: readonly ThreadField[] = [
   'notify',
   'idle_park_min',
   'effort',
+  'compact_window',
 ]
 
 /** What the table's hint and risk cannot say for one row. Keyed by path, so a note on a row that is gone does not compile. */
@@ -133,7 +134,7 @@ Change a thread later with \`config_propose\` and the \`threads.<id>.<field>\` p
 A thread's own session (a thread agent) reaches these tools for its own thread only:
 
 - It may set up only its own sub-threads: \`create_thread\` with \`parent_id\` set to its own thread id. A sub-thread cannot make threads (one level deep). The sub-thread's folder must be the agent's own folder or inside it.
-- It may change its own thread's low fields only: name, topic, icon, colour, notify, parking (\`idle_park_min\`) and effort. Everything else about its own thread is the owner's or Main's.
+- It may change its own thread's low fields only: name, topic, icon, colour, notify, parking (\`idle_park_min\`), effort and compact point (\`compact_window\`). Everything else about its own thread is the owner's or Main's.
 - It may change any field of its own sub-threads except moving them under or out of another thread.
 - \`set_thread_instructions\` writes the AGENTS.md of its own sub-threads only (into a folder inside its own). Its own instructions are the owner's.
 - It changes no global setting and no other thread.`

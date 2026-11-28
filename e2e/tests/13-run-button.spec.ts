@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/run.ts
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import {
   enrollDevice,

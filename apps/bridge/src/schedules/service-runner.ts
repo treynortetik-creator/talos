@@ -19,6 +19,11 @@ import { MAX_SKIPS_PER_SLOT, type Offer } from './sidecar.ts'
 export async function runnerTick(this: ScheduleService): Promise<void> {
   if (!this.gate()) return
   this.sidecar.flush() // a write that failed or was refused earlier goes out now
+  // First: it needs only the sidecar and the last snapshot, so a scheduler that is down cannot hold the owner's alert back.
+  if ((await this.checkRepairs()) > 0)
+    await this.refresh().catch((e) =>
+      this.log('refresh after a repair deadline failed', { error: (e as Error).message }),
+    )
   const d = await this.ensure()
   if (d.state !== 'ready') return
   // Start-up could not sweep when its first discovery went unanswered: finish that once discovery has recovered.
@@ -443,8 +448,7 @@ export async function closeRun(
   const name = (this.lastGood?.schedules.find((s) => s.id === id)?.name ?? id) as string
   // A refused mark means noticesFor reports it on reconnect: posting now as well would say it twice.
   if (this.markAll(failKeys(id, runId, ds, status))) {
-    await this.postFailure(id, name, status)
-    this.pendingAlerts.push({ kind: 'job_failed', key: `${id}:${ds}`.slice(0, 80) })
+    await this.jobFailed({ id, name, status, ds, runId, row: true })
   }
   await this.refresh()
 }

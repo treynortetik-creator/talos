@@ -1,5 +1,5 @@
 // A fake `claude` on PATH for doctor tests, so no test ever runs the real one.
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -59,6 +59,7 @@ exit 0
   process.env.PATH = `${dir}:${before ?? ''}`
   return () => {
     process.env.PATH = before
+    rmSync(dir, { recursive: true, force: true }) // the folder it made goes with it
   }
 }
 

@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { clockTime, dayLabel } from '../../lib/format.ts'
 import { IconClose, IconSearch } from '../../ui/icons.tsx'
+import { reactEscapeIntent, searchBoxKeys } from '../../ui/keys.ts'
 import { useAgentName } from '../threads/useThreads.ts'
 import { HitRow } from './HitRow.tsx'
 import { MIN_CHARS, SEARCH_WORDS } from './logic.ts'
@@ -36,12 +37,17 @@ export function ThreadSearchPanel({
 
   useEffect(() => inputRef.current?.focus(), [])
 
-  // Escape is this panel's: it closes it and goes no further. Arrow keys walk between the box and the hits.
+  // Escape is this panel's and goes no further: in the box it clears the text first and closes on an empty box (ui/keys.ts);
+  // on a hit row it closes. A held, modified or input-method Esc closes nothing. Arrow keys walk between the box and the hits.
+  const boxKeys = searchBoxKeys({ value: text, onClear: () => setText(''), onClose })
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      // the box's own handler (on the input, below) has acted on its Esc and stopped it; what arrives here came from a row
+      const intent = reactEscapeIntent(e, '')
+      if (intent === 'ignore') return
       e.preventDefault()
       e.stopPropagation()
-      onClose()
+      if (intent === 'close') onClose()
       return
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
@@ -112,6 +118,7 @@ export function ThreadSearchPanel({
             placeholder={all ? 'Search all threads…' : `Search ${threadName}…`}
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onKeyDown={boxKeys}
             maxLength={200}
             enterKeyHint="search"
             className="min-h-11 w-full appearance-none rounded-pill border border-line bg-surface pr-3 pl-10 text-base text-text [&::-webkit-search-cancel-button]:hidden focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"

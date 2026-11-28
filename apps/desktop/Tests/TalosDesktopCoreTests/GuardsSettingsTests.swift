@@ -51,12 +51,13 @@ struct GuardsSettingsTests {
     let plainHome = try home()
     let plain = try WorkerSpec.build(inputs(plainHome))
     // A plain worker (no guards installed) has no guard hooks and no deny rules but the Talos-home fence and the workers-folder deny;
-    // the only hook is the permission relay's, which is always registered because the hook and the bridge check `permission_relay`
-    // themselves, on every request.
+    // the hooks are the permission relay's (always registered, because the hook and the bridge check `permission_relay` themselves,
+    // on every request) and its PreToolUse record (WorkerPreTool), and nothing of the guards'.
     let plainObj = try #require(try JSONSerialization.jsonObject(with: Data(plain.settingsJSON.utf8)) as? [String: Any])
     let plainHooks = try #require(plainObj["hooks"] as? [String: Any])
-    #expect(Set(plainHooks.keys) == ["PermissionRequest"])
-    #expect(plainHooks["PreToolUse"] == nil)
+    #expect(Set(plainHooks.keys) == ["PermissionRequest", "PreToolUse"])
+    let plainPre = try #require(plainHooks["PreToolUse"] as? [[String: Any]])
+    #expect(plainPre.count == 1 && plainPre[0]["matcher"] == nil, "only the record hook, no guard hook")
     // and the settings-file deny: no session edits the Claude Code settings of a folder a thread session works in, or the owner's
     let home = NSHomeDirectory()
     let scripts = WorkerFence.scripts(

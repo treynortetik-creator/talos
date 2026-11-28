@@ -307,16 +307,18 @@ job_three() { sleep 1; }`)
     expect(run.out()).toMatch(/✓ three \(\d+s\)\n/)
     // timings.tsv: a ninth column, each job's wall/steps seconds; the first eight are as before. A tenth, appended: the desktop
     // job's pty peak and limit, "-" for a run without it (older rows keep nine and read the same). An eleventh: the run's bun. A twelfth:
-    // the seconds of Chronos's suite inside check, "chronos=-" for a run that did not have it.
+    // the seconds of Chronos's suite inside check, "chronos=-" for a run that did not have it. A thirteenth: the steps taken from the
+    // gate's result (reuse_gate_step), "reused=-" for a run that took none.
     const row = readFileSync(join(r.home, '.cache/talos-ci/logs/timings.tsv'), 'utf8')
       .trim()
       .split('\n')
       .pop() as string
     const cols = row.split('\t')
-    expect(cols).toHaveLength(12)
+    expect(cols).toHaveLength(13)
     expect(cols[9]).toBe('-')
     expect(cols[10]).toBe('bun=1.4.4')
     expect(cols[11]).toBe('chronos=-')
+    expect(cols[12]).toBe('reused=-')
     // and each job's log says first which bun it runs, and from where
     expect(r.log('two').split('\n')[0]).toBe(`bun: 1.4.4 (${join(r.T, 'bin')}/bun)`)
     expect(cols[3]).toBe('one,two,three')
@@ -387,6 +389,89 @@ job_plain() { :; }`)
     // a malformed note is refused before anything runs
     for (const bad of ['image=Titan!', 'image', '=titan errored', 'image=titan errored;'])
       expect(await repo('').start([...noStatus, '--jobs', 'plain'], { CI_FALLBACK_NOTES: bad }).done, bad).toBe(64)
+  })
+
+  // A Titan part that fails is Linux's red (owner, 11-25: Mac first): Titan says "not tested" and reports the red to report-ci/, and
+  // the Mac, which takes the job over, is the one that decides. Shown with the image job (a stub: no Docker here).
+  describe("a Titan image that fails: the Mac's own run decides", () => {
+    const A = 'https://example.test/runs/9/attempts/1#'
+    const titan = {
+      CI_STATUS_PREFIX: 'local-ci',
+      CI_TITAN_PART: '1',
+      CI_ATTEMPT_URL: A,
+      CI_STATUS_URL: `${A}titan`,
+      CI_RUN_ID: '9',
+    }
+    const TLOG = '~/.cache/talos-ci/logs/2026-11-25/abc1234-image.log'
+    const posts = (r: ReturnType<typeof repo>, ctx: string) =>
+      readFileSync(r.env.GH_LOG, 'utf8')
+        .split('\n')
+        .filter((l) => l.includes('-X POST') && l.includes(`context=${ctx} `) && !l.includes('state=pending'))
+    const rows = (...lines: string[]) => ({
+      docker: 'exit 0', // the cleanup after any image run
+      gh: `case "$1" in repo) echo owner/repo ;; api) echo "$*" >> "$GH_LOG"
+  case "$*" in *"/statuses?"*) printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} ;; esac ;; esac`,
+    })
+
+    it('on Titan: a red image is "not tested" under local-ci/ and a failure under report-ci/, so the Mac takes it over', async () => {
+      const r = repo('job_image() { echo "docker build failed" >> "$1"; return 1; }', { docker: 'exit 0' })
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'image'], titan)
+      expect(await run.done, run.out()).toBe(0)
+      expect(posts(r, 'local-ci/image')).toEqual([
+        expect.stringMatching(
+          /state=error .*description=not tested: Titan failed image, log ~\/\.cache\/talos-ci\/logs\/.*-image\.log;/,
+        ),
+      ])
+      expect(posts(r, 'report-ci/image')).toEqual([
+        expect.stringMatching(
+          /state=failure .*description=Titan failed image, log ~\/\.cache\/talos-ci\/logs\/.*-image\.log/,
+        ),
+      ])
+    })
+
+    it('on Titan: a green image also says so under report-ci/; without CI_TITAN_PART a red stays a red', async () => {
+      const r = repo('job_image() { :; }', { docker: 'exit 0' })
+      expect(await r.start(['--ref', 'HEAD', '--jobs', 'image'], titan).done).toBe(0)
+      expect(posts(r, 'local-ci/image')).toEqual([expect.stringMatching(/state=success /)])
+      expect(posts(r, 'report-ci/image')).toEqual([expect.stringMatching(/state=success .*description=passed on /)])
+      const plain = repo('job_image() { return 1; }', { docker: 'exit 0' })
+      expect(await plain.start(['--ref', 'HEAD', '--jobs', 'image'], { ...titan, CI_TITAN_PART: '' }).done).toBe(1)
+      expect(posts(plain, 'local-ci/image')).toEqual([expect.stringMatching(/state=failure /)])
+      expect(posts(plain, 'report-ci/image')).toEqual([])
+    })
+
+    const taken = {
+      CI_ATTEMPT_URL: A,
+      CI_STATUS_URL: `${A}lemnos`,
+      CI_RUN_ID: '9',
+      CI_FALLBACK_NOTES: 'image=titan errored',
+    }
+    const titanRed = `local-ci/image\terror\t${A}titan\tnot tested: Titan failed image, log ${TLOG}; the Mac re-runs it`
+
+    it('on the Mac: the take-over passes, and the status, output and log say "Titan-only failure, not counted" with the log', async () => {
+      const r = repo('job_image() { :; }', rows(titanRed))
+      const run = r.start(['--ref', 'HEAD', '--jobs', 'image'], taken)
+      expect(await run.done, run.out()).toBe(0)
+      const text = `Titan-only failure, not counted: image, log ${TLOG}`
+      expect(posts(r, 'local-ci/image')).toEqual([
+        expect.stringContaining(`state=success -f context=local-ci/image -f description=${text}`),
+      ])
+      expect(r.log('image')).toContain(text)
+      expect(run.out()).toContain(text)
+    })
+
+    it('on the Mac: red here too is red, with no "not counted"; a take-over of a job Titan never failed says nothing of Titan', async () => {
+      const bad = repo('job_image() { return 1; }', rows(titanRed))
+      expect(await bad.start(['--ref', 'HEAD', '--jobs', 'image'], taken).done).toBe(1)
+      expect(posts(bad, 'local-ci/image')).toEqual([expect.stringMatching(/state=failure /)])
+      expect(posts(bad, 'local-ci/image').join('\n')).not.toContain('not counted')
+      const quiet = repo(
+        'job_image() { :; }',
+        rows(`local-ci/image\terror\t${A}titan\trun on titan ended before this job reported`),
+      )
+      expect(await quiet.start(['--ref', 'HEAD', '--jobs', 'image'], taken).done).toBe(0)
+      expect(posts(quiet, 'local-ci/image').join('\n')).not.toContain('Titan')
+    })
   })
 
   it('a job killed from outside is a failure, never a pass', async () => {
@@ -594,6 +679,48 @@ describe('the parts of check that run on another machine, and the Linux report j
         /^pnpm test --maxWorkers=4 .*--retry=0 --reporter=default --reporter=\S+ci-flake-vitest\.ts/,
       ),
     ])
+  })
+
+  // The WSL distro's tests (scripts/windows-distro.test.ts) are off the push lanes (owner, 11-25: Windows and Linux are back-burner,
+  // Mac first): the Vitest config leaves them out unless TALOS_LINUX_LANE=1, which Titan's Linux check, Hestia's linux job, the
+  // nightly and every --full run (a dispatch) set. So Lemnos's check, the gate's tests and a plain `pnpm test` do not run them.
+  it('the WSL distro tests are off the push lanes: the Vitest config leaves them out, unless TALOS_LINUX_LANE=1', () => {
+    const listed = (lane: string) => {
+      const out = spawnSync('pnpm', ['exec', 'vitest', 'list', '--filesOnly', '--project', 'scripts'], {
+        cwd: join(here, '..'),
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          VITEST: '',
+          VITEST_MODE: '',
+          VITEST_POOL_ID: '',
+          VITEST_WORKER_ID: '',
+          NODE_ENV: '',
+          TALOS_LINUX_LANE: lane,
+        },
+      })
+      expect(out.status, out.stderr).toBe(0)
+      return out.stdout.split('\n').map((l) => l.replace(/^\[[^\]]*\] /, '').trim())
+    }
+    const push = listed('')
+    expect(push).toContain('scripts/heavy-lock.test.ts') // the rest of the project is there
+    expect(push).not.toContain('scripts/windows-distro.test.ts')
+    expect(listed('1')).toContain('scripts/windows-distro.test.ts')
+  })
+
+  it('check runs the root suite with TALOS_LINUX_LANE on Linux (Titan), in the nightly and on --full; never on a Mac push', async () => {
+    const pnpm = 'echo "pnpm $* LANE=${TALOS_LINUX_LANE:-}" >> "$CALLS"'
+    const lane = async (args: string[], extra: Record<string, string>, tools: Record<string, string> = {}) => {
+      const r = repo('', { pnpm, ...tools })
+      const run = r.start([...noStatus, '--jobs', 'vitest', ...args], { CI_STATUS_PREFIX: 'ci-part', ...extra })
+      expect(await run.done, run.out()).toBe(0)
+      return r.calledLines().find((l) => l.startsWith('pnpm test ')) ?? ''
+    }
+    // a Mac, a push: uname is stubbed so the case means the same on any host (on Titan's Linux the real uname said Linux)
+    expect(await lane([], {}, { uname: 'echo Darwin' })).toMatch(/LANE=$/)
+    expect(await lane([], {}, { uname: 'echo Linux' })).toMatch(/LANE=1$/) // Titan
+    expect(await lane([], { CI_NIGHTLY: '1' })).toMatch(/LANE=1$/)
+    expect(await lane(['--full'], {})).toMatch(/LANE=1$/)
   })
 
   it('linux runs the supervisor files, the permission hook, the secret store and history-corrupt.test.ts on 2 processes, then the WSL distro’s Vitest file, under report-ci/', async () => {

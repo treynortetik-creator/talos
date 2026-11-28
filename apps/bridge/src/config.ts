@@ -21,6 +21,11 @@ export type BridgeEnv = {
   chronosBin: string | undefined
   /** Passed to Chronos as CHRONOS_CONFIG. */
   chronosConfig: string | undefined
+  /**
+   * Set only by a test harness (TALOS_TEST_ROOT, read from the process too): a Chronos is used only if it lives under this
+   * folder, symlinks followed (schedules/test-root.ts). Unset in production, where nothing changes.
+   */
+  testRoot: string | undefined
   /** Every adapter call is killed after this long (S2.4). */
   schedulerTimeoutMs: number
   /** How often the live bridge's schedule runner and refresh loops look (S3.2): never slower than the defaults, never under 5 s. */
@@ -161,6 +166,7 @@ export function loadEnv(processEnv: Record<string, string | undefined> = process
     chronosAutoDiscover:
       (merged.TALOS_APP_CHRONOS_AUTODISCOVER ?? process.env.TALOS_APP_CHRONOS_AUTODISCOVER) !== 'off',
     chronosConfig: merged.TALOS_APP_CHRONOS_CONFIG || undefined,
+    testRoot: merged.TALOS_TEST_ROOT ?? process.env.TALOS_TEST_ROOT,
     schedulerTimeoutMs: Math.round(num(merged.TALOS_APP_SCHEDULER_TIMEOUT_S, 15) * 1000),
     // The browser suite's real bridge runs these faster, so a job that comes due is offered within seconds, not a minute later
     scheduleRunnerMs: Math.round(Math.min(60, Math.max(5, num(merged.TALOS_APP_SCHEDULE_RUNNER_S, 60))) * 1000),

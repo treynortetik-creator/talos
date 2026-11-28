@@ -73,7 +73,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -88,11 +89,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -178,9 +181,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -231,9 +236,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -277,9 +284,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -326,8 +335,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -348,6 +359,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -410,8 +422,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -432,6 +446,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -633,7 +648,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -648,11 +664,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -738,9 +756,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -791,9 +811,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -837,9 +859,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -886,8 +910,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -908,6 +934,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -970,8 +997,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -992,6 +1021,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -1475,7 +1505,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -1490,11 +1521,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -1580,9 +1613,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -1633,9 +1668,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -1679,9 +1716,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -1728,8 +1767,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -1750,6 +1791,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -1812,8 +1854,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -1834,6 +1878,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -2328,7 +2373,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -2343,11 +2389,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -2433,9 +2481,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -2486,9 +2536,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -2532,9 +2584,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -2581,8 +2635,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -2603,6 +2659,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -2665,8 +2722,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -2687,6 +2746,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -3017,7 +3077,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -3032,11 +3093,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -3122,9 +3185,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -3175,9 +3240,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -3221,9 +3288,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -3270,8 +3339,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -3292,6 +3363,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -3354,8 +3426,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -3376,6 +3450,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -3649,7 +3724,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -3664,11 +3740,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -3754,9 +3832,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -3807,9 +3887,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -3853,9 +3935,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -3902,8 +3986,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -3924,6 +4010,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -3986,8 +4073,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -4008,6 +4097,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -4242,7 +4332,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -4257,11 +4348,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -4347,9 +4440,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -4400,9 +4495,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -4446,9 +4543,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -4495,8 +4594,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -4517,6 +4618,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -4579,8 +4681,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -4601,6 +4705,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -4822,7 +4927,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -4837,11 +4943,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -4927,9 +5035,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -4980,9 +5090,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -5026,9 +5138,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -5075,8 +5189,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -5097,6 +5213,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -5159,8 +5276,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -5181,6 +5300,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -5652,7 +5772,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -5667,11 +5788,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -5757,9 +5880,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -5810,9 +5935,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -5856,9 +5983,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -5905,8 +6034,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -5927,6 +6058,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -5989,8 +6121,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -6011,6 +6145,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -6257,7 +6392,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -6272,11 +6408,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -6362,9 +6500,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -6415,9 +6555,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -6461,9 +6603,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -6510,8 +6654,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -6532,6 +6678,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -6594,8 +6741,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -6616,6 +6765,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -6934,7 +7084,8 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
             "work": {
               "label": "Work systems",
@@ -6949,11 +7100,13 @@
             "permission_relay": true,
             "session_models": ["default", "opus", "sonnet", "haiku"],
             "media_keep_days": null,
+            "memory": {},
             "dev": {
               "thread_fence": true,
               "note_lookup": true
             },
             "settings_lock": false,
+            "auto_continue_at_limit": true,
             "always_allow": [],
             "memory_browser": true,
             "peers": []
@@ -7039,9 +7192,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "agent_config_rev": 0
@@ -7092,9 +7247,11 @@
               "always-allow/1",
               "problems-install/1",
               "peer/1",
+              "plugin-add/1",
               "themes/2",
               "always-allow/2",
-              "attest/1"
+              "attest/1",
+              "term-view/1"
             ]
           },
           "features": ["schedules/1", "schedules/2", "thread-sessions/1", "bridge-standby/1"]
@@ -7138,9 +7295,11 @@
             "always-allow/1",
             "problems-install/1",
             "peer/1",
+            "plugin-add/1",
             "themes/2",
             "always-allow/2",
-            "attest/1"
+            "attest/1",
+            "term-view/1"
           ]
         }
       },
@@ -7187,8 +7346,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -7209,6 +7370,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"
@@ -7271,8 +7433,10 @@
             "quiet_window": null,
             "notifications": {
               "master": true,
-              "show_thread_names": "fixed_only"
+              "show_thread_names": "fixed_only",
+              "web_message_text": true
             },
+            "memory": {},
             "work": {
               "label": "Work systems",
               "ask_note": "Ask your IT team before connecting these.",
@@ -7293,6 +7457,7 @@
               "note_lookup": true
             },
             "always_allow": [],
+            "auto_continue_at_limit": true,
             "peers": [],
             "mirror": {
               "telegram": "off"

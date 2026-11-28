@@ -256,6 +256,7 @@ describe('a recheck error is a failed send to the callers that retry', () => {
 
 describe('an unreadable device list is a failed send, not "nobody to notify"', () => {
   it('card reminder: the failed attempt leaves it to be retried, and it goes out once the list answers', async () => {
+    const looks = countLooks(CardReminder)
     const w = await world(utc5('08:00'))
     const made = w.bridge.createCard({
       thread_id: 'general',
@@ -268,34 +269,119 @@ describe('an unreadable device list is a failed send, not "nobody to notify"', (
     w.requests().length = 0
     await advance(w.clock, 22 * HOUR, 5 * 60_000)
     w.breakList() // broken from here until the first reminder attempt has been made
-    for (let i = 0; i < 24 && !w.store.getState(`card_reminded:${made.id}`); i++) await advance(w.clock, 5 * 60_000)
+    // One reminder tick per step, each only after its look (send and record) has finished: the push's 30 s deadline runs on
+    // this fake clock, so a step taken while a send is in flight would time it out, count it failed and send it again.
+    await tickUntil(w.clock, looks, () => !!w.store.getState(`card_reminded:${made.id}`), 90, 'the first attempt')
     expect(w.errors).toContain('push devices unreadable')
     // not "sent": the attempt failed, so it is tried again (the broken code wrote 'sent' here)
     expect(w.store.getState(`card_reminded:${made.id}`)).toMatch(/^try:/)
     w.fixList()
-    await advance(w.clock, 30 * 60_000, 5 * 60_000)
-    await waitFor(() => w.requests().length >= 1, 5000, 'the reminder reaches the phone')
-    await waitFor(() => w.store.getState(`card_reminded:${made.id}`) === 'sent', 5000, 'now it is recorded')
+    const errorsBefore = w.errors.length // the log line names no card, so the window is from here to the record
+    await tickUntil(
+      w.clock,
+      looks,
+      () => w.store.getState(`card_reminded:${made.id}`) === 'sent',
+      30,
+      'the retried reminder',
+    )
+    // one more look after it is recorded: nothing more goes out
+    for (let i = 0; i < 2; i++) {
+      const before = looks.n
+      w.clock.advance(REMINDER_TICK_MS)
+      await waitFor(() => looks.n > before, 10_000, 'a look after the record')
+    }
+    // the retry and its record ran with nothing timing out (the send deadline is on the fake clock): other pushes earlier
+    // in the long fast-forward may time out, those are not this reminder
+    expect(w.errors.slice(errorsBefore)).not.toContain('push send timed out')
     // exactly one reminder, whatever else (a health notice) the long clock jump produced
     expect(w.alerts().filter((x) => x === 'A card in General expires soon')).toHaveLength(1)
   })
 
+  // timing-ok: the waits are hang caps; each ends the moment its condition holds
+  it('card reminder: a send still in flight, its record not yet written, is not sent again by later looks', async () => {
+    const looks = countLooks(CardReminder)
+    const w = await world(utc5('08:00'))
+    const made = w.bridge.createCard({
+      thread_id: 'general',
+      title: 'Send the contract',
+      created_at: new Date(w.clock.now()).toISOString(),
+      expires_at: new Date(w.clock.now() + 24 * HOUR).toISOString(),
+    })
+    await waitFor(() => w.store.getCard(made.id) !== null, 3000, 'card stored')
+    await waitFor(() => w.alerts().includes('Needs you in General'), 5000, "the card's own push")
+    w.requests().length = 0
+    await advance(w.clock, 22 * HOUR, 5 * 60_000)
+    // The push reaches the phone, but the caller is held before it can record "sent": a slow write, a busy database.
+    const push = w.r.runtime.push
+    const realNotify = push.notifyCounted.bind(push)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let held = 0
+    vi.spyOn(push, 'notifyCounted').mockImplementation(async (intent, opts) => {
+      const res = await realNotify(intent, opts)
+      if (intent.template === 'card_expiring') {
+        held++
+        await gate
+      }
+      return res
+    })
+    // time runs on one tick at a time, each look finished before the next step, until the reminder is sent and held
+    for (let i = 0; i < 90 && held === 0; i++) {
+      const before = looks.n
+      w.clock.advance(REMINDER_TICK_MS)
+      await waitFor(() => looks.n > before || held > 0, 10_000, 'the look for this tick')
+    }
+    await waitFor(() => held === 1, 10_000, 'the reminder is sent and held before its record')
+    for (let i = 0; i < 10; i++) w.clock.advance(REMINDER_TICK_MS) // ten more ticks while the write is pending
+    expect(w.store.getState(`card_reminded:${made.id}`)).toBeNull()
+    expect(held).toBe(1)
+    release()
+    await waitFor(() => w.store.getState(`card_reminded:${made.id}`) === 'sent', 10_000, 'now it is recorded')
+    const before = looks.n
+    w.clock.advance(REMINDER_TICK_MS)
+    await waitFor(() => looks.n > before, 10_000, 'a look after the record')
+    expect(w.alerts().filter((x) => x === 'A card in General expires soon')).toHaveLength(1)
+  })
+
   it('quiet summary: the held counts survive a failing list and the summary goes out after', async () => {
+    const looks = countLooks(QuietSummary)
     const w = await world(utc5('22:30'))
     for (let i = 0; i < 3; i++) w.bridge.reply('general', `private words ${i}`)
     await waitFor(() => readQuietHeld(w.store).replies === 3, 3000, 'three replies held')
     w.requests().length = 0
     await advance(w.clock, 7 * HOUR, 5 * 60_000) // 05:30, still quiet
     w.breakList()
-    for (let i = 0; i < 24 && readQuietHeld(w.store).tries === 0 && readQuietHeld(w.store).replies > 0; i++)
-      await advance(w.clock, 5 * 60_000)
+    // One summary tick per step, each only after its look (send and record) has finished: the push's 30 s deadline runs on
+    // this fake clock, so a step taken while a send is in flight would time it out, count it failed and send it again.
+    await tickUntil(
+      w.clock,
+      looks,
+      () => readQuietHeld(w.store).tries > 0 || readQuietHeld(w.store).replies === 0,
+      90,
+      'the failed attempt',
+      SUMMARY_TICK_MS,
+    )
     expect(w.errors).toContain('push devices unreadable')
     // the failed attempt neither wiped the held counts nor counted as sent (the broken code cleared them here)
     expect(readQuietHeld(w.store)).toMatchObject({ replies: 3, tries: 1 })
     w.fixList()
-    await advance(w.clock, 30 * 60_000, 5 * 60_000)
+    await tickUntil(
+      w.clock,
+      looks,
+      () => readQuietHeld(w.store).replies === 0,
+      90,
+      'the retried summary',
+      SUMMARY_TICK_MS,
+    )
     await waitFor(() => w.requests().length >= 1, 5000, 'the summary reaches the phone')
-    await waitFor(() => readQuietHeld(w.store).replies === 0, 5000, 'now the held counts are cleared')
+    // two more looks after the record: nothing more goes out
+    for (let i = 0; i < 2; i++) {
+      const before = looks.n
+      w.clock.advance(SUMMARY_TICK_MS)
+      await waitFor(() => looks.n > before, 10_000, 'a look after the record')
+    }
     expect(w.alerts()).toEqual(['3 replies'])
   })
 

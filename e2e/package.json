@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../scripts/typecheck.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

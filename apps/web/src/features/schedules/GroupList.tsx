@@ -7,6 +7,7 @@ import { useTalos, useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
 import { IconBack } from '../../ui/icons.tsx'
 import { Switch } from '../../ui/index.ts'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import { useNow } from '../cards/util.ts'
 import { COPY, fill } from './constants.ts'
@@ -226,6 +227,7 @@ export function FilterBar({
           placeholder={COPY.search}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
+          onKeyDown={searchBoxKeys({ value: query, onClear: () => onQuery('') })}
           className="min-h-11 min-w-0 flex-1 rounded-button border border-line bg-surface px-3 text-md text-text placeholder:text-text-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
         />
       ) : null}

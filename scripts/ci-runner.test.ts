@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { cleanEnv, RUNNER_VARS } from './ci-test-env'
 import { gateOwned } from './gate-test-env'
 
@@ -919,7 +920,11 @@ esac`
           expect(readFileSync(s.calls, 'utf8')).toContain('CI_WORKERS=5\n')
         })
 
-        it('outside the window or at the weekend it is the machine’s default (not set here)', () => {
+        // five whole runs of ci-runner.sh (about 3 s each: 16.6 s alone, 46.7 s in a loaded gate against the 30 s default): a budget
+        // of its own, x the time factor. (Needlessly slow: ci_day_workers called alone, as the next test does, would show the same table; left as it is here.)
+        it('outside the window or at the weekend it is the machine’s default (not set here)', {
+          timeout: scaled(120_000),
+        }, () => {
           const s = setup()
           for (const [dow, hhmm] of [
             ['6', '09:30'],

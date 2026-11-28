@@ -1,3 +1,4 @@
+// gate-reads: apps/web/src/lib/hostWords.ts
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostOf, RECOVER_SENT_TEXT } from '@talos-app/protocol'

@@ -160,7 +160,14 @@ class Recorder {
       label,
       received_by_bridge: received,
       sent_by_bridge: sent,
-      channel_notifications: notes.map((n: Notification) => ({ content: n.content, meta: n.meta })),
+      // the wrapper around text a job wrote carries a random id: the same on every run in the file
+      channel_notifications: notes.map((n: Notification) => ({
+        content: n.content.replace(
+          /(<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT id=")[0-9a-f]+(">>>)/g,
+          (_m, a: string, b: string) => `${a}0000000000000000${b}`,
+        ),
+        meta: n.meta,
+      })),
       agent_tool_calls: this.toolsLog,
     }
     if (restamp) (step as Step & { restamp?: string }).restamp = new Date(this.h.clock.now()).toISOString()
@@ -718,12 +725,6 @@ const FLOWS: Flow[] = [
         writeBlock(h.box, 'watchdog', false)
         return h.app.runScheduleNow('read-only-job')
       })
-      await r.step('rate_limited: Run now twice in a row', async () => {
-        const a = await h.app.runScheduleNow('daily-digest')
-        await h.app.expectFrame('ack', (x) => x.ref === a.id, { direction: 'in' })
-        const b = await h.app.runScheduleNow('daily-digest')
-        await h.app.expectFrame('error', (e) => e.ref === b.id, { direction: 'in' })
-      })
       await r.step('sig_invalid: a list with a wrong signature', async () => {
         const f = h.app.send({
           ...mkFrame('schedules.list'),
@@ -749,7 +750,8 @@ const FLOWS: Flow[] = [
   },
   {
     name: '13-states-and-health',
-    title: 'A job through offered, agent_busy, no_session, running, failed and missed; the job_failed alert',
+    title:
+      'A job through offered, agent_busy, no_session, running, failed (Main is woken, the job_failed alert is held two hours) and missed',
     start: {
       now: '2026-10-05T11:29:00Z',
       jobs: [
@@ -788,7 +790,7 @@ const FLOWS: Flow[] = [
       })
       await r.quiet(async () => r.advance(2_100, '2026-10-05T11:40:05Z'))
       await r.step('list: running', list)
-      await r.step('the agent reports a failure: a system row and a job_failed alert', async () => {
+      await r.step('the agent reports a failure: a system row; Main is woken and the alert is held', async () => {
         await r.tool('schedule_run_done', { run_id: runId, ok: false, summary: 'The API said no.' })
       })
       await r.quiet(async () => r.advance(2_100, '2026-10-05T11:40:08Z'))

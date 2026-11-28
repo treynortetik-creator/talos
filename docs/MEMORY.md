@@ -1,6 +1,13 @@
-# Memory browser (Clio)
+# Memory (Nyx)
 
-Clio, Talos's memory system: in the app it is the Memory screen. A read-only view of notes folders on your Mac: a tree, a note view and search. Off until you set it up at the Mac.
+Nyx is the memory service. In the app it is the Nyx screen (`/memory`): you type the https address of your Nyx, press
+Connect, and Nyx's own sign-in opens in a new tab; after that the screen shows "Connected to <host>" and an Open Nyx link.
+Talos keeps only the address (`memory.nyx_url`, an owner setting the agent cannot change) and holds no Nyx credentials.
+"Connected" means the address is saved: Talos cannot see whether you are signed in at Nyx. Viewing your notes (the page tree
+and the 3D graph) happens in Nyx, not in Talos: the app no longer has a notes browser of its own.
+
+The rest of this page is the Mac's side: the notes folders it shares, which the agent's notes lookup and its "Notes that may
+matter" pointers read. Off until you set it up at the Mac.
 
 ## Turn it on
 
@@ -12,7 +19,7 @@ talos-app memory on | off                   # both switches at once
 talos-app memory reindex                    # rebuild the search index
 ```
 
-The browser is on only when `memory.json` has `enabled: true` AND the app switch (`config.memory_browser`) is on. The
+The sharing is on only when `memory.json` has `enabled: true` AND the app switch (`config.memory_browser`) is on. The
 phone can only turn it off; turning it on is done at the Mac (`memory on`). `memory.json` lives in `$TALOS_APP_HOME`
 (0600) and the search index in `memory-index.sqlite` beside it. Nothing is ever written under the agent folder.
 
@@ -46,13 +53,9 @@ resolve to nothing, the same as a missing note.
 
 ## How it works
 
-- Signed reads on their own queue: `memory.tree`, `memory.read`, `memory.search` (60/min per socket).
+- The Mac still answers signed reads on their own queue (the app does not send them now): `memory.tree`, `memory.read`, `memory.search` (60/min per socket).
 - Listings page by size (`next_cursor`); a note comes in chunks of whole characters (`next_offset`); links ride on the first
   chunk. Every frame stays under the relay's cap with room to spare.
 - Fresh: a scan at start, `fs.watch` (2 s debounce), a 5-minute poll, and a rebuild when `memory.json` changes. Every read
   and every page checks the rules again at that moment.
-- `[Ask {agent}]` attaches a note to a message. The Mac re-checks it: `memory_path` (absolute), `memory_changed` if it
-  differs from what you opened, or "That note isn't shared any more." if it is no longer allowed.
 - A compromised relay would see the notes you open, in transit, just as it sees chat. The relay never stores memory frames.
-
-Not yet: the offline cache of recently opened notes (P1).

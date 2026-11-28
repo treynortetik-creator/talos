@@ -5,6 +5,7 @@ import { Link } from 'react-router'
 import { useTalos } from '../../lib/client.ts'
 import { IconBack } from '../../ui/icons.tsx'
 import { Button, Input } from '../../ui/index.ts'
+import { searchBoxKeys } from '../../ui/keys.ts'
 import { Meander } from '../../ui/Meander.tsx'
 import { ScrollRegion } from '../../ui/ScrollRegion.tsx'
 import { useSession } from '../auth/session.ts'
@@ -67,6 +68,7 @@ export function HelpScreen() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={searchBoxKeys({ value: query, onClear: () => setQuery('') })}
               placeholder="For example: quiet hours"
               autoComplete="off"
               maxLength={SEARCH_MAX}

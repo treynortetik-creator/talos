@@ -1,6 +1,6 @@
-// Settings > Memory folders: which folders of the agent folder the Memory screen's Notes show (owner, 2026-11-15; before
-// this only `talos-app memory init` in a terminal could set them, and a new user saw nothing). Ticked folders are what Notes
-// shows; Save sends the owner's signed choice and the Mac checks every name against its own listing. No confirm: it is the
+// Settings > Memory folders: which folders of the agent folder the Mac shares as notes (owner, 2026-11-15; before
+// this only `talos-app memory init` in a terminal could set them, and a new user saw nothing). Ticked folders are what is
+// shared; Save sends the owner's signed choice and the Mac checks every name against its own listing. No confirm: it is the
 // owner's own choice. A Mac that is offline means nothing was saved, and this says so.
 import { MEMORY_ROOTS_FEATURE, MEMORY_ROOTS_WORDING } from '@talos-app/protocol'
 import { useEffect, useState } from 'react'
@@ -12,7 +12,8 @@ import type { SectionProps } from './sections.tsx'
 
 export const MEMORY_FOLDERS_TEXT = {
   title: 'Memory folders',
-  intro: 'Pick the folders of your agent folder that Notes in Memory shows. Nothing else in the agent folder is shown.',
+  intro:
+    'Pick the folders of your agent folder that your Mac shares as notes. Nothing else in the agent folder is shared.',
   loading: 'Asking your Mac…',
   offline: "Your Mac is offline, so the folders can't be listed or saved now.",
   notSaved: "Your Mac didn't get this, so nothing was saved. Try again when it's online.",

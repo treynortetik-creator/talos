@@ -4,6 +4,8 @@
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.bat text eol=crlf
-# CHANGELOG.md takes both sides when two landings each add an entry at the top (a union merge), so gate-push's rebase
-# never stops on it; the result is still read in review. Nothing else merges this way (scripts/changelog-union.test.ts).
+# CHANGELOG.md takes both sides when two landings each add an entry at the top, and docs/FOLLOWUPS.md when two landings each
+# add a row at the end (a union merge), so gate-push's rebase never stops on either; the result is still read in review.
+# Nothing else merges this way (scripts/changelog-union.test.ts).
 CHANGELOG.md merge=union
+docs/FOLLOWUPS.md merge=union

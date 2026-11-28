@@ -558,6 +558,27 @@ const CLAIMS: Record<string, Proof[]> = {
     has(S, 'in the timezone set under Agent'),
     has(S, 'between these times ({zone})'),
   ],
+  'It does not hide the message text: that has its own switch, below.': [
+    has(S, 'Show message text in browser notifications'),
+    has('apps/relay/src/core/push.ts', 'cfg.notifications.web_message_text === false'),
+  ],
+  'It is on by default: a browser or Home Screen notification shows the first 80 characters of each reply, with passwords, keys and link codes hidden.':
+    [
+      has('packages/protocol/src/config.ts', 'export const PUSH_TEXT_DEFAULT = true'),
+      has('packages/protocol/src/push-words.ts', 'export const PUSH_BODY_MAX = 80'),
+      has('packages/protocol/src/push-words.ts', 'visibleText(redact(flat))'),
+    ],
+  'Turn the switch off and it says only “New reply in” the thread.': [
+    has(S, 'Turn it off and it says only'),
+    has('packages/protocol/src/push.ts', 'New reply in ${thread}'),
+  ],
+  'The iPhone app has its own switch for message words, also on by default: Apple never sees the words (they travel sealed, and only the phone opens them), and your Talos server can still read them, as it can your messages.':
+    [
+      has(NATIVE, 'Apple never sees the words.'),
+      has(NATIVE, 'Message text and the Reply and Approve buttons are off for this phone.'),
+      has('packages/protocol/src/config.ts', 'export const PUSH_TEXT_DEFAULT = true'),
+      has('apps/relay/src/core/push.ts', 'private async sealFor('),
+    ],
   'This changes browser notifications.': [
     has('packages/protocol/src/push.ts', 'const mode = config.notifications.show_thread_names'),
   ],
@@ -692,7 +713,7 @@ const CLAIMS: Record<string, Proof[]> = {
     has('apps/web/src/lib/keymap.ts', 'inField: true'),
     has('apps/web/src/lib/useKeyboard.ts', 'const isField'),
   ],
-  'It jumps to a thread, searches all messages, opens Schedules, Settings or Memory, starts a new thread, runs a / command and opens the top Needs-you card.':
+  'It jumps to a thread, searches all messages, opens Schedules, Settings or Nyx, starts a new thread, runs a / command and opens the top Needs-you card.':
     [
       has('apps/web/src/features/palette/items.ts', "'searchMessages'"),
       has('apps/web/src/features/palette/items.ts', "type: 'slash'"),

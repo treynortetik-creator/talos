@@ -14,6 +14,8 @@ const KNOWN = new Set([
   'settings',
   'search',
   'memory',
+  'files',
+  'terminal',
   'drive',
   'share',
   'help',

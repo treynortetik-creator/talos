@@ -23,8 +23,9 @@ struct WorkerLoginEnvGuiTests {
     cfg.claudePath = "auto"
     cfg.env = ["PATH": pinned, "TALOS_APP_HOME": root + "/talos-home", "PINNED": "yes"]
     let done = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)  // the fake login shell answers only once the test lets it
     let slow = LiveSystem(loginEnv: {
-      Thread.sleep(forTimeInterval: 2)
+      _ = release.wait(timeout: .now() + 10)  // a safety bound only: the test releases it right after the timing check
       done.signal()
       return ["PATH": "/home/alex/login/bin", "FROM_LOGIN": "1"]
     })
@@ -36,6 +37,7 @@ struct WorkerLoginEnvGuiTests {
     let m = try #require(made)
     let env = m.loginEnvironment()  // what the Terminals window reads on the main thread
     let took = Date().timeIntervalSince(t0)
+    release.signal()
     #expect(took < 1, "building the worker manager held the main thread for \(took) s")
     #expect(env["PATH"] == pinned && env["PINNED"] == "yes", "desktop.json env is on top from the first moment: \(env)")
     #expect(m.options.talosHome == root + "/talos-home")

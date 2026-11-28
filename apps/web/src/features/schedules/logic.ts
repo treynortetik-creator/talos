@@ -619,6 +619,8 @@ export type RunNowAsk = {
   lines: string[]
   again: boolean
   offerSession: boolean
+  /** The sheet is only for a run that repeats one, replaces one, or runs with full permissions (or has a way round a blocked background run to offer): any other Run now is one tap. */
+  needsSheet: boolean
 }
 export function runNowAsk(s: ScheduleT, h: SchedulerHealthT, nowMs: number): RunNowAsk {
   const lines: string[] = []
@@ -626,6 +628,7 @@ export function runNowAsk(s: ScheduleT, h: SchedulerHealthT, nowMs: number): Run
   if (s.permissions === 'full') lines.push(`Run ${s.name} now? It runs with full permissions.`)
   else lines.push(`Run ${s.name} now?`)
   let again = false
+  let replaces = false
   // `ds` is a run key: a date, or a slot (2026-10-05T0945) for a job with several fire times (HB1)
   const ranToday =
     s.today === 'ran' ||
@@ -638,13 +641,14 @@ export function runNowAsk(s: ScheduleT, h: SchedulerHealthT, nowMs: number): Run
     const at = s.last_run?.started_at ? formatTime(s.last_run.started_at, tz) : 'earlier'
     lines.push(`It already ran today at ${at}. Run again?`)
   } else if (s.next_run && Date.parse(s.next_run) > nowMs && dayKey(Date.parse(s.next_run), tz) === dayKey(nowMs, tz)) {
+    replaces = true
     lines.push(`This counts as today's run; the ${formatTime(s.next_run, tz)} run won't happen.`)
   }
   const offerSession =
     s.runner === 'headless' &&
     s.permissions !== 'restricted' &&
     (h.headless === 'blocked' || h.issues.some((i) => i.code === 'headless_blocked' || i.code === 'tcc_suspected'))
-  return { lines, again, offerSession }
+  return { lines, again, offerSession, needsSheet: again || replaces || s.permissions === 'full' || offerSession }
 }
 
 // ---- the form -----------------------------------------------------------------------------------------------------

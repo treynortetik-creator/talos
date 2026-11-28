@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { bridgeChildEnv } from '@talos-app/testkit'
 import { runCli } from '../src/cli.ts'
 import { COMMANDS, terminalOnly } from '../src/talos.ts'
 
@@ -14,16 +15,18 @@ const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
 
 /** Runs the real entry point with stdin and stdout both pipes, the way an agent's shell tool runs it. */
 async function piped(args: string[], stdin = 'y\n') {
-  const p = Bun.spawn([process.execPath, CLI, ...args], {
+  const argv = [process.execPath, CLI, ...args]
+  const p = Bun.spawn(argv, {
     stdin: new Response(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
-    env: {
-      ...process.env,
+    // the test's own folder is the CLI's test root: its HOME, inbox and Claude folder are inside it
+    env: bridgeChildEnv(argv, {
       TALOS_APP_HOME: home,
+      TALOS_TEST_ROOT: home,
       TALOS_APP_RELAY_URL: 'http://127.0.0.1:9',
       TALOS_APP_CHRONOS_AUTODISCOVER: 'off',
-    },
+    }).env,
   })
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
   return { out, err, code }

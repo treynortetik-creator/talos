@@ -37,8 +37,7 @@ export default defineConfig({
       manifest: false,
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,webmanifest}'],
-        // the Clio graph's 3D chunk (three.js, ~380 KB gzip) is fetched only when the graph opens, never on install
-        globIgnores: ['**/talos-icon-1024.png', '**/ClioGraph-*.js'],
+        globIgnores: ['**/talos-icon-1024.png'],
         maximumFileSizeToCacheInBytes: 4_000_000,
       },
       devOptions: { enabled: true, type: 'module', navigateFallback: 'index.html' },
@@ -72,7 +71,6 @@ export default defineConfig({
               main: fileURLToPath(new URL('index.html', import.meta.url)),
               cardsHarness: fileURLToPath(new URL('test/cards/harness/index.html', import.meta.url)),
               schedulesHarness: fileURLToPath(new URL('test/schedules/harness/index.html', import.meta.url)),
-              memoryHarness: fileURLToPath(new URL('test/memory/harness/index.html', import.meta.url)),
               searchHarness: fileURLToPath(new URL('test/search/harness/index.html', import.meta.url)),
             },
           },

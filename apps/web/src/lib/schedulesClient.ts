@@ -45,7 +45,12 @@ export interface SchedulesClient {
    * `schedule.patch`. Writes nothing: the bridge answers with a `card.create` (kind 'schedule') whose
    * `payload.client_ref` is the returned `clientRef`. `set` must hold only the fields the owner touched.
    */
-  proposeScheduleChange(change: ScheduleChangeT, threadId: string): Promise<{ clientRef: string }>
+  proposeScheduleChange(
+    change: ScheduleChangeT,
+    threadId: string,
+    /** `formSave`: the owner pressed Save in the schedule form, so a create or update applies without a tap (the Mac decides; an older one shows the card). `saved`: it did, and there is no card. */
+    opts?: { formSave?: boolean },
+  ): Promise<{ clientRef: string; saved?: true }>
   runScheduleNow(id: string, opts: { again: boolean; where: 'default' | 'session' }): Promise<void>
   /** `schedule_id` is required for pause, resume and disable, and must be null for the global actions. */
   controlSchedule(action: ScheduleControlActionT, id: string | null): Promise<void>

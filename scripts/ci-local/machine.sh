@@ -269,3 +269,54 @@ ci_where() {
 ci_logs_dir() { # ci_logs_dir <cache>
   if [ "${CI_HOSTILE:-}" = 1 ]; then printf '%s/logs/hostile\n' "$1"; elif [ "${CI_NIGHTLY:-}" = 1 ]; then printf '%s/logs/nightly\n' "$1"; else printf '%s/logs\n' "$1"; fi
 }
+
+# Titan's red is Linux's, not main's (owner, 11-25: Mac first). A Titan part that gates (CI_TITAN_PART=1, set by ci-runner.sh for image,
+# browser-e2e and check) never posts a red: report() makes it "not tested: Titan failed <part>, log <path>; the Mac re-runs it" (an
+# error, no answer, so the Mac's own take-back runs the part) and posts the red to report-ci/<job>, the report-only alert. Then the
+# Mac's own result decides. titan_red_say <job> <ran here: 1>: when Titan's part of this job failed in this attempt and this run ran
+# the job itself, the words for a pass ("Titan-only failure, not counted: <part>, log <path>"); nothing otherwise.
+titan_red_say() {
+  local c d
+  [ "$STATUS" = 1 ] && [ -n "${CI_ATTEMPT_URL:-}" ] && [ "${2:-}" = 1 ] || return 0
+  case "$1" in image) c=local-ci/image ;; browser) c=ci-part/browser-e2e ;; check) c=ci-part/check ;; *) return 0 ;; esac
+  d="$(ci_statuses "$SLUG" "$SHA" | awk -F'\t' -v c="$(ci_ns "$c")" -v a="$CI_ATTEMPT_URL" -v own="${CI_STATUS_URL:-}" \
+    '$1 == c && $2 == "error" && $3 != own && index($3, a) == 1 && index($4, "not tested: Titan failed ") == 1 { print $4; exit }')" || return 0
+  printf '%s' "$d" | sed -n 's/^not tested: Titan failed \([a-z0-9-]*\), log \([^;]*\).*$/Titan-only failure, not counted: \1, log \2/p'
+}
+titan_red_convert() { # titan_red_convert <job> <took>, from report() (its rc, why, slept, nottested and _ci_held, by dynamic scope)
+  local tp="$1" tl="~/.cache/talos-ci/logs${LOGS#"$CACHE/logs"}/$SHORT-$1.log"
+  [ "${CI_TITAN_PART:-}" = 1 ] && [ "$STATUS" = 1 ] && [ "$rc" != 0 ] && [ -z "$why" ] && [ "$slept" != 1 ] && [ -z "$nottested" ] &&
+    [ "$_ci_held" != 1 ] && [ ! -s "$RESULTS/$1.refused" ] || return 0
+  [ "$1" != check ] || tp=check-titan
+  echo "  ✗ $1 ($2), log: $log"; tail -25 "$log" | sed 's/^/    /'
+  post "$(ci_ns "report-ci/$1")" failure "$(printf 'Titan failed %s, log %s; the Mac re-runs it (report-only)' "$tp" "$tl" | cut -c1-140)"
+  printf 'not tested: Titan failed %s, log %s; the Mac re-runs it\n' "$tp" "$tl" > "$RESULTS/$1.refused"
+}
+titan_pass_say() { # titan_pass_say <job> <fb> <log>: "Titan-only failure, not counted: ...; " (said in the output and the log) when Titan's part of this job failed and this run ran it
+  local here="" say
+  case "$1" in
+    image) [ "$2" != 1 ] || here=1 ;;
+    browser) ! grep -q 'packages here:' "$RESULTS/browser.where" 2>/dev/null || here=1 ;;
+    check) ! grep -q '^check here:' "$RESULTS/check.where" 2>/dev/null || here=1 ;;
+  esac
+  say="$(titan_red_say "$1" "$here")"
+  [ -z "$say" ] || { echo "  ! $1: $say" >&2; echo "$say" >> "$3"; printf '%s; ' "$say"; }
+}
+titan_report_green() { # titan_report_green <job> <secs>: a Titan part's green is said under report-ci/ too, so the report alert has a "green again" for its red
+  [ "${CI_TITAN_PART:-}" != 1 ] || post "$(ci_ns "report-ci/$1")" success "passed on $WHERE in ${2}s"
+}
+
+# How long a test may take: the gate's rule (scripts/talos-machine.sh), sampled once, when the run's tests are about to start (after
+# every wait), and exported to every job. Before this CI ran at factor 1 whatever the load, and fixed-budget tests timed out on a
+# loaded Mac (a load of 40 to 140 on 18 cores). One set already wins. reuse_gate_step (jobs-check.sh) takes a gate's result only when
+# the gate's factor is no higher than this one. A copy of this script without talos-machine.sh keeps the factor it was given.
+ci_time_factor() {
+  local cores
+  [ -r "$CI_LOCAL_LIB/../talos-machine.sh" ] || return 0
+  . "$CI_LOCAL_LIB/../talos-machine.sh"
+  cores="${GATE_CORES:-$(cores_here)}"
+  case "$cores" in '' | *[!0-9]* | 0) cores=1 ;; esac
+  talos_time_factor "$cores"
+  export TALOS_TEST_TIME_FACTOR
+  echo "ci-local: time factor $TALOS_TEST_TIME_FACTOR: every test budget x$TALOS_TEST_TIME_FACTOR ($TIME_FACTOR_WHY)"
+}

@@ -281,3 +281,24 @@ describe('the waiting line has a limit', () => {
     expect(await promptly(again)).toMatchObject({ state: 'working' }) // accepted now: a job, not 'busy'
   })
 })
+
+describe('read aloud goes ahead of reply voices', () => {
+  test("the owner's tap runs next when a slot frees, before reply voices that were already waiting", async () => {
+    const r = rig({ maxParallel: 1, maxWaiting: 1 })
+    const m = r.add('Read this one aloud for the owner.')
+    // one reply voice holds the only slot, three more wait behind it
+    const replies = ['reply one', 'reply two', 'reply three', 'reply four'].map((t) => r.svc.synthesizeForReply(t, t))
+    await settle()
+    expect(r.synthCalls).toEqual(['reply one'])
+    const tap = ask(r, m, true)
+    await settle()
+    r.clock.fireAll()
+    expect(await promptly(tap)).toMatchObject({ state: 'working' }) // accepted: queued reply voices do not count against the cap
+    r.gates[0]?.() // the running reply voice ends
+    await settle()
+    expect(r.synthCalls[1]).toBe('Read this one aloud for the owner.') // the owner's tap is next, not "reply two"
+    r.open()
+    for (const g of r.gates.slice(1)) g()
+    await Promise.all(replies)
+  })
+})

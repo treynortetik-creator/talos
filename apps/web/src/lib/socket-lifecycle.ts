@@ -1,7 +1,7 @@
-// The page coming and going: online/offline, the app brought to the front (wake probe), and the activity report.
-import { newId } from '@talos-app/protocol'
+// The page coming and going: online/offline, the app back in front or focused (the socket probe), and the activity report.
+import { newId, newUlid } from '@talos-app/protocol'
 import { NoAnswerError } from './client.ts'
-import { ACTIVITY_REPORT_MS, WAKE_PROBE_MS } from './socket-constants.ts'
+import { ACTIVITY_REPORT_MS, EAGER_DIAL_MS } from './socket-constants.ts'
 import type { SocketCtx } from './socket-ctx.ts'
 
 export function createSocketLifecycle(c: SocketCtx) {
@@ -9,7 +9,7 @@ export function createSocketLifecycle(c: SocketCtx) {
 
   function onOnline() {
     setMeta({ networkOffline: false })
-    c.client.reconnect()
+    probeSocket('online')
   }
   function onOffline() {
     setMeta({ networkOffline: true })
@@ -17,6 +17,7 @@ export function createSocketLifecycle(c: SocketCtx) {
     // Close the zombie socket so sends queue now instead of claiming "sent" until the ping times out.
     if (c.retryTimer) clearTimeout(c.retryTimer)
     c.retryTimer = null
+    c.clearLinkTimers()
     const s = c.ws
     c.ws = null
     c.ready = false
@@ -34,32 +35,72 @@ export function createSocketLifecycle(c: SocketCtx) {
     c.lastPointer = null // the first pointermove after coming back only records where the cursor is
     c.send({ type: 'visibility', state: isVisible() ? 'visible' : 'hidden' })
     if (!isVisible() || c.closed) return
-    // Coming back to the front: a phone that slept can hold a dead socket for ~25 s (until the next ping). Ask now, and
-    // if nothing answers within a couple of seconds, drop it and reconnect. No socket and a retry pending: retry now.
-    if (!c.ws) {
-      // A session that was refused stays stopped: foregrounding must not start new refused attempts.
+    probeSocket('back')
+  }
+  function onFocus() {
+    if (isVisible()) probeSocket('back')
+  }
+  /** A page restored from the back-forward cache: its socket was frozen with it. A first load is not one. */
+  function onPageShow(e?: Event) {
+    if ((e as PageTransitionEvent | undefined)?.persisted) probeSocket('back')
+  }
+
+  /**
+   * The page came back (online, to the front, focused, restored from the cache): find out whether the link still works, and
+   * replace it only if not. A healthy socket is left exactly as it is: no new socket, nothing rejected, nothing written again.
+   * A phone that slept can hold a dead socket for ~25 s (until the next ping), so ask now, and if the pong with this ask's
+   * nonce is not back within wakeProbeMs (WAKE_PROBE_MS), let go of it and dial at once. Events that arrive together share one probe.
+   */
+  function probeSocket(reason: 'online' | 'back') {
+    if (c.closed) return
+    const sock = c.ws
+    if (!sock) {
+      // A session that was refused stays stopped: coming back must not start new refused attempts.
       if (meta.getState().authFailed) return
+      // A retry is already scheduled: focus and visibility events (they come by the dozen in a bad hour) dial at once only
+      // every EAGER_DIAL_MS, so an outage gets no dial storm and no /api/me storm. The network coming back always dials.
+      if (reason === 'back' && c.retryTimer && now() - c.lastEagerDialAt < EAGER_DIAL_MS) return
+      c.lastEagerDialAt = now()
       if (c.retryTimer) clearTimeout(c.retryTimer)
       c.retryTimer = null
-      c.attempt = 0
-      c.connect()
+      c.connect() // the wait is cut short; the backoff step is kept (only a link that lasts STABLE_MS starts it over)
       return
     }
-    if (!c.canSend()) return
-    const sock = c.ws
-    const askedAt = c.pongs
-    if (c.wakeTimer) clearTimeout(c.wakeTimer)
-    c.send({ type: 'ping', nonce: newId('m').slice(2, 14) })
+    if (c.wakeTimer) return // a probe of this socket is already out
+    const state = sock.readyState
+    // Closing: its real close is on the way, with its code (a 4401 or 4403 must still stop the session). Not ours to cut short.
+    if (state === c.WS?.CLOSING || state === c.WS?.CLOSED) return
+    if (!c.ready) {
+      // Still dialling. It carries nothing, so replacing it loses nothing, but a slow handshake is not a dead one: a trigger
+      // may replace a connecting dial only after DIAL_GIVE_UP_MS. An open socket waiting for `ready` is never cut by the page
+      // coming back (only 'online' may, after that long); otherwise the dial's own timer (HANDSHAKE_GIVE_UP_MS) ends it.
+      if (state === c.WS?.OPEN && reason === 'back') return
+      if (now() - c.dialAt >= c.dialGiveUpMs) replaceSocket(sock)
+      return
+    }
+    const nonce = newId('m').slice(2, 14)
+    try {
+      sock.send(JSON.stringify({ v: 1, id: newUlid(), ts: new Date(now()).toISOString(), type: 'ping', nonce }))
+    } catch {
+      replaceSocket(sock) // it cannot even carry the ask: dead, never read as fine
+      return
+    }
+    c.probeNonce = nonce
     c.wakeTimer = setTimeout(() => {
       c.wakeTimer = null
-      if (c.ws !== sock || c.pongs > askedAt) return
-      try {
-        sock.close()
-      } catch {}
-      // A dead socket may not finish closing for a long time: run the close path ourselves (it ignores a later real one).
-      c.closedByHand.add(sock)
-      sock.onclose?.({ code: 4000 } as CloseEvent)
-    }, WAKE_PROBE_MS)
+      c.probeNonce = null
+      if (c.ws !== sock) return // it closed, or was replaced, meanwhile: nothing left to decide
+      replaceSocket(sock)
+    }, c.wakeProbeMs)
+  }
+
+  /**
+   * Lets go of a socket that no longer answers and dials a new one now, the way a person's Retry does: the socket is not
+   * "closed" (no drop is logged, the backoff step does not grow, nothing flashes "unreachable"), it is replaced.
+   */
+  function replaceSocket(sock: WebSocket) {
+    if (c.ws !== sock || c.closed) return
+    c.client.reconnect()
   }
   /**
    * Pointer, key, touch or wheel while the screen is showing: tell the relay someone is here (at most once per
@@ -82,6 +123,8 @@ export function createSocketLifecycle(c: SocketCtx) {
   }
 
   c.onActivity = onActivity
+  c.onFocus = onFocus
+  c.onPageShow = onPageShow
   c.onOffline = onOffline
   c.onOnline = onOnline
   c.onVisibility = onVisibility

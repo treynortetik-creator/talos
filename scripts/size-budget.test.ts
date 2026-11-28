@@ -22,6 +22,26 @@ import {
   refreshBudget,
 } from './size-report.ts'
 
+// The real tree's report, counted once for the whole file and shared by every test that compares against it (it parses every
+// production file: seconds under load). Tests only read it.
+let realReport: ReturnType<typeof buildReport> | undefined
+const realTree = () => {
+  realReport ??= buildReport(ROOT)
+  return realReport
+}
+
+// A run of the real script over the real tree scans every file again, so each output mode runs once per file and is shared.
+const runCache = new Map<string, ReturnType<typeof spawnSync<string>>>()
+const runReal = (...args: string[]) => {
+  const key = args.join(' ')
+  let out = runCache.get(key)
+  if (!out) {
+    out = spawnSync(process.execPath, [join(ROOT, 'scripts/size-report.ts'), ...args], { cwd: ROOT, encoding: 'utf8' })
+    runCache.set(key, out)
+  }
+  return out
+}
+
 const made: string[] = []
 afterEach(() => {
   for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -67,7 +87,7 @@ describe("today's tree against the budget", () => {
   const agents = existsSync(join(root, 'AGENTS.md')) ? readFileSync(join(root, 'AGENTS.md'), 'utf8') : undefined
 
   it('passes when AGENTS.md fits, and prints every new file or function over the limit instead of failing on it', () => {
-    const r = checkBudget(buildReport(root), b, agents)
+    const r = checkBudget(realTree(), b, agents)
     expect(r.failures).toEqual([])
     for (const w of r.warnings) console.warn(`size warning: ${w}`)
   })
@@ -136,10 +156,8 @@ describe('AGENTS.md', () => {
     expect(text).toMatch(/functions are measured for TypeScript only/)
     expect(text).toContain('node scripts/size-report.ts --refresh-budget')
     expect(text).toContain('prints growth')
-    const out = spawnSync(process.execPath, [join(ROOT, 'scripts/size-report.ts'), '--help'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    })
+    // `--help` is not a flag the script reads: it prints the same plain report, so the one shared plain run stands in for it
+    const out = runReal()
     expect(out.status).toBe(0) // the flag the text names is one the script reads
     expect(readFileSync(join(ROOT, 'scripts/size-report.ts'), 'utf8')).toContain("includes('--refresh-budget')")
   })
@@ -604,8 +622,7 @@ describe('the budget file', () => {
 })
 
 describe('the size report script', () => {
-  const run = (...args: string[]) =>
-    spawnSync(process.execPath, [join(ROOT, 'scripts/size-report.ts'), ...args], { cwd: ROOT, encoding: 'utf8' })
+  const run = runReal
 
   it('prints the same counts the budget check uses, and exits 0', () => {
     const b = loadBudget(ROOT)
@@ -665,7 +682,7 @@ describe('the size report script', () => {
     const out = run('--json')
     expect(out.status).toBe(0)
     const json = JSON.parse(out.stdout) as { totals: Record<string, number>; filesOver1000: unknown[] }
-    expect(json.totals.core).toBe(buildReport(ROOT).totals.core)
+    expect(json.totals.core).toBe(realTree().totals.core)
     expect(json.filesOver1000).toHaveLength(Object.keys(loadBudget(ROOT).filesOverLimit).length)
   })
 })

@@ -34,6 +34,7 @@ import {
 import { stillRunning, waitChild } from '../child-wait.ts'
 import { say } from '../owner-words.ts'
 import { ownerHost } from '../platform.ts'
+import { chronosRefusal, testRootOf } from './test-root.ts'
 
 export class AdapterError extends Error {
   constructor(
@@ -60,6 +61,8 @@ export type ChronosAdapterOptions = {
   bin: string
   /** CHRONOS_CONFIG. */
   config?: string | undefined
+  /** A test harness's folder (TALOS_TEST_ROOT): with one set, a Chronos whose program, HOME or config is outside it is refused. */
+  testRoot?: string | undefined
   /** S2.4: an adapter call is killed after this long. */
   timeoutMs: number
   /** CHRONOS_NOW (test builds only; the service refuses it in production). */
@@ -309,6 +312,12 @@ export class ChronosAdapter implements SchedulerAdapter {
 
   /** `chronos api <args>` with `stdin` as JSON. Resolves with the parsed JSON, whatever its exit code. */
   raw(args: string[], stdin?: unknown, timeoutMs = this.o.timeoutMs, quiet = false): Promise<unknown> {
+    // Every verb the bridge runs, `due` (which writes Chronos's own beat) and `session-beat` included, passes here. A test
+    // harness (TALOS_TEST_ROOT) allows only a Chronos under its own folder: anything else is refused before it is started.
+    const root = this.o.testRoot ?? testRootOf(undefined)
+    const refusal =
+      root !== undefined ? chronosRefusal(this.o.bin, root, { home: this.o.env?.home, config: this.o.config }) : null
+    if (refusal) return Promise.reject(new AdapterError('spawn', `refused in a test: ${refusal}`))
     return new Promise((resolve, reject) => {
       let child: ReturnType<typeof spawn>
       try {

@@ -119,7 +119,12 @@ describe('1. Main’s hook and script files in its own folder cannot be replaced
   test('Main’s launch carries them', () => {
     const home = makeHome(true)
     const { agent } = makeAgent()
-    const r = mainLaunchArgs([], home, { cwd: agent, userHome: '/home/alex', ownerExcludes: () => [] })
+    const r = mainLaunchArgs([], home, {
+      cwd: agent,
+      userHome: '/home/alex',
+      ownerExcludes: () => [],
+      writableRoots: [],
+    })
     expect(r.refusal).toBeUndefined()
     const s = JSON.parse(r.args[1] as string)
     expect(s.sandbox.filesystem.denyWrite).toContain(join(agent, 'hooks'))
@@ -128,14 +133,20 @@ describe('1. Main’s hook and script files in its own folder cannot be replaced
     const home = makeHome(true)
     const { agent } = makeAgent()
     rmSync(join(agent, 'hooks'))
-    const r = prepareOsSandbox({ talosHome: home, userHome: '/home/alex', folder: agent }, { ownerExcludes: () => [] })
+    const r = prepareOsSandbox(
+      { talosHome: home, userHome: '/home/alex', folder: agent, writableRoots: [] },
+      { ownerExcludes: () => [] },
+    )
     expect('refusal' in r && r.refusal).toMatch(/hooks/)
   })
 })
 
 describe('A. a hard link to a file in the session’s folder is refused', () => {
   const prepare = (folder: string) =>
-    prepareOsSandbox({ talosHome: makeHome(true), userHome: '/home/alex', folder }, { ownerExcludes: () => [] })
+    prepareOsSandbox(
+      { talosHome: makeHome(true), userHome: '/home/alex', folder, writableRoots: [] },
+      { ownerExcludes: () => [] },
+    )
   test('a clean folder starts', () => {
     const { agent } = makeAgent()
     expect('pieces' in prepare(agent)).toBe(true)
@@ -165,7 +176,10 @@ describe('A. a hard link to a file in the session’s folder is refused', () => 
 
 describe('A2. hooks, scripts and kit are links only into the kit release', () => {
   const prepare = (folder: string) =>
-    prepareOsSandbox({ talosHome: makeHome(true), userHome: '/home/alex', folder }, { ownerExcludes: () => [] })
+    prepareOsSandbox(
+      { talosHome: makeHome(true), userHome: '/home/alex', folder, writableRoots: [] },
+      { ownerExcludes: () => [] },
+    )
   const relink = (agent: string, name: string, target: string) => {
     rmSync(join(agent, name), { recursive: true, force: true })
     symlinkSync(target, join(agent, name))
@@ -317,7 +331,7 @@ describe('4. a settings file in the folder cannot weaken the sandbox', () => {
     const home = makeHome(true)
     const f = tmp()
     w(join(f, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: { excludedCommands: ['python3'] } }))
-    const r = mainLaunchArgs([], home, { cwd: f, userHome: '/home/alex', ownerExcludes: () => [] })
+    const r = mainLaunchArgs([], home, { cwd: f, userHome: '/home/alex', ownerExcludes: () => [], writableRoots: [] })
     expect(r.refusal).toContain('sets sandbox.excludedCommands')
     const p = planOsSandbox(true, { talosHome: home, userHome: '/home/alex', folder: f }, true)
     expect('refusal' in p && p.refusal).toContain('sets sandbox.excludedCommands')

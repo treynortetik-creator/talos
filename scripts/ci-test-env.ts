@@ -75,6 +75,7 @@ export const RUNNER_VARS = [
   'CI_TITAN_HOSTILE',
   'CI_CHECK_WAIT',
   'CI_CHECK_PART',
+  'CI_TITAN_PART', // ci-runner.sh's: told a gating Titan part, which reports its red as "not tested"
   'CI_CHECK_SHADOW_WAIT',
   'CI_CHECK_SHADOW_QUEUED',
   'CI_CHECK_SHADOW_POLL',

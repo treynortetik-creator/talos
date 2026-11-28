@@ -8,6 +8,7 @@
 import { lstatSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  AUTO_CONTINUE_AT_LIMIT_DEFAULT,
   jcs,
   MCP_ALWAYS_DENIED,
   MCP_CONNECTOR_DENY,
@@ -30,7 +31,15 @@ import {
 import { type OsSandboxPieces, withOsSandbox } from '../guards/os-sandbox.ts'
 import { realFileSync } from '../real-file.ts'
 import { pathIssue } from '../secrets/platform.ts'
-import { CHANNEL_SWITCH_ALWAYS, CHANNEL_SWITCH_NOCHANNEL, NOCHANNEL_SUFFIX, TERMINAL_ONLY } from './launch-env.ts'
+import { COMPACT_WINDOW_ENV, compactWindowEnv } from './compact-window.ts'
+import {
+  CHANNEL_SWITCH_ALWAYS,
+  CHANNEL_SWITCH_NOCHANNEL,
+  NOCHANNEL_SUFFIX,
+  RESUME_TURN_ENV,
+  TERMINAL_ONLY,
+} from './launch-env.ts'
+import { preToolInto } from './pretool-hook.ts'
 import { STATE_HOOK, workerHookDir } from './worker-hook.ts'
 import type { WorkerMcpPlan } from './worker-mcp.ts'
 
@@ -160,6 +169,7 @@ export type WorkerInputs = {
   /** `inherit` = no --model. */
   model: string
   effort: string | null
+  compactWindow?: number | null
   nonce: string
   /** The owner's permission flag (e.g. --dangerously-skip-permissions), when Main uses it. */
   permissionFlag: string | null
@@ -188,6 +198,12 @@ export type WorkerInputs = {
    * its block and environment go into the settings. Absent or null: the switch is off and the launch is as before.
    */
   osSandbox?: OsSandboxPieces | null
+  /**
+   * The owner's "continue at the usage limit" switch as the supervisor read it for this start (config.json auto_continue_at_limit).
+   * Written into the settings as Claude Code's own `autoContinueAtUsageLimit`, `true` or `false`, never left out (Claude Code reads
+   * a missing key as on). Absent: the config default (AUTO_CONTINUE_AT_LIMIT_DEFAULT).
+   */
+  autoContinueAtLimit?: boolean
 }
 
 export type WorkerSpec = {
@@ -218,6 +234,8 @@ export type Trusted = {
   settingSources?: string | null
   /** With the switch on (the supervisor's own read), what it built: the settings must carry exactly this sandbox. Absent or null: off. */
   osSandbox?: OsSandboxPieces | null
+  /** The switch as the supervisor itself read it for this start: the settings must carry exactly this. Absent: the default. */
+  autoContinueAtLimit?: boolean
   /**
    * A sub-thread in its own folder outside its parent's: the parent folder's deny rules as the supervisor read them, every one of
    * which must be in the settings (the parent's fence holds in a folder the parent does not contain).
@@ -240,17 +258,6 @@ export const PERMISSION_FLAGS =
 
 /** In a worker's environment (value `1`) exactly when its settings register the kit's thread-state hook. */
 export const THREAD_STATE_ENV = 'TALOS_APP_THREAD_STATE'
-
-/**
- * What makes Claude Code run the turn that was cut off again when its session is resumed (measured on 2.1.332: with both it
- * re-ran after SIGTERM and SIGKILL, without them it waits at "Interrupted"). Set only by a resume of a cut turn
- * (cut-turn.ts); never part of the launch spec hash (launch-spec.ts LAUNCH_SPEC_EXCLUDED_ENV_LINUX), or the next update check
- * would see a changed spec and restart the session again.
- */
-export const RESUME_TURN_ENV = {
-  CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
-  CLAUDE_CODE_RESUME_REASON: 'user_resume',
-} as const
 
 /** The worker identity keys the build sets itself (Claude's marker rule names them too: here they are wanted). */
 const WORKER_KEYS = new Set([
@@ -515,6 +522,8 @@ const WORKER_SETTINGS_KEYS = new Set([
   'disableSkillShellExecution',
   'statusLine',
   'sandbox',
+  // Claude Code's own wait-then-continue at a usage limit: a boolean, held to the supervisor's reading by validateSpec
+  'autoContinueAtUsageLimit',
 ])
 
 /**
@@ -535,6 +544,7 @@ export function withPermissionHook(settings: Json, script: string, python: strin
   const entries = Array.isArray(hooks.PermissionRequest) ? [...hooks.PermissionRequest] : []
   entries.push({ hooks: [{ type: 'command', timeout: 3600, command: permissionHookCommand(script, python, fixed) }] })
   hooks.PermissionRequest = entries
+  if (!fixed.rooted) preToolInto(hooks, fixed) // the PreToolUse record the permission hook looks its call up by (not on a Talos distro)
   return { ...settings, hooks }
 }
 
@@ -653,6 +663,7 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
   if (i.resume && i.resumeTurn) Object.assign(env, RESUME_TURN_ENV)
   env.TELEGRAM_STATE_DIR = noChannel
   env.IMESSAGE_STATE_DIR = noChannel
+  Object.assign(env, compactWindowEnv(i.compactWindow))
   // with a list, claude.ai connectors are not fetched (the setting below says the same; some versions read only one of them)
   if (mcp) env[CONNECTORS_ENV] = 'false'
 
@@ -685,9 +696,12 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
   for (const key of mcp?.disabledPlugins ?? []) if (!isInstructionPlugin(key)) plugins[key] = false
   let settings: Json = withInstructionFiles({
     enabledPlugins: plugins,
-    env: { TELEGRAM_STATE_DIR: noChannel, IMESSAGE_STATE_DIR: noChannel },
+    env: { TELEGRAM_STATE_DIR: noChannel, IMESSAGE_STATE_DIR: noChannel, ...compactWindowEnv(i.compactWindow) },
   })
   if (i.effort !== null) settings.effortLevel = i.effort
+  // Claude Code's own wait-then-continue at a usage limit: it only ever waits for the reset (never usage credits or an upgrade) and
+  // goes on with the task. Always written, true or false: a missing key is read as on.
+  settings.autoContinueAtUsageLimit = i.autoContinueAtLimit ?? AUTO_CONTINUE_AT_LIMIT_DEFAULT
   // Claude Code's own computer use is off for every session; a list also turns off the browser server
   settings.deniedMcpServers = (mcp ? MCP_NEVER_OPEN : MCP_ALWAYS_DENIED).map((serverName) => ({ serverName }))
   if (mcp) settings.disableClaudeAiConnectors = true
@@ -780,6 +794,7 @@ export function buildWorkerSpec(i: WorkerInputs): WorkerSpec {
     settingSources: i.settingSources ?? null,
     outsideAgentFolder: i.cwd !== null && i.settingSources !== undefined,
     osSandbox: i.osSandbox ?? null,
+    ...(i.autoContinueAtLimit === undefined ? {} : { autoContinueAtLimit: i.autoContinueAtLimit }),
   })
   return spec
 }
@@ -942,6 +957,8 @@ export function validateSpec(spec: WorkerSpec, trusted: Trusted): void {
     const v = senv[k]
     if (k === 'TELEGRAM_STATE_DIR' || k === 'IMESSAGE_STATE_DIR') {
       if (v !== empty) no('forbidden_env', `settings.env.${k}`)
+    } else if (k === COMPACT_WINDOW_ENV) {
+      if (v !== spec.env[k]) no('forbidden_env', `settings.env.${k}`)
     } else if (strippedKey(k) || isInheritedClaudeVar(k)) no('forbidden_env', `settings.env.${k}`)
   }
   // with the developer switch off (the supervisor's own read) the session has Main's access: no Talos-home fence is asked for, but the
@@ -963,6 +980,9 @@ export function validateSpec(spec: WorkerSpec, trusted: Trusted): void {
     for (const [k, v] of Object.entries(trusted.osSandbox.env))
       if (senv[k] !== v) no('fence_missing', `the OS sandbox environment ${k} is not in the settings`)
   }
+  // the continue-at-limit switch: the one value the supervisor read, as a boolean, in the settings (never dropped, never another type)
+  if (settings.autoContinueAtUsageLimit !== (trusted.autoContinueAtLimit ?? AUTO_CONTINUE_AT_LIMIT_DEFAULT))
+    no('forbidden_env', 'autoContinueAtUsageLimit is not in the settings as the supervisor read it')
   if (mcp?.refusal) no('escalation', `mcp: ${mcp.refusal}`, 'mcp')
   const d = checkCeiling(spec.args, settings, mcp?.allowed ?? [], Object.keys(mcp?.ownFolder ?? {}), trusted.main)
   if (d) no('escalation', `${d.axis}: ${d.detail}`, d.axis)

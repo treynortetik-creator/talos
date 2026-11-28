@@ -1,5 +1,5 @@
-// The Terminal item and screen exist only inside the Mac app, and the only thing that leaves the page is the
-// `terminal_view` message to the shell: no request to the relay, no socket frame.
+// In the Mac app the Terminal screen is a native view, and the only thing that leaves the page is the `terminal_view` message to the
+// shell: no request to the relay, no socket frame. In a browser or on a phone it is the read-only view (test/terminal/remote-*.test.ts).
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -55,9 +55,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount(route: string, ui: React.ReactElement = <Sidebar />) {
+function mount(route: string, ui: React.ReactElement = <Sidebar />, client = setup()) {
   return render(
-    <ClientProvider client={setup()}>
+    <ClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
         <Routes>
           <Route path="/terminal" element={<TerminalScreen />} />
@@ -70,18 +70,32 @@ function mount(route: string, ui: React.ReactElement = <Sidebar />) {
 }
 
 describe('in a browser or on a phone (no Mac app)', () => {
-  it('has no Terminal item in the sidebar or the bottom bar', () => {
+  /** A client whose Mac does not list the terminal view (an older Mac). */
+  const oldMac = () => {
+    const c = setup()
+    c.store.setState((s) => ({
+      ...s,
+      presence: { ...s.presence, features: (s.presence.features ?? []).filter((f) => f !== 'term-view/1') },
+    }))
+    return c
+  }
+
+  it('lists the Terminal item only when the Mac lists the terminal view', () => {
     expect(getShell()).toBeNull()
-    mount('/')
+    mount('/', <Sidebar />, oldMac())
     expect(screen.queryByRole('link', { name: /Terminal/ })).toBeNull()
     cleanup()
-    mount('/', <BottomBar />)
+    mount('/', <BottomBar />, oldMac())
     expect(screen.queryByRole('link', { name: /Terminal/ })).toBeNull()
+    cleanup()
+    mount('/')
+    expect(screen.getByRole('link', { name: /Terminal/ })).toBeTruthy()
   })
 
-  it('sends /terminal back to Home and shows nothing', () => {
+  it("shows the read-only view's card at /terminal, not the native space, and sends nothing", async () => {
     mount('/terminal', <p>home</p>)
-    expect(screen.getByTestId('location').textContent).toBe('/')
+    expect(await screen.findByTestId('terminal-card')).toBeTruthy()
+    expect(screen.getByTestId('location').textContent).toBe('/terminal')
     expect(screen.queryByTestId('terminal-space')).toBeNull()
   })
 })

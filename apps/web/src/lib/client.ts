@@ -22,6 +22,7 @@ import type {
 import { createContext, createElement, type ReactNode, useContext } from 'react'
 import { type StoreApi, useStore } from 'zustand'
 import { initialSchedulesSlice, type SchedulesClient, type SchedulesSlice } from './schedulesClient.ts'
+import type { TermClient } from './termClient.ts'
 import type {
   AgentsMdClient,
   BugReportClient,
@@ -126,6 +127,13 @@ export type CardResolveInput = {
    * bridge says ALWAYS_ALLOW_FEATURE. Goes inside the signed frame.
    */
   always?: true
+  /**
+   * "Allow for this session": only with action 'primary' on a permission card the hook raised that offers it (`session_allow`). Goes inside
+   * the signed frame, so only the owner's own tap carries it.
+   */
+  session?: true
+  /** With `session`: the hash of the rules the button showed (protocol `sessionRulesHash`), signed in the frame so the bridge and the hook can tell a rewritten button. */
+  sessionHash?: string
 }
 
 /** Typed HTTP API (spec 3.8). Every shape comes from the route table in `@talos-app/protocol`. */
@@ -221,6 +229,8 @@ export interface TalosClient {
   readonly memoryFolders?: MemoryFoldersClient
   /** The bug reporter (Mac's versions and logs, and the signed post to the relay). Absent in a fake that does not model it. */
   readonly bugs?: BugReportClient
+  /** The read-only terminal view of the agent's pane (piece 1 of the remote terminal). Absent on a client that cannot ask the Mac. */
+  readonly term?: TermClient
   /**
    * CC-C3: signs and sends a raw owner frame (`session.control`) and resolves on the relay's ack; rejects with
    * `TalosClientError`. Optional so older clients keep compiling; the answer arrives as `session.control.result`.

@@ -128,7 +128,6 @@ describe('I5-H1 privacy: the plaintext APNs request', () => {
       log: silent,
       transport: new NoopTransport(),
       config: () => cfg,
-      anyVisible: () => false,
       apns: sender,
     })
     await push.notify({ template: 'reply', thread_id: slug })
@@ -314,7 +313,6 @@ describe('I5-M5 a web push does not wait on Apple', () => {
       log: silent,
       transport: web,
       config: () => DEFAULT_AGENT_CONFIG,
-      anyVisible: () => false,
       apns: sender,
     })
     const done = push.notify({ template: 'reply', thread_id: 'general' })

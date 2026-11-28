@@ -374,6 +374,8 @@ export type NoticeDeps = {
   lineWaits?(id: string): boolean
   /** The sign-in link of the supervisor's own sign-in (signin.ts), when one is running and has shown it. */
   signInLink?: (() => string | null) | undefined
+  /** The owner's "continue at the usage limit" switch now (config.json); the usage-limit line says Claude Code goes on by itself when on. */
+  autoContinue?: (() => boolean) | undefined
 }
 
 export class WorkerNotices {
@@ -494,7 +496,7 @@ export class WorkerNotices {
       scr.kind === 'login_expired'
         ? lines.login(where, this.d.signInLink?.() ?? null)
         : scr.kind === 'usage_limit'
-          ? usageLimitThreadLine(scr.info, where.attach, where.windows)
+          ? usageLimitThreadLine(scr.info, where.attach, where.windows, this.d.autoContinue?.() === true)
           : lines.dialog(scr.kind, where)
     this.send(id, r.dlg, prompt, text)
   }

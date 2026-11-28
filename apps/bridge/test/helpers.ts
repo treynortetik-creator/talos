@@ -205,12 +205,13 @@ export function pushCardResolvePastRelay(
 /**
  * Retries `check` (an `expect`) until it passes, rethrowing its last failure after `timeoutMs`. Put it after the fixed
  * sleep a test already had, never instead of it: on time it behaves exactly as before, late (a loaded machine) it waits.
+ * `check` may be async: its promise is awaited, so a rejected `expect` inside it is retried too (not left unhandled).
  */
-export async function eventually(check: () => void, timeoutMs = 10_000): Promise<void> {
+export async function eventually(check: () => void | Promise<void>, timeoutMs = 10_000): Promise<void> {
   const start = Date.now()
   for (;;) {
     try {
-      check()
+      await check()
       return
     } catch (e) {
       if (Date.now() - start > timeoutMs) throw e

@@ -1782,7 +1782,11 @@ describe('heavy lock slots: N holders at once, one queue, each slot its own', ()
       expect([await a.done, await q.done]).toEqual([0, 0])
     })
 
-    it('the first-in-line look prints nothing on stderr when its reader stops early (a runner that ignores SIGPIPE once printed "write error: Broken pipe" 611 times in a wait)', () => {
+    // 200 looks, each a pipeline of its own: 13-19 s alone on a quiet Mac, 66 s in a loaded gate at factor 1 (the 60 s file budget
+    // timed out). A budget of its own, x F like every one here; the work stays 200 looks, because the regression was a count.
+    it('the first-in-line look prints nothing on stderr when its reader stops early (a runner that ignores SIGPIPE once printed "write error: Broken pipe" 611 times in a wait)', {
+      timeout: 240_000 * F,
+    }, () => {
       const m = machine('5')
       const r = spawnSync(
         'bash',

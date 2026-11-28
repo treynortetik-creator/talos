@@ -32,7 +32,6 @@ async function rig(over: Partial<AgentConfigT> = {}) {
   cleanups.push(() => r.stop())
   r.runtime.store.putSub({ endpoint: 'https://push.example/one', keys: { p256dh: 'a', auth: 'b' } })
   const web = new NoopTransport()
-  let visible = false
   const cfg: AgentConfigT = { ...DEFAULT_AGENT_CONFIG, ...over }
   const push = new CorePush({
     store: r.runtime.store,
@@ -40,17 +39,13 @@ async function rig(over: Partial<AgentConfigT> = {}) {
     log: quietLog,
     transport: web,
     config: () => cfg,
-    anyVisible: () => visible,
   })
-  return { push, web, setVisible: (v: boolean) => (visible = v) }
+  return { push, web }
 }
 
 describe('sign-in alerts ignore the rules that silence chat', () => {
-  it('both sign-in templates go out while a screen is visible; a reply does not', async () => {
+  it('both sign-in templates go out whatever screens are open', async () => {
     const x = await rig()
-    x.setVisible(true)
-    await x.push.notify({ template: 'reply', thread_id: 'general' })
-    expect(x.web.sent).toHaveLength(0)
     await x.push.notify({ template: 'sign_in' })
     await x.push.notify({ template: 'sign_in_unproven' })
     expect(x.web.sent.map((s) => s.payload.notification.body)).toEqual([
@@ -60,7 +55,7 @@ describe('sign-in alerts ignore the rules that silence chat', () => {
   })
 
   it('both go out with the chat master switch off; a reply does not', async () => {
-    const x = await rig({ notifications: { master: false, show_thread_names: 'fixed_only' } })
+    const x = await rig({ notifications: { master: false, show_thread_names: 'fixed_only', web_message_text: true } })
     await x.push.notify({ template: 'reply', thread_id: 'general' })
     expect(x.web.sent).toHaveLength(0)
     await x.push.notify({ template: 'sign_in' })

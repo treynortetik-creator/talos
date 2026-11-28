@@ -1,5 +1,6 @@
 // The one keymap table: shipped defaults, a pure resolver that lets the owner's overrides sit beside them, and no chord
 // literals anywhere else in the app.
+// gate-reads: apps/web/src/*.ts apps/web/src/*.tsx
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'

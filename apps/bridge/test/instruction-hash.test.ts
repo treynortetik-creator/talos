@@ -10,21 +10,21 @@ const APPS = 'APPS TEXT'
 
 describe('what the agent is told', () => {
   const cases: Array<[string, Parameters<typeof agentInstructions>[0], string]> = [
-    ['main', { worker: false, trust: false }, 'fcbad0ff3579f86e61a9e42cb508a57b2f96d17fe6157776b4845db839090a69'],
+    ['main', { worker: false, trust: false }, '247dd8d7b87572e3b2775f2ce1d829e577fd8cd97bed91ab038f7b5c093d2347'],
     [
       'main with apps',
       { worker: false, trust: false, appInstructions: APPS },
-      '3af2a26e619f018b18e3c548af47c9c2ca089096ab9e29f6fafabda2a7e9136a',
+      'be4e21d9736d41575b27945ed3ecfd41f46c883d331eb74f7bb2da9c1ef07d1d',
     ],
     [
       'main with trust',
       { worker: false, trust: true },
-      '260c4edc39cf2fdf51bcbcc6e0fc56d9c6d4ac88c330b72799b71d34a31afe48',
+      'da0f99e1ff0280c9786f14feba457fa0c5a7392176a0d09ca19147b1460cf514',
     ],
     [
       'main with trust and apps',
       { worker: false, trust: true, appInstructions: APPS },
-      '3cc04c356b11a2bb80a708b9af6d1a6cbbe460032ff1497bf51f59019d9c72a5',
+      'e57115accfa4bb71f8d93ec1afe93a3a22e08a33e4a71671a4a56ac15c84f8c1',
     ],
     [
       'main with the self-map',
@@ -33,7 +33,7 @@ describe('what the agent is told', () => {
         trust: false,
         self: { bridgeDir: '/home/alex/talos-app', commit: 'abc1234', relayVersion: '9f8e7d6' },
       },
-      'ee78194c090f72b9994a02abbef45b292525c8cd33c477d673204f7f61a4cb7e',
+      '5424777e68b7f1a34b9d39f6f131935b6b3e9f095ac1804276859e9810e6220a',
     ],
     ['worker', { worker: true, trust: false }, '0a12afee7c6b0576325e088f86385409dcfd38490241c08b535188926fd350ff'],
     [

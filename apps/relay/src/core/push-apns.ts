@@ -15,6 +15,7 @@ import {
   type SealEnvelopeT,
 } from '@talos-app/protocol'
 import type { Clock, Logger } from '../services.ts'
+import type { SenderWhy } from './push-last.ts'
 
 export type ApnsConfig = { keyId: string; teamId: string; keyP8: string; bundleId: string }
 
@@ -54,13 +55,27 @@ export type ApnsSendResult = {
   reason?: string
   /** True when the gate said the device is no longer trusted: nothing was sent, and nothing was attempted. */
   skipped?: boolean
+  /** Which body left: the sealed copy or the plain template. Absent when nothing was sent. */
+  body?: 'sealed' | 'plain'
+  /** Set when a seal was offered and the plain body went anyway: the seal was over Apple's size, or the gate dropped it. */
+  plainWhy?: SenderWhy
+}
+
+/** One request's answer, before the retry logic: `body` is which copy left, `gated` why the gate (not the size) chose plain. */
+type OnceResult = {
+  status: number
+  reason?: string
+  skipped?: true
+  body?: 'sealed' | 'plain'
+  gated?: 'grant_changed' | 'seal_failed'
 }
 
 /**
  * Asked right before each request leaves, including the one repeated after an expired provider token. 'seal' sends the
- * sealed body, 'template' the fixed phrase alone, 'none' sends nothing. It may throw: that is a failed send, not a skip.
+ * sealed body, 'template' the fixed phrase alone (the object form says why, for the Settings readout; the bare word means the
+ * grant changed), 'none' sends nothing. It may throw: that is a failed send, not a skip.
  */
-export type SendGate = () => 'seal' | 'template' | 'none'
+export type SendGate = () => 'seal' | 'template' | 'none' | { pick: 'template'; why: 'grant_changed' | 'seal_failed' }
 
 export interface ApnsSender {
   send(
@@ -236,7 +251,7 @@ export function createApnsSender(o: ApnsOptions): ApnsSender | null {
     ttlS: number,
     jwtValue: string,
     timeoutMs: number,
-  ): Promise<{ status: number; reason?: string; skipped?: true }> => {
+  ): Promise<OnceResult> => {
     const authority = authorityOf(device.env)
     let session: ClientHttp2Session
     try {
@@ -248,9 +263,9 @@ export function createApnsSender(o: ApnsOptions): ApnsSender | null {
       if (stuck?.connecting) dropSession(authority, stuck)
       return { status: 0, reason: 'ConnectionError' }
     }
-    return new Promise<{ status: number; reason?: string; skipped?: true }>((resolve) => {
+    return new Promise<OnceResult>((resolve) => {
       let settled = false
-      const done = (r: { status: number; reason?: string; skipped?: true }) => {
+      const done = (r: OnceResult) => {
         if (settled) return
         settled = true
         resolve(r)
@@ -258,15 +273,21 @@ export function createApnsSender(o: ApnsOptions): ApnsSender | null {
       try {
         // The last look before the bytes leave: the PING wait above can be seconds long, and a revoke can land in it.
         let pick: 'seal' | 'template' | 'none' = 'seal'
+        let gateWhy: 'grant_changed' | 'seal_failed' = 'grant_changed'
         if (gate) {
           try {
-            pick = gate()
+            const g = gate()
+            pick = typeof g === 'string' ? g : g.pick
+            if (typeof g === 'object') gateWhy = g.why
           } catch {
             return done({ status: 0, reason: 'RecheckFailed' })
           }
         }
         if (pick === 'none') return done({ status: 0, reason: 'NotTrusted', skipped: true })
-        const body = pick === 'seal' && bodies.sealed ? bodies.sealed : bodies.plain
+        const sealedGoes = pick === 'seal' && bodies.sealed !== null
+        const body = sealedGoes && bodies.sealed ? bodies.sealed : bodies.plain
+        const which = sealedGoes ? 'sealed' : 'plain'
+        const gated = pick === 'template' && bodies.sealed !== null ? gateWhy : undefined
         const headers: Record<string, string | number> = {
           [h2.HTTP2_HEADER_METHOD]: 'POST',
           [h2.HTTP2_HEADER_PATH]: `/3/device/${device.token}`,
@@ -296,7 +317,7 @@ export function createApnsSender(o: ApnsOptions): ApnsSender | null {
           } catch {
             /* an empty body on 200 */
           }
-          done({ status, ...(reason ? { reason } : {}) })
+          done({ status, body: which, ...(gated ? { gated } : {}), ...(reason ? { reason } : {}) })
         })
         req.on('error', () => done({ status: 0, reason: 'ConnectionError' }))
         req.setTimeout(timeoutMs, () => {
@@ -330,7 +351,16 @@ export function createApnsSender(o: ApnsOptions): ApnsSender | null {
       const gone = r.status === 410
       const ok = r.status === 200
       if (!ok) o.log.warn({ status: r.status, reason: r.reason ?? null, env: device.env, gone }, 'apns send failed')
-      return { ok, gone, status: r.status, ...(r.reason ? { reason: r.reason } : {}) }
+      // Why the plain body went when a seal was offered: the gate dropped it, or it did not fit (decided above, in `bodies`).
+      const plainWhy = r.body === 'plain' && opts?.seal ? (r.gated ?? 'too_big') : undefined
+      return {
+        ok,
+        gone,
+        status: r.status,
+        ...(r.reason ? { reason: r.reason } : {}),
+        ...(r.body ? { body: r.body } : {}),
+        ...(plainWhy ? { plainWhy } : {}),
+      }
     },
     close() {
       for (const s of sessions.values()) s.destroy()

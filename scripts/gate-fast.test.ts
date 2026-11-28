@@ -1,6 +1,6 @@
 // scripts/gate.sh --fast: the pre-push gate that CI backs up. Of the bridge tests it runs the changed ones, the ones whose own
-// quoted relative paths name a changed bridge file (direct importers only), and the guards that read it; no e2e or old-client
-// step, and of the browser specs only the changed spec files (scripts/gate-web-specs.test.ts); no heavy lock unless it has
+// quoted relative paths name a changed bridge file (direct importers only), and the guards that read it; no old-client step and
+// no e2e spec but those whose `// gate-reads:` line matches a changed file, and of the browser specs only the changed spec files (scripts/gate-web-specs.test.ts); no heavy lock unless it has
 // such a spec. Anything on the keep-out list, or anything the scan cannot follow, runs the full gate
 // and says why. Every --plan here also goes through the node second count, which must agree or the gate refuses.
 import { spawnSync } from 'node:child_process'
@@ -169,6 +169,52 @@ describe('gate.sh --fast: which bridge tests it picks', () => {
     expect(planned).toContain('web-specs')
     expect(planned).toContain('e2e')
     expect(r.plan('--fast').lines).toEqual(['fast', ...CHECKS, 'vitest', '\tapps/web/src/a.ts'])
+  })
+
+  it('an e2e spec that reads a changed file (its `// gate-reads:` line) still runs in the fast gate; no other e2e spec does', () => {
+    const r = repo()
+    r.put('e2e/tests/c.spec.ts', '// gate-reads: apps/bridge/src/c.ts apps/web/src/lib/c/*\ntest\n')
+    r.put('e2e/tests/other.spec.ts', '// gate-reads: apps/bridge/src/b.ts\ntest\n')
+    r.git('add', '-A')
+    r.git('commit', '-qm', 'marks')
+    const marked = r.git('rev-parse', 'HEAD')
+    const planOf = (...a: string[]) => {
+      const p = spawnSync('bash', ['scripts/gate.sh', '--plan', '--base', marked, ...a], {
+        cwd: r.T,
+        env,
+        encoding: 'utf8',
+      })
+      expect(p.stderr).not.toContain('plan-check:') // the second count agreed
+      expect(p.status, p.stderr).toBe(0)
+      return p.stdout.trim().split('\n')
+    }
+    r.commit({ 'apps/bridge/src/c.ts': 'export const c = 2\n' })
+    // the guard test and the direct importers run as before; the spec is added, not a bridge test
+    expect(planOf('--fast')).toEqual([
+      'fast',
+      ...CHECKS,
+      'bun',
+      '\tapps/bridge/test/deep/spawn.test.ts',
+      '\tapps/bridge/test/dyn.test.ts',
+      '\tapps/bridge/test/guard-reader.test.ts',
+      'e2e',
+      '\ttests/c.spec.ts',
+    ])
+    // a changed spec file alone, or a source no spec marks, still plans no e2e here (CI runs those after the push)
+    const t = repo()
+    t.put('e2e/tests/c.spec.ts', '// gate-reads: apps/bridge/src/c.ts\ntest\n')
+    t.git('add', '-A')
+    t.git('commit', '-qm', 'marks')
+    t.commit({
+      'e2e/tests/c.spec.ts': '// gate-reads: apps/bridge/src/c.ts\nchanged\n',
+      'apps/bridge/src/b.ts': 'export const b = 5\n',
+    })
+    const q = spawnSync('bash', ['scripts/gate.sh', '--plan', '--fast', '--base', t.base], {
+      cwd: t.T,
+      env,
+      encoding: 'utf8',
+    })
+    expect(q.stdout.trim().split('\n')).toEqual(['fast', ...CHECKS, 'bun', '\tapps/bridge/test/b.test.ts'])
   })
 
   it('a protected path is that file or folder only, not a longer name beside it', () => {
@@ -400,7 +446,8 @@ describe('gate.sh --fast runs without the heavy lock', () => {
     r.commit({ '.gitignore': 'node_modules\nbin\nlock.log\n' })
     const base = r.git('rev-parse', 'HEAD')
     r.commit({ 'apps/bridge/src/b.ts': 'export const b = 5\n' })
-    const path = [bin, ...(process.env.PATH ?? '').split(':').filter((d) => !existsSync(join(d, 'bun')))].join(':')
+    // the stub bun in `bin` comes first, so no other bun is reached; no directory is dropped (on some systems /usr/bin holds bun and bash)
+    const path = `${bin}:${process.env.PATH ?? ''}`
     const run = (...a: string[]) =>
       spawnSync('bash', ['scripts/gate.sh', '--base', base, ...a], {
         cwd: r.T,

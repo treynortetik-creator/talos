@@ -3,6 +3,8 @@
 import type { InboxItemT } from '@talos-app/protocol'
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { announce, cancelAnnouncement } from '../../lib/announce.ts'
+import { ANNOUNCE, SOURCE } from '../../lib/announceText.ts'
 import { useApprovalOpen } from '../../lib/approvalOpen.ts'
 import { useTalosClient } from '../../lib/client.ts'
 import { cn } from '../../ui/cn.ts'
@@ -13,8 +15,15 @@ type Offer = { item: InboxItemT; kind: 'done' | 'snoozed' }
 const useUndoStore = create<{ offer: Offer | null }>(() => ({ offer: null }))
 
 /** `item` is the row as it was BEFORE the change, so Undo can put back what it was (an unread item stays unread). */
-export const offerUndo = (item: InboxItemT, kind: Offer['kind']) => useUndoStore.setState({ offer: { item, kind } })
-export const clearUndo = () => useUndoStore.setState({ offer: null })
+export const offerUndo = (item: InboxItemT, kind: Offer['kind']) => {
+  useUndoStore.setState({ offer: { item, kind } })
+  // The strip appears already filled, which a screen reader skips: the announcer says it instead (so the strip has no live role).
+  announce(kind === 'done' ? ANNOUNCE.markedDone : ANNOUNCE.snoozed, SOURCE.inboxUndo)
+}
+export const clearUndo = () => {
+  useUndoStore.setState({ offer: null })
+  cancelAnnouncement(SOURCE.inboxUndo) // the offer is over: what was said about it no longer applies
+}
 
 export function UndoStrip({ floating = false }: { floating?: boolean }) {
   const client = useTalosClient()
@@ -29,7 +38,6 @@ export function UndoStrip({ floating = false }: { floating?: boolean }) {
   const { item, kind } = offer
   return (
     <div
-      role="status"
       data-testid="inbox-undo"
       className={cn(
         'z-40 flex items-center gap-3 rounded-card border border-line bg-surface-2 p-2 pl-3 text-sm text-text',

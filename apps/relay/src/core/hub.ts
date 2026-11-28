@@ -70,11 +70,11 @@ import type { UndeliveredCtx } from './hub-undelivered.ts'
 import { undeliveredFrames } from './hub-undelivered.ts'
 import { ScheduleRouter } from './schedules.ts'
 import type { Store, StoredFrame } from './store.ts'
+import { TermRouter } from './term.ts'
 import { DAY_MS, mkFrame } from './util.ts'
 
 // What other files import from hub.ts. The types and constants live in hub-types.ts, the helpers in hub-helpers.ts.
-export type { AppConn, Conn, HubDeps, Ref } from './hub-types.ts'
-export { FrameRejected } from './hub-types.ts'
+export { type AppConn, type Conn, FrameRejected, type HubDeps, type Ref } from './hub-types.ts'
 
 export class Hub implements Bus {
   private apps = new Map<string, AppConn>()
@@ -107,6 +107,7 @@ export class Hub implements Bus {
   readonly ephemeral: EphemeralRouter
   /** MCP Apps request routing (core/apps.ts): app.request to the bridge, app.response back to the asking socket. */
   readonly appRouter: AppRouter
+  readonly term: TermRouter
   readonly bridgeFeatures: BridgeFeatures
   private twoStageBridge = false
   private schedules: ScheduleRouter
@@ -148,13 +149,19 @@ export class Hub implements Bus {
       const a = this.apps.get(id)
       if (a) this.appError(a, code, message, ref)
     }
-    this.ephemeral = new EphemeralRouter({
+    const host = {
       clock: d.clock,
       log: d.log,
       bridgeOnline: () => this.bridgeOnline(),
-      sendBridge: (raw) => this.sendBridge(raw),
+      sendBridge: (raw: Record<string, unknown>) => this.sendBridge(raw),
       sendToApp,
       appError,
+    }
+    this.ephemeral = new EphemeralRouter(host)
+    this.term = new TermRouter({
+      ...host,
+      bridgeHas: (feature) => this.bridgeFeatures.has(feature),
+      buffered: (id) => this.apps.get(id)?.conn.bufferedAmount?.() ?? 0,
     })
     // each signed read's rate bucket (auth/limits.ts); an upload also waits longer: the Mac fetches up to 50 MB first
     const bucket: Partial<Record<string, string>> = {
@@ -292,6 +299,7 @@ export class Hub implements Bus {
       d,
       apps: this.apps,
       ephemeral: this.ephemeral,
+      term: this.term,
       appRouter: this.appRouter,
       isStopped: () => this.stopped,
       track: (h) => void this.timers.add(h),
@@ -312,6 +320,7 @@ export class Hub implements Bus {
       historyCtx: this.historyCtx,
       schedules: this.schedules,
       ephemeral: this.ephemeral,
+      term: this.term,
       appRouter: this.appRouter,
       sendApp: (a, frame) => this.sendApp(a, frame),
       appError: (a, code, message, ref) => this.appError(a, code, message, ref),
@@ -358,6 +367,7 @@ export class Hub implements Bus {
       historyFrameIds: this.historyFrameIds,
       appRouter: this.appRouter,
       ephemeral: this.ephemeral,
+      term: this.term,
       schedules: this.schedules,
       getConfig: () => this.config,
       setConfig: (config) => {

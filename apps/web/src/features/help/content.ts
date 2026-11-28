@@ -100,7 +100,12 @@ export const HELP_SECTIONS: Section[] = [
           {
             q: 'Hide thread names in notifications',
             where: [w('settings', 'Notifications', 'Show thread names')],
-            note: 'This changes browser notifications. iPhone notifications always show General and Inbox by name and call every other thread “a thread”, whatever it is set to.',
+            note: 'This changes browser notifications. iPhone notifications always show General and Inbox by name and call every other thread “a thread”, whatever it is set to. It does not hide the message text: that has its own switch, below.',
+          },
+          {
+            q: 'Hide the message text in browser notifications',
+            where: [w('settings', 'Notifications', 'Show message text in browser notifications')],
+            note: 'It is on by default: a browser or Home Screen notification shows the first 80 characters of each reply, with passwords, keys and link codes hidden. Turn the switch off and it says only “New reply in” the thread. The iPhone app has its own switch for message words, also on by default: Apple never sees the words (they travel sealed, and only the phone opens them), and your Talos server can still read them, as it can your messages.',
           },
           {
             q: 'Turn notifications on for this browser',
@@ -399,7 +404,7 @@ export const HELP_SECTIONS: Section[] = [
               {
                 keys: '⌘K or Ctrl+K',
                 what: 'Open the command palette',
-                when: 'On the app’s main screens, also while you type. Not on this Help page or the sign-in screen. It jumps to a thread, searches all messages, opens Schedules, Settings or Memory, starts a new thread, runs a / command and opens the top Needs-you card. It never answers a card.',
+                when: 'On the app’s main screens, also while you type. Not on this Help page or the sign-in screen. It jumps to a thread, searches all messages, opens Schedules, Settings or Nyx, starts a new thread, runs a / command and opens the top Needs-you card. It never answers a card.',
               },
               {
                 keys: '⌘J or Ctrl+J',

@@ -11,6 +11,7 @@ import {
   NEEDS_YOU_FEATURE,
   newUlid,
   type PresenceT,
+  QUIET_LINES_FEATURE,
   SCHEDULES_FEATURE,
   SCHEDULES_FEATURE_V2,
   stripDeviceHidden,
@@ -47,6 +48,7 @@ export const readyFrames = {
           CONFIG_PROPOSE_FEATURE,
           CUSTOM_THEMES_FEATURE,
           NEEDS_YOU_FEATURE, // knows kind:'dialog'; the web build it ships draws it
+          QUIET_LINES_FEATURE, // takes a bridge's `quiet.lines` frame and sends it to the apps that listed it
           BRIDGE_STANDBY_FEATURE, // turns a standby hello away while another bridge is connected
           WIDE_FEATURES_FEATURE, // takes a bridge hello with up to FEATURES_MAX features
           FEATURES_IMPLIED_FEATURE, // reads a bridge's features-implied/1 as its retired features

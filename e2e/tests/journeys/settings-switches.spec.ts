@@ -4,8 +4,6 @@
 //     stops (and later resumes) pushing the next reply, for the reason that switch names.
 //   - permission_relay: has no switch in the app (the Health screen says so); it is a line in config.json. Turning it off
 //     must close an open approval card and refuse new ones.
-//   - memory browser: the app switch (config.memory_browser, which the phone may only turn off) and `talos-app memory on|off`
-//     at the Mac; the app must follow each. The app has no control for the first of these yet.
 // The apps switch (TALOS_APP_APPS) is E15 in apps.spec.ts and is not repeated here.
 import { createECDH, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -220,66 +218,5 @@ test('settings-switches: permission_relay off in config.json closes the open app
   await test.step('the Health screen follows', async () => {
     await page.goto(`${stack.origin}/settings/health`)
     await expect(page.getByTestId('permission-relay-state')).toContainText('Tool prompts as approval cards: Off')
-  })
-})
-
-test('settings-switches: the memory browser follows its app switch and `talos-app memory on|off` at the Mac', async ({
-  stack,
-  page,
-  context,
-}) => {
-  const agentDir = join(stack.root, 'agent')
-  mkdirSync(join(agentDir, 'notes'), { recursive: true })
-  writeFileSync(join(agentDir, 'notes', 'hello.md'), '# Hello note\n\nA note the phone may read.\n')
-  writeFileSync(
-    join(stack.home, 'memory.json'),
-    JSON.stringify({
-      version: 1,
-      enabled: true,
-      agent_dir: agentDir,
-      roots: [{ id: 'notes', label: 'Notes', path: 'notes', include: ['**/*.md'], exclude: [] }],
-      max_file_kb: 512,
-    }),
-    { mode: 0o600 },
-  )
-  await signedIn(stack, page, context)
-
-  const seeNote = async () => {
-    await expect(async () => {
-      await page.goto(`${stack.origin}/memory`)
-      await expect(page.getByRole('button', { name: /^Hello note/ })).toBeVisible({ timeout: 4000 })
-    }).toPass({ timeout: 45_000 })
-  }
-
-  // The bridge notices a hand-edited config.json on its next housekeeping tick, so reload until the app reflects it.
-  const seeOff = async () => {
-    await expect(async () => {
-      await page.reload()
-      await expect(page.getByTestId('memory-off')).toBeVisible({ timeout: 4000 })
-    }).toPass({ timeout: 45_000 })
-    await expect(page.getByRole('button', { name: /^Hello note/ })).toHaveCount(0)
-  }
-
-  await test.step('on: the app lists the note', async () => {
-    await seeNote()
-  })
-
-  await test.step('the app switch alone off (config.memory_browser, what a phone off-switch writes): the app says off', async () => {
-    writeConfig(stack, (c) => {
-      c.memory_browser = false
-    })
-    await seeOff()
-  })
-
-  await test.step('`talos-app memory on` at the Mac: the note is back', async () => {
-    const on = stack.cli(['memory', 'on'])
-    expect(await on.done()).toBe(0)
-    await seeNote()
-  })
-
-  await test.step('`talos-app memory off` at the Mac: off again, and nothing is listed', async () => {
-    const off = stack.cli(['memory', 'off'])
-    expect(await off.done()).toBe(0)
-    await seeOff()
   })
 })

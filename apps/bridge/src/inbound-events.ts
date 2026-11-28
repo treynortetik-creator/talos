@@ -17,7 +17,7 @@ export const eventsFrames = {
   async onShareItem(this: Inbound, it: Item, f: Of<'share.item'>) {
     const { ctx } = this
     const m = f.message
-    if (ctx.store.hasSeen(m.id)) return this.done(it)
+    if (this.isSeen(m.id)) return this.done(it)
     if (m.thread_id !== SHARE_THREAD || m.via !== 'share' || m.author !== 'owner')
       return this.reject(it, 'bad_frame', 'a share must be an owner row in inbox via share', [m.id])
     // A share is not signed, and history rows are replaced by id: one that names a row the Mac already has (an agent's reply,
@@ -45,13 +45,14 @@ export const eventsFrames = {
       files: files.map((x) => x.path),
     })
     await ctx.emit(shareItemNotification({ thread, frame: f, files, notes, filedPath }))
+    this.noteHandedOver([it.frame.id, m.id])
     this.done(it, [m.id])
   },
 
   /**
    * A problem report (docs/ERRORS.md): filed under `problems/open/`, answered `consumed` only once it is on disk. A write
-   * that fails is not consumed, so the relay sends it again; nothing is lost and nothing is announced as filed. This never
-   * emits a channel notification: a report is not an instruction and wakes nobody.
+   * that fails is not consumed, so the relay sends it again; nothing is lost and nothing is announced as filed. The report itself
+   * is never an instruction. An owner's own report wakes Main through the wake piece (problems/service.ts `wakeFor`); no other does.
    */
   async onProblemItem(this: Inbound, it: Item, f: Of<'problem.item'>) {
     const { ctx } = this
@@ -65,6 +66,7 @@ export const eventsFrames = {
     const { ctx } = this
     const thread = ctx.config.thread(f.event.thread) ? threadRef(ctx, f.event.thread) : defaultThreadRef(ctx)
     await ctx.emit(hookEventNotification({ thread, event: f.event, delivery: f.delivery }))
+    this.noteHandedOver([it.frame.id])
     this.done(it)
   },
 
@@ -72,6 +74,7 @@ export const eventsFrames = {
     const { ctx } = this
     const thread = ctx.config.thread('inbox') ? threadRef(ctx, 'inbox') : defaultThreadRef(ctx)
     await ctx.emit(hookDigestNotification({ thread, frame: f }))
+    this.noteHandedOver([it.frame.id])
     this.done(it)
   },
 }

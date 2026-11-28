@@ -222,7 +222,7 @@ describe('InboxScreen', () => {
     await userEvent.click(screen.getByText('Invoice question'))
     await userEvent.click(await screen.findByRole('button', { name: 'Ask Talos' }))
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/t/general'))
-    expect(useComposerStore.getState().prefill.general).toEqual({ text: 're: Invoice question', mode: 'replace' })
+    expect(useComposerStore.getState().prefill.general).toEqual({ text: 're: Invoice question', mode: 'append' })
   })
 
   it('shows the related card in the item sheet', async () => {

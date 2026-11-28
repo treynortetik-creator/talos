@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "plugin.add.request",
+  "id": "01JBF3V7Q8K2M4N6P8R0S2T46J",
+  "ts": "2026-10-28T15:32:10.120Z",
+  "control_id": "01JBF3V7Q8K2M4N6P8R0S2T46K",
+  "plugin": "notes",
+  "marketplace": "market",
+  "device_id": "d_rjxnk4xufxem5xago5zd",
+  "osig": "JEpuYuj1RAJsXqCN_wFKXFWjqQo21QJATh82lw_n2Ace5lFDPBqXRLougsb5n573QvQ0SkaTeMU1szquIcEb5g"
+}

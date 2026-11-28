@@ -1257,6 +1257,62 @@ describe("ci-runner.sh: main's Linux report (report-ci/linux, report-ci/check) r
     expect(linux(s)).toEqual([])
   })
 
+  // A Titan part that gates and fails (owner, 11-25: Mac first) says "not tested" under its own context and reports the red under
+  // report-ci/<part>; the Mac's run decides main's verdict. The one alert line for that Titan-only red is this report alert.
+  it("a Titan-only red of a gating part (check on, e2e, image) is one Linux report alert, and 'green again' when it passes", () => {
+    const s = setup()
+    const c1 = s.commit('one')
+    const c2 = s.commit('two')
+    const titanRed = (part: string, ctx: string) => ({
+      [ctx]: ['error', `not tested: Titan failed ${part}, log ~/.cache/talos-ci/logs/x.log; the Mac re-runs it`] as [
+        string,
+        string,
+      ],
+      [`report-ci/${part === 'check-titan' ? 'check' : part}`]: [
+        'failure',
+        `Titan failed ${part}, log ~/x.log; the Mac re-runs it (report-only)`,
+      ] as [string, string],
+    })
+    writeFileSync(
+      join(s.T, 'status', c1),
+      rows({
+        ...titanRed('check-titan', 'ci-part/check'),
+        ...titanRed('browser-e2e', 'ci-part/browser-e2e'),
+        ...titanRed('image', 'local-ci/image'),
+      }),
+    )
+    writeFileSync(
+      join(s.T, 'status', c2),
+      rows({
+        'ci-part/check': ['success', 'passed on titan in 300s'],
+        'report-ci/check': ['success', 'passed on titan in 300s'],
+        'report-ci/browser-e2e': ['success', 'passed on titan in 90s'],
+        'report-ci/image': ['success', 'passed on titan in 60s'],
+      }),
+    )
+    s.main([[c1, now()]])
+    s.alert(c1)
+    s.untested()
+    const red = linux(s).filter((f) => f.endsWith('-red.txt'))
+    expect(red.map((f) => f.replace(/^.*-report-/, '')).sort()).toEqual([
+      'browser-e2e-red.txt',
+      'check-red.txt',
+      'image-red.txt',
+    ])
+    expect(s.read(red.find((f) => f.includes('report-image')) as string)).toMatch(
+      /^main's LINUX REPORT is RED at [0-9a-f]{7}: report-ci\/image \(Titan failed image, log /,
+    )
+    s.untested()
+    expect(linux(s).filter((f) => f.endsWith('-red.txt'))).toHaveLength(3) // said once
+    // the next commit passes on Titan: one "green again" for each
+    s.main([
+      [c1, now()],
+      [c2, now()],
+    ])
+    s.untested()
+    expect(linux(s).filter((f) => f.endsWith('-green.txt'))).toHaveLength(3)
+  })
+
   it('one alert per commit and context going red, even when two runs read the state before either wrote it', () => {
     const s = setup()
     const c1 = s.commit('one')

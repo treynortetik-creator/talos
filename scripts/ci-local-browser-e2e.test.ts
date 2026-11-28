@@ -615,6 +615,68 @@ describe('the browser-e2e part (Titan): every e2e package but web, after a check
   })
 })
 
+// A Titan part that fails is Linux's red, not main's (owner, 11-25: Mac first): Titan says "not tested" (an error) and reports the red
+// to report-ci/, so the browser job takes the packages back and its own run decides.
+describe('the browser-e2e part fails on Titan: the Mac runs the packages itself, and only its own result counts', () => {
+  const titan = {
+    CI_STATUS_PREFIX: 'ci-part',
+    CI_TITAN_PART: '1',
+    CI_ATTEMPT_URL: A,
+    CI_STATUS_URL: `${A}titan-e2e`,
+    CI_RUN_ID: '9',
+  }
+  const partRun = ['--ref', 'HEAD', '--jobs', 'browser-e2e']
+  const TLOG = '~/.cache/talos-ci/logs/2026-11-25/abc1234-browser-e2e.log'
+  const titanRed = `ci-part/browser-e2e\terror\t${A}titan-e2e\tnot tested: Titan failed browser-e2e, log ${TLOG}; the Mac re-runs it`
+
+  it('on Titan: a red is "not tested" under ci-part/ and a failure under report-ci/; a green says so under both', async () => {
+    const r = repo()
+    const run = r.start(partRun, {
+      ...titan,
+      FAIL_ON: '--no-bail --if-present --filter !@talos-app/web --filter !{.} test:e2e',
+    })
+    expect(await run.done, run.out()).toBe(0) // the Mac answers
+    expect(r.posts('ci-part/browser-e2e')).toEqual([
+      expect.stringMatching(
+        /state=error .*description=not tested: Titan failed browser-e2e, log ~\/\.cache\/talos-ci\/logs\/.*-browser-e2e\.log;/,
+      ),
+    ])
+    expect(r.posts('report-ci/browser-e2e')).toEqual([
+      expect.stringMatching(/state=failure .*description=Titan failed browser-e2e, log ~\/\.cache\/talos-ci\/logs\//),
+    ])
+    const ok = repo()
+    expect(await ok.start(partRun, titan).done).toBe(0)
+    expect(ok.posts('ci-part/browser-e2e')).toEqual([expect.stringMatching(/state=success /)])
+    expect(ok.posts('report-ci/browser-e2e')).toEqual([expect.stringMatching(/state=success .*description=passed on /)])
+  })
+
+  it('on the Mac: the packages are taken back at once, and green here is a pass that says "Titan-only failure, not counted"', async () => {
+    const r = repo()
+    r.set('rows', [titanRed])
+    r.set('jobs', ['titan-e2e\tin_progress'])
+    const run = r.start(browserRun, { ...fold, CI_BROWSER_E2E_WAIT: '3600' }) // a wait would hit the test's timeout
+    expect(await run.done, run.out()).toBe(0)
+    expect(e2eCalls(r)).toEqual([WEB, THERE])
+    const text = `Titan-only failure, not counted: browser-e2e, log ${TLOG}`
+    expect(r.posts('local-ci/browser')).toEqual([
+      expect.stringContaining(`state=success -f context=local-ci/browser -f description=${text}`),
+    ])
+    expect(r.log('browser')).toContain(text)
+    expect(run.out()).toContain(text)
+  })
+
+  it('on the Mac: red here too is red, with no "not counted"', async () => {
+    const r = repo()
+    r.set('rows', [titanRed])
+    r.set('jobs', ['titan-e2e\tcompleted'])
+    const run = r.start(browserRun, { ...fold, FAIL_ON: '!{.} test:e2e' })
+    expect(await run.done).toBe(1)
+    const posts = r.posts('local-ci/browser')
+    expect(posts).toEqual([expect.stringMatching(/state=failure /)])
+    expect(posts.join('\n')).not.toContain('not counted')
+  })
+})
+
 describe('the split itself, with the real pnpm over this workspace', () => {
   // The fakes above only see the arguments. Here pnpm selects: every workspace package must fall on exactly one side, and the
   // workspace root on neither (its own test:e2e is `pnpm -r … test:e2e`: on the part's side it would run web there too).

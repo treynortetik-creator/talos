@@ -103,14 +103,26 @@ struct OsSandboxWorkerTests {
     try FileManager.default.createDirectory(atPath: r.root + "/clone/apps/bridge/src", withIntermediateDirectories: true)
     try Data("1".utf8).write(to: URL(fileURLWithPath: cli))
     // no guards installed: no record
-    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, unsafe: [r.talosHome], tmpRoots: []) == nil)
+    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, tmpRoots: []) == nil)
     try put(cli, bun: bunPath)
-    let got = OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, unsafe: [r.talosHome], tmpRoots: [])
+    let got = OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, tmpRoots: [])
     // the bun is the first executable of the fixed list (this Mac's own may come before the test's), by real path
     let first = (GuardsRefresh.bunCandidates(home: home) + [bunPath]).compactMap { Supervisor.realPath($0) }.first { FileManager.default.isExecutableFile(atPath: $0) }
-    #expect(got == .init(bun: first ?? "", bridgeDir: Supervisor.realPath(r.root + "/clone/apps/bridge") ?? ""), "\(String(describing: got))")
-    // in a folder a session works in, or under a temp root: no record
-    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, unsafe: [r.root + "/clone"], tmpRoots: []) == nil)
-    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, unsafe: [], tmpRoots: [Supervisor.realPath(r.root) ?? r.root]) == nil)
+    #expect(got?.bun == first && got?.bridgeDir == Supervisor.realPath(r.root + "/clone/apps/bridge"), "\(String(describing: got))")
+    #expect(got?.bunInTemp == false, "not in a temp folder here")
+    // every other executable bun of the list is kept (a second bun is fenced and denied too)
+    let all = (GuardsRefresh.bunCandidates(home: home) + [bunPath]).compactMap { Supervisor.realPath($0) }.filter { FileManager.default.isExecutableFile(atPath: $0) }
+    #expect(Set(([got?.bun ?? ""] + (got?.extraBuns ?? []))) == Set(all), "\(String(describing: got))")
+    // a clone in a folder a session works in still gets the record (the clone fence needs it); under a temp root or the Talos home: no record
+    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, tmpRoots: [Supervisor.realPath(r.root) ?? r.root]) == nil)
+    let inHome = r.talosHome + "/clone/apps/bridge/src/cli.ts"
+    try FileManager.default.createDirectory(atPath: r.talosHome + "/clone/apps/bridge/src", withIntermediateDirectories: true)
+    try Data("1".utf8).write(to: URL(fileURLWithPath: inHome))
+    try put(inHome, bun: bunPath)
+    #expect(OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, tmpRoots: []) == nil, "a clone inside the Talos home: no record")
+    // a bun in a temp folder keeps the record, marked
+    try put(cli, bun: bunPath)
+    let marked = OsSandboxLaunch.recordedBridge(talosHome: r.talosHome, home: home, tmpRoots: [Supervisor.realPath(home) ?? home])
+    #expect(marked != nil && marked?.bunInTemp == true || first.map { !($0.hasPrefix(Supervisor.realPath(home) ?? home)) } == true, "\(String(describing: marked))")
   }
 }

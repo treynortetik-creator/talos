@@ -18,6 +18,7 @@
 import { closeSync, constants, lstatSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
 import type { BridgeEnv } from '../config.ts'
+import { BUN_CACHE_OFF } from '../mcp-config.ts'
 import { processStartTime } from '../proc-identity.ts'
 import { readRegularFile } from '../safe-open.ts'
 import { parseGuardConfig } from './hook.ts'
@@ -69,7 +70,7 @@ type Shape = { re: RegExp; pick(m: RegExpExecArray): [string, string, string, st
 const SHAPES: Shape[] = [
   {
     re: new RegExp(
-      `^\\[ -f (${Q}) \\] && \\[ -x (${Q}) \\] && \\[ -f (${Q}) \\] && exec (${Q}) (${Q}) guard-hook --config (${Q}) --sha ${HEX} \\|\\| printf '%s\\\\n' '${esc(GUARD_HOOK_GONE_JSON)}'$`,
+      `^\\[ -f (${Q}) \\] && \\[ -x (${Q}) \\] && \\[ -f (${Q}) \\] && (?:${BUN_CACHE_OFF.name}=${BUN_CACHE_OFF.value} )?exec (${Q}) (${Q}) guard-hook --config (${Q}) --sha ${HEX} \\|\\| printf '%s\\\\n' '${esc(GUARD_HOOK_GONE_JSON)}'$`,
     ),
     pick: (m) =>
       m[1] === m[2] && m[1] === m[4] && m[3] === m[5]

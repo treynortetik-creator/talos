@@ -48,6 +48,8 @@ export type RelayHarness = { start(): Promise<RelayHandle> }
 export type BridgeHandle = {
   claude: FakeClaude
   stop(): Promise<void>
+  /** Optional: the bridge's own log file as text (a failed count prints its failure lines). A bridge logs only to its home's bridge.log, never to stderr. */
+  logText?(): string
 }
 export type BridgeHarness = {
   /**

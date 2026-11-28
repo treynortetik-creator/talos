@@ -1,3 +1,4 @@
+// gate-reads: apps/mobile/ios/*.swift apps/mobile/ios/*.strings apps/mobile/ios/*Info.plist apps/mobile/ios/*project.yml
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'

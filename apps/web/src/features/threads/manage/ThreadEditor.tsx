@@ -6,11 +6,23 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { cn } from '../../../ui/cn.ts'
 import { IconCheck, IconSearch } from '../../../ui/icons.tsx'
-import { Button, Input, Sheet, SheetContent, SheetDescription, SheetTitle, Textarea } from '../../../ui/index.ts'
+import {
+  Button,
+  ESCAPE_BOX,
+  Input,
+  keepEscapeInBox,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  searchBoxKeys,
+  Textarea,
+} from '../../../ui/index.ts'
 import { ThreadIcon } from '../../../ui/ThreadIcon.tsx'
 import { ART_ICONS, ART_LABEL, INK, searchIcons, THREAD_COLOR } from '../../../ui/threadIcons.ts'
 import { newThread } from '../../agent-config/patch.ts'
 import { useAwaitingOwner } from '../../cards/useAwaitingOwner.ts'
+import { THREAD_FILES_TITLE, threadFilesPath, useThreadFilesOn } from '../../files/threadFilesLink.ts'
 import { useMediaQuery } from '../../settings/useMedia.ts'
 import { Instructions } from '../../thread-sessions/Instructions.tsx'
 import { OwnSession } from '../../thread-sessions/OwnSession.tsx'
@@ -46,6 +58,7 @@ export function ThreadEditor({
       <SheetContent
         side={wide ? 'right' : 'bottom'}
         data-testid="thread-settings"
+        onEscapeKeyDown={keepEscapeInBox}
         {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}
         // editing: don't pop the phone keyboard by focusing the name; creating: the name field takes focus (autoFocus)
         onOpenAutoFocus={(e) => {
@@ -176,7 +189,12 @@ function EditorBody({
         </div>
       </div>
 
-      {thread && <SearchThisThread id={thread.id} close={close} />}
+      {thread && (
+        <div className="flex flex-wrap gap-2">
+          <SearchThisThread id={thread.id} close={close} />
+          {!thread.archived && <ThreadFilesButton id={thread.id} close={close} />}
+        </div>
+      )}
 
       {!system && (
         <div>
@@ -236,6 +254,8 @@ function EditorBody({
                 placeholder="Search icons"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
+                onKeyDown={searchBoxKeys({ value: q, onClear: () => setQ(''), onClose: close })}
+                {...ESCAPE_BOX}
                 className="pl-9"
               />
             </div>
@@ -466,5 +486,23 @@ function Swatch({
         )}
       </span>
     </button>
+  )
+}
+
+/** The thread's folder on the Mac (Thread files), when the Mac shares thread folders. */
+function ThreadFilesButton({ id, close }: { id: string; close: () => void }) {
+  const nav = useNavigate()
+  if (!useThreadFilesOn()) return null
+  return (
+    <Button
+      variant="outline"
+      onClick={() => {
+        close()
+        nav(threadFilesPath(id))
+      }}
+      data-testid="thread-files-open"
+    >
+      {THREAD_FILES_TITLE}
+    </Button>
   )
 }

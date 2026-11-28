@@ -15,8 +15,13 @@ import {
   isAlwaysKind,
   isBodyEditable,
   ScheduleCardPayload,
+  type SessionRuleT,
+  sessionAllowWords,
+  sessionRulesHash,
 } from '@talos-app/protocol'
 import { type ComponentType, type ReactNode, type SVGProps, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { announce } from '../../lib/announce.ts'
+import { ANNOUNCE, SOURCE } from '../../lib/announceText.ts'
 import { NoAnswerError, NotSentError, TalosClientError, useTalos, useTalosClient } from '../../lib/client.ts'
 import { placeWords, useHost } from '../../lib/hostWords.ts'
 import { HttpError } from '../../lib/http.ts'
@@ -41,6 +46,7 @@ import { Button, Input, Textarea } from '../../ui/index.ts'
 import { StatusDot } from '../../ui/StatusDot.tsx'
 import type { CardViewProps } from '../contracts.ts'
 import { dateTimeLabel } from '../schedules/logic.ts'
+import { answeredSaid, choiceSaid } from './announceAnswer.ts'
 import { spendArm, useArmedCard } from './arm.tsx'
 import { DialogCard } from './DialogCard.tsx'
 import {
@@ -55,7 +61,7 @@ import {
   KIND_LABEL,
   renderedHash,
 } from './logic.ts'
-import { PermissionCardLive } from './PermissionCard.tsx'
+import { PermissionCardLive, sessionRulesShown } from './PermissionCard.tsx'
 import { ThemePreview, themeOfCard } from './ThemePreview.tsx'
 import { copyText, formatExpiry, prefersReducedMotion, revealHidden, useRelayNow } from './util.ts'
 
@@ -165,6 +171,17 @@ function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/** The words of the primary button the owner pressed, for the spoken "Answered: ..." note. */
+function pressedWords(
+  card: CardT,
+  opts: { always?: true; session?: true },
+  alwaysLabel: string | null,
+  sessionShown: readonly SessionRuleT[] | null,
+): string {
+  if (opts.session && sessionShown) return sessionAllowWords(sessionShown)
+  return opts.always && alwaysLabel ? alwaysLabel : card.primary_label
+}
+
 export function CardView({ card, threadName, highlighted, armPrimary, inline = true }: CardViewProps) {
   const host = useHost()
   const client = useTalosClient()
@@ -234,11 +251,12 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
   const bodyEditable = isBodyEditable(card)
   const hasEditable = card.allow_edit && (card.fields.some((f) => f.editable) || bodyEditable)
 
-  const run = async (fn: () => Promise<void>) => {
+  // `said` is what the screen-reader announcer says once the answer went (a failure shows in the card's own alert instead).
+  const run = async (said: string, fn: () => Promise<unknown>) => {
     setBusy(true)
     setError(null)
     try {
-      await fn()
+      if ((await fn()) !== false) announce(said, SOURCE.card(card.id))
     } catch (e) {
       setError(errorCopy(e, agent, host))
     } finally {
@@ -253,37 +271,42 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
   const alwaysLabel =
     alwaysOffered && cardOffersAlways(card) && isAlwaysKind(card.kind) ? ALWAYS_ALLOW_LABEL[card.kind] : null
 
-  const primary = (opts: { always?: true } = {}) =>
-    run(async () => {
+  const sessionShown = card.kind === 'permission' ? sessionRulesShown(card) : null
+  const primary = (opts: { always?: true; session?: true } = {}) =>
+    run(answeredSaid(revealHidden(pressedWords(card, opts, alwaysLabel, sessionShown))), async () => {
       // the card may have run out while it sat on screen: an expired card is never sent
       if (isExpiredNow(card, Date.now() + (client.store.getState().clockOffset ?? 0))) {
         setError('This card expired, so this tap was not sent.')
-        return
+        return false
       }
       await client.resolveCard(card.id, {
         action: 'primary',
         payloadHash: hash,
         ...(edits && editedHash ? { edited: edits, editedHash } : {}),
         ...(opts.always && alwaysLabel ? { always: true as const } : {}),
+        // the owner signs the hash of the rules the button showed (never a hash of anything else), next to `session`
+        ...(opts.session && sessionShown
+          ? { session: true as const, sessionHash: sessionRulesHash(sessionShown) }
+          : {}),
       })
       setEditing(false)
       setDecided(true)
     })
   latest.current = { live: live && !decided, busy }
   const kill = () =>
-    run(async () => {
+    run(answeredSaid(revealHidden(card.kill_label)), async () => {
       await client.resolveCard(card.id, { action: 'kill', payloadHash: hash })
       setDecided(true)
     })
   // "Deny with a note" on a permission card: the same kill, with the owner's words signed in `note` (none: a plain kill)
   const killWithNote = (note: string | undefined) =>
-    run(async () => {
+    run(answeredSaid(revealHidden(card.kill_label)), async () => {
       await client.resolveCard(card.id, { action: 'kill', payloadHash: hash, ...(note ? { note } : {}) })
       setDecided(true)
     })
   // a button of a needs-you dialog card; the login card's one button carries no index
   const choose = (choice: number | null, text?: string) =>
-    run(async () => {
+    run(choiceSaid(card, choice), async () => {
       await client.resolveCard(card.id, {
         action: 'primary',
         payloadHash: hash,
@@ -294,7 +317,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
       setDecided(true)
     })
   const revise = () =>
-    run(async () => {
+    run(ANNOUNCE.revisionSent, async () => {
       await client.resolveCard(card.id, { action: 'revise', payloadHash: hash, note: note.trim() })
       setReviseOpen(false)
       setNote('')
@@ -454,6 +477,7 @@ export function CardView({ card, threadName, highlighted, armPrimary, inline = t
         {...shared}
         highlighted={highlighted}
         onAllow={() => primary()}
+        onAllowSession={() => primary({ session: true })}
         onDeny={kill}
         onDenyWithNote={killWithNote}
       />

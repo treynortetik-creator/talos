@@ -4510,12 +4510,14 @@
         "ok": true,
         "at": {
           "master": true,
-          "show_thread_names": "fixed_only"
+          "show_thread_names": "fixed_only",
+          "web_message_text": true
         },
         "disk_rev": 1,
         "disk_at": {
           "master": true,
-          "show_thread_names": "fixed_only"
+          "show_thread_names": "fixed_only",
+          "web_message_text": true
         }
       }
     },
@@ -4616,9 +4618,11 @@
     "loaded_top_keys": [
       "agent",
       "always_allow",
+      "auto_continue_at_limit",
       "default_thread",
       "dev",
       "media_keep_days",
+      "memory",
       "memory_browser",
       "notifications",
       "owner",

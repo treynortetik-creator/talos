@@ -184,7 +184,14 @@ export class ChronosMac extends ChronosBox {
    * same loops, so a job that comes due is offered by the live loop as in production, without the test waiting a minute for it.
    */
   bridgeEnv(): Record<string, string> {
-    return { TALOS_APP_CHRONOS_BIN: this.bin, TALOS_APP_SCHEDULE_RUNNER_S: '5', TALOS_APP_SCHEDULE_REFRESH_S: '5' }
+    // the box is the bridge's test root: the program, the HOME it is started with and its config are all inside it
+    return {
+      TALOS_APP_CHRONOS_BIN: this.bin,
+      TALOS_TEST_ROOT: this.dir,
+      HOME: this.home,
+      TALOS_APP_SCHEDULE_RUNNER_S: '5',
+      TALOS_APP_SCHEDULE_REFRESH_S: '5',
+    }
   }
 
   logs(): string {

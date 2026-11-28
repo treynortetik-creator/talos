@@ -41,6 +41,7 @@ Use these paths in `config_propose`.
 - `notifications.show_thread_names` (Thread names in notifications): "fixed_only", "all" or "none". Matters more: its card is marked high.
 - `voice_notes.reply_with_voice` (Spoken replies): "always" or "never". Small change.
 - `voice_notes.driving_until` (Driving mode until): an ISO time with offset (the bridge clamps it to 12 hours from now) or null to turn it off. Small change.
+- `work.thread` (Work alert thread): a thread id from list_threads, not archived and not a system thread. Matters more: its card is marked high.
 - `work.label` (Work section name): 1-40 chars. Small change.
 - `work.ask_note` (Work note): 1-120 chars. Small change.
 - `session_models` (Model list): 1 to 12 model aliases or ids, like ["default","opus","sonnet","haiku"]. Small change.
@@ -50,6 +51,7 @@ Use these paths in `config_propose`.
 - `dev.thread_fence` (Thread fence): true (on: thread sessions cannot read the Talos home) or false (off: they can, from their next start). Matters more: its card is marked high. Turning it off is made at once only when he asked and nothing from outside or from another session has reached you since; otherwise a card.
 - `dev.note_lookup` (Notes that may matter): true (on: thread sessions are pointed at notes a message names) or false (off: no pointers). Small change.
 - `os_sandbox` (Extra lock on protected files (experimental)): Experimental. It doesn't stop everything: - a thread folder that contains the Talos code folder - MCP servers added with "claude mcp add" (they are kept in ~/.claude.json) - some newer Claude Code command settings and plugins - a hook written in a project's own settings. true (on: sessions start in an OS sandbox from their next start, and agents cannot edit their own instruction files such as CLAUDE.md) or false (off). Matters more: its card is marked high.
+- `auto_continue_at_limit` (Continue at the usage limit): true (on: when a thread session hits a usage limit, Claude Code waits for the reset and goes on by itself, from its next start) or false (off: it stops at the limit). Small change.
 - `settings_lock` (Lock Talos settings): true; only the owner turns it off. Small change. Only `true` is accepted. Only the owner turns the lock off.
 - `dedicated` (Thread sessions): true to let threads have their own sessions, false to turn them all off. Matters more: its card is marked high. Turning it on lets threads start sessions that use the owner's Claude plan.
 - `theme` (Colour theme): a whole custom theme object, see the talos-theme skill: only the allowed tokens, typed values and readable contrast; applied at once when the owner asked for it, else a card with a preview. Matters more: its card is marked high. Draft it with the `talos-theme` skill; do not build the value from this list.
@@ -66,6 +68,7 @@ Use these paths in `config_propose`.
 - `threads.<id>.idle_park_min` (idle minutes before parking): 5-720 minutes (default 30). Small change. A thread agent: its own session may change this on its own thread.
 - `threads.<id>.color` (colour): one of red, orange, yellow, lime, mint, cyan, blue, violet, magenta, pink. Small change. A thread agent: its own session may change this on its own thread.
 - `threads.<id>.effort` (effort): one of low, medium, high, xhigh, max. Small change. A thread agent: its own session may change this on its own thread.
+- `threads.<id>.compact_window` (compact at (tokens)): 100000-1000000 tokens, or null to follow the owner's other sessions (the value from their shell or user settings); there is no screen for it yet, so it is set through a settings card. Small change. A thread agent: its own session may change this on its own thread.
 - `threads.<id>.model` (model): one of the models the app offers, or "inherit" for the main session's. Matters more: its card is marked high.
 - `threads.<id>.mcp_allow` (MCP servers): a list of up to 32 server names (the session gets only these, plus talos-app); [] for none. Matters more: its card is marked high.
 - `threads.<id>.session_opts.cwd` (folder): an absolute folder inside the owner's home folder, not in ~/.claude or the Talos data; a sub-thread's must be inside its parent's. Matters more: its card is marked high.
@@ -105,7 +108,7 @@ Change a thread later with `config_propose` and the `threads.<id>.<field>` paths
 A thread's own session (a thread agent) reaches these tools for its own thread only:
 
 - It may set up only its own sub-threads: `create_thread` with `parent_id` set to its own thread id. A sub-thread cannot make threads (one level deep). The sub-thread's folder must be the agent's own folder or inside it.
-- It may change its own thread's low fields only: name, topic, icon, colour, notify, parking (`idle_park_min`) and effort. Everything else about its own thread is the owner's or Main's.
+- It may change its own thread's low fields only: name, topic, icon, colour, notify, parking (`idle_park_min`), effort and compact point (`compact_window`). Everything else about its own thread is the owner's or Main's.
 - It may change any field of its own sub-threads except moving them under or out of another thread.
 - `set_thread_instructions` writes the AGENTS.md of its own sub-threads only (into a folder inside its own). Its own instructions are the owner's.
 - It changes no global setting and no other thread.

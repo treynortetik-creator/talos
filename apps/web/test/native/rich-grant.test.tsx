@@ -151,8 +151,10 @@ async function world(
   return { key, r, s, client, deps, clock }
 }
 
-describe('Turn on never makes a grant; "Show message text" does', () => {
-  it('Turn on leaves every notification a fixed phrase: no keys asked for, no grant posted, text off', async () => {
+describe('A kept-off phone: Turn on never makes a grant; "Show message text" does (new phones: push-text-default.test.tsx)', () => {
+  it('Turn on for a page that had text off leaves every notification a fixed phrase: no keys asked for, no grant posted, text off', async () => {
+    localStorage.setItem('talos.nativePush.choice', 'on') // a page from before 0.11 that recorded text as off
+    localStorage.setItem('talos.nativePush.text', 'off')
     const w = await world()
     await enableNativePush(w.deps)
     expect(useNativePush.getState().view.kind).toBe('on')
@@ -167,7 +169,9 @@ describe('Turn on never makes a grant; "Show message text" does', () => {
     expect(useNativePush.getState().rich).toBe(false)
   })
 
-  it('the Home setup card Turn on is the fixed phrase too: it goes through the same path and makes no grant', async () => {
+  it('the Home setup card Turn on is the same path: on a kept-off page it makes no grant, and the row offers text', async () => {
+    localStorage.setItem('talos.nativePush.choice', 'on') // a page from before 0.11 that recorded text as off
+    localStorage.setItem('talos.nativePush.text', 'off')
     const w = await world({}, { permission: 'prompt' })
     const g = globalThis as unknown as { Capacitor?: unknown }
     const before = g.Capacitor
@@ -208,11 +212,10 @@ describe('Turn on never makes a grant; "Show message text" does', () => {
     }
   })
 
-  it('Turn off then Turn on starts from the fixed phrase again, even after text had been chosen', async () => {
+  it("Turn off then Turn on keeps the owner's decision: a fixed phrase chosen stays a fixed phrase", async () => {
     const w = await world()
     await enableNativePush(w.deps)
-    await setNativeText(w.deps, true)
-    expect(w.r.grantHeld()).not.toBeNull()
+    await setNativeText(w.deps, false)
     await disableNativePush(w.deps)
     await enableNativePush(w.deps)
     expect(w.r.grantHeld()).toBeNull()
@@ -225,7 +228,7 @@ describe('Turn on never makes a grant; "Show message text" does', () => {
     const w = await world()
     await enableNativePush(w.deps)
     await setNativeText(w.deps, true)
-    const grantPost = w.r.posts.find((p) => NativeGrant.safeParse(p.body).success)
+    const grantPost = w.r.posts.filter((p) => NativeGrant.safeParse(p.body).success).at(-1)
     expect(grantPost).toBeTruthy()
     expect(grantPost?.body).toMatchObject({
       type: 'native.grant',
@@ -237,7 +240,7 @@ describe('Turn on never makes a grant; "Show message text" does', () => {
     const life = Date.parse(String(grantPost?.body.exp)) - Date.parse(String(grantPost?.body.ts))
     expect(life).toBe(GRANT_MAX_LIFETIME_MS)
     // the shell holds the exact bytes the relay holds: the relay compares them byte for byte when a tap arrives
-    const stored = w.s.log.find((c) => c.call === 'storeGrant')
+    const stored = w.s.log.filter((c) => c.call === 'storeGrant').at(-1)
     expect(stored?.grant).toBe(w.r.grantHeld()?.raw)
     expect(w.s.log.map((c) => c.call).indexOf('storeGrant')).toBeGreaterThan(
       w.s.log.map((c) => c.call).indexOf('nativeKeys'),
@@ -274,6 +277,8 @@ describe('Turn on never makes a grant; "Show message text" does', () => {
     expect(w.r.posts).toEqual([])
     expect(useNativePush.getState().view.kind).toBe('on')
     expect(useNativePush.getState().rich).toBeNull()
+    expect(useNativePush.getState().textFailed).toBe(false)
+    expect(useNativePush.getState().note).toBe('Notifications are on.')
   })
 })
 
@@ -484,7 +489,7 @@ const grantPosts = (w: { r: { posts: Array<{ body: Record<string, unknown> }> } 
   w.r.posts.filter((p) => NativeGrant.safeParse(p.body).success)
 
 describe('message text never returns without a tap (review round 4, finding 1)', () => {
-  it('iOS permission denied: text goes off for good, so re-allowing and tapping Turn on does not bring it back', async () => {
+  it('iOS permission denied: text ends and the grant goes; opening the app never brings it back, and only the Turn on tap restores what the owner chose', async () => {
     const w = await world({}, { permission: 'granted' })
     await enableNativePush(w.deps)
     await setNativeText(w.deps, true)
@@ -494,13 +499,15 @@ describe('message text never returns without a tap (review round 4, finding 1)',
     await refreshNativeOnOpen(w.deps)
     expect(localStorage.getItem('talos.nativePush.text')).toBe('off')
     expect(w.r.grantHeld()).toBeNull()
-    w.s.setPermission('granted') // he re-allows, taps Turn on, and later opens the app again
-    await enableNativePush(w.deps)
+    w.s.setPermission('granted') // he re-allows and opens the app twice: no tap, no grant
     await refreshNativeOnOpen(w.deps)
     await refreshNativeOnOpen(w.deps)
     expect(grantPosts(w).length).toBe(before)
     expect(w.r.grantHeld()).toBeNull()
-    expect(useNativePush.getState().rich).toBe(false)
+    await enableNativePush(w.deps) // his tap: he chose words earlier, so words come back, once
+    await refreshNativeOnOpen(w.deps)
+    expect(grantPosts(w).length).toBe(before + 1)
+    expect(useNativePush.getState().rich).toBe(true)
   })
 
   it('denied while the relay holds no token: the text choice still ends', async () => {
@@ -528,17 +535,28 @@ describe('message text never returns without a tap (review round 4, finding 1)',
     expect(useNativePush.getState().pendingRevoke).toBe(false)
   })
 
-  it('Turn on after a leftover text=on does not let the next open make a grant', async () => {
+  it('Turn on after a leftover text=on makes one grant at the tap, and the next open makes no more', async () => {
     const w = await world({}, { permission: 'prompt' })
     localStorage.setItem('talos.nativePush.text', 'on')
     await enableNativePush(w.deps)
     await refreshNativeOnOpen(w.deps)
-    expect(grantPosts(w)).toEqual([])
+    expect(grantPosts(w).length).toBe(1)
+    expect(useNativePush.getState().rich).toBe(true)
+    // the same page with a leftover text=off is told apart: no grant, a fixed phrase
+    resetNativePushForTests()
+    localStorage.setItem('talos.nativePush.text', 'off')
+    const w2 = await world({}, { permission: 'prompt' })
+    await enableNativePush(w2.deps)
+    await refreshNativeOnOpen(w2.deps)
+    expect(grantPosts(w2)).toEqual([])
+    expect(useNativePush.getState().rich).toBe(false)
   })
 })
 
 describe('the row tells the truth about text (review round 4, finding 3)', () => {
   it('"Use a fixed phrase only" offline: the phone is cleared, the note says the server has not confirmed, and the next open retries until it lands', async () => {
+    localStorage.setItem('talos.nativePush.choice', 'on') // a page from before 0.11 that recorded text as off
+    localStorage.setItem('talos.nativePush.text', 'off')
     const w = await world({}, { permission: 'granted' })
     await enableNativePush(w.deps)
     await setNativeText(w.deps, true)
@@ -630,7 +648,9 @@ describe('what the Settings row says about thread names and older shells (review
     expect(screen.queryByTestId('native-push-names')?.textContent ?? '').not.toMatch(/turn on message text/)
   })
 
-  it('a current shell in the off state does promise the choice', async () => {
+  it('a current shell in the off state, for a page that had text off, does promise the choice', async () => {
+    localStorage.setItem('talos.nativePush.text', 'off')
+    localStorage.setItem('talos.nativePush.choice', 'off')
     const w = await world({ registered: false }, { permission: 'prompt' })
     useNativePush.setState({ view: { kind: 'off' }, rich: null })
     render(
@@ -654,23 +674,26 @@ describe('text stays off after a block, a failed write and a sign-out race (revi
     expect(w.r.grantHeld()).not.toBeNull()
   }
 
-  it('blocked while the relay holds a grant but no token: the open takes the grant back, so re-allowing and Turn on do not restore text', async () => {
+  it('blocked while the relay holds a grant but no token: the open takes the grant back, and only the Turn on tap restores the chosen words', async () => {
     const w = await world({ grantExpIn: 25 * DAY, registered: false }, { permission: 'denied' })
     live(w)
     await refreshNativeOnOpen(w.deps)
     expect(w.r.grantHeld()).toBeNull()
     expect(w.s.log.map((c) => c.call)).toContain('clearGrant')
-    w.s.setPermission('granted')
-    await enableNativePush(w.deps)
-    expect(w.r.grantHeld()).toBeNull()
-    expect(useNativePush.getState().rich).toBe(false)
     expect(localStorage.getItem('talos.nativePush.text')).toBe('off')
+    w.s.setPermission('granted')
+    await refreshNativeOnOpen(w.deps)
+    expect(w.r.grantHeld()).toBeNull()
+    await enableNativePush(w.deps)
+    expect(grantPosts(w).length).toBe(1)
+    expect(useNativePush.getState().rich).toBe(true)
   })
 
   it('Turn on itself revokes a grant that is still alive (relay and Keychain), even when nothing blocked it first', async () => {
     const w = await world({ grantExpIn: 25 * DAY, registered: true }, { permission: 'granted' })
     live(w)
     localStorage.setItem('talos.nativePush.choice', 'off')
+    localStorage.setItem('talos.nativePush.text', 'off') // a page that had text off: Turn on starts clean and stays a fixed phrase
     await enableNativePush(w.deps)
     expect(w.r.grantHeld()).toBeNull()
     expect(w.s.log.map((c) => c.call)).toContain('clearGrant')
@@ -693,7 +716,7 @@ describe('text stays off after a block, a failed write and a sign-out race (revi
     expect(useNativePush.getState().pendingRevoke).toBe(true)
   })
 
-  it('the Settings row alone sees the block (no open, inside the throttle): text ends and the grant goes', async () => {
+  it('the Settings row alone sees the block (no open, inside the throttle): text ends and the grant goes; Turn on restores the chosen words once', async () => {
     const w = await world({ grantExpIn: 25 * DAY, registered: true }, { permission: 'granted' })
     live(w)
     w.s.setPermission('denied')
@@ -704,8 +727,8 @@ describe('text stays off after a block, a failed write and a sign-out race (revi
     w.s.setPermission('granted')
     await enableNativePush(w.deps)
     await refreshNativeOnOpen(w.deps)
-    expect(grantPosts(w).length).toBe(0)
-    expect(useNativePush.getState().rich).toBe(false)
+    expect(grantPosts(w).length).toBe(1)
+    expect(useNativePush.getState().rich).toBe(true)
   })
 
   it('an offline open still reads the permission first: a block ends the text choice and clears the keys with no network at all', async () => {
@@ -741,6 +764,8 @@ describe('text stays off after a block, a failed write and a sign-out race (revi
   })
 
   it('sign-out landing during the grant POST: nothing is stored on the phone and the relay copy is taken back', async () => {
+    localStorage.setItem('talos.nativePush.choice', 'on') // a page from before 0.11 that recorded text as off
+    localStorage.setItem('talos.nativePush.text', 'off')
     const w = await world({}, { permission: 'granted' })
     await enableNativePush(w.deps)
     const real = w.r.fn.getMockImplementation()

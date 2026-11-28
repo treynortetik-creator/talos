@@ -2,8 +2,16 @@
 // permission dialog only ever comes from the tap on "Turn on notifications". The share sheet lives in Settings.
 import { useEffect, useState } from 'react'
 import { useTalosClient } from '../../lib/client.ts'
+import { nativeGrantSupported } from '../../lib/nativePush.ts'
 import { Button } from '../../ui/index.ts'
-import { enableNativePush, refreshNativePush, useNativePush } from '../pwa/nativePush.ts'
+import { wantsText } from '../pwa/nativeChoice.ts'
+import {
+  enableNativePush,
+  refreshNativePush,
+  setNativeText,
+  TEXT_FAILED_NOTE,
+  useNativePush,
+} from '../pwa/nativePush.ts'
 import { enablePush, usePushState } from '../pwa/push.ts'
 
 export const SETUP_DISMISSED_KEY = 'talos.setupCard.dismissed'
@@ -35,7 +43,9 @@ export function SetupCard({ onSettings }: { onSettings: () => void }) {
   const off = inApp ? v.kind === 'off' : web.permission === 'default'
   // After a tap that failed, the card stays and says why instead of vanishing.
   const failed = inApp && tried && (v.kind === 'error' || v.kind === 'needs_setup' || v.kind === 'blocked')
-  if (dismissed || (!off && !failed)) return null
+  // Turn on worked but the words did not: the card stays and says so, with a way to try again (never a silent fixed phrase).
+  const textFailed = inApp && v.kind === 'on' && native.textFailed
+  if (dismissed || (!off && !failed && !textFailed)) return null
   const busy = inApp ? native.busy : web.busy
   const failure =
     v.kind === 'error'
@@ -52,44 +62,73 @@ export function SetupCard({ onSettings }: { onSettings: () => void }) {
       data-testid="setup-card"
       className="incised flex flex-col gap-2 rounded-card bg-surface p-4"
     >
-      <p className="m-0 font-medium text-text">Get pinged when Talos needs you</p>
-      <p className="m-0 text-sm text-text-2">
-        Notifications are off on this device.
-        {inApp ? ' You can also add Talos to your share sheet in Settings.' : ''}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          disabled={busy}
-          onClick={() => {
-            setTried(true)
-            void (inApp ? enableNativePush({ client }) : enablePush())
-          }}
-          data-testid="setup-enable"
-        >
-          Turn on notifications
-        </Button>
-        <Button variant="outline" onClick={onSettings}>
-          Open Settings
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={() => {
-            try {
-              localStorage.setItem(SETUP_DISMISSED_KEY, '1')
-            } catch {
-              /* it hides for this visit; it may return next open */
-            }
-            setDismissed(true)
-          }}
-        >
-          Not now
-        </Button>
-      </div>
-      {message ? (
-        <p role="status" className="m-0 text-sm text-text-2">
-          {message}
-        </p>
-      ) : null}
+      {textFailed ? (
+        <>
+          <p className="m-0 font-medium text-text">Get pinged when Talos needs you</p>
+          <p role="status" className="m-0 text-sm text-text-2">
+            {TEXT_FAILED_NOTE}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={native.busy}
+              onClick={() => void setNativeText({ client }, true)}
+              data-testid="setup-retry"
+            >
+              Try again
+            </Button>
+            <Button variant="outline" onClick={onSettings}>
+              Open Settings
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="m-0 font-medium text-text">Get pinged when Talos needs you</p>
+          <p className="m-0 text-sm text-text-2">
+            Notifications are off on this device.
+            {inApp ? ' You can also add Talos to your share sheet in Settings.' : ''}
+          </p>
+          {inApp && nativeGrantSupported(globalThis) ? (
+            <p className="m-0 text-sm text-text-2" data-testid="setup-shared">
+              {wantsText() ? 'Turn on shows message words with Reply. ' : ''}On a shared phone, set Show Previews to
+              Never for Talos: iPhone Settings, Notifications, Talos, Show Previews.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={busy}
+              onClick={() => {
+                setTried(true)
+                void (inApp ? enableNativePush({ client }) : enablePush())
+              }}
+              data-testid="setup-enable"
+            >
+              Turn on notifications
+            </Button>
+            <Button variant="outline" onClick={onSettings}>
+              Open Settings
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                try {
+                  localStorage.setItem(SETUP_DISMISSED_KEY, '1')
+                } catch {
+                  /* it hides for this visit; it may return next open */
+                }
+                setDismissed(true)
+              }}
+            >
+              Not now
+            </Button>
+          </div>
+          {message ? (
+            <p role="status" className="m-0 text-sm text-text-2">
+              {message}
+            </p>
+          ) : null}
+        </>
+      )}
     </section>
   )
 }

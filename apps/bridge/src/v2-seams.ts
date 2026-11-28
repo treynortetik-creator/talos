@@ -63,6 +63,10 @@ export interface MemoryService {
 export interface SpeakServiceSeam {
   readonly available: boolean
   request(f: FrameOf<'speak.request'>): Promise<SpeakBody>
+  /** A reply's `voice_text` audio, under the read-aloud parallel limit (waits for a slot). */
+  synthesizeForReply(text: string, id: string): Promise<import('./tts.ts').TtsResult>
+  /** How long a reply waits for that audio before its text goes out alone. */
+  readonly replyWaitMs: number
 }
 
 /** The folder picker (src/folders/**): folder names under the owner's home, for the signed device only. */

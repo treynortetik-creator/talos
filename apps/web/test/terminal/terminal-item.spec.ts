@@ -17,12 +17,14 @@ async function pretendMacApp(page: Page) {
 }
 
 test.describe('in a browser', () => {
-  test('there is no Terminal item, and /terminal goes to Home', async ({ page }) => {
+  // Since the remote view: a browser has the Terminal item once the Mac lists the view (the fake Mac does), and /terminal is the remote view's
+  // cards, never the Mac app's native terminal space.
+  test('the Terminal item opens the remote view, not the native terminal space', async ({ page }) => {
     await page.goto('/')
     await expect(page.getByRole('link', { name: 'Settings' }).first()).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Terminal' })).toHaveCount(0)
     await page.goto('/terminal')
-    await expect(page).toHaveURL(/\/$/)
+    await expect(page).toHaveURL(/\/terminal$/)
+    await expect(page.getByTestId('terminal-card').first()).toBeVisible()
     await expect(page.getByTestId('terminal-space')).toHaveCount(0)
   })
 })

@@ -1,5 +1,5 @@
 // The Library on a phone or tablet: a bottom sheet over the chat listing the pages and files sent in Talos (SentFiles.tsx), asked for each
-// time it opens. The thread's folder on the Mac is browsed under Memory (memory/AgentFolders.tsx).
+// time it opens. The thread's folder on the Mac is Thread files (`/files`, features/files/ThreadFiles.tsx).
 
 import { IconClose } from '../../ui/icons.tsx'
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../ui/sheet.tsx'

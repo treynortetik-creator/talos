@@ -454,7 +454,7 @@ describe('Edit', () => {
     await user.click(screen.getByRole('button', { name: 'Edit Packing check' }))
     await screen.findByTestId('schedule-form')
     await change(user)
-    await user.click(screen.getByRole('button', { name: 'Review change' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(propose).toHaveBeenCalledTimes(1))
     const card = await waitFor(() => {
       const c = client.store

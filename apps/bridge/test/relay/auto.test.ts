@@ -16,9 +16,12 @@ import {
   FAKE_PROJECT_TOKEN,
   PROJECT_ID,
   RELAY_SERVICE_ID,
+  useWorldCleanup,
   type World,
   world,
 } from './helpers.ts'
+
+useWorldCleanup()
 
 const HOUR = 3_600_000
 

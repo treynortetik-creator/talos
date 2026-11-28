@@ -119,12 +119,22 @@ describe('routes (fake mode, real App)', () => {
     render(<App client={mk(opts)} storage={createMemoryStorage()} />)
   }
 
-  it.each([
-    ['/memory', 'Clio'],
-    ['/memory/notes/todo.md', 'Clio'],
-  ])('%s renders its placeholder', async (url, heading) => {
-    await mount(url)
-    expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeTruthy()
+  it('/memory renders the Nyx screen', async () => {
+    await mount('/memory')
+    expect(await screen.findByRole('heading', { name: 'Nyx', level: 1 })).toBeTruthy()
+  })
+
+  it('/files renders Thread files, and an old /memory?af= link opens that thread there', async () => {
+    await mount('/memory?af=general')
+    expect(await screen.findByRole('heading', { name: 'Thread files', level: 1 })).toBeTruthy()
+    expect(window.location.pathname + window.location.search).toBe('/files?t=general')
+    expect(await screen.findByTestId('thread-folder')).toBeTruthy()
+  })
+
+  it('an old memory browser path (/memory/graph) goes to the Nyx screen, not Home', async () => {
+    await mount('/memory/graph')
+    expect(await screen.findByRole('heading', { name: 'Nyx', level: 1 })).toBeTruthy()
+    expect(window.location.pathname).toBe('/memory')
   })
 
   it('/settings/health renders the real Health screen (WP-V1), a level-2 heading under Settings', async () => {

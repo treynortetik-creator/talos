@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import {
   type CardT,
   cleanDenyNote,
+  cleanSessionRules,
   composePermissionCard,
   type ErrorCodeT,
   newId,
@@ -24,6 +25,8 @@ import {
   permissionCardAllowsPrimary,
   permissionHiddenReasons,
   permissionVerdictFor,
+  sessionRulesHash,
+  validSessionOffer,
 } from '@talos-app/protocol'
 import type { LedgerRow } from '../cards-ledger.ts'
 import type { BridgeContext } from '../context.ts'
@@ -36,10 +39,29 @@ import { askRuleMatches, BYPASS_MODE } from './ask-why.ts'
 import { type Explainer, type ExplainRequest, explainRequestOf, explainToCard } from './explainer.ts'
 import { agentFileWarning } from './frontmatter-risk.ts'
 import { renderHookCall } from './hook-render.ts'
+import { parseQuestions } from './question.ts'
+import { ResultWatch, safeTranscriptPath } from './transcript-watch.ts'
 
 export type VerdictSender = (verdict: PermissionVerdictT) => Promise<void>
 /** `hook`: raised for a PermissionRequest hook (kit/hooks/permission-relay.py), answered to that hook and not over MCP. */
-type Pending = { card: CardT; requestId: string; hook?: true }
+/** A channel request, as `onRequest` parsed it. */
+type ChannelRequest = Parameters<typeof composePermissionCard>[0]['request']
+/**
+ * `paired`: for a hook card that took the place of a channel card, the channel request it stands in for. If the hook ends with no
+ * answer (it died, was ended, timed out, or its card could not be sent) the prompt is still open at Claude Code, so that channel card is
+ * raised again (`drop`).
+ */
+type Pending = {
+  card: CardT
+  requestId: string
+  hook?: true
+  mismatch?: boolean
+  paired?: ChannelRequest
+  /** The exact-call watch of this card (`watchResult`); a channel card raised again takes it over from its hook card. */
+  armed?: ResultWatch
+  /** Set on a channel card a hook's id was attached to (route H2): tool + input. A second request with that key ends the watch (see `seen`). */
+  carriedKey?: string
+}
 
 /**
  * A prompt a PermissionRequest hook reports. `thread` is a PROVEN worker thread (hub/server.ts), absent for the main session;
@@ -53,13 +75,29 @@ export type HookRequest = {
   cwd?: string
   /** The session's permission mode as the hook's input names it (`permission_mode`); used only for the "why it asked" line. */
   mode?: string
+  /** The rule Claude Code offered for "Allow for this session", as the hook kept it (checked again by `cleanSessionRules` when the card is made). */
+  suggest?: { rules: unknown }
+  /**
+   * The call this prompt is for, when the hook tied it to exactly ONE PreToolUse record of its own session: the call's tool_use id, the
+   * session, the subagent (when the call is a subagent's) and the transcript path the hook was given. `watchResult` reads the transcript.
+   */
+  session_id?: string
+  tool_use_id?: string
+  agent_id?: string
+  transcript_path?: string
 }
 /** `allow` and `deny` are only ever the owner's signed answer to the card; everything else is `none` (leave the prompt alone). */
 export type HookDecision = {
-  decision: 'allow' | 'deny' | 'none'
+  decision: 'allow' | 'deny' | 'answer' | 'none'
   reason: string
+  /** With `answer` only (an AskUserQuestion, permission/question.ts): the question text to its answer, which the hook hands back as `updatedInput.answers`. */
+  answers?: Record<string, string>
   /** The owner's own words with a `deny` (cleaned, capped): signed in the card.resolve, so no program wrote them. Never logged. */
   note?: string
+  /** With an `allow` only: the owner's signed tap chose "Allow for this session". The hook prints its own stored rule; nothing here names one. */
+  session?: true
+  /** With `session`: the hash the owner signed, which the hook compares with its own stored rules. */
+  session_hash?: string
 }
 
 /**
@@ -73,12 +111,21 @@ const HOOK_RELAY_GRACE_MS = 1_500
  */
 const HOOK_MAX_WAIT_MS = 3_700_000
 const HOOK_MAX_OPEN = 16
+/** How often a hook card's transcript is looked at for its call's result. */
+const RESULT_WATCH_MS = 1_000
+/** A hook with a known call id ended with no word: how long, in steps, its call's result is looked for before the channel card is raised again. */
+const RERAISE_LOOK_MS = 500
+const RERAISE_STEP_MS = 100
+/** Why a hook card closed with no answer from the owner (relay.ts `drop`): the prompt is still open, so a channel card it replaced comes back. */
+const HOOK_ENDED_UNANSWERED = new Set(['hook_gone', 'timeout', 'send_failed'])
 /** What a card shows of the description whole (protocol permission.ts MAX_SHOWN). */
 const MAX_CARD_DESCRIPTION = 19_000
 /** What the session is told when a change to agent files is too long for a card (the hub keeps the first 120 characters). */
 export const TOO_LONG_AGENT_CHANGE =
   'This change to a Claude agent, skill or command file is too long to show the owner on a card, and it changes settings the owner must see. Make it as smaller edits.'
 const RECENT_RELAY_MS = 15_000
+/** How long a channel request is remembered in `seen`: far longer than any card send can wait (an 8 s ack plus the HTTP fallback), so a held send never loses its own entry. */
+const SEEN_KEEP_MS = 120_000
 const ID_LETTERS = 'abcdefghijkmnopqrstuvwxyz' // a-z without `l`, like PermissionRequestId
 
 /**
@@ -104,7 +151,16 @@ export type PreCheck =
 export type ResolveOutcome = { ok: true } | { ok: false; code: ErrorCodeT; reason: string }
 
 /** A relay card that can stand in for a hook's. `sent` settles once the send is over: true when it went, false when it threw. */
-type RelayNote = { tool: string; json: string; at: number; sent: Promise<boolean> }
+type RelayNote = {
+  tool: string
+  json: string
+  at: number
+  sent: Promise<boolean>
+  cardId: string
+  params: ChannelRequest
+}
+/** A Main-session hook card with a session offer that no relay card has been paired with yet (a relay request for the same call is then not made). */
+type HookOffer = { tool: string; json: string; at: number }
 
 export class PermissionRelay {
   private readonly ids = new OpenPermissionIds()
@@ -113,10 +169,25 @@ export class PermissionRelay {
   private readonly hookWaiters = new Map<string, (d: HookDecision) => boolean>()
   private hookInFlight = 0
   private recentRelay: RelayNote[] = []
+  /** Open hook cards (cardId) that won over the channel's card and wait for a channel request that is not here yet. */
+  private readonly hookOffers = new Map<string, HookOffer>()
   private sessionPids = new Set<number>()
   private readonly graceWake = new Set<() => void>()
   private hookGraceMs = HOOK_RELAY_GRACE_MS
   private hookMaxWaitMs = HOOK_MAX_WAIT_MS
+  /** How often the transcript is looked at for a hook card whose call is known (one lstat, plus the appended bytes). */
+  private watchMs = RESULT_WATCH_MS
+  private reraiseLookMs = RERAISE_LOOK_MS
+  /** Channel cards waiting out the look before they are raised again (`raiseAgain`): their timers, so a stop can cancel them. */
+  private readonly looking = new Map<object, unknown>()
+  /**
+   * Every channel request of the last `RECENT_RELAY_MS`, by tool and input, taken by a hook or not (`recentRelay` loses a note when a hook takes it).
+   * A hook's id may go on a channel card only when exactly ONE request with that tool and input was seen: with two, which hook belongs to
+   * which card is a guess (arrival order, not identity), and a wrong guess would close a card whose prompt is still open.
+   */
+  private seen: { tool: string; json: string; at: number }[] = []
+  /** Hook cards whose exact call is watched for a result (`watchResult`): cardId -> its timer. Only while the card is pending. */
+  private readonly watches = new Map<string, unknown>()
   private sender: VerdictSender | undefined
   private clientVersion: () => string | undefined = () => undefined
   private otherChannels: string[] = []
@@ -176,6 +247,9 @@ export class PermissionRelay {
         ctx.log.warn('card explanation failed', { reason, tool, input_chars: req.input.length })
       })
       if (!this.pending.has(cardId) || ctx.ledger.get(cardId)?.state !== 'pending') return
+      // a call the explainer says does not match what it claims takes no "for this session" tap (onResolved)
+      const open = this.pending.get(cardId)
+      if (open && explain.status === 'ready' && explain.mismatch) open.mismatch = true
       await ctx.transport.sendDurable(cardUpdateFrame(ctx.clock.now(), { card_id: cardId, state: 'pending', explain }))
     })().catch((e) => ctx.log.warn('card explanation not sent', { error: (e as Error).message }))
   }
@@ -212,8 +286,17 @@ export class PermissionRelay {
   }
 
   /** Test seam: the two hook timings. */
-  setHookTimings(t: { graceMs?: number; maxWaitMs?: number }) {
+  setHookTimings(t: {
+    graceMs?: number
+    maxWaitMs?: number
+    watchMs?: number
+    reraiseLookMs?: number
+    questionUnblockMs?: number
+  }) {
+    if (t.questionUnblockMs !== undefined) this.ctx.questions?.setUnblockMs(t.questionUnblockMs)
     if (t.graceMs !== undefined) this.hookGraceMs = t.graceMs
+    if (t.watchMs !== undefined) this.watchMs = t.watchMs
+    if (t.reraiseLookMs !== undefined) this.reraiseLookMs = t.reraiseLookMs
     if (t.maxWaitMs !== undefined) this.hookMaxWaitMs = t.maxWaitMs
   }
 
@@ -258,7 +341,7 @@ export class PermissionRelay {
   }
 
   /** Claude Code opened a prompt (`notifications/claude/channel/permission_request`). Never throws. */
-  async onRequest(params: unknown): Promise<void> {
+  async onRequest(params: unknown, again = false, armed?: ResultWatch): Promise<void> {
     const { ctx } = this
     let cardId: string | undefined
     let requestId: string | undefined
@@ -268,7 +351,9 @@ export class PermissionRelay {
       if (!parsed.success) return ctx.log.warn('permission_request ignored: not in the documented format')
       const request = parsed.data
       requestId = request.request_id
-      const { repeated } = this.ids.add(request.request_id)
+      // `again`: the card of a prompt that is still open is being raised a second time (its hook card ended unanswered): the same id, not a repeat
+      const repeated = again ? false : this.ids.hasSeen(request.request_id)
+      if (!again) this.noteSeen(request.tool_name, request.input_preview)
       const nowMs = ctx.clock.now()
       const card = composePermissionCard({
         request,
@@ -280,11 +365,6 @@ export class PermissionRelay {
         ...(this.otherChannels.length > 0 ? { other_channels: this.otherChannels } : {}),
         ...(this.clientVersion() !== undefined ? { client_version: this.clientVersion() as string } : {}),
       })
-      cardId = card.id
-      const frame = cardCreateFrame(nowMs, card)
-      assertFrameFits(frame)
-      ctx.ledger.create(card)
-      this.pending.set(card.id, { card, requestId: request.request_id })
       // only a relay card that offers Allow AND shows the whole call can stand in for a hook's: the hook renders the call whole
       // from the raw input, so where Claude Code's preview is cut or masked, the hook's card is the one that shows all of it.
       // It is noted BEFORE the send: a send can take far longer than the hook's grace, and the hook must find its twin meanwhile.
@@ -292,7 +372,23 @@ export class PermissionRelay {
         permissionCardAllowsPrimary(card) &&
         (card.warning === undefined || PERMISSION_OTHER_CHANNEL_NOTE.test(card.warning)) &&
         permissionHiddenReasons(request).length === 0
-      const note = stands ? this.noteRelayRequest(request.tool_name, request.input_preview) : undefined
+      // A Main-session hook card with a session offer already carries this very call (it won, see runHook): no second card, and no
+      // verdict is ever sent for this channel request, so Claude Code is answered once, by the hook.
+      if (!again && stands && this.claimHookOffer(request)) {
+        return ctx.log.debug('permission_request not made into a card: a hook card with a session offer carries it')
+      }
+      if (again) this.ids.reopen(request.request_id)
+      else this.ids.add(request.request_id)
+      cardId = card.id
+      const frame = cardCreateFrame(nowMs, card)
+      assertFrameFits(frame)
+      ctx.ledger.create(card)
+      this.pending.set(card.id, { card, requestId: request.request_id, ...(armed ? { armed } : {}) })
+      if (armed) this.startWatch(card.id, armed) // the same exact call: its result closes this card too, however long it is open
+      const note =
+        stands && !again // a card raised again is nobody's twin: no hook can rightly take it
+          ? this.noteRelayRequest(request.tool_name, request.input_preview, card.id, request)
+          : undefined
       try {
         await ctx.transport.sendDurable(frame)
       } catch (e) {
@@ -371,7 +467,13 @@ export class PermissionRelay {
    * `ok: false` when the verdict did not reach Claude Code (the card shows "failed"): the caller owes a tap from a
    * notification a refusal, because the relay told the phone "done" when it queued the tap.
    */
-  async onResolved(row: LedgerRow, action: 'primary' | 'kill' | 'revise', ownerNote?: string): Promise<ResolveOutcome> {
+  async onResolved(
+    row: LedgerRow,
+    action: 'primary' | 'kill' | 'revise',
+    ownerNote?: string,
+    session?: boolean,
+    sessionHash?: string,
+  ): Promise<ResolveOutcome> {
     const { ctx } = this
     const p = this.pending.get(row.id)
     // what the owner reads when the verdict did not get through: what happened, never "answer it at the Mac"
@@ -415,7 +517,24 @@ export class PermissionRelay {
       // The owner's note goes only with a Deny to a hook (an Allow, and a channel relay verdict, have no room for words). Cleaned
       // here as well as by the caller; it is owner text going into the agent's context and is never logged.
       const note = v.verdict.behavior === 'deny' ? cleanDenyNote(ownerNote) : undefined
-      if (!waiter?.({ decision: v.verdict.behavior, reason: 'owner', ...(note ? { note } : {}) }))
+      // "For this session" counts only on an allow to a hook, on a card that offered it; anywhere else the tap is the plain answer it always was
+      // and only when the rules the owner saw are the rules this bridge holds (a relay that rewrote the button leaves a hash that does not match), and the explainer did not call the call a mismatch
+      const held = cleanSessionRules(p.card.session_allow?.rules)
+      const forSession =
+        session === true &&
+        v.verdict.behavior === 'allow' &&
+        held !== undefined &&
+        !p.mismatch &&
+        sessionHash !== undefined &&
+        sessionHash === sessionRulesHash(held)
+      if (
+        !waiter?.({
+          decision: v.verdict.behavior,
+          reason: 'owner',
+          ...(note ? { note } : {}),
+          ...(forSession ? { session: true as const, session_hash: sessionHash } : {}),
+        })
+      )
         return fail('send_failed', 'internal')
     } else {
       if (!this.sender) return fail('no_channel', 'permission_closed')
@@ -433,6 +552,7 @@ export class PermissionRelay {
       }
       if (!sent) return fail('send_failed', 'internal')
     }
+    this.unwatch(row.id) // answered: nothing is left to watch for
     if (v.verdict.behavior !== 'allow') return { ok: true } // a deny has no result to report: the inbound pipeline closes it `done`, like any killed card
     ctx.ledger.finish(row.id, true)
     ctx.transport
@@ -454,9 +574,35 @@ export class PermissionRelay {
   }
 
   private drop(cardId: string, requestId: string, reason = 'closed') {
+    const gone = this.pending.get(cardId)
     this.pending.delete(cardId)
+    this.hookOffers.delete(cardId)
+    this.unwatch(cardId)
     this.ids.close(requestId)
     this.takeWaiter(cardId)?.({ decision: 'none', reason }) // a hook still waiting is told "no decision": it never reads as an answer
+    // A hook card that stood in for a channel card and ended with NO answer: the prompt is still open, so the channel card comes back
+    // (never after an answer, a stop, or the relay being switched off: those do not come through these reasons)
+    if (gone?.paired && HOOK_ENDED_UNANSWERED.has(reason)) this.raiseAgain(gone.paired, gone.armed)
+  }
+
+  /**
+   * Claude Code stops the hook on No and on Esc and writes the call's result only a moment later. A hook that knew its call's id is
+   * therefore looked for in small steps (never blocking) for a short while: a result found means the prompt is over and nothing is
+   * raised; none within the window and the channel card comes back WITH the watch, which still closes it on the result. No id: at once.
+   */
+  private raiseAgain(params: ChannelRequest, armed: ResultWatch | undefined) {
+    if (!armed) return void this.onRequest(params, true)
+    const token = {}
+    const t0 = this.ctx.clock.now()
+    const look = () => {
+      this.looking.delete(token)
+      if (!this.enabled) return
+      if (armed.poll()) return this.ctx.log.debug('hook ended unanswered, its call has a result: no card raised again')
+      const left = this.reraiseLookMs - (this.ctx.clock.now() - t0)
+      if (left <= 0) return void this.onRequest(params, true, armed)
+      this.looking.set(token, this.ctx.clock.setTimeout(look, Math.min(RERAISE_STEP_MS, left)))
+    }
+    look()
   }
 
   private takeWaiter(cardId: string): ((d: HookDecision) => boolean) | undefined {
@@ -479,6 +625,8 @@ export class PermissionRelay {
   /** This process stopped being the live bridge (superseded, stopping): no pending prompt can be answered from here. */
   closeAll(): void {
     this.explainer?.close?.() // a CLI still running for an explanation dies with this bridge
+    for (const timer of this.looking.values()) this.ctx.clock.clearTimeout(timer) // a card waiting to be raised again is not raised
+    this.looking.clear()
     for (const [cardId, p] of [...this.pending]) this.drop(cardId, p.requestId, 'bridge_stopped')
   }
 
@@ -488,17 +636,56 @@ export class PermissionRelay {
 
   // ---- PermissionRequest hook path ------------------------------------------------------------------------------------
 
-  private noteRelayRequest(tool: string, preview: string) {
+  private noteRelayRequest(tool: string, preview: string, cardId: string, params: ChannelRequest) {
     const now = this.ctx.clock.now()
     let settle: (sent: boolean) => void = () => {}
     const sent = new Promise<boolean>((resolve) => {
       settle = resolve
     })
-    const entry: RelayNote = { tool, json: normPreview(preview), at: now, sent }
+    const entry: RelayNote = { tool, json: normPreview(preview), at: now, sent, cardId, params }
     this.recentRelay = this.recentRelay.filter((r) => now - r.at < RECENT_RELAY_MS).slice(-49)
     this.recentRelay.push(entry)
     for (const wake of [...this.graceWake]) wake()
     return { entry, settle }
+  }
+
+  private noteSeen(tool: string, preview: string) {
+    const now = this.ctx.clock.now()
+    this.seen = this.seen.filter((r) => now - r.at < SEEN_KEEP_MS).slice(-399)
+    this.seen.push({ tool, json: normPreview(preview), at: now })
+    // a second request with the key of a card that already has an id attached: which card the id belongs to is now a guess, so the watch ends
+    const key = `${tool}\0${normPreview(preview)}`
+    if (this.seenCount(tool, preview, now) < 2) return
+    for (const [cardId, p] of this.pending)
+      if (p.carriedKey === key) {
+        this.unwatch(cardId)
+        delete p.armed
+        delete p.carriedKey
+      }
+  }
+
+  /** The requests with this tool and input within `RECENT_RELAY_MS` of `at`, before or after it (`at`: when the note in question was made). */
+  private seenCount(tool: string, json: string, at: number): number {
+    const want = normPreview(json)
+    return this.seen.filter((r) => Math.abs(r.at - at) < RECENT_RELAY_MS && r.tool === tool && r.json === want).length
+  }
+
+  /** A relay request for this call, arriving after a hook card with a session offer: pairs with one such card (once) and answers true. */
+  private claimHookOffer(request: ChannelRequest): boolean {
+    const now = this.ctx.clock.now()
+    const want = normPreview(request.input_preview)
+    for (const [cardId, o] of [...this.hookOffers]) {
+      if (now - o.at >= RECENT_RELAY_MS)
+        this.hookOffers.delete(cardId) // as old as a twin may be: a later prompt is not this one
+      else if (o.tool === request.tool_name && o.json === want) {
+        this.hookOffers.delete(cardId)
+        const hook = this.pending.get(cardId)
+        if (!hook) continue
+        hook.paired = request // if this hook ends unanswered, the channel card is made after all
+        return true
+      }
+    }
+    return false
   }
 
   /**
@@ -583,20 +770,43 @@ export class PermissionRelay {
   private async runHook(req: HookRequest, signal: AbortSignal): Promise<HookDecision> {
     const { ctx } = this
     const none = (reason: string): HookDecision => ({ decision: 'none', reason })
+    // an open AskUserQuestion is mirrored as a card per question and answered through the hook (permission/question.ts); any other input shape is an ordinary prompt
+    if (req.tool_name === 'AskUserQuestion' && ctx.questions) {
+      const asked = parseQuestions(req.tool_input)
+      if (asked) return ctx.questions.ask(req, asked, signal)
+    }
     const call = renderHookCall(req.tool_name, req.tool_input)
     if (!call) return none('unreadable')
     // Only the session this bridge is the channel of can have a relay twin: Claude Code sends that session's prompt to the
     // channel too. A twin means the relay card answers it; a second card would be a double.
     const mainSession = req.thread === undefined && req.pid !== undefined && this.sessionPids.has(req.pid)
     const relayMayCarry = mainSession && this.enabled
+    // A Main-session hook that carries a session offer WINS over the channel's card: the channel verdict has no field for a session
+    // rule, so the owner must see the hook's card (with its third button) and answer through the hook. The same check the composer uses.
+    const hookWins = relayMayCarry && validSessionOffer(req.tool_name, req.suggest?.rules) !== undefined
     let twinSent = false
-    if (relayMayCarry) {
-      const twin = await this.waitForRelayTwin(req.tool_name, call.json, signal)
+    let twin: RelayNote | undefined
+    let carrier: RelayNote | undefined
+    if (hookWins) {
+      twin = this.takeRelayTwin(req.tool_name, call.json) // no waiting: a twin that is not here yet is caught when it arrives (claimHookOffer)
+    } else if (relayMayCarry) {
+      const found = await this.waitForRelayTwin(req.tool_name, call.json, signal)
       // the relay card is noted before its send: the twin only carries the prompt once that send went. Held no longer than the
       // send itself (sendDurable's own bounds) or this hook's abort, whichever comes first; a failed send means no twin
-      if (twin) twinSent = await this.awaitSent(twin.sent, signal)
+      carrier = found
+      if (found) twinSent = await this.awaitSent(found.sent, signal)
     }
-    if (twinSent) return none('relay_carries_it')
+    if (twinSent) {
+      // The hook ends here, but its call's id is known: the channel card is the one the owner sees, so the call's result closes IT.
+      // Only when the pairing was no guess (exactly one channel request had this tool and input in the window, counted NOW, so one that
+      // came while the send was out counts too) and only while the card is still open.
+      if (carrier && this.seenCount(req.tool_name, call.json, carrier.at) === 1 && this.pending.has(carrier.cardId)) {
+        this.watchResult(carrier.cardId, req)
+        const p = this.pending.get(carrier.cardId)
+        if (p?.armed) p.carriedKey = `${req.tool_name}\0${normPreview(call.json)}`
+      }
+      return none('relay_carries_it')
+    }
     if (signal.aborted) return none('hook_gone')
     if (!this.hookEnabled) return none('relay_off')
     const requestId = this.mintRequestId()
@@ -635,20 +845,27 @@ export class PermissionRelay {
       now: nowMs,
       client_version: PERMISSION_MIN_CLIENT_VERSION,
       deny_note: true, // this card's Deny goes to the hook, whose deny answer can carry the owner's words
+      // a rule Claude Code offered, plain enough to show: the card offers "for this session" too (permission.ts refuses an offer it cannot show whole)
+      ...(req.suggest ? { session_allow: req.suggest } : {}),
       ...(this.askedWhy(req, mainSession) ? { asked_why: 'your_rule' as const } : {}),
       ...(this.explainer ? { explain: true } : {}),
       // the relay may be asking the same thing in a card of its own (its preview did not match exactly): say so, keep Allow
-      ...(relayMayCarry ? { other_channels: ['Another card for this call'] } : {}),
+      // (said unless this card took the twin: a channel request that comes later is not made into a card, but nothing says it will)
+      ...(relayMayCarry && !twin ? { other_channels: ['Another card for this call'] } : {}),
     })
     this.ids.add(requestId)
     const frame = cardCreateFrame(nowMs, card)
     assertFrameFits(frame)
     ctx.ledger.create(card)
     this.pending.set(card.id, { card, requestId, hook: true })
+    this.watchResult(card.id, req)
+    if (hookWins && !twin)
+      this.hookOffers.set(card.id, { tool: req.tool_name, json: normPreview(call.json), at: nowMs })
     const answer = new Promise<HookDecision>((resolve) => {
       let timer: unknown
       let done = false
-      const onAbort = () => this.closeHookCard(card.id, 'hook_gone')
+      // `prompt_over`: the hook said it knew its prompt ended (hub/server.ts); anything else is a hook that vanished with no word
+      const onAbort = () => this.closeHookCard(card.id, signal.reason === 'prompt_over' ? 'prompt_over' : 'hook_gone')
       const settle = (d: HookDecision): boolean => {
         if (done) return false
         done = true
@@ -677,8 +894,9 @@ export class PermissionRelay {
       () =>
         quietly('posted', () => {
           ctx.expiry?.sync()
-          // answered, closed or timed out while the send was out: nothing is left to explain
+          // answered, closed or timed out while the send was out: nothing is left to explain, and the relay's card stays as it was
           if (!this.pending.has(card.id)) return
+          if (twin) void this.replaceTwin(twin, card.id)
           // the model gets the command and Claude's own description, not the "asked by pid" note the bridge adds above
           const own =
             typeof (req.tool_input as { description?: unknown } | null)?.description === 'string'
@@ -693,6 +911,13 @@ export class PermissionRelay {
         quietly('drop', () => {
           if (this.pending.get(card.id)) this.drop(card.id, requestId, 'send_failed')
         })
+        // the relay card that was to be replaced is still the owner's way to answer: it stays, and can be paired with again
+        if (twin) {
+          const back = twin
+          void back.sent.then((ok) => {
+            if (ok) this.recentRelay.push(back)
+          })
+        }
         quietly('expire', () => {
           ctx.ledger.expire(card.id)
           ctx.log.warn('permission hook card not sent', { error: (e as Error).message })
@@ -700,6 +925,63 @@ export class PermissionRelay {
       },
     )
     return answer
+  }
+
+  /**
+   * The hook's card is out: the relay's card for the same call (the twin, once its own send went) is replaced by it. Only while the
+   * hook's card is still open and the relay's still pending; an answer already given to the relay's card stands.
+   */
+  private async replaceTwin(twin: RelayNote, hookCardId: string): Promise<void> {
+    try {
+      if (!(await twin.sent) || !this.pending.has(hookCardId)) return
+      const row = this.ctx.ledger.get(twin.cardId)
+      if (row && row.state === 'pending') {
+        this.closeCard(row, 'replaced_by_hook')
+        // if the hook now ends with no answer, this channel card is raised again
+        const hook = this.pending.get(hookCardId)
+        if (hook) hook.paired = twin.params
+      }
+    } catch (e) {
+      this.ctx.log.warn('relay card not replaced', { error: (e as Error).message })
+    }
+  }
+
+  /**
+   * A hook card whose hook knew its call's exact tool_use id: watch the session's transcript for that id's tool_result. A result is
+   * written only when the call has finished (answered Yes and run, answered No, interrupted), so the prompt cannot be open any more:
+   * the card expires as `prompt_over`, the hook is released with none, and nothing is raised again (a replaced or claimed channel
+   * card stays as it is). Only an exact id counts, only while the card is pending, only appended bytes are read, and there is no time
+   * limit. No id, a path of the wrong shape, or no result: the card stays open.
+   */
+  private watchResult(cardId: string, req: HookRequest) {
+    if (!req.tool_use_id) return
+    const path = safeTranscriptPath(req.transcript_path, req.session_id, req.agent_id)
+    if (!path) return
+    const w = new ResultWatch(path, req.tool_use_id)
+    const p = this.pending.get(cardId)
+    if (p) p.armed = w
+    this.startWatch(cardId, w)
+  }
+
+  /** Polls `w` while the card is pending; the result closes it as `prompt_over`. Ends with the card (drop), never by time. */
+  private startWatch(cardId: string, w: ResultWatch) {
+    this.unwatch(cardId) // one card never has two loops
+    const tick = () => {
+      if (!this.pending.has(cardId)) return this.unwatch(cardId)
+      if (w.poll()) {
+        this.unwatch(cardId)
+        return this.closeHookCard(cardId, 'prompt_over')
+      }
+      this.watches.set(cardId, this.ctx.clock.setTimeout(tick, this.watchMs))
+    }
+    this.watches.set(cardId, this.ctx.clock.setTimeout(tick, this.watchMs))
+  }
+
+  private unwatch(cardId: string) {
+    const timer = this.watches.get(cardId)
+    if (timer === undefined) return
+    this.watches.delete(cardId)
+    this.ctx.clock.clearTimeout(timer)
   }
 
   /** The hook gave up, died or ran out of time: the card closes on the phone and can answer nothing. */

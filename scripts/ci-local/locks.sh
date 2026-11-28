@@ -1,7 +1,5 @@
-# scripts/ci-local/locks.sh: locks, run records, status posting and settling, reaping, slots, the suites mutex. Part of scripts/ci-local.sh, which sources it in place (these lines were there,
-# unchanged, and run in the same order). Not run on its own.
-# A process's start time, the token apps/bridge/src/proc-identity.ts prints. Linux: /proc/<pid>/stat field 22 with the boot id,
-# never ps (WSL's ps prints a start time that drifts by seconds, and a live owner then looked like a reused pid); the fields
+# scripts/ci-local/locks.sh: locks, run records, status posting and settling, reaping, slots, the suites mutex. Part of scripts/ci-local.sh, which sources it in place. Not run on its own.
+# A process's start time, the token apps/bridge/src/proc-identity.ts prints. Linux: /proc/<pid>/stat field 22 with the boot id, never ps (WSL's ps prints a start time that drifts by seconds, and a live owner then looked like a reused pid); the fields
 # are counted after the last `)` because the command may hold spaces. Elsewhere: ps, pinned to C locale and UTC so the same
 # process prints the same start time whoever asks. Nothing printed means no answer, which never proves "gone"; nor does a
 # token against a start time an older script wrote with ps (ci_comparable).
@@ -838,12 +836,10 @@ ci_shared_drop() { # the name cleared (a holder that writes none reads as unknow
 ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-wide mutex, for a resource a slot can't own
   # CI_MUTEX_WHAT says what the holder runs (status and the waiting line show it); CI_MUTEX_JOB is the name the guard is given.
   local lock="$1/mutex-$2" name="$2" q="$1.queue/$2" deadline said="" line t rc what label held asked locks="$1" free_since="" grace="${CI_DEFER_GRACE:-15}" owner go
-  local slotlocks=("$lock") nslots=1 nci=1 k got l free m mine=() all excl="" busy CI_QCLASS="" env_saved=""
+  local slotlocks=("$lock") nslots=1 nci=1 k got l free m mine=() all excl="" busy CI_QCLASS="" env_saved="" jump="" kind=ci sched="" l7="" shared_ci=""
   shift 2
-  label="the $name mutex"
-  [ "$name" != suites ] || label="the heavy lock"
+  label="the $name mutex"; [ "$name" != suites ] || label="the heavy lock"
   what="${CI_MUTEX_WHAT:-slot ${CI_SLOT:-?}}"
-  local jump="" kind=ci sched="" l7=""
   # a gate's one jump ahead of queued CI (ci_queue_order): never for a CI slot, never for another mutex; the wait log shows it
   what="${what//$'\n'/ }" what="${what//$'\r'/ }" # one ticket line: a script's own "jump" or "ci" line never reads as the ticket's
   if [ "$name" = suites ] && [ -n "${HEAVY_LOCK_JUMP:-}" ] && [ -n "${CI_MUTEX_WHAT:-}" ]; then jump=jump what="$what [jump]"; fi
@@ -864,7 +860,6 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
   deadline=$(($(date +%s) + CI_LOCK_TIMEOUT))
   [ "$CI_LOCK_TIMEOUT" != 0 ] || deadline=$(($(date +%s) + 315360000)) # 0 = wait as long as it takes (heavy-lock.sh: a push gate)
   case "$grace" in '' | *[!0-9]*) grace=15 ;; esac
-  local shared_ci=""
   [ "$name" = suites ] && [ "$kind" = ci ] && ci_shared_wanted && shared_ci=1
   # CI_MUTEX_EXCLUSIVE=1 (ci_mutex_all: ci-local's quiet group, which fails beside anything else): every one of CI's slots, so no
   # other CI job runs beside it, and (ci_quiet_active) no new gate starts
@@ -885,6 +880,11 @@ ci_mutex() { # ci_mutex <locks dir> <name> <cmd...>: run cmd holding a machine-w
         CI_QCLASS=gate
         for ((k = nci + 1; k <= nslots; k++)); do slotlocks+=("$(ci_suites_lock "$locks" "$k")"); done
       fi
+    fi
+    if [ "$kind" = ci ] && ci_yield "$locks" "$name" "$t"; then # a gate waits (turn.sh): a CI job that holds nothing lets go any slot it took and asks again, its place kept
+      for m in ${mine[@]+"${mine[@]}"}; do ci_lock_release "$m"; done; mine=(); [ "$CI_LOCK_TIMEOUT" = 0 ] || deadline=$(($(date +%s) + CI_LOCK_TIMEOUT)) # (capped: ci_yield_starved)
+      [ "$CI_YIELD_SAYS" = "$said" ] || { echo "${CI_MSG:-ci-local}: waiting for $label: $CI_YIELD_SAYS" >&2; said="$CI_YIELD_SAYS"; }
+      ci_part_beat "$label"; sleep "$CI_POLL"; continue
     fi
     [ -z "$shared_ci" ] || ci_shared_mark # a CI run waiting here waits for the shared lock too: requests on the other side hold off
     # Liveness: a waiter that defers (not first in line) still takes a lock left free, with no living holder, for CI_DEFER_GRACE
@@ -994,7 +994,7 @@ else
   ci_turn_done() { return 0; }
   ci_turn_status() { return 0; }; ci_turn_pass() { return 0; }
   ci_fold_wait() { return 0; }
-  ci_fold_end() { rm -f "$1/folding-$2"; return 0; }
+  ci_yield() { return 1; }; ci_fold_end() { rm -f "$1/folding-$2"; return 0; }
   ci_fold_resume() { rm -f "$1/folding-$2"; return 0; }
   ci_scheduled_run() { return 1; }; ci_ticket_sched() { return 1; }; ci_push_queued() { return 1; }; ci_sched_yield() { return 1; }; ci_part_beat() { return 0; }; ci_part_beat_end() { return 0; } # no scheduled-run rule, no lock-wait beat without turn.sh
 fi

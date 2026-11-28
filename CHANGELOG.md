@@ -1,5 +1,41 @@
 # Changelog
 
+## The relay's Railway settings are set in the dashboard
+
+- The repository no longer has a `railway.json`: Railway was not reading it, and new services cannot use one at all. The relay's Railway settings (Dockerfile path, watch paths, healthcheck, restart policy, one replica, sleep off) are now a table in `docs/deploy-railway.md`, and the setup guides say to set them by hand in the service's Settings. A running relay is not affected.
+## Watch your agent's terminal from your phone or a browser
+
+- A new **Terminal** screen in the web app and the iPhone app shows your agent's terminal live, read-only: Main's, or the terminal of a thread that has its own session. Tap **Watch** on the card ("Watch your agent's terminal", "Read-only. Nothing you do here types into it.") and pick which terminal. The header says whose terminal it is, "Watching · read-only", and the time left; **Close** ends it. Nothing you do on that screen types into the terminal, and no keyboard opens on a phone.
+- It needs your Mac and its Talos to be up to date, and works with only the Mac's Talos running (the Mac app is not needed). If your Mac is away or too old the card says so. A view closes after 10 minutes with nobody looking at it, after an hour in all, when you close it, when the connection drops, or when the agent's terminal ends; the screen says which. Watching again is a new tap.
+- Your Mac keeps a record of each view (which device, when it opened and closed, why, and how much was sent), and never what the terminal showed. There is no indicator on the Mac yet that a view is open.
+
+## The Memory section is now Nyx, and it links out
+
+- The memory service is called **Nyx**; "Clio" is retired. The Memory section of the app now reads **Nyx**. Type the https address of your Nyx, press **Connect**, and Nyx's own sign-in opens in a new tab. After that the screen says "Connected to" and the address, with **Open Nyx** and **Change address**. Talos keeps only the address and never holds your Nyx sign-in.
+- Viewing your memory (the page tree and the 3D graph) now happens in Nyx. The notes browser, the Clio graph and "Ask" on a note are gone from the app. Settings, Memory folders still picks which folders your Mac shares as notes.
+- Each thread's folder on your Mac, which used to sit under Memory, is now **Thread files**: in the sidebar, in the phone menu, and as a button in each thread's settings. Look through a thread's folder and add files to it as before. Old links to a folder under Memory open it there.
+- **Add Nyx to agents** lists Main and each thread's agent with a box each. The boxes are switched off for now and say it is coming soon.
+## A reply with a spoken version always comes with audio, and a decode error tries once more
+
+- When your agent gives a reply a spoken version, the audio is now always made and attached when a text-to-speech command is set up, whatever the "Spoken replies" setting says; that setting now only decides whether replies without a spoken version are read aloud too. If no audio can be made (no text-to-speech command, the command failed, or the audio could not be uploaded), the agent is told why, so it can send an audio file instead, and the text reply still goes out. A slow speech command no longer holds the text back: after 20 seconds the text is sent and the audio follows as its own message. The Spoken replies setting's help text now says a reply with a spoken version still comes with audio on Never.
+- An audio file that stops with a decode error (in any browser, and in the iPhone app) is now loaded again once at the spot it reached, and keeps playing if you were listening. If it fails a second time, the message shows the usual line, as before.
+
+## Long replies stay smooth, and a screen reader hears what you did
+
+- A very long reply from your agent is now drawn a screenful at a time, so it scrolls and opens smoothly on a phone. It looks the same as before: a code block, table or list is never split, a reply that is still growing only redraws its last part, and a single code block too large to draw is shown as plain text.
+- A screen reader now says what an action did when nothing else on screen tells it: Copy ("Copied"), Send ("Sent", or "Saved. It sends when you're back online." when you are offline), answering a card ("Answered:" and the button you pressed, or "Revision sent"), Stop and its Undo, Done and Snooze with Undo, and "<thread> needs you" when a card arrives for a thread you are not looking at. One announcer speaks all of these, so nothing is read twice.
+## The relay's logs keep no addresses, and "Sign out everywhere" ends a pairing in progress
+
+- The relay's logs no longer carry IP addresses, user agents, URLs, paths or device details (names, models, system versions, push tokens). Where two clients must be told apart, a short keyed hash stands in for the address.
+- "Sign out everywhere" now also cancels a pairing that is under way: a setup code that was shown but not used stops working, and a device that did its half and waits for the Mac's answer is revoked, so a later yes pairs nothing. Devices already paired stay paired.
+## Your phone still gets replies while the Mac app is open, and browser pushes say what was said
+
+- Notifications in the iPhone app now show the words by default: one tap on "Turn on notifications" gives message text and the Reply and Approve buttons on a new phone. Apple still sees only a fixed phrase; the words travel sealed and only the phone opens them. A phone that had message text off keeps it off and is asked once whether to turn it on. If the words cannot be turned on, the row says so and offers Try again. On a shared phone, set Show Previews to Never for Talos in iPhone Settings, Notifications. The Mac's browser switch now says iPhone notifications have their own switch, also on by default.
+- A reply now pushes to your phone even when Talos is open on your Mac. Before, any open, recently used Talos window anywhere silenced reply pushes everywhere. Now only the screen that is actually showing that thread stays quiet, and it decides that itself (the iPhone app and the web app already did).
+- Push notifications in the Home Screen app and in Mac Safari now show the thread name and a short preview of the reply (up to 80 characters) instead of "New reply in General". The words travel encrypted to your browser, passwords, keys and link codes in them are hidden, and they are never written to the relay's logs. This is on by default. Settings, Notifications has a new switch, "Show message text in browser notifications": off, and a notification says only "New reply in" the thread. "Show thread names" still decides the thread's name. Approvals, sign-in alerts and the other alerts keep their fixed text, and the iPhone app's push to Apple is unchanged. An older web app shows the new words too; an older relay still sends the fixed text, which every web app still shows.
+- If the Mac app and a browser are both set up for push on one Mac, a reply can show in both. That is a known limit for now.
+- Schedule alerts still wait while a screen is in use.
+
 ## An agent folder with a space in its path starts with the extra lock on
 
 - With "Extra lock on protected files" on, an agent or lead folder whose path has a space in it (for example `My Agent`) is no longer refused as running something that is not the kit's own. The check now keeps the folder's path as one word when a hook is written the way the kit writes it (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`), in the Mac app and in the bridge, and a server in a kit release whose own path has a space is read as one file. Any other line is still cut at the spaces like the shell cuts it, and a command that runs anything outside the kit's links is still refused. The bridge side now also refuses a hook that names a variable or a file that does not exist yet, as the Mac app already did.

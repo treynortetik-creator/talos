@@ -10,6 +10,7 @@ import { resetComposer } from '../composer/composerStore.ts'
 import { forgetNativeChoices } from '../pwa/nativeChoice.ts'
 import { clearRecent } from '../search/logic.ts'
 import { audioPlayer } from '../threads/audioPlayer.ts'
+import { useQuietLines } from '../threads/quietLines.ts'
 import { resetSpeak } from '../threads/speak.ts'
 import { clearThreadDescriptions } from '../threads/threadMeta.ts'
 
@@ -125,12 +126,13 @@ export async function clearLocalData(storage: Storage, opts: { keepUnsent?: bool
   // Typed searches and local thread notes live in localStorage, not the stores above.
   clearRecent()
   clearThreadDescriptions()
+  useQuietLines.getState().clear() // pane text held in memory for a notice
   // The notification keys and grant live in the iPhone Keychain, outside page storage: a signed-out phone must not keep them.
   void clearNativeGrant()
-  // ...and the page's record of what the owner chose: message text is off again, so the next person to pair this phone (or the
-  // same one) starts from the fixed phrase and has to tap to turn text on. The server's copy of the grant is taken back on the
+  // ...and the page's record of what the owner chose: applied text ends, and a real sign-out also clears the owner's decision, so the next person to pair this phone gets the
+  // default (words on) at their Turn on tap. An expired session (`keepUnsent`) keeps the decision: the same owner is coming back. The server's copy of the grant is taken back on the
   // next open (`reconcileGrant`).
-  forgetNativeChoices()
+  forgetNativeChoices({ keepDecision: opts.keepUnsent === true })
   if (failure) throw failure
   try {
     // A 'keep' wipe finishing does not finish an 'all' wipe that was still owed.

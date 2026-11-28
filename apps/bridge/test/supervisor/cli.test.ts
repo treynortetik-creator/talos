@@ -23,6 +23,7 @@ import {
   conversationEmpty,
   holdsLock,
   loginShellEnv,
+  MAC_SUPERVISE_LINE,
   mainClaudeDir,
   markConversationSeen,
   mcpLogReason,
@@ -33,6 +34,7 @@ import {
   SUPERVISOR_FILES,
   saveSessionId,
   sessionSaved,
+  superviseHost,
   systemdUnit,
   TMUX_CONF,
   takeLock,
@@ -587,5 +589,37 @@ describe('supervisor.json workers', () => {
     expect(read({})).toMatchObject({ workers: true })
     expect(read({ workers: false })).toMatchObject({ workers: false })
     expect(read({ workers: 'no' })).toHaveProperty('error')
+  })
+})
+
+describe('supervise on a Mac', () => {
+  const MAC_LINE = MAC_SUPERVISE_LINE
+  const run = async (platform: string) => {
+    const home = tmp()
+    const err: string[] = []
+    const out: string[] = []
+    const was = superviseHost.platform
+    superviseHost.platform = platform
+    try {
+      const code = await cmdSupervise({ home, userHome: home } as never, [], {
+        out: (l: string) => out.push(l),
+        err: (l: string) => err.push(l),
+      } as never)
+      return { code, err, out }
+    } finally {
+      superviseHost.platform = was
+    }
+  }
+  it('warns once at startup and carries on to the supervisor (here: the missing-config message)', async () => {
+    const r = await run('darwin')
+    expect(r.err.filter((l) => l === MAC_LINE)).toHaveLength(1)
+    expect(r.err[0]).toBe(MAC_LINE)
+    expect(r.err.join('\n')).toContain('supervisor.json')
+    expect(r.code).toBe(1)
+  })
+  it('linux prints no such line', async () => {
+    const r = await run('linux')
+    expect(r.err.join('\n')).not.toContain('On a Mac')
+    expect(r.err.join('\n')).toContain('supervisor.json')
   })
 })

@@ -25,6 +25,17 @@ export const TERMINAL_ONLY = new Set([
  * environment (install.sh run from a thread session) they would reach Main; the owner's own state dirs stay.
  */
 /** isWorkerChannelSwitch as data (the launch spec's strip rule): always dropped, and dropped when pointed at the no-channel dir. */
+/**
+ * What makes Claude Code run the turn that was cut off again when its session is resumed (measured on 2.1.332: with both it
+ * re-ran after SIGTERM and SIGKILL, without them it waits at "Interrupted"). Set only by a resume of a cut turn
+ * (cut-turn.ts); never part of the launch spec hash (launch-spec.ts LAUNCH_SPEC_EXCLUDED_ENV), or the next update check
+ * would see a changed spec and restart the session again.
+ */
+export const RESUME_TURN_ENV = {
+  CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
+  CLAUDE_CODE_RESUME_REASON: 'user_resume',
+} as const
+
 export const CHANNEL_SWITCH_ALWAYS = ['ENABLE_CLAUDEAI_MCP_SERVERS'] as const
 export const CHANNEL_SWITCH_NOCHANNEL = ['IMESSAGE_STATE_DIR', 'TELEGRAM_STATE_DIR'] as const
 export const NOCHANNEL_SUFFIX = '/workers/_nochannel'

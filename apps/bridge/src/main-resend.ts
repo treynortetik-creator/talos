@@ -18,6 +18,7 @@
 //   - Act on anything it did not hold itself: only owner text and file notices of this process are kept (a bounded list), so
 //     a request cannot make the bridge deliver anything but what the owner sent.
 //   - Hide a failure: a request it cannot read, a message it no longer holds, and a delivery that fails each leave a log line.
+
 import { readFileSync, unlinkSync } from 'node:fs'
 import { MAIN_RESTART } from '@talos-app/protocol'
 import type { Clock } from './clock.ts'
@@ -25,6 +26,7 @@ import type { BridgePaths } from './config.ts'
 import { writeJsonAtomic } from './fsutil.ts'
 import type { Logger } from './log.ts'
 import type { Notification } from './notify.ts'
+import { RETRY_REDELIVERED_PREFIX } from './router/session-error-words.ts'
 
 /** How many owner notices are held for a second delivery (the newest; a message older than that is not re-sent). */
 export const HELD_MAX = 64
@@ -77,8 +79,9 @@ export const REDELIVERED_PREFIX =
   "(Talos sent this again because the last turn ended without an answer. If you already acted on it, don't do it twice.)"
 
 /** The notice as it goes out the second time: the same owner trust and ids, marked in meta and in its first line. Never mutates the held one. */
-export function redelivered(n: Notification, why: 'missed' | 'stall' | 'update'): Notification {
-  const prefix = why === 'update' ? UPDATE_REDELIVERED_PREFIX : REDELIVERED_PREFIX
+export function redelivered(n: Notification, why: 'missed' | 'stall' | 'update' | 'retry'): Notification {
+  const prefix =
+    why === 'update' ? UPDATE_REDELIVERED_PREFIX : why === 'retry' ? RETRY_REDELIVERED_PREFIX : REDELIVERED_PREFIX
   return { content: `${prefix}\n${n.content}`, meta: { ...n.meta, redelivered: why } }
 }
 

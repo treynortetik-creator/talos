@@ -377,13 +377,24 @@ export function usageLimitWords(
   i: Pick<UsageLimitInfo, 'model' | 'kind' | 'resets'>,
   who: string,
   pane: string,
+  autoContinue = false,
 ): string {
   const reset = i.resets ? ` It resets ${i.resets}.` : ''
-  return `${who} ${hitWords(i)}.${reset} Talos pressed nothing on that screen: some of its options spend money or change your plan. ${wayOn(i, pane)}`
+  // "Continue at the usage limit" is on (config.json auto_continue_at_limit): Claude Code's own setting makes it wait for the reset
+  // and go on by itself, but not for a reset more than a day away. Said, never promised past that; Talos still presses nothing.
+  const auto = autoContinue
+    ? ' Continue at the usage limit is on: Claude Code will wait for the reset and go on by itself, if it can wait that long (it does not wait for a reset more than a day away).'
+    : ''
+  return `${who} ${hitWords(i)}.${reset}${auto} Talos pressed nothing on that screen: some of its options spend money or change your plan. ${wayOn(i, pane)}`
 }
 
 /** The thread's line, posted into the thread it is about. */
-export const usageLimitThreadLine = (i: UsageLimitInfo, attach: string, windows = false): string =>
+export const usageLimitThreadLine = (
+  i: UsageLimitInfo,
+  attach: string,
+  windows = false,
+  autoContinue = false,
+): string =>
   usageLimitWords(
     i,
     "This thread's session",
@@ -391,6 +402,7 @@ export const usageLimitThreadLine = (i: UsageLimitInfo, attach: string, windows 
     windows
       ? "this thread's pane (on the PC: the Talos icon by the clock, Open a thread's session..., this thread)"
       : `this thread's pane (${attach})`,
+    autoContinue,
   )
 
 /**

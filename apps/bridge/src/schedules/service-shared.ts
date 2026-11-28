@@ -39,7 +39,6 @@ export const HB_THREAD_LOOKUP_MS = 2000
 export const THREAD_MAP_SCHEMA = 'talos.heartbeat-threads/1'
 /** The proposer row of a card main (or the owner's form) made: recorded so that a missing row is never read as "main". */
 export const MAIN_PROPOSER = 'main'
-export const RUN_NOW_GAP_MS = 2 * 60_000
 export const PROPOSALS_PER_HOUR = 10
 export const MAX_PENDING_SCHEDULE_CARDS = 20
 /** A failure older than this (by its job date) is history, not news, when the bridge first sees it. */

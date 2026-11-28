@@ -17,11 +17,28 @@ export const RELAY_SERVICE_ID = '9d3e4f5a-2b6c-4d8e-8f9a-1b2c3d4e5f6a'
 export const OTHER_SERVICE_ID = 'ad4f5a6b-3c7d-4e9f-9a0b-2c3d4e5f6a7b'
 
 const servers: Array<ReturnType<typeof Bun.serve>> = []
-afterEach(() => {
-  for (const s of servers.splice(0)) s.stop(true)
+
+/**
+ * Every test file that builds a fake world calls this once at its top. A hook declared here, at the top of this shared module, would
+ * only run for the first test file that imports it: every later file would leak its listeners (the process runs out of file
+ * descriptors late in a long run, and a connection to a fake is refused) and keep a seam set by an earlier test.
+ */
+export function useWorldCleanup(): void {
+  afterEach(closeWorlds)
+}
+
+/** Stops every fake server and waits until each is closed; clears the seam addresses. */
+export async function closeWorlds(): Promise<void> {
+  await Promise.all(servers.splice(0).map((s) => s.stop(true)))
   railwayTestSeam.url = undefined
   releaseFeedTestSeam.url = undefined
-})
+}
+
+function serve(opts: Parameters<typeof Bun.serve>[0]) {
+  const srv = Bun.serve(opts)
+  servers.push(srv)
+  return srv
+}
 
 export type Call = { op: string; variables: Record<string, unknown>; projectHeader?: string; authHeader?: string }
 
@@ -40,7 +57,7 @@ export function fakeRailway(o: { relayDomain?: string; redeployError?: string; r
     } as Record<string, string[]>,
     url: '',
   }
-  const srv = Bun.serve({
+  const srv = serve({
     port: 0,
     async fetch(req) {
       const body = (await req.json()) as { query: string; variables?: Record<string, unknown> }
@@ -108,7 +125,6 @@ export function fakeRailway(o: { relayDomain?: string; redeployError?: string; r
       }
     },
   })
-  servers.push(srv)
   world.url = `http://127.0.0.1:${srv.port}/graphql/v2`
   return world
 }
@@ -116,7 +132,7 @@ export function fakeRailway(o: { relayDomain?: string; redeployError?: string; r
 /** A relay whose /healthz reports `release` (undefined: a build from main). `moveTo` makes the next redeploy take effect after `after` answers. */
 export function fakeRelay(release: string | undefined) {
   const w = { release, hits: 0, moveTo: undefined as string | undefined, after: 0, down: 0, url: '' }
-  const srv = Bun.serve({
+  const srv = serve({
     port: 0,
     fetch(req) {
       if (new URL(req.url).pathname !== '/healthz') return new Response('no', { status: 404 })
@@ -133,7 +149,6 @@ export function fakeRelay(release: string | undefined) {
       return Response.json({ ok: true, version: 'abc1234', ...(w.release ? { release: w.release } : {}) })
     },
   })
-  servers.push(srv)
   w.url = `http://127.0.0.1:${srv.port}`
   return w
 }
@@ -141,14 +156,13 @@ export function fakeRelay(release: string | undefined) {
 const rel = (v: string) => ({ tag_name: `mac-v${v}`, draft: false, prerelease: false })
 export function fakeFeed(versions: string[]) {
   const w = { versions, hits: 0, url: '' }
-  const srv = Bun.serve({
+  const srv = serve({
     port: 0,
     fetch() {
       w.hits++
       return Response.json(w.versions.map(rel))
     },
   })
-  servers.push(srv)
   w.url = `http://127.0.0.1:${srv.port}/releases`
   return w
 }

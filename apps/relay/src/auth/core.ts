@@ -394,6 +394,50 @@ export class AuthCore {
     if (reason) this.endSessions('id = ?', [sessionId], reason)
     else this.db.prepare('delete from auth_sessions where id = ?').run(sessionId)
   }
+  /**
+   * "Sign out everywhere": every session ends and every pairing in progress is cancelled, in ONE transaction (a crash or a
+   * failure between the two leaves neither half done). Returns the ids of the devices it revoked, for the Mac to be told.
+   */
+  signOutEverywhere(): string[] {
+    return this.db.transaction(() => {
+      this.deleteAllSessions()
+      return this.cancelPairings()
+    })()
+  }
+
+  /**
+   * Cancels every pairing in progress: each code shown and not yet burned is burned (a phone that holds a session from it, or
+   * comes back with it, gets nothing); each passkey registered against such a code is deleted unless a paired device uses it
+   * (a half-paired passkey must not sign in); each device that did its half but was NEVER paired (the Mac's y still pending)
+   * is revoked, so a y that arrives later changes nothing. A device that was paired once and is unpinned only because a
+   * re-enroll prompt went unanswered is left alone. Devices already paired stay paired. Call inside a transaction.
+   */
+  cancelPairings(): string[] {
+    return this.db.transaction(() => {
+      const creds = this.db
+        .prepare(
+          'select distinct registered_credential_id from auth_enroll_codes where burned_at is null and registered_credential_id is not null',
+        )
+        .pluck()
+        .all() as string[]
+      this.db.prepare('update auth_enroll_codes set burned_at = ? where burned_at is null').run(this.now())
+      const pending = this.db
+        .prepare('select id from auth_devices where pinned = 0 and revoked = 0 and ever_pinned = 0')
+        .pluck()
+        .all() as string[]
+      for (const id of pending) this.revokeDevice(id)
+      for (const credId of creds) {
+        const { n } = this.db
+          .prepare(
+            'select count(*) as n from auth_devices where credential_id = ? and (pinned = 1 or ever_pinned = 1) and revoked = 0',
+          )
+          .get(credId) as { n: number }
+        if (n === 0) this.db.prepare('delete from auth_credentials where credential_id = ?').run(credId)
+      }
+      return pending
+    })()
+  }
+
   deleteAllSessions(): void {
     // One transaction: a failure while relabelling must not leave sessions ended with the wrong reason.
     this.db.transaction(() => {
@@ -542,6 +586,8 @@ export class AuthCore {
       this.endSessions('device_id = ?', [id], 'revoked')
       // Its browser and Home Screen push subscriptions go with it, whichever route revoked it.
       this.db.prepare('delete from core_push_subs where device_id = ?').run(id)
+      // ...and so does the readout of how its last push left ("Why was that push plain?").
+      this.db.prepare('delete from core_push_last where device_id = ?').run(id)
       // ...including a session of this device that ended earlier in a way that keeps the queue ('expired', 'signed_in_again').
       this.db
         .prepare(

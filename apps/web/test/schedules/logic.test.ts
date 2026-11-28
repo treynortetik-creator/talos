@@ -187,6 +187,25 @@ describe('run now confirm (S5.3)', () => {
       "This counts as today's run; the 9:00 AM run won't happen.",
     )
   })
+  it('the sheet is only for a repeat, a replaced run or full permissions; anything else is one tap', () => {
+    const plain = job({ id: 'a-b', permissions: 'restricted', today: 'pending', next_run: null })
+    expect(runNowAsk(plain, h, NOW_MS).needsSheet).toBe(false)
+    expect(runNowAsk({ ...plain, permissions: 'full' }, h, NOW_MS).needsSheet).toBe(true)
+    const ran = job({
+      id: 'a-b',
+      permissions: 'restricted',
+      today: 'ran',
+      last_run: { ds: '2026-10-05', started_at: '2026-10-05T07:31:00-04:00', status: 'ok', has_report: false },
+    })
+    expect(runNowAsk(ran, h, NOW_MS).needsSheet).toBe(true)
+    const before = job({
+      id: 'a-b',
+      permissions: 'restricted',
+      today: 'pending',
+      next_run: '2026-10-05T09:00:00-04:00',
+    })
+    expect(runNowAsk(before, h, NOW_MS).needsSheet).toBe(true)
+  })
   it('a headless job with background runs blocked offers the session instead', () => {
     const blocked = VARIANTS.headlessBlocked()
     const hj = job({ id: 'a-b', runner: 'headless', permissions: 'full' })

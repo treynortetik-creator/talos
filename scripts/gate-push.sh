@@ -173,7 +173,8 @@ lease_put() { # lease_put <expected sha or ''>: a new lease over exactly that on
 }
 # ---- main's verdict: is it red? (for --red-main, and to check another machine's claim) ---------------------------------------
 # Red means the newest of the last 20 commits on main whose CI statuses (local-ci/* and report-ci/*, gating or not) are all
-# finished has one that failed. Read from GitHub's statuses, never from anyone's word. Prints "<sha> <failed contexts>"
+# finished has a local-ci/* one that failed. A report-only (report-ci/*) failure is never red: it does not gate, so it must not
+# put a --red-main push ahead of the queue. Read from GitHub's statuses, never from anyone's word. Prints "<sha> <failed contexts>"
 # when red; nothing when green, unknown or unreadable (unknown is never red). One look per run, kept. A commit CI never
 # tested is no verdict and is walked past: no local-ci/ status (nothing yet, or only report-ci/superseded), or, with no
 # failure, a local-ci/ status that says "not tested:" (its run was cancelled; that error is never a failure).
@@ -210,7 +211,7 @@ red_verdict() {
     ci="$(grep -E '^(local-ci|report-ci)/' <<<"$rows")"
     grep -q '^local-ci/' <<<"$ci" || continue # no CI run on this commit (nothing yet, or skipped as superseded)
     ! awk -F'\t' '$2 == "pending" { f = 1 } END { exit !f }' <<<"$ci" || continue # not finished
-    failed="$(awk -F'\t' '($2 == "failure" || $2 == "error") && index($3, "not tested:") != 1 { print $1 }' <<<"$ci" | paste -sd, -)"
+    failed="$(awk -F'\t' '$1 ~ /^local-ci\// && ($2 == "failure" || $2 == "error") && index($3, "not tested:") != 1 { print $1 }' <<<"$ci" | paste -sd, -)"
     [ -n "$failed" ] || ! awk -F'\t' '$1 ~ /^local-ci\// && index($3, "not tested:") == 1 { f = 1 } END { exit !f }' <<<"$ci" ||
       continue # cancelled before it reported: not tested
     [ -z "$failed" ] || echo "$sha $failed"

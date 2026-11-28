@@ -11,6 +11,7 @@
 // cannot forge a call or replay one (seq only goes up, ts must be fresh and is used once). A model that only calls tools
 // (a prompt injection that reads no files) gets nothing, with or without the mod loaded; one that can read files can
 // read the key, which is why this is hygiene and the owner's signature on controls is the boundary.
+
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import {
@@ -126,6 +127,7 @@ export class ModLink {
   private readonly sink: ModEventSink
   private readonly random: (n: number) => Uint8Array
   private badKeys = 0
+  private readonly approving: () => string[]
   private readonly agents: ModAgents
 
   constructor(deps: {
@@ -135,8 +137,12 @@ export class ModLink {
     random?: (n: number) => Uint8Array
     /** Omit for an in-memory secret nobody can read (tools refuse every hello; nothing leaks). */
     keys?: ModKeyStore
+    /** The enabled plugins (`<name>@<marketplace>`) that may approve tool calls without asking the phone: the bridge's own read of Main's config folder. */
+    approvingPlugins?: () => string[]
   }) {
     this.clock = deps.clock
+    // the bridge passes its real reader (bridge.ts); importing it here would pull the supervisor into every ModLink user
+    this.approving = deps.approvingPlugins ?? (() => [])
     this.log = deps.log
     this.sink = deps.sink
     this.random = deps.random ?? ((n) => randomBytes(n))
@@ -343,6 +349,22 @@ export class ModLink {
     this.publishState()
   }
 
+  /**
+   * The mod's plugin list with the bridge's OWN flag: an enabled plugin the bridge's read of Main's config folder says may approve tool calls without
+   * asking the phone carries `approves_tool_calls` whatever the mod said, one the mod left out is added, and a flag the mod set for another is dropped.
+   */
+  private pluginsWithFlags(list: Array<{ name: string; enabled: boolean; approves_tool_calls?: boolean | undefined }>) {
+    const flagged = new Set(this.approving())
+    const named = (n: string) => flagged.has(n) || [...flagged].some((k) => k.split('@')[0] === n)
+    const out = list.map(({ approves_tool_calls: _claimed, ...p }) =>
+      p.enabled && named(p.name) ? { ...p, approves_tool_calls: true } : p,
+    )
+    for (const k of flagged)
+      if (!out.some((p) => p.name === k || p.name === k.split('@')[0]))
+        out.push({ name: k, enabled: true, approves_tool_calls: true })
+    return out.slice(0, 200)
+  }
+
   private takeInventory(raw: unknown, at: string) {
     if (!isObj(raw)) {
       this.log.warn('mod sync: inventory dropped', { reason: 'not an object' })
@@ -363,7 +385,7 @@ export class ModLink {
         .filter((e): e is string => typeof e === 'string' && e.length > 0 && e.length <= 16)
         .slice(0, 8),
       mcp_servers: keep(SessionInventory.shape.mcp_servers.element, raw.mcp_servers, 100),
-      plugins: keep(SessionInventory.shape.plugins.element, raw.plugins, 200),
+      plugins: this.pluginsWithFlags(keep(SessionInventory.shape.plugins.element, raw.plugins, 200)),
       ...(isObj(raw.codex) ? { codex: raw.codex } : {}),
       at,
     }

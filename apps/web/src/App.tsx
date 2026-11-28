@@ -52,7 +52,9 @@ import { Button } from './ui/index.ts'
 import { Mascot } from './ui/Mascot.tsx'
 import { Meander } from './ui/Meander.tsx'
 
-const ClioGraphScreen = lazy(() => import('./features/memory/ClioGraph.tsx').then((m) => ({ default: m.ClioGraph })))
+const ThreadFilesScreen = lazy(() =>
+  import('./features/files/ThreadFiles.tsx').then((m) => ({ default: m.ThreadFilesScreen })),
+)
 const HelpScreen = lazy(() => import('./features/help/HelpScreen.tsx').then((m) => ({ default: m.HelpScreen })))
 const FAKE = import.meta.env.VITE_FAKE === '1'
 /** How long a stale 'online' (no new `ready` since the screen opened) is trusted before a missing card is called gone. */
@@ -368,20 +370,13 @@ export function App({ client, storage }: { client: TalosClient; storage: Storage
                       </Suspense>
                     }
                   />
-                  {/* the Clio graph: three.js and 3d-force-graph load only here (their own chunk) */}
+                  {/* the old memory browser's paths (notes, the graph) are gone: Nyx's screen is the nearest */}
+                  <Route path="memory/*" element={<Navigate to="/memory" replace />} />
                   <Route
-                    path="memory/graph"
+                    path="files"
                     element={
                       <Suspense fallback={null}>
-                        <ClioGraphScreen />
-                      </Suspense>
-                    }
-                  />
-                  <Route
-                    path="memory/*"
-                    element={
-                      <Suspense fallback={null}>
-                        <MemoryScreen />
+                        <ThreadFilesScreen />
                       </Suspense>
                     }
                   />

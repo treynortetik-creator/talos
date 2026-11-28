@@ -359,6 +359,59 @@ may depend on a mod hook running**. What each of the mod's hooks does, and what 
 `AskUserQuestion` always prompts and doesn't relay. A mod `tool.call` hook on it can raise a `decision` card with one
 field per question and return `{result}`. **SMOKE S6.**
 
+### C3.10 "Waiting on you" gaps with no card: the Notification hook
+
+An MCP elicitation dialog has no card. Claude Code runs `Notification` hooks for it (`notification_type: elicitation_dialog`; a permission prompt is
+`permission_prompt`, the permission hook's job; `idle_prompt` is NOT used, see below). The kit's `hooks/notification-relay.py` sends the hub ONE line,
+`{t:"notify", id, kind:"ask", pid, cwd?, session_id?, thread_id?, nonce?}` (protocol `hub-notify.ts`), proven exactly as `perm` is (a thread session
+names its thread, pid and nonce; the main session names none). It never sends the notification's `message`: the bridge writes the sentence itself
+(`permission/needs-you-words.ts`), so nothing a session sends is ever shown as text.
+
+- **The notice** (`permission/needs-you-notice.ts`): one system row in the session's thread (Main: the default thread) with an `open_terminal` action
+  (the slice-3 message action: Main's is `main`, a thread's is its own id), fixed words ("The main agent asked you something at its terminal. Open it to
+  answer." for Main; "<thread> asked you something at its terminal. Open it to answer." for a thread), a normal (pushed) notice, at most ONE per thread
+  per ten minutes (kv `needs_notice:ask:<thread>`, set before the post). The hub always answers `notify_result`, and the answer decides nothing. One
+  `notify` per connection; a notify line on a connection that is already a worker's link or an open permission request is ignored, never answered or ended.
+- **The hook** exits 0 and prints nothing whatever happens, waits at most four seconds IN ALL (one monotonic deadline for the connect and the reads), does
+  nothing in an unattended (`claude -p`) run, in the agent folder's copy inside a thread session, or with no live bridge (the bridge.pid proof as for the
+  permission hook), and honours `TALOS_TEST_SANDBOX` (the kit's hub fence, `test-hub-fence.sh`). Its own off switches: `notification-relay.off` and
+  `TALOS_NOTIFICATION_RELAY_OFF=1` (`TALOS_NOTIFICATION_HOOK_WAIT_S` only shortens the wait).
+- **Why not `idle_prompt`**: Claude Code sends it when the input has sat idle for a minute, which is the normal state after an answered turn, so every
+  quiet Main would push "waiting for your input" every ten minutes. It needs a real-wait signal (like the quiet watch's open owner message) first.
+- **Registered** in the agent folder's settings template (`templates/dot-claude/settings.json`: `Notification`, matcher `elicitation_dialog`, timeout 10),
+  so Main's session on Linux runs it. A thread session's own settings are written by the supervisor (`supervisor/worker-spec.ts`), which does not register
+  it yet: that needs the hook staged beside the permission hook and the Mac app's supervisor to do the same in step (the swift-parity test holds the staged
+  files and settings equal). Spec: FOLLOWUPS.
+- **Trust**: any process of the same user that can reach the hub socket can post Main's notice (fixed words, one per ten minutes): the same trust as a
+  main-session `perm` line, which shows no nonce either.
+
+### C3.7a Questions at the terminal: the PermissionRequest hook answers them (item 6)
+
+`AskUserQuestion` is interactive-only (a `claude -p` run does not offer it). Claude Code runs BOTH hooks for it with no channel involved: PreToolUse
+and **PermissionRequest** (`tool_name: "AskUserQuestion"`, `tool_input: {questions:[{question, header, multiSelect, options:[{label, description}]}]}`).
+A PermissionRequest hook that answers `allow` with `updatedInput = {...tool_input, answers:{"<question text>":"<label or typed words>"}}` completes the
+tool WITHOUT the pane: Claude Code shows `User answered Claude's questions` and `Allowed by PermissionRequest hook`, and the model gets "Your questions
+have been answered: ...". Verified on a real claude 2.1.322 (a private tmux server, a local stub API, a temp HOME; no network); 2.1.332 is for the live check.
+The Lemnos freeze (19:00 to 06:20) was such a question sitting open: it has no timeout, and Claude Code held the channel messages behind it.
+
+- **The mirror** (`apps/bridge/src/permission/question.ts`): in `runHook`, an AskUserQuestion whose input has the shape (1 to 4 questions, 2 to 4 options each)
+  is not a permission card. At once, ONE `dialog` card per question (kind `agent_question`) goes to the agent's thread (Main: the default thread): the question,
+  its options as buttons, and an "Other" button that takes the owner's words. Answered by the owner's signed `card.resolve` (the existing ledger and signature
+  checks; `precheck` accepts only a primary tap on one of its buttons, words only on "Other"); first answer wins; a multi-select is offered as one choice.
+- **The answer**: when every question has one, the hub sends `perm_result` `decision: "answer"` with `answers` keyed by the question's POSITION (`"0"`, `"1"`),
+  and the kit hook (`permission-relay.py` `answers_of`, which keeps only positions the input really has and maps each to its own question text) prints the
+  allow + `updatedInput`. The hook takes `answer` only for AskUserQuestion; an older hook reads `answer` as none. The card shows the question as text with hidden
+  and control characters made visible and clipped to 500; a question is never refused for its words, and when no card can be made the unblock still runs.
+- **A bridge restart mid-wait**: the hook sees the connection close, waits a second and asks again (an AskUserQuestion only, at most 60 tries and never past its
+  own wait), so the new bridge makes new cards and a new timer.
+- **The unblock**: after ten minutes (`questionUnblockMs`) the unanswered questions get EXACTLY "(No answer from the owner. This is Talos, not the
+  owner.) No answer yet; carry on with other work and ask again later." (`permission/question-words.ts`), the answered ones keep their answers, the
+  cards expire (`unblocked`), once. A late tap finds a closed card. Claude Code frames every answer as "The user answered: …", which cannot be
+  avoided on the allow path, so the words open by saying the owner did not answer.
+- **Answered at the terminal**: Claude Code ends the hook; the cards close, the timer is cancelled, nothing is sent.
+- Permission prompts are untouched and never fail closed. The Mac's pane reader makes no second `agent_question` dialog card for a thread while one of
+  these is pending, or was answered in the last 8 seconds (`DialogCards.mintNew`). Off with `permission_relay` (the question then stays at the terminal as before).
+
 ### C3.8 Not covered
 
 Workspace trust, MCP consent, the dev-channel warning, the bypass disclaimer, login: startup dialogs, not tool prompts.
@@ -523,6 +576,25 @@ again by the hook (one line, no control, bidi or zero-width characters), and it 
   leaves the prompt as it is. Interactive sessions set `CLAUDE_CODE_SESSION_ATTENDED=1`, `claude -p` sets `0` and the hook stays
   silent there, so an unattended ask is still refused (C3.1).
 
+  **"Allow for this session" (Wave 1, 1.10).** The hook also reads `permission_suggestions`. It keeps a suggestion only if it is an
+  `addRules` with `behavior: "allow"`, every rule is for the call's own tool and has a `ruleContent` with at least one literal character (not a blank, `*`, `?`, `:` or `/`)
+  before its first wildcard (`*`, `:*`, `domain:*` and `//**` are whole-tool allows and are never offered), nothing is longer than
+  64 (tool) or 160 (content) characters, there are at most 3 rules, and no text has a hidden character. One thing off and the
+  whole offer is dropped, never cut. A whole-tool rule (no `ruleContent`), `setMode`, `addDirectories` and deny or ask rules are
+  never offered. The kept rules go to the bridge only as words to show (`suggest` on the `perm` line); the bridge puts them on the
+  card as `session_allow`, outside the card's binding. The owner's signed `card.resolve` (primary, `session: true`, and `session_hash`, the
+  sha256 of the canonical {tool, content} list the button showed) makes the hub answer `allow` with `session` and `session_hash`. The
+  bridge drops the session part (a plain allow) when the hash is not that of the rules it holds (a relay rewrote the button), when
+  there is no hash (an older app), or when the explainer called the call a mismatch; the hook checks the hash against its own rules
+  too. The hook then prints its OWN stored copy of Claude Code's offer, with `destination`
+  forced to `"session"`: `{"behavior":"allow","updatedPermissions":[{"type":"addRules","rules":[{"toolName":"Bash",
+  "ruleContent":"python3 -c *"}],"behavior":"allow","destination":"session"}]}` (the rule is whatever Claude Code offered; which commands it
+  offers a rule for is its own choice and differs by version: on 2.1.332, `touch` and `rm -rf` got only `addDirectories` and `setMode`, and a
+  `python3 -c "open('probe-1','w').close()"` got an `addRules`). The bridge never names a rule, and nothing is
+  written to a settings file. The channel relay road has no field for it. Every new field is optional; an older app, relay or
+  hook behaves as before. Tests: `apps/bridge/test/permission-session-allow.test.ts`, `packages/protocol/test/permission-session-allow.test.ts`,
+  `apps/web/test/cards/permission-session-allow.test.tsx`.
+
   **What the session's own environment can reach (Linux; the Mac's twin is being built).** Claude Code runs a hook's command as
   `/bin/sh -c <command>` with the session's environment (seen in real runs: bash in POSIX mode), and a thread with acceptEdits
   can write its folder's `.claude/settings.json`, whose `env` Claude Code applies to that environment. So:
@@ -627,6 +699,62 @@ again by the hook (one line, no control, bidi or zero-width characters), and it 
   Anything else, including a preview Claude Code cut or reshaped, is not a match: the hook raises its own card and says "Another card
   for this call can also approve this." A duplicate is a nuisance; a missing card leaves a prompt at the Mac and nothing on the phone.
   Every hook request gets its own card; one Allow releases exactly one hook.
+  **One exception: a session offer (Wave 1, 1.10).** When a Main-session hook carries a rule offer that can be shown
+  (`validSessionOffer`: a plain rule with content, for the call's own tool), the HOOK's card wins, because the channel's verdict has no
+  field for a session rule. The hook card is raised at once (no wait). If the relay's card for the same call exists, it is replaced:
+  once the hook card is out and the relay card's own send went, the relay card is expired (`card.update`, reason `replaced_by_hook`).
+  If the relay request comes later, no card is made for it (the hook card is remembered as unpaired until it pairs, once). The
+  channel prompt is never sent a verdict by the bridge; Claude Code is answered once, by the hook. If the hook card cannot be sent,
+  the relay card stays and still answers. If the hook then ends with NO answer (it died, Claude Code ended it, it timed out, or its
+  card could not be sent) the prompt may still be open, so the channel card it replaced, or the channel request it claimed, is raised
+  again from the request the bridge kept (same request id, not a repeat). Only a channel request young enough to be a twin (15 s) is
+  claimed. With no usable offer, everything above holds as written. Tests:
+  `apps/bridge/test/permission-hook-wins.test.ts`.
+  **The prompt is over: the exact call's result (PreToolUse record, 2026-11).** The channel card that comes back must not come back for a
+  prompt the owner already answered at the terminal. The live check on 2.1.332 showed what does NOT work: Claude Code does not stop the hook
+  for a terminal Yes or No (only for Esc, and a plain `kill` looks the same), the transcript has no entry for the call until it has finished, the
+  PermissionRequest input carries no `tool_use_id`, and a rule by tool name and input cannot tell a call from the one before it. So the id is
+  found another way. **`kit/hooks/permission-pre.sh`** is a PreToolUse hook, a few lines of POSIX sh (about 10 ms a call, against about 45 ms
+  for python), that never blocks, never prints and always exits 0 (an exit code 2 from a PreToolUse hook BLOCKS the tool call, so stderr is closed,
+  every failure is `|| exit 0`, and the one write is done by a regular builtin: `:` is a special builtin and a failed redirect would end the script
+  with 2). For every tool call it leaves one EMPTY file in `<app home>/run/pretool` (a folder 0700 that we own and that is not a link, else it
+  does nothing; files 0600; every id at most 100 characters and the whole name at most 250), named `<key>.<session>.<agent or ->.<tool_use id>.<epoch>`, where `<key>` is the POSIX `cksum` of the tool name and
+  the RAW `tool_input` text exactly as Claude Code wrote it (nothing is canonicalised, so the sh script and the python hook have nothing to
+  disagree about; no tool input is ever stored). `session_id` and `agent_id` are read from anywhere outside `tool_input`, as the python hook reads
+  them (a key inside the input is not the call's). It prunes files older than an hour, in batches, at most every ten minutes, and only names of
+  exactly the five-field record shape. The permission
+  hook computes the same key from its own stdin (`_talos_common.pre_key`) and takes the id of its call only when exactly ONE record of its own
+  session and subagent, younger than two minutes and not yet finished (no `tool_result` in the transcript or the subagent's file), has that
+  key; it then puts `tool_use_id`, `agent_id` and `transcript_path` in its `perm` request. No id (none, several: identical parallel calls, or a fresh
+  record of the same session and call under ANOTHER agent label: a main call and a subagent doing the same thing at once), and everything is as before. **The bridge** then watches that card (`permission/transcript-watch.ts`): the transcript path must have the
+  shape `<anything>/projects/<folder>/<session id>.jsonl` named by the hook's own session id (a subagent's calls are in
+  `<session id>/subagents/agent-<agent id>.jsonl` beside it), a link is not read, and it looks (one `lstat`, only the appended bytes, a one-megabyte
+  look-back the first time and after the file was cut shorter, at most 4 MB a look, a line over 8 MB dropped, no time limit, only while the card is
+  pending; opened without following a link and without waiting, and judged by the open file) for a top-level `user` record with a `tool_result` for exactly that
+  id: such a record is written only when the call has finished (answered Yes and run, answered No, interrupted). Then the card expires as
+  `prompt_over`, the hook is released with none, and nothing is raised again (a replaced or claimed channel card stays as it is). Another call's
+  result, a copy of a message inside another record kind, a channel message that mentions the id, an assistant record, a wrong path, or no id never
+  closes anything. Registered in Main's `kit/templates/dot-claude/settings.json` (every tool, timeout 5) and, for a thread session, as its own
+  command with the script embedded (`supervisor/pretool-hook.ts`, kept equal to the kit file by a test), not on a Talos distro. The one thing the
+  hook still tells the hub itself is that Claude Code is gone: `{"t":"perm_over","id":<its request id>,"why":"parent"}`, sent once the request has
+  gone out whole; the hub reads it only on the connection that carries that hook's own `perm`, for that request id, and the card closes as
+  `prompt_over` with nothing raised again. A stop (SIGTERM, SIGHUP), the hook's own wait running out, a crash, SIGKILL, the hub closing, and the
+  call's own result turning up in the transcript for the hook say nothing: the prompt is kept open and the channel card comes back, as above.
+  A stop is what Claude Code does to the hook on No and on Esc, so that channel card carries the armed id over: when the hook ends with no word the bridge
+  first looks once for the call's result (it is written at once), and if it is there raises nothing; otherwise the card comes back WITH the same exact-id
+  watch (a replaced or claimed twin as well), which closes it as `prompt_over` when the result arrives, with no time limit, until it ends or is answered.
+  No id: the card comes back and stays, as before.
+  With `TALOS_PERMISSION_HOOK_TRACE=<file>` set (off by default; a probe for live checks) the hook appends: `in:` (agent_id yes/no, transcript yes/no,
+  the NAMES of the input's keys), `pre: id=<last 6> matches=N open=M`, the watcher's `W:` lines, `sent`, and why it ended; never a value. Slow or silent
+  by design: a terminal Yes on a long Bash closes its card when the Bash ends (no earlier record exists), and identical parallel calls keep their cards.
+  Tests: `apps/bridge/test/permission-pre-hook.test.ts`, `permission-result-watch.test.ts`, `permission-prompt-over.test.ts`,
+  `permission-prompt-over-hook.test.ts`, `permission-watch-trace.test.ts`, `supervisor/pretool-hook.test.ts`, `kit/scripts/test-permission-relay.sh`.
+  A Main card that is the channel's own (no session offer) is closed the same way: the hook still sends its id, the bridge answers it
+  `relay_carries_it` and starts the watch on the CHANNEL card, but only when the pairing is no guess (exactly ONE channel request with that tool and
+  input was seen in the last 15 s, taken by a hook or not, counted when the watch would start; a second one later ends it; and the hook is the Main
+  session's). No id, or two requests: the card stays as before (so two identical prompts in a row within 15 s are not closed by a terminal answer). A hook that ended with no word and had an id is looked
+  for in 100 ms steps for up to 500 ms (`reraiseLookMs`) before the channel card is raised again; a stop of the bridge cancels that wait.
+  Still open: a channel card whose preview Claude Code cut is not a twin (exact match only), so it is not watched and still lingers; see `docs/FOLLOWUPS.md`.
 - **Time.** The hook waits until it is answered or the prompt is over. Claude Code ends the hook at once when the prompt is
   answered at the Mac, but NOT when its own countdown blocks the call (observed on 2.1.318: the countdown reads 0:00 at 2 minutes,
   the call is blocked, and the hook is left running). So the hook also watches the session transcript for the `tool_result` of

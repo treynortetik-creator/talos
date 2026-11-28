@@ -290,6 +290,9 @@ export class ScreenConsent {
     void this.ctx.permissionModeConsent
       ?.recover()
       .catch((e) => this.ctx.log.warn('permission mode card recovery failed', { error: (e as Error).message }))
+    void this.ctx.agentPlugins
+      ?.recover()
+      .catch((e) => this.ctx.log.warn('plugin card recovery failed', { error: (e as Error).message }))
     const rows = this.ctx.ledger
       .list('resolved')
       .filter((r) => r.actor === 'bridge' && isScreenAllowCard(r.binding) && r.resolution?.action === 'primary')

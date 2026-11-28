@@ -81,6 +81,7 @@ final class WorkerRig: @unchecked Sendable {
     o.heartbeat = 0.5
     o.readyTimeout = 8
     o.parkGrace = 2
+    o.echoWait *= waitScale  // a key gets longer to show on a slow machine, as every wait does
     o.idleSecondsOverride = idle
     o.busyWindow = 0.5
     let e = env

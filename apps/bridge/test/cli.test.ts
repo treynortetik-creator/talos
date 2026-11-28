@@ -250,7 +250,7 @@ describe('.mcp.json merge and install.sh', () => {
         '--config=/opt/talos-app/apps/bridge/bunfig.toml',
         '/opt/talos-app/apps/bridge/src/server.ts',
       ],
-      env: { TALOS_APP_HOME: '/home/user/.config/talos/app' },
+      env: { TALOS_APP_HOME: '/home/user/.config/talos/app', BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
     })
   })
 
@@ -267,7 +267,11 @@ describe('.mcp.json merge and install.sh', () => {
     const next = mcpEntry('/opt/talos-app/apps/bridge', '/home/user/.config/talos/app', undefined, '/opt/bun/bin/bun')
     const r = mergeMcpConfig(existing, next)
     const got = (r.config.mcpServers as Record<string, McpEntry>)['talos-app']
-    expect(got.env).toEqual({ EXTRA_FLAG: 'on', TALOS_APP_HOME: '/home/user/.config/talos/app' })
+    expect(got.env).toEqual({
+      EXTRA_FLAG: 'on',
+      TALOS_APP_HOME: '/home/user/.config/talos/app',
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0',
+    })
     expect(r.droppedEnv).toEqual(['RETRIES', 'NESTED', 'NOTHING', 'TALOS_APP_HOME'])
     expect(mergeMcpConfig(undefined, next).droppedEnv).toEqual([])
     expect(mergeMcpConfig({ mcpServers: { 'talos-app': { env: ['x'] } } }, next).droppedEnv).toEqual([])
@@ -310,6 +314,7 @@ describe('.mcp.json merge and install.sh', () => {
     expect(got.env).toEqual({
       TALOS_APP_HOME: '/home/user/.config/talos/app',
       TALOS_AGENT_DIR: '/home/alex/agent',
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0',
       EXTRA_FLAG: 'on',
       HTTPS_PROXY: 'http://proxy.example.com:8080',
     })
@@ -329,6 +334,7 @@ describe('.mcp.json merge and install.sh', () => {
     expect(mcpEntry('/b', '/h', '/home/alex/agent', '/opt/bun/bin/bun').env).toEqual({
       TALOS_APP_HOME: '/h',
       TALOS_AGENT_DIR: '/home/alex/agent',
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0',
     })
   })
 
@@ -394,6 +400,7 @@ describe('.mcp.json merge and install.sh', () => {
     expect(parsed.mcpServers['talos-app'].env).toEqual({
       TALOS_APP_HOME: home,
       TALOS_AGENT_DIR: resolve(agent),
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0',
     })
     const key1 = readFileSync(join(home, 'bridge.key'), 'utf8')
     const cfg1 = readFileSync(join(home, 'config.json'), 'utf8')

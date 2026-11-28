@@ -76,6 +76,20 @@ function stubStatus(over: Partial<HealthStatusT> = {}) {
 }
 
 // ---- Quiet window -> Settings -> Notifications ------------------------------------------------------------------------
+describe('Message text in browser notifications', () => {
+  it('is on by default, says so, and turns off with a signed patch that touches only that field', async () => {
+    const client = setup()
+    renderWith(<NotificationsSection readOnly={false} />, client)
+    const sw = screen.getByRole('switch', { name: 'Show message text in browser notifications' })
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText(/On by default/)).toBeTruthy()
+    await userEvent.click(sw)
+    await waitFor(() => expect(cfg(client).notifications.web_message_text).toBe(false))
+    expect(lastPatch(client)).toEqual({ notifications: { web_message_text: false } })
+    expect(checkConfigPatch(lastPatch(client) ?? {}).ok).toBe(true)
+  })
+})
+
 describe('Quiet hours live in Notifications', () => {
   it('saves at once with a signed patch that touches only quiet_window', async () => {
     const client = setup()
@@ -428,6 +442,7 @@ describe('Voice section', () => {
     const box = screen.getByTestId('spoken-replies')
     expect(box.textContent).toMatch(/Always still sends text if your Mac has no speech command/)
     expect(box.textContent).toMatch(/Never is overridden by Driving mode/)
+    expect(box.textContent).toMatch(/Replies that come with a spoken version always include audio\./)
     await userEvent.selectOptions(sel, 'always')
     await waitFor(() => expect(cfg(client).voice_notes.reply_with_voice).toBe('always'))
     expect(lastPatch(client)).toEqual({ voice_notes: { reply_with_voice: 'always' } })

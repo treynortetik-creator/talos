@@ -16,8 +16,9 @@ import { inlineCommandNote } from '../inline-commands.ts'
 import { kindFor } from '../media.ts'
 import { say } from '../owner-words.ts'
 import { RelayHttpError } from '../relay-http.ts'
+import { VOICE_ATTACH_WAIT_MS } from '../speak/service.ts'
 import { assertFrameFits, RelayRejectedError } from '../transport.ts'
-import { synthesize } from '../tts.ts'
+import { synthesize, type TtsResult } from '../tts.ts'
 import { ALWAYS_LOAD, fail, needStr, ok, postThreadArg, str, ToolError, threadProps } from './common.ts'
 import { OWN_THREAD, type ToolRecord } from './define.ts'
 
@@ -106,7 +107,7 @@ export const reply: ToolRecord = {
   instructions: `Messages from the Talos app arrive as <channel source="talos-app" thread_id=… message_id=… kind=… trust=…>. The owner reads the app, not this terminal. Answer with \`reply\`, passing \`thread_id\` back unchanged; never answer in a different thread. Threads are topics. Reply in the thread a message came from.`,
   told: ['main'],
   description:
-    'Send a message to the owner in a thread. Pass thread_id back unchanged from the notification. Optional: files (absolute paths), voice_text (the spoken version, when replies are read aloud), silent (no push).',
+    'Send a message to the owner in a thread. Pass thread_id back unchanged from the notification. Optional: files (absolute paths), voice_text (the spoken version, made into audio), silent (no push).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -123,9 +124,9 @@ export const reply: ToolRecord = {
       voice_text: {
         type: 'string',
         description: say({
-          mac: 'Spoken version, up to 1500 characters. Used when replies are read aloud (needs a TTS command on the Mac).',
+          mac: 'Spoken version, up to 1500 characters, made into audio (attached, or sent just after when it takes longer or in Driving mode). Needs a TTS command on the Mac; the spoken-replies setting does not matter.',
           linux:
-            'Spoken version, up to 1500 characters. Used when replies are read aloud (needs a TTS command on this computer).',
+            'Spoken version, up to 1500 characters, made into audio (attached, or sent just after when it takes longer or in Driving mode). Needs a TTS command on this computer; the spoken-replies setting does not matter.',
         }),
       },
       silent: { type: 'boolean' },
@@ -138,16 +139,37 @@ export const reply: ToolRecord = {
       const text = needStr(args, 'text', 32_000)
       const voiceText = str(args.voice_text)
       if (voiceText && voiceText.length > 1500) throw new ToolError('voice_text is over 1500 characters')
-      const attachments = await uploadAll(ctx, filesFrom(args.files))
       const cfg = ctx.config.config
       const now = ctx.clock.now()
       // docs/V2-FEATURES.md V4.1: driving mode speaks every reply, but the TEXT goes out first and the voice follows
       const driving = drivingActive(cfg, now)
-      const wantVoice = wantVoiceReply(cfg, now)
+      // `voice_text` always makes audio when a TTS command is set up; the owner's setting (or driving mode) only adds voice to a
+      // reply that carries none. When no audio can be made, say so in the result, so the agent can send an audio file instead of
+      // thinking it spoke.
+      const wantVoice = Boolean(voiceText) || wantVoiceReply(cfg, now)
       const spoken = wantVoice ? (spokenText(text, voiceText) ?? DETAILS_IN_THREAD) : ''
-      if (wantVoice && !driving) {
-        const voice = await voiceAttachment(ctx, spoken)
-        if (voice.ok) attachments.push(voice.ref)
+      // Outside driving mode the audio is made while the files are read, and waited for a limited time: a hanging TTS command
+      // must not hold the text. Past the wait the text goes out alone and the audio follows as its own message.
+      const voiceP = wantVoice && !driving ? voiceAttachment(ctx, spoken) : null
+      const cutoff = voiceP ? replyCutoff(ctx) : null
+      let attachments: AttachmentRefT[]
+      try {
+        attachments = await uploadAll(ctx, filesFrom(args.files))
+      } catch (e) {
+        cutoff?.cancel()
+        throw e
+      }
+      let noVoice = ''
+      let lateVoice: Promise<VoiceResult> | null = null
+      if (voiceP && cutoff) {
+        const got = await Promise.race([voiceP, cutoff.promise])
+        cutoff.cancel()
+        if (got === LATE) lateVoice = voiceP
+        else if (got.ok) attachments.push(got.ref)
+        else {
+          ctx.log.info('voice reply skipped', { reason: got.reason })
+          if (voiceText) noVoice = got.reason
+        }
       }
       const replyTo = str(args.reply_to)
       const message: MessageT = {
@@ -165,41 +187,76 @@ export const reply: ToolRecord = {
       const status = await deliverAgentMessage(ctx, message, {
         ...(args.silent === true ? { silent: true } : {}),
       })
-      // never awaited: a slow TTS holds neither the reply nor this tool call
+      // never awaited: a slow TTS holds neither the reply nor this tool call (driving mode, or audio that missed the wait)
       if (wantVoice && driving) void sendVoiceFollowUp(ctx, message, spoken)
+      else if (lateVoice) void deliverVoiceFollowUp(ctx, message, lateVoice)
       // after the send, so a failed one never carries it; the message itself is not touched
       const inline = inlineCommandNote(text)
-      return ok(inline ? `${status}\n${inline}` : status)
+      const notes = [
+        ...(noVoice ? [`voice_text made no audio: ${noVoice}. Send an audio file in files if he needs one.`] : []),
+        ...(inline ? [inline] : []),
+      ]
+      return ok(notes.length ? `${status}\n${notes.join('\n')}` : status)
     } catch (e) {
       return fail((e as Error).message)
     }
   },
 }
 
-async function voiceAttachment(
-  ctx: BridgeContext,
-  spoken: string,
-): Promise<{ ok: true; ref: AttachmentRefT } | { ok: false; reason: string }> {
-  const tts = await synthesize(ctx.env, ctx.paths, spoken, newId('m').slice(2))
-  if (!tts.ok) return { ok: false, reason: tts.reason }
-  const ref = await ctx.media.upload(tts.path, {
-    role: 'voice_reply',
-    name: `reply.${tts.ext}`,
-    mime: tts.mime,
-    kind: 'audio',
+type VoiceResult = { ok: true; ref: AttachmentRefT } | { ok: false; reason: string }
+const LATE = Symbol('voice audio not ready in time')
+
+/** A timer for how long the reply waits for its audio, on the bridge's clock; `cancel` frees it. */
+function replyCutoff(ctx: BridgeContext): { promise: Promise<typeof LATE>; cancel: () => void } {
+  let handle: unknown
+  const promise = new Promise<typeof LATE>((resolve) => {
+    handle = ctx.clock.setTimeout(() => resolve(LATE), ctx.speak?.replyWaitMs ?? VOICE_ATTACH_WAIT_MS)
   })
-  return { ok: true, ref }
+  return { promise, cancel: () => ctx.clock.clearTimeout(handle) }
+}
+
+/** The audio for `spoken`, made and uploaded. Never rejects: every failure is a reason. */
+async function voiceAttachment(ctx: BridgeContext, spoken: string): Promise<VoiceResult> {
+  const id = newId('m').slice(2)
+  let tts: TtsResult
+  try {
+    tts = ctx.speak ? await ctx.speak.synthesizeForReply(spoken, id) : await synthesize(ctx.env, ctx.paths, spoken, id)
+  } catch (e) {
+    ctx.log.warn('voice audio not made', { error: (e as Error).message })
+    return { ok: false, reason: 'text to speech failed' }
+  }
+  if (!tts.ok) return { ok: false, reason: tts.reason }
+  try {
+    const ref = await ctx.media.upload(tts.path, {
+      role: 'voice_reply',
+      name: `reply.${tts.ext}`,
+      mime: tts.mime,
+      kind: 'audio',
+    })
+    return { ok: true, ref }
+  } catch (e) {
+    ctx.log.warn('voice audio not uploaded', { error: (e as Error).message })
+    return { ok: false, reason: 'upload failed' }
+  }
 }
 
 /**
  * Driving mode's spoken follow-up (V4.1.2): its own message, `reply_to` the text it reads, with a `voice_reply`
  * attachment. Sent `silent` so a driving reply pushes once, not twice (review note B). Failures only log.
  */
-export async function sendVoiceFollowUp(ctx: BridgeContext, replyTo: MessageT, spoken: string): Promise<void> {
+export const sendVoiceFollowUp = (ctx: BridgeContext, replyTo: MessageT, spoken: string): Promise<void> =>
+  deliverVoiceFollowUp(ctx, replyTo, voiceAttachment(ctx, spoken))
+
+/** The audio that comes after its text (driving mode, or a reply whose audio missed the wait): one silent message. Failures only log. */
+export async function deliverVoiceFollowUp(
+  ctx: BridgeContext,
+  replyTo: MessageT,
+  voiceP: Promise<VoiceResult>,
+): Promise<void> {
   try {
-    const voice = await voiceAttachment(ctx, spoken)
+    const voice = await voiceP
     if (!voice.ok) {
-      ctx.log.info('driving voice follow-up skipped', { reason: voice.reason })
+      ctx.log.info('voice follow-up skipped', { reason: voice.reason })
       return
     }
     const message: MessageT = {
@@ -215,7 +272,7 @@ export async function sendVoiceFollowUp(ctx: BridgeContext, replyTo: MessageT, s
     }
     await deliverAgentMessage(ctx, message, { silent: true })
   } catch (e) {
-    ctx.log.warn('driving voice follow-up failed', { error: (e as Error).message })
+    ctx.log.warn('voice follow-up failed', { error: (e as Error).message })
   }
 }
 

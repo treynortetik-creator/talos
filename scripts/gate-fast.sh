@@ -8,7 +8,8 @@
 # test files whose own relative strings name a changed apps/bridge/src or apps/bridge/test file ('../src/x.ts': an import, an
 # export from, a dynamic import, a require, a path it spawns). Direct only, on purpose: bridge.ts reaches 317 of the 321 source
 # files, so following imports further selects about 283 of the 371 bridge test files for almost any change. Everything else
-# the planned gate runs (the e2e and old-client steps, and the browser specs of a changed feature or helper) is CI's after the push.
+# the planned gate runs (the old-client step, the other e2e specs, and the browser specs of a changed feature or helper) is CI's after the push;
+# the e2e specs that carry a `// gate-reads:` mark matching a changed file are the one e2e step it keeps (E2E_MARKED, plan.sh).
 # The browser specs the fast gate runs are the change's own: each changed apps/web/test/**/*.spec.ts that is still there (not a
 # feature's folder of specs, not the smoke set), on every Playwright project that takes it (desktop, iphone, pixel;
 # iphone-se for its one spec), under the heavy lock; a fast gate with no such spec takes no lock. A deleted spec runs
@@ -186,7 +187,7 @@ fast_plan() {
     return 0
   fi
   BUN=("${bun[@]+"${bun[@]}"}")
-  BUN_ALL=0 E2E=() E2E_ALL=0 OLD=0
+  BUN_ALL=0 E2E=("${E2E_MARKED[@]+"${E2E_MARKED[@]}"}") E2E_ALL=0 OLD=0 # only the e2e specs that read a changed file (their mark)
   WEB=("${web[@]+"${web[@]}"}") WEBKIT=("${webkit[@]+"${webkit[@]}"}")
 }
 

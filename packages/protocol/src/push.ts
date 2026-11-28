@@ -6,7 +6,7 @@ export const PushPayload = z.object({
   web_push: z.literal(8030), // Declarative Web Push (iOS 18.4+); the SW path parses the same JSON
   notification: z.object({
     title: z.string().max(40), // agent name from config, e.g. "Talos"
-    body: z.string().max(80), // fixed templates only
+    body: z.string().max(80), // fixed templates; a browser reply push may carry a short preview (push-words.ts)
     navigate: z.string().startsWith('/'), // in-scope deep link
     tag: z.string().max(64).optional(),
     /** Alert again even though a notification with this `tag` may still be showing (web push `renotify`). Only the card-expiry reminder sets it: it shares its card's tag. */
@@ -302,12 +302,50 @@ export const ApnsRegistration = z
   })
 export type ApnsRegistrationT = z.infer<typeof ApnsRegistration>
 
+/**
+ * Why a push that should have carried the message text went as the fixed phrase. The first six are decided on the relay;
+ * the last three are what the phone's notification extension may report (the page reads them through the TalosPush plugin:
+ * `lastPlainReason`, see docs/IOS-PUSH.md). Settings has words for every one (features/pwa/plainPushWords.ts).
+ */
+export const RELAY_PLAIN_REASONS = [
+  'no_grant', // this phone has text off, or never gave the relay a key
+  'grant_expired', // the phone's key ran out
+  'grant_bad', // the key the relay holds is not usable
+  'seal_failed', // sealing the text failed
+  'too_big', // the sealed copy was over what Apple takes
+  'grant_changed', // the key changed or was checked again while the push was leaving
+] as const
+export const PHONE_PLAIN_REASONS = [
+  'phone_no_key', // the extension has no key on this phone
+  'phone_open_failed', // the extension could not open the sealed text
+  'phone_timed_out', // the extension ran out of time
+] as const
+export const PLAIN_PUSH_REASONS = [...RELAY_PLAIN_REASONS, ...PHONE_PLAIN_REASONS] as const
+export type PlainPushReasonT = (typeof PLAIN_PUSH_REASONS)[number]
+export type RelayPlainReasonT = (typeof RELAY_PLAIN_REASONS)[number]
+export type PhonePlainReasonT = (typeof PHONE_PLAIN_REASONS)[number]
+
+/** How the latest message push to one phone left the relay: with its text (`rich`) or plain, and when. Latest only. */
+export const PushLast = z.object({
+  rich: z.boolean(),
+  reason: z.enum(RELAY_PLAIN_REASONS).optional(),
+  /** The seal's id when the push left sealed: the phone's own report (`phone_*`) names the seal it could not open. */
+  id: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{22}$/)
+    .optional(),
+  at: IsoTs,
+})
+export type PushLastT = z.infer<typeof PushLast>
+
 /** `GET /api/push/apns`: the truth about native push, for Settings. Never a token, key or id of the key. */
 export const ApnsStatus = z.object({
   /** The relay has a working APNs sender (all APNS_* variables present and the key parsed). */
   configured: z.boolean(),
   /** This session's device has a token registered. */
   registered: z.boolean(),
+  /** How the last message push to this device left; absent before the first one. */
+  last: PushLast.optional(),
 })
 export type ApnsStatusT = z.infer<typeof ApnsStatus>
 

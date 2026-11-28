@@ -35,8 +35,9 @@ import {
   WORKER_MCP_APP,
   workerMcpConfigPath,
 } from '@talos-app/protocol'
+import { pluginDeclaresServers, pluginServerDefs, pluginSource } from './plugin-hooks.ts'
 import { INSTRUCTION_PLUGINS } from './worker-policy.ts'
-import { cleanMcpEntry } from './worker-spec.ts'
+import { cleanMcpEntry, IMESSAGE_PLUGIN, TELEGRAM_PLUGIN } from './worker-spec.ts'
 
 type Json = Record<string, unknown>
 
@@ -173,9 +174,33 @@ export type InstalledPlugin = { key: string; name: string; root: string; enabled
 
 /** The installed plugins (`<name>@<marketplace>`), from both layouts of installed_plugins.json, and whether each is on. */
 export function installedPlugins(claudeDir: string): InstalledPlugin[] {
-  const plugins = childOf(object(join(claudeDir, 'plugins', 'installed_plugins.json')), 'plugins')
+  return readInstalledPlugins(claudeDir) ?? []
+}
+
+/** A JSON file: its object, undefined when it is not there, null when it is there and is not a JSON object. */
+function jsonFile(path: string): Json | undefined | null {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null
+  }
+  try {
+    const v = JSON.parse(text) as unknown
+    return isObject(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** installedPlugins, or null when one of its two files is there and cannot be read (the set is then not known, never "empty"). */
+export function readInstalledPlugins(claudeDir: string): InstalledPlugin[] | null {
+  const installed = jsonFile(join(claudeDir, 'plugins', 'installed_plugins.json'))
+  const settings = jsonFile(join(claudeDir, 'settings.json'))
+  if (installed === null || settings === null) return null
+  const plugins = childOf(installed, 'plugins')
   if (!plugins) return []
-  const enabled = childOf(object(join(claudeDir, 'settings.json')), 'enabledPlugins')
+  const enabled = childOf(settings, 'enabledPlugins')
   const out: InstalledPlugin[] = []
   for (const key of Object.keys(plugins).sort()) {
     const value = plugins[key]
@@ -224,21 +249,36 @@ function hasPlaceholder(v: unknown): boolean {
  */
 export function pluginServers(claudeDir: string, projectDir: string): Map<string, McpEntry> {
   const out = new Map<string, McpEntry>()
+  const memo = new Map<string, unknown>()
   for (const plugin of installedPlugins(claudeDir)) {
     if (!plugin.enabled) continue
-    const mcp = object(join(plugin.root, '.mcp.json'))
-    let defs = mcp ? tableOrSelf(mcp) : new Map<string, Json>()
-    if (defs.size === 0) defs = table(object(join(plugin.root, '.claude-plugin', 'plugin.json'))?.mcpServers)
-    for (const [server, def] of defs) {
-      let filled = substitute(def, plugin.root, projectDir) as Json
+    // the servers Claude Code starts: .mcp.json, plugin.json mcpServers (object, path, array), the marketplace entry's only with strict: false;
+    // read from where it loads the plugin from (the source folder of a local-folder marketplace)
+    const src = pluginSource(claudeDir, plugin.key, plugin.name, plugin.root, memo)
+    for (const [server, def] of pluginServerDefs(src.root, src.entry).servers) {
+      let filled = substitute(def, src.root, projectDir) as Json
       if (Object.hasOwn(def, 'command')) {
         const env = isObject(filled.env) ? filled.env : {}
-        filled = { ...filled, env: { ...env, CLAUDE_PLUGIN_ROOT: plugin.root } }
+        filled = { ...filled, env: { ...env, CLAUDE_PLUGIN_ROOT: src.root } }
       }
       out.set(`plugin:${plugin.name}:${server}`, { def: filled, scope: 'plugin', unfillable: hasPlaceholder(filled) })
     }
   }
   return out
+}
+
+/**
+ * The plugins that are switched on at user scope and could load in a thread session (`<name>@<marketplace>`, sorted): the set a launch is made
+ * with, so turning one on or off restarts a running session after its turn. The channel plugins are never in it (they are forced off). Null: a file is
+ * there and cannot be read, so the set is not known (never read as "no plugins", which would restart sessions for nothing).
+ */
+export function enabledPluginKeys(claudeDir: string): string[] | null {
+  return (
+    readInstalledPlugins(claudeDir)
+      ?.filter((p) => p.enabled && p.key !== TELEGRAM_PLUGIN && p.key !== IMESSAGE_PLUGIN)
+      .map((p) => p.key)
+      .sort() ?? null
+  )
 }
 
 /** The plugins that carry a messaging channel into a session: never on a thread session's list. */
@@ -343,8 +383,27 @@ export function planWorkerMcp(o: {
       return p.length >= 3 && p[0] === 'plugin' ? [p[1] as string] : []
     }),
   )
-  const disabledPlugins = installedPlugins(o.claudeDir)
-    .filter((p) => !listed.has(p.name) && !(INSTRUCTION_PLUGINS as readonly string[]).includes(p.key))
+  // ...except a plugin that is on and has no MCP server at all (skills, commands, agents, hooks): a list is about servers, so there is nothing to list
+  // and it stays on, as in Main (an approval hook included: the owner was told on the card)
+  // fail closed: a plugin is without servers only when it declares none in ANY form (.mcp.json, plugin.json mcpServers of any type, its marketplace entry)
+  const installed = installedPlugins(o.claudeDir)
+  const marketplaceFiles = new Map<string, unknown>() // each marketplace file is read once for this plan
+  const withServers = new Set([
+    ...[...pluginServers(o.claudeDir, o.cwd).keys()].map((k) => k.split(':')[1]),
+    ...installed
+      .filter((p) => {
+        const src = pluginSource(o.claudeDir, p.key, p.name, p.root, marketplaceFiles)
+        return pluginDeclaresServers(src.root, src.entry)
+      })
+      .map((p) => p.name),
+  ])
+  const disabledPlugins = installed
+    .filter(
+      (p) =>
+        !listed.has(p.name) &&
+        !(INSTRUCTION_PLUGINS as readonly string[]).includes(p.key) &&
+        !(p.enabled && !withServers.has(p.name)),
+    )
     .map((p) => p.key)
   const refusal =
     unapproved.length === 0

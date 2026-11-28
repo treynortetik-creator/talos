@@ -1,6 +1,7 @@
 // RFC 7386 JSON merge patch and the config.patch allowlist walk (spec 3.4). Shared by the bridge (enforces), the web
 // app (builds) and the testkit fakes, so all of them agree on which paths a patch may touch.
 import { IntegrationId } from './ids.ts'
+import { parseNyxUrl } from './nyx.ts'
 import { PHONE_PATCH_ENTRIES } from './settings-table.ts'
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -72,6 +73,12 @@ export function checkConfigPatch(patch: unknown): ConfigPatchCheck {
       const known = (x: unknown) => IntegrationId.safeParse(x).success
       if (e !== null && (!Array.isArray(e) || !e.every(known))) return { ok: false, path: 'work.enabled' }
     }
+  }
+  // Nyx's address is checked again here, where it is saved: https only, whatever the sender's form did
+  const memory = patch.memory
+  if (isObject(memory) && 'nyx_url' in memory) {
+    const v = memory.nyx_url
+    if (v !== null && parseNyxUrl(v) === null) return { ok: false, path: 'memory.nyx_url' }
   }
   if ('trust_mode' in patch) {
     const v = patch.trust_mode

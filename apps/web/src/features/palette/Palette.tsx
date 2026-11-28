@@ -6,7 +6,15 @@ import { useLocation, useMatch, useNavigate } from 'react-router'
 import { useStore } from 'zustand'
 import { DEFAULT_KEYMAP, isMacPlatform, type KeyEntry } from '../../lib/keymap.ts'
 import { cn } from '../../ui/cn.ts'
-import { Dialog, DialogContent, DialogTitle } from '../../ui/index.ts'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  ESCAPE_BOX,
+  isImeKey,
+  keepEscapeInBox,
+  searchBoxKeys,
+} from '../../ui/index.ts'
 import { openBugReport } from '../bugreport/store.ts'
 import { useAwaitingOwner } from '../cards/useAwaitingOwner.ts'
 import { commandBlock, filterCommands } from '../session/logic.ts'
@@ -131,8 +139,11 @@ export function Palette({
     })
   }
 
+  // Escape: text clears first, an empty box closes (ui/keys.ts); a held, modified or input-method Esc closes nothing
+  const escKeys = searchBoxKeys({ value: query, onClear: () => setQuery(''), onClose: close })
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return // an input method is still choosing
+    if (isImeKey(e.nativeEvent) || e.keyCode === 229) return // an input method is still choosing
+    if (e.key === 'Escape') return escKeys(e)
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       if (items.length === 0) return
@@ -160,6 +171,7 @@ export function Palette({
     <Dialog open={mode === 'palette' || needs} onOpenChange={(o) => !o && close()}>
       <DialogContent
         aria-describedby={undefined}
+        onEscapeKeyDown={keepEscapeInBox}
         data-palette=""
         onCloseAutoFocus={(e) => {
           e.preventDefault()
@@ -196,6 +208,7 @@ export function Palette({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
+          {...ESCAPE_BOX}
           enterKeyHint="go"
           className="min-h-11 w-full rounded-button border border-line bg-surface px-3 text-md text-text placeholder:text-text-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
         />

@@ -5,6 +5,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['test-contract/**/*.vitest.ts'],
+    // no inherited session variables, no real Chronos, a fake claude first on PATH (as test/preload.ts does for bun)
+    setupFiles: ['./test-contract/vitest-setup.ts'],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     pool: 'forks',

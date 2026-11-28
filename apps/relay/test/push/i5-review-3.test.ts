@@ -61,7 +61,6 @@ async function sentToApple(threadId: 'general' | 'inbox', name: string, mode: Mo
     log: silent,
     transport: new NoopTransport(),
     config: () => cfg,
-    anyVisible: () => false,
     apns: sender,
   })
   await push.notify({ template: 'reply', thread_id: threadId }, { force: true })

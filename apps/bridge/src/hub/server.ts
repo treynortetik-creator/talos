@@ -11,6 +11,7 @@ import {
   HUB_MAX_LINE_BYTES,
   HUB_RPC_MAX_TEXT,
   type HubAskRuleT,
+  HubNotify,
   type HubPermT,
   type HubRuleNoticeT,
   type HubRuleTakeT,
@@ -23,6 +24,7 @@ import {
 import { inspectRuleFile, ruleFileNotice, ruleKillSwitchPath } from '../action-rule-asks.ts'
 import { settingsReadText } from '../config-propose/settings-read.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
+import { NeedsYouNotices } from '../permission/needs-you-notice.ts'
 import { workerScheduleTool } from '../schedules/worker-scope.ts'
 import { setInstructionsAs } from '../tools/thread-setup.ts'
 import { runCreateThread } from '../tools/threads.ts'
@@ -38,6 +40,7 @@ import {
   sessionSettingsProblem,
 } from '../worker/project-settings.ts'
 import type { WorkerStore } from '../worker/store.ts'
+import { noteStatusSent } from '../worker/working-row.ts'
 import { type FenceDeps, workerFrameProblem } from './worker-fence.ts'
 
 /** Frames a worker may hand the hub. */
@@ -76,6 +79,11 @@ type Conn = {
   features?: readonly string[]
   /** A PermissionRequest hook's connection: one `perm` request, no hello, closed after the answer. */
   perm?: AbortController
+  /** The hook's request id and whether it said (`perm_over`) that its prompt has ended: its close then aborts with the reason `prompt_over`. */
+  permId?: string
+  permOver?: boolean
+  /** A Notification hook's connection: one `notify` line per connection (a second is ignored). */
+  notified?: boolean
 }
 
 /** Constant-time compare (the nonce is the real gate on `hello`; the pid is self-reported). */
@@ -96,6 +104,7 @@ export class HubServer {
     private readonly o: HubServerOptions,
   ) {
     this.workers = o.workers ?? new WorkersReader(ctx.paths.home)
+    ctx.needsYou ??= new NeedsYouNotices(ctx)
     this.pgid = o.pgidOf ?? pgidOf
   }
 
@@ -189,7 +198,9 @@ export class HubServer {
     sock.on('close', () => {
       clearTimeout(t)
       this.conns.delete(c)
-      c.perm?.abort() // the hook died or was stopped (the owner answered at the Mac): its card closes
+      // the hook died or was stopped (the owner answered at the Mac): its card closes. With `perm_over` the hook said it KNEW the prompt
+      // had ended, which the relay takes as "answered elsewhere, nothing to raise again"; a plain close is a crash or a wait that ran out.
+      c.perm?.abort(c.permOver ? 'prompt_over' : undefined)
     })
   }
 
@@ -210,10 +221,13 @@ export class HubServer {
     } catch {
       return c.thread ? undefined : this.refuse(c, 'bad_frame', 'not JSON')
     }
+    // the Notification hook's one line (a kind and who asks, never the notification's text), before the worker lines
+    if (typeof raw === 'object' && raw !== null && (raw as { t?: unknown }).t === 'notify') return this.onNotify(c, raw)
     const m = HubWorkerLine.safeParse(raw)
     if (!m.success) return c.thread ? undefined : this.refuse(c, 'bad_frame', 'not a hub line')
     const msg = m.data
     if (msg.t === 'perm') return this.onPerm(c, msg)
+    if (msg.t === 'perm_over') return this.onPermOver(c, msg)
     if (msg.t === 'ask_rule' || msg.t === 'rule_take') return this.onRule(c, msg)
     if (msg.t === 'rule_notice') return this.onRuleNotice(c, msg)
     if (msg.t === 'hello') {
@@ -361,20 +375,29 @@ export class HubServer {
    * answered `none`, which leaves the prompt at the Mac. One request per connection; the connection closing closes the card.
    */
   private async onPerm(c: Conn, msg: HubPermT) {
-    const answer = (decision: 'allow' | 'deny' | 'none', reason: string, note?: string) => {
-      // the owner's note goes with a deny only; an older hook ignores the extra key
+    const answer = (
+      decision: 'allow' | 'deny' | 'answer' | 'none',
+      reason: string,
+      note?: string,
+      session?: { hash: string },
+      answers?: Record<string, string>,
+    ) => {
+      // the owner's note goes with a deny only, and "for this session" with an allow only; an older hook ignores the extra keys
       this.write(c, {
         t: 'perm_result',
         id: msg.id,
         decision,
         reason: reason.slice(0, 120),
         ...(decision === 'deny' && note ? { note } : {}),
+        ...(decision === 'allow' && session ? { session: true, session_hash: session.hash } : {}),
+        ...(decision === 'answer' && answers ? { answers } : {}),
       })
       c.sock.end()
     }
     if (c.perm || c.thread) return // one request per connection, and a worker's own connection never carries one
     const ac = new AbortController()
     c.perm = ac
+    c.permId = msg.id
     if (this.ctx.mode !== 'live') return answer('none', 'not_live')
     const refused = this.proveAsker(msg, 'permission request')
     if (refused) return answer('none', refused)
@@ -386,10 +409,54 @@ export class HubServer {
         ...(msg.pid !== undefined ? { pid: msg.pid } : {}),
         ...(msg.cwd !== undefined ? { cwd: msg.cwd } : {}),
         ...(msg.permission_mode !== undefined ? { mode: msg.permission_mode } : {}),
+        ...(msg.suggest !== undefined ? { suggest: msg.suggest } : {}),
+        // the call this prompt is for, when the hook tied it to exactly one PreToolUse record of its own session (relay.ts watchResult)
+        ...(msg.session_id !== undefined ? { session_id: msg.session_id } : {}),
+        ...(msg.tool_use_id !== undefined ? { tool_use_id: msg.tool_use_id } : {}),
+        ...(msg.agent_id !== undefined ? { agent_id: msg.agent_id } : {}),
+        ...(msg.transcript_path !== undefined ? { transcript_path: msg.transcript_path } : {}),
       },
       ac.signal,
     )
-    if (!ac.signal.aborted) answer(r.decision, r.reason, r.note)
+    if (!ac.signal.aborted)
+      answer(
+        r.decision,
+        r.reason,
+        r.note,
+        r.session && r.session_hash ? { hash: r.session_hash } : undefined,
+        r.answers,
+      )
+  }
+
+  /**
+   * The kit's Notification hook (docs/CLAUDE-CODE.md C3.10): a session waits on the owner with no card. Proof as for `perm`; the bridge says ONE
+   * fixed sentence per kind per thread per ten minutes (needs-you-notice.ts). Always answered, and the answer decides nothing.
+   */
+  private async onNotify(c: Conn, raw: unknown) {
+    // first of all: a worker's own link or an open permission request is never answered or ended by a notify line, bad or not, and a second
+    // notify on the same connection is ignored
+    if (c.perm || c.thread || c.notified) return
+    c.notified = true
+    const m = HubNotify.safeParse(raw)
+    const id = m.success ? m.data.id : ''
+    const answer = (state: string) => {
+      this.write(c, { t: 'notify_result', id, state })
+      c.sock.end()
+    }
+    if (!m.success) return answer('bad_frame')
+    if (this.ctx.mode !== 'live') return answer('not_live')
+    const refused = this.proveAsker(m.data, 'notification')
+    if (refused) return answer(refused)
+    answer((await this.ctx.needsYou?.tell(m.data.kind, m.data.thread_id)) ?? 'none')
+  }
+
+  /**
+   * The hook's last line (docs/CLAUDE-CODE.md C3.5): its prompt has ended. Only on the connection that carries its own `perm` and only
+   * for that request id; anything else (before the request, another id) is ignored. It decides nothing by itself: it only changes why the
+   * card closes when the connection does.
+   */
+  private onPermOver(c: Conn, msg: { id: string }) {
+    if (c.perm && c.permId === msg.id) c.permOver = true
   }
 
   /**
@@ -592,7 +659,9 @@ export class HubServer {
     if (f.type === 'card.update' && (f.state === 'done' || f.state === 'failed'))
       this.o.store.settleClaims([f.card_id], ctx.clock.now())
     if (!DURABLE.has(f.type)) {
-      ctx.transport.sendEphemeral(f)
+      const sent = ctx.transport.sendEphemeral(f)
+      // what the session last said about the thread: a `working` it never took back is cleared when its session is gone (working-row.ts)
+      if (sent && f.type === 'status') noteStatusSent(ctx, f.thread_id, f.state)
       return { ok: true, state: 'sent' }
     }
     try {

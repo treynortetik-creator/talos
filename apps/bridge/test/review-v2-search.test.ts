@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type FrameOf, type MessageT, newId, newUlid } from '@talos-app/protocol'
-import { mkFrame, waitScale } from '@talos-app/testkit'
+import { bridgeChildEnv, mkFrame, waitScale } from '@talos-app/testkit'
 import { type HistoryStore, openHistory } from '../src/history-store.ts'
 import { RECONCILE_BATCH } from '../src/search/indexer.ts'
 import { createSearchService, indexerFor } from '../src/search/install.ts'
@@ -185,8 +185,9 @@ describe('isolation under a full reindex', () => {
           msg({ text: `${body} n${i}`, created_at: new Date(Date.now() - (100_000 - i) * 60_000).toISOString() }),
         )
     })()
-    const cli = Bun.spawn(['bun', join(import.meta.dir, '../src/cli.ts'), 'search', 'reindex'], {
-      env: { ...process.env, TALOS_APP_HOME: home },
+    const cliArgv = ['bun', join(import.meta.dir, '../src/cli.ts'), 'search', 'reindex']
+    const cli = Bun.spawn(cliArgv, {
+      env: bridgeChildEnv(cliArgv, { TALOS_APP_HOME: home, TALOS_TEST_ROOT: home }).env,
       stdout: 'pipe',
       stderr: 'pipe',
     })

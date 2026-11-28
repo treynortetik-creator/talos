@@ -136,7 +136,7 @@ struct TerminalTabsGuiTests {
     c.nativeMessage(.ready(signedIn: false, features: [WebController.tabsFeature]))
     #expect(!c.terminalSessionsTimerRunningForTest, "signing out stops the timer, not just the sending")
     f.threads["trip"]?.state = "live"
-    try? await Task.sleep(nanoseconds: 2_200_000_000)
+    c.pushTerminalSessions()  // asked directly: the timer is already proved stopped, and a changed list must still not go out
     #expect(sent.count == 3, "nothing is sent to a signed-out page")
     f.threads["trip"]?.state = "failed"  // the same list as the last one sent
     c.nativeMessage(.ready(signedIn: true, features: [WebController.tabsFeature]))

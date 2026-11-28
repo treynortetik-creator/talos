@@ -149,7 +149,7 @@ struct AboutWindowGuiTests {
     return d
   }
 
-  @Test func everyStateIsDrawnInLightAndDark() async throws {
+  @Test func everyStateIsDrawnInLightAndDark() throws {
     _ = NSApplication.shared
     OnboardingFonts.directoryOverride = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Resources/onboarding")
@@ -169,8 +169,6 @@ struct AboutWindowGuiTests {
         w.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         w.contentView = hostV
         hostV.frame = NSRect(origin: .zero, size: size)
-        hostV.layoutSubtreeIfNeeded()
-        try await Task.sleep(nanoseconds: 400_000_000)
         hostV.layoutSubtreeIfNeeded()
         hostV.displayIfNeeded()
         let raw = try #require(hostV.bitmapImageRepForCachingDisplay(in: hostV.bounds))

@@ -24,16 +24,15 @@ import {
 } from '@talos-app/protocol'
 import { claudeConfigDir } from '../claude-dir.ts'
 import { type BridgeContext, postSystemNotice, threadRef } from '../context.ts'
-import { statusFrame } from '../frames-out.ts'
 import type { Notification } from '../notify.ts'
 import { BridgeStopping, isStopping } from '../stopping.ts'
 import { noteHandOver, pointBefore, waitForRestore, workerFolder } from '../undo/route-point.ts'
 import { BRIDGE_COMMIT } from '../version.ts'
-import { dropWake } from '../wake-me/drop.ts'
+import { dropWake, keepWake, recheckWake } from '../wake-me/drop.ts'
 import { pendingOf } from '../wake-me/service.ts'
 import { WakeMeStore } from '../wake-me/store.ts'
 import { deadlineLine, ownersOwn, syncWaitLines } from '../worker/busy-line.ts'
-import { WorkersReader, writeControl, writeWake } from '../worker/files.ts'
+import { WorkersReader, writeControl } from '../worker/files.ts'
 import {
   cleanHandoffText,
   firstWords,
@@ -44,10 +43,12 @@ import {
   type StoredHandoff,
 } from '../worker/handoff.ts'
 import { placeFilesInInbox } from '../worker/inbox.ts'
-import { type RouteRow, WorkerStore } from '../worker/store.ts'
+import { type RouteRow, SupersededByMain, WorkerStore } from '../worker/store.ts'
+import { settleWorkingRows, startRow } from '../worker/working-row.ts'
 import { deafStatus, noteMainHandled } from './deaf.ts'
 import { allowsStart, type GovernorReading, governorNow } from './governor.ts'
 import { tellOldSupervisor } from './old-supervisor-notice.ts'
+import { unansweredLine, wireQuiet } from './quiet-wiring.ts'
 import { failureReason, REASON_TEXT, runEnded, wakeDropReason } from './reasons.ts'
 import { GoneWatch } from './rewake.ts'
 import { mainNeedsYou, statusLine } from './status-line.ts'
@@ -59,6 +60,7 @@ import {
   turnEndedSince,
   UpdateResendCards,
 } from './update-resend.ts'
+import { writeThreadWake } from './wake-file.ts'
 import { WorkerContextFeed } from './worker-context.ts'
 
 export type Emit = (n: Notification) => Promise<void>
@@ -107,6 +109,7 @@ export class ThreadRouter {
   private parkSentAt = new Map<string, number>()
   private relayListsFeature = false
   private readonly contextFeed: WorkerContextFeed
+  private readonly sessionErrors: ReturnType<typeof wireQuiet>
   /** Each thread's session as last seen (id, start time, pane), so a session that started since is noticed once. */
   private readonly sessionsSeen = new Map<string, string>()
   private readonly workerFeatures: (thread: string) => readonly string[] | undefined
@@ -118,7 +121,7 @@ export class ThreadRouter {
   private markerSaid = ''
 
   constructor(
-    private readonly ctx: BridgeContext,
+    readonly ctx: BridgeContext,
     private readonly mainEmit: Emit,
     opts: {
       store?: WorkerStore
@@ -133,6 +136,13 @@ export class ThreadRouter {
     ctx.updateResend = new UpdateResendCards(ctx, {
       held: (id) => this.store.route(id)?.notification,
       route: (n) => this.route(n),
+    })
+    this.sessionErrors = wireQuiet(ctx, () => this.store, {
+      held: (id) => this.store.route(id)?.notification,
+      store: () => this.store,
+      decide: (n) => this.decide(n),
+      routeRaw: (n, supersedes) => this.route(n, supersedes),
+      workers: () => this.workers,
     })
     this.workerFeatures = opts.workerFeatures ?? (() => undefined)
     this.onCardUndelivered = opts.onCardUndelivered ?? (() => {})
@@ -217,8 +227,7 @@ export class ThreadRouter {
         cold,
       })
       this.wake(row.lead, 'message')
-      if (cold && fresh)
-        ctx.transport.sendEphemeral(statusFrame(now, row.lead, 'working', 'Starting a session for this thread…'))
+      if (cold && fresh) startRow(ctx, row.lead, now)
     }
     this.handoffs.markDelivered(row.id, now)
   }
@@ -265,6 +274,7 @@ export class ThreadRouter {
   /** From `ready.features`: an older relay answers `workers.status` with an error, so it gets none. */
   setRelayFeatures(features: readonly string[]): void {
     this.relayListsFeature = features.includes(THREAD_SESSIONS_FEATURE)
+    this.sessionErrors.setRelayFeatures(features)
   }
 
   governor(): GovernorReading {
@@ -333,7 +343,7 @@ export class ThreadRouter {
   }
 
   /** The emit the bridge installs (after driving-mode meta). */
-  async route(n: Notification): Promise<void> {
+  async route(n: Notification, supersedes?: string): Promise<void> {
     const first = this.decide(n)
     // nothing starts a turn in a folder being undone (an owner message, a scheduled run, a notice alike); then decide
     // again, on what is true after the wait. pointBefore waits once more right before each hand-over.
@@ -342,13 +352,15 @@ export class ThreadRouter {
       first.to === 'worker' ? { worker: workerFolder(this.ctx, this.workers.read(), first.thread) } : 'main',
     )
     const d = this.decide(n)
+    if (supersedes !== undefined && this.store.claimedBy(supersedes) === 'main') throw new SupersededByMain() // main answered the original while this waited
     // an owner message's undo point is taken of the folder its turn runs in, right before each hand-over
     if (d.to === 'main') {
       await pointBefore(this.ctx, n, 'main')
       return this.mainEmit(n)
     }
     const messageId = n.meta.message_id ?? ''
-    if (d.to === 'fallback') return this.routeFallback(n, d.thread, d.reason, messageId)
+    if (d.to === 'fallback')
+      return keepWake(this, n, d.thread, () => this.routeFallback(n, d.thread, d.reason, messageId))
     // the thread's session reads files from its own inbox only: copy them there, or let main have the whole message
     let held = n
     try {
@@ -377,7 +389,7 @@ export class ThreadRouter {
     const startsWorker = d.cold && this.store.unclaimed(d.thread).length === 0
     // the same id routed before: never hold it twice. Main runs it now: its point is taken only when the one recorded
     // is of another folder (main may already have run it, and a point of its folder now could hold that turn's edits)
-    if (!this.store.addRoute(row)) {
+    if (!this.store.addRoute(row, supersedes)) {
       // the earlier route row may still wait for the thread's worker: main takes the claim first (with its intent row, in the
       // same step), so only one of them runs it and a stop or crash mid-emit leaves the hand-over for `resume`
       if (!this.claimLate(messageId)) return this.notHandedOver(messageId, d.thread)
@@ -392,7 +404,7 @@ export class ThreadRouter {
     if (d.cold) {
       // shown where the owner is waiting: the message's own thread (a sub-thread answered by its parent's lead included)
       const shownIn = this.shownIn(n, d.thread)
-      this.ctx.transport.sendEphemeral(statusFrame(now, shownIn, 'working', 'Starting a session for this thread…'))
+      startRow(this.ctx, shownIn, now)
       // Only trust mode gets here in the "limits are close" band (allowsStart); say so, as the phone's resume button does
       // Said once, on the message that starts the worker; later messages to the same starting thread do not repeat it
       if (startsWorker && this.governor().state === 'paused')
@@ -414,31 +426,11 @@ export class ThreadRouter {
   }
 
   /** Writes the thread's wake file naming every message its worker has not claimed yet. */
-  private wake(thread: string, reason: 'message' | 'card_action') {
-    const ids = this.store
-      .unclaimed(thread)
-      .map((r) => r.message_id)
-      .slice(-50)
-    if (!ids.length) return
-    try {
-      writeWake(
-        this.ctx.paths.home,
-        {
-          v: 1,
-          thread_id: thread,
-          message_ids: ids,
-          at: new Date(this.ctx.clock.now()).toISOString(),
-          reason,
-          action: 'pointer',
-        },
-        (msg, f) => this.ctx.log.warn(msg, f),
-      )
-    } catch (e) {
-      this.ctx.log.warn('wake file not written', { thread, error: (e as Error).message })
-    }
+  wake(thread: string, reason: 'message' | 'card_action') {
+    writeThreadWake(this.ctx, this.store, thread, reason)
   }
 
-  private arm(row: RouteRow) {
+  arm(row: RouteRow) {
     if (row.notification.meta.kind === 'handoff') return // main wrote it: no deadline, and main never answers it for the lead
     const wait = Math.max(0, row.deadline_at - this.ctx.clock.now())
     const t = this.ctx.clock.setTimeout(() => {
@@ -451,6 +443,7 @@ export class ThreadRouter {
   }
 
   private async onDeadline(row: RouteRow) {
+    if (recheckWake(this, row)) return // a thread session's wake is kept for it (wake-me/drop.ts)
     if (!this.claimLate(row.message_id)) return // the worker got it
     const entry = this.workers.read()?.threads[row.thread_id]
     const reason: ErrorCodeT = entry?.state === 'failed' ? failureReason(entry) : 'worker_unavailable'
@@ -753,9 +746,9 @@ export class ThreadRouter {
     }
     for (const [thread, ids] of report) {
       this.store.settleClaims(ids, now)
-      postSystemNotice(ctx, "This thread's session stopped before it answered. Send the message again to carry on.", {
-        thread: threadRef(ctx, thread),
-      }).catch((e) => ctx.log.warn('unanswered notice not posted', { error: (e as Error).message }))
+      postSystemNotice(ctx, unansweredLine(ctx, this.store, thread, ids), { thread: threadRef(ctx, thread) }).catch(
+        (e) => ctx.log.warn('unanswered notice not posted', { error: (e as Error).message }),
+      )
     }
   }
 
@@ -855,6 +848,10 @@ export class ThreadRouter {
     this.releaseSwitchedOff()
     this.releaseGone()
     this.syncLines()
+    // a held wake waits for a session that is not running and says nothing about a turn (as in undo/busy.ts)
+    settleWorkingRows(ctx, file, now, (thread) =>
+      this.store.unclaimed(thread).some((r) => r.notification.meta.kind !== 'wake'),
+    )
     for (const lead of this.handoffs.openLeads())
       if (threadSessionMode(ctx.config.config, lead) !== 'dedicated') this.handoffs.closeLead(lead)
     this.expireUnclaimedHandoffs(now)
@@ -894,6 +891,9 @@ export class ThreadRouter {
       this.lastStatusKey = key
       send(status)
     }
+    // a thread session whose turn ended on an API error or a refusal (a card, or one plain line), or that read the owner's message and has been
+    // quiet and idle for five minutes (one notice): told to the owner; transcript and workers.json only
+    this.sessionErrors.tick(file, (t) => threadSessionMode(ctx.config.config, t) === 'dedicated')
     // A scoped session.state only goes to a relay that lists thread-sessions/1: an older app's strict SessionState refuses `scope`.
     if (this.relayListsFeature && sendState)
       this.contextFeed.tick(file, (t) => threadSessionMode(ctx.config.config, t) === 'dedicated', sendState)

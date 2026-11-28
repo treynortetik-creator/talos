@@ -11,7 +11,8 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { bridgeBunfig, bridgeServer, bunPath } from '../mcp-config.ts'
+import { CACHE_ENV } from '../lead/settings.ts'
+import { BUN_CACHE_OFF, bridgeBunfig, bridgeServer, bunPath } from '../mcp-config.ts'
 import { realFileSync } from '../real-file.ts'
 import { kitVendorDir } from '../talos.ts'
 
@@ -91,20 +92,29 @@ const lstatOk = (p: string): boolean => {
 const projectSettings = (dir: string): Array<[string, string]> =>
   ['settings.json', 'settings.local.json'].map((n) => [n, join(dir, '.claude', n)])
 
-/** Every command string of a settings object: hooks, the status line, and the helpers Claude Code runs. */
-function settingsCommands(s: Json): string[] {
-  const out: string[] = []
+/**
+ * Every command of a settings object: hooks, the status line, and the helpers Claude Code runs. Each comes with `name`, how a refusal says
+ * which one it is (the hook's event and number, or the setting's key). A refusal never prints the command: it can hold a secret.
+ * A hook's number is what the owner counts in the file: every entry of the event's `hooks` lists counts (a prompt, agent or http hook
+ * too, which has no command and is not returned), flat across the matcher groups, from 1, per event.
+ */
+function settingsCommands(s: Json): Array<{ name: string; cmd: string }> {
+  const out: Array<{ name: string; cmd: string }> = []
   const hooks = objOf(s.hooks)
   for (const event of Object.keys(hooks).sort()) {
     const groups = hooks[event]
+    let n = 0
     for (const g of Array.isArray(groups) ? groups : [])
-      for (const h of Array.isArray(objOf(g).hooks) ? (objOf(g).hooks as unknown[]) : [])
-        if (typeof objOf(h).command === 'string') out.push(objOf(h).command as string)
+      for (const h of Array.isArray(objOf(g).hooks) ? (objOf(g).hooks as unknown[]) : []) {
+        n++
+        if (typeof objOf(h).command === 'string')
+          out.push({ name: `the ${event} hook (number ${n})`, cmd: objOf(h).command as string })
+      }
   }
   const line = objOf(s.statusLine).command
-  if (typeof line === 'string') out.push(line)
+  if (typeof line === 'string') out.push({ name: 'statusLine', cmd: line })
   for (const k of ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'])
-    if (typeof s[k] === 'string') out.push(s[k] as string)
+    if (typeof s[k] === 'string') out.push({ name: k, cmd: s[k] as string })
   return out
 }
 
@@ -113,26 +123,65 @@ const PROJECT_DIR = String.raw`\$(?:\{CLAUDE_PROJECT_DIR\}|CLAUDE_PROJECT_DIR)`
 /**
  * The one form of a hook line in which the shell certainly keeps the folder's path as ONE word, and so does this check: an optional plain
  * interpreter (no flag), then the folder variable inside double quotes, then a path of plain characters (`"$CLAUDE_PROJECT_DIR"/hooks/x.sh`,
- * `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes. Anything else with a space in the folder's path is cut like the shell would.
+ * `python3 "$CLAUDE_PROJECT_DIR/hooks/x.py"`). That is what the kit writes, and the only whole hook line credited as the kit's own (no `bun`: it reads
+ * `bunfig.toml` and `.env` from the working folder; no relative path). Anything else with a space in the folder's path is cut like the shell would.
  */
 const SIMPLE_HOOK = new RegExp(
-  `^(?:(bash|sh|zsh|python3?|node|bun) )?(?:"${PROJECT_DIR}"/([A-Za-z0-9._@+/-]*)|"${PROJECT_DIR}/([A-Za-z0-9._@+/-]*)")$`,
+  `^(?:(bash|sh|zsh|python3?|node) )?(?:"${PROJECT_DIR}"/([A-Za-z0-9._@+/-]*)|"${PROJECT_DIR}/([A-Za-z0-9._@+/-]*)")$`,
 )
+/** Programs that run the script named by their first non-flag argument (a bare word there is read from the working folder). */
+const SCRIPT_RUNNERS = /^(?:python[\d.]*|node|deno|bun|tsx|bash|sh|zsh|dash|ksh|csh|tcsh|fish|ruby|perl|php|lua)$/
+/** Prefixes that run the next word as the program. */
+const PROGRAM_PREFIXES = /^(?:env|exec|nohup|time|command|sudo)$/
+const ASSIGNMENT = /^[A-Za-z_]\w*=/
+
+/**
+ * The bare word a command (its words, program first) runs as a file of the working folder, as `./word`, or null: the word after `.` or
+ * `source`, or the first word that is no flag after an interpreter (`bash evil`, `node evil`, `bun run evil`, `python3 -m evil`). A word
+ * with a slash is named already; a bare word is not, and the shell reads it from the folder it runs in, which the session can write.
+ */
+function bareScript(tokens: readonly string[]): string | null {
+  const t = [...tokens]
+  for (;;) {
+    while (t[0] && ASSIGNMENT.test(t[0])) t.shift()
+    if (t[0] && PROGRAM_PREFIXES.test(basename(t[0]))) t.shift()
+    else break
+  }
+  const prog = t[0] ?? ''
+  let word: string | undefined
+  if (prog === '.' || prog === 'source') word = t[1]
+  else if (SCRIPT_RUNNERS.test(basename(prog))) {
+    for (let i = 1; i < t.length; i++) {
+      const x = t[i] as string
+      if (x === '-m') {
+        word = t[i + 1]
+        break
+      }
+      if (x.startsWith('-') || (i === 1 && x === 'run')) continue
+      word = x
+      break
+    }
+  }
+  return word && !word.includes('/') && !word.startsWith('-') ? `./${word}` : null
+}
 
 /**
  * The words of a shell command line that may name a file: quotes, `;`, `|`, `&`, `(`, `)`, `<`, `>`, `=` taken apart. The project folder
  * variable (and its braced form, with a quote that closes right after it: `"$CLAUDE_PROJECT_DIR"/tools/x`) becomes the folder BEFORE the cut,
  * as the shell cuts what it expands, so a folder path with a space in it is cut there too (and refused), except in the one simple form
- * (SIMPLE_HOOK) whose folder path stays one word. A command with a NUL in it has no words.
+ * (SIMPLE_HOOK) whose folder path stays one word. It only splits a line into words: it does not follow the shell (quotes, escapes, `eval`, `-c`, a
+ * program that runs another), so a hook line is credited only whole (SIMPLE_HOOK), never by what its words look like. A command with a NUL in it has no words.
  */
 function words(cmd: string, folder: string): string[] {
   if (cmd.includes('\0')) return []
   const simple = SIMPLE_HOOK.exec(cmd)
   if (simple) return [simple[1] ?? '', `${folder}/${simple[2] ?? simple[3] ?? ''}`].filter((w) => w.length > 1)
-  return cmd
-    .replaceAll(/\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])["']?/g, () => folder)
-    .split(WORD_BREAK)
-    .filter((w) => w.length > 1)
+  const text = cmd.replaceAll(/\$\{CLAUDE_PROJECT_DIR\}["']?|\$CLAUDE_PROJECT_DIR(?![A-Za-z0-9_])["']?/g, () => folder)
+  const scripts = text
+    .split(/[;|&()\n]+/)
+    .map((seg) => bareScript(seg.split(/[\s"'`<>]+/).filter((w) => w.length > 0)))
+    .filter((w): w is string => w !== null)
+  return [...text.split(WORD_BREAK), ...scripts].filter((w) => w.length > 1)
 }
 
 /** A flag that makes a program read an argument as code or a command line (`-c`, `-e`, `-p`, `-m`, `--eval`): its other arguments are then not plain file names. */
@@ -140,18 +189,43 @@ const RUNS_ITS_ARGUMENT = /^(?:-[A-Za-z]*[cepm][A-Za-z]*|--eval|--print|--comman
 /** The programs that take a file argument as one file, with no flag that says otherwise: not env, xargs, ssh, su, watch, script (they cut an argument again). */
 const FILE_TAKERS = /^(?:node|bun|python[\d.]*|bash|sh|zsh)$/
 
+/** What a server entry carries that the kit's own never does: a `cwd`, or an `env` that is anything but an empty object (null, a list and a string count). */
+function envOrCwd(entry: Json): 'cwd' | 'env' | null {
+  if ('cwd' in entry) return 'cwd'
+  const env = entry.env
+  const emptyObject = env !== null && typeof env === 'object' && !Array.isArray(env) && Object.keys(env).length === 0
+  return env !== undefined && !emptyObject ? 'env' : null
+}
+
 /**
  * The words of a stdio MCP server's command and arguments. They are no shell line: the program gets each one as it is. For a program that
  * takes a file argument as one file (FILE_TAKERS), with no flag that makes it run an argument as code, an absolute path with a space in it
- * that exists as written is that one file (a kit release in a folder with a space). Any other argument is cut as a shell line is, which only
- * ever finds more.
+ * that exists as written is that one file (a kit release in a folder with a space). Any other argument is cut as a shell line is. These words only
+ * find files to refuse: a server is credited only in the forms `argvForm` allows, never by what its words look like.
  */
 function argvWords(argv: readonly string[], folder: string): string[] {
   const whole = FILE_TAKERS.test(basename(argv[0] ?? '')) && !argv.some((a) => RUNS_ITS_ARGUMENT.test(a))
-  return argv.flatMap((a) => {
+  const script = bareScript(argv)
+  const ws = argv.flatMap((a) => {
     const plain = whole && isAbsolute(a) && a.includes(' ') && !/[^\S ]|["'`;|&()<>=]/.test(a) && lstatOk(a)
     return plain ? [a] : words(a, folder)
   })
+  return script ? [...ws, script] : ws
+}
+
+/**
+ * The only argv forms of a stdio server credited as the kit's own: `[<absolute file>, ...args]`, or `[bash|sh|zsh|node|python3, <absolute file>, ...args]`
+ * with nothing between the interpreter and the file (a shell may take `-x` or `-e` first). Any wrapper (env, nice, timeout, busybox, npx, ...)
+ * or flag that takes a value is not the kit's. Which file it is, and that it is the kit's, is checked after (kitFile).
+ */
+function argvForm(argv: readonly string[]): boolean {
+  const [first, ...rest] = argv
+  if (first === undefined) return false
+  if (isAbsolute(first)) return true
+  if (!/^(?:bash|sh|zsh|node|python3)$/.test(first)) return false
+  let i = 0
+  if (/^(?:bash|sh|zsh)$/.test(first)) while (/^-[xe]$/.test(rest[i] ?? '')) i++
+  return isAbsolute(rest[i] ?? '')
 }
 
 /** This bridge clone (the talos-app MCP entry runs from it): outside the session folder, and not writable from the sandbox. */
@@ -183,6 +257,25 @@ const realOf = (p: string): string => {
   }
 }
 
+/**
+ * A path with a link on it that leads nowhere (yet), at the end or anywhere above: whoever makes the target later (in a temp folder, say)
+ * decides what runs. A path whose only problem is that its last name is missing, in a folder that resolves, is not one.
+ */
+function hasDanglingLink(p: string): boolean {
+  try {
+    realFileSync(p)
+    return false
+  } catch {
+    // the last name is missing: fine when the folder it would be in resolves and nothing (a dangling link) is there
+    try {
+      realFileSync(dirname(p))
+    } catch {
+      return true
+    }
+    return lstatOk(p)
+  }
+}
+
 /** The shared temp folders, by real path: every program writes there, so nothing in one can stand in for a fixed file. */
 export function tempRoots(): string[] {
   const real = (t: string): string | null => {
@@ -202,12 +295,13 @@ export function tempRoots(): string[] {
   ]
 }
 
-const under = (p: string, dir: string): boolean => p === dir || p.startsWith(`${dir}/`)
+const under = (p: string, dir: string): boolean => dir === '/' || p === dir || p.startsWith(`${dir}/`)
 
 /**
- * The files a command line names, as real paths: a word that is an absolute or folder-relative path, whether or not the file exists yet (a
- * session can create it later), or a script by name. A word that still has a `$` in it is whatever the environment says: it is named as it
- * stands, so it is never the kit's own.
+ * The files a command line names, by the path as written (made absolute against the folder, links not followed): a word that is an absolute or
+ * folder-relative path, whether or not the file exists yet (a session can create it later), or a script by name. A word that still has a `$` in
+ * it is whatever the environment says, a `~` word with no slash is someone's home folder, and a path with a `.` or `..` segment goes where
+ * the links on its way say: each is named as it stands, so it is never the kit's own (see kitFile).
  */
 function namedFiles(ws: readonly string[], folder: string): string[] {
   const out: string[] = []
@@ -216,12 +310,22 @@ function namedFiles(ws: readonly string[], folder: string): string[] {
       out.push(w)
       continue
     }
+    if ((isAbsolute(w) || w.includes('/')) && w.split('/').some((x) => x === '.' || x === '..')) {
+      out.push(`$${w}`)
+      continue
+    }
     let abs: string | null = null
     if (isAbsolute(w)) abs = w
     else if (w.startsWith('./') || (w.includes('/') && !w.startsWith('-'))) abs = resolve(folder, w)
     else if (SCRIPT_EXT.test(w)) abs = resolve(folder, w)
-    if (!abs || abs === folder) continue
-    out.push(realOf(abs))
+    else if (w.startsWith('~')) {
+      // `~evil` is another user's home folder to the shell: not a path this check can place, so it is never the kit's own
+      out.push(w)
+      continue
+    }
+    if (!abs) continue
+    // the folder itself is named too (it is writable), never skipped
+    out.push(abs)
   }
   return out
 }
@@ -238,31 +342,56 @@ function mcpServers(dir: string): Array<{ name: string; cmd: string; argv: strin
 }
 
 /** What Talos recorded about its own bridge (the record): the bun it runs and the bridge folder of its clone (`<clone>/apps/bridge`). */
-export type TrustedBridge = { bun: string; bridgeDir: string }
+export type TrustedBridge = {
+  bun: string
+  bridgeDir: string
+  /** Other buns this process may be started by (the PATH one and the running one differ): fenced and denied too. Never one in a temp folder. */
+  extraBuns?: string[]
+  /** `bun` is in a shared temp folder: the record and its denies stay, but a `talos-app` server entry is refused. */
+  bunInTemp?: boolean
+}
 
 /**
- * The record, as this process knows it: the bun it finds on its PATH or runs on, and the clone it runs from. null when there is none
- * to trust: no absolute bun, or the clone sits in a shared temp folder (a place every program can write to). Built here, once per
- * launch, outside the pure folder checks (which take the record as given, so a test or the Mac's recipe can name another).
+ * The record, as this process knows it: the buns it finds on its PATH and runs on, and the clone it runs from. null when there is none
+ * to trust: no absolute bun, or the clone sits in a shared temp folder (a place every program can write to). A bun in a temp folder does
+ * NOT drop the record (the clone's denies stay): the PATH bun stays the record's bun, marked `bunInTemp` so the `talos-app` entry check
+ * refuses an entry that runs it, and any other bun in a temp folder is left out of `extraBuns`. Built here, once per launch, outside the
+ * pure folder checks (which take the record as given, so a test or the Mac's recipe can name another); `temps` is for tests.
  */
-export function trustedBridge(): TrustedBridge | null {
-  const bun = [bunPath(), process.execPath].find((b) => isAbsolute(b) && /^bun(-|$)/.test(basename(b)))
-  if (!bun || tempRoots().some((t) => under(realOf(BRIDGE_DIR), t))) return null
-  return { bun, bridgeDir: BRIDGE_DIR }
+export function trustedBridge(temps: string[] = tempRoots()): TrustedBridge | null {
+  const isBun = (b: string) => isAbsolute(b) && /^bun(-|$)/.test(basename(b))
+  const inTemp = (p: string) => temps.some((t) => under(p, t))
+  // the bun on the PATH and the running one (the hook is pinned to the second, the server entry to the first): both are Talos's
+  const buns = [...new Set([bunPath(), process.execPath].filter(isBun).map(realOf))]
+  if (buns.length === 0 || inTemp(realOf(BRIDGE_DIR))) return null
+  const [bun, ...others] = buns as [string, ...string[]]
+  const extra = others.filter((b) => !inTemp(b))
+  return {
+    bun,
+    bridgeDir: BRIDGE_DIR,
+    ...(extra.length > 0 ? { extraBuns: extra } : {}),
+    ...(inTemp(bun) ? { bunInTemp: true } : {}),
+  }
 }
 
 /** What the launch gives the folder checks besides the folder: the owner's home, the Talos home, and the record (undefined: build it). */
-export type LaunchContext = { userHome?: string; talosHome?: string; trusted?: TrustedBridge | null }
+export type LaunchContext = {
+  userHome?: string
+  talosHome?: string
+  trusted?: TrustedBridge | null
+  /** The folders besides the session folder that a session can write (default: the shared temp folders). A test whose kit sits in a temp folder names none. */
+  writableRoots?: readonly string[]
+}
 
-/** The env keys the talos-app entry may carry: the two `mcpEntry` writes. Anything else (BUN_OPTIONS, NODE_OPTIONS, PATH, ...) changes what runs. */
-const TALOS_ENTRY_ENV = ['TALOS_APP_HOME', 'TALOS_AGENT_DIR']
+/** The env keys the talos-app entry may carry: the ones `mcpEntry` writes (the home, the agent folder, and the bun cache switch, which only "0" is). Anything else (BUN_OPTIONS, NODE_OPTIONS, PATH, ...) changes what runs. */
+const TALOS_ENTRY_ENV = ['TALOS_APP_HOME', 'TALOS_AGENT_DIR', BUN_CACHE_OFF.name]
 
 /**
  * The `talos-app` stdio entry of a project `.mcp.json`, which every agent folder has. MCP servers are not sandboxed, and `bun <script>`
  * run from the session folder loads that folder's `bunfig.toml` (its `preload` is code) and `.env`; so the entry is allowed only in the
  * form Talos writes (`mcpEntry`: `<bun> --no-env-file --config=<bridge>/bunfig.toml <bridge>/src/server.ts`) and only when each part,
- * by real path, is what the record says (never what the entry says of itself): no `cwd`, an env of only TALOS_APP_HOME (this home) and
- * TALOS_AGENT_DIR, and a recorded clone outside the session folder. The old form (`run --cwd ...`) is "in the old form"; any other
+ * by real path, is what the record says (never what the entry says of itself): no `cwd`, an env of only TALOS_APP_HOME (this home),
+ * TALOS_AGENT_DIR and BUN_RUNTIME_TRANSPILER_CACHE_PATH=0, a recorded bun that is not in a temp folder, and a recorded clone outside the session folder. The old form (`run --cwd ...`) is "in the old form"; any other
  * refuses with what is wrong. One plain line naming the file, or null.
  */
 function talosEntryProblem(
@@ -281,11 +410,16 @@ function talosEntryProblem(
     return `${file} has a talos-app server, and Talos can't confirm which bridge this folder runs (the guards aren't installed); install them from Settings, then start again`
   const bridge = realOf(trusted.bridgeDir)
   if (under(bridge, folder)) return no('the bridge Talos recorded is inside the session folder')
+  if (trusted.bunInTemp) return no('its bun is in a shared temp folder')
   if ('cwd' in entry) return no('it sets cwd')
   const env = objOf(entry.env)
   for (const [k, v] of Object.entries(env))
     if (!TALOS_ENTRY_ENV.includes(k)) return no(`its env sets ${k}`)
-    else if (typeof v !== 'string' || (k === 'TALOS_APP_HOME' && talosHome && realOf(v) !== realOf(talosHome)))
+    else if (
+      typeof v !== 'string' ||
+      (k === BUN_CACHE_OFF.name && v !== BUN_CACHE_OFF.value) ||
+      (k === 'TALOS_APP_HOME' && talosHome && realOf(v) !== realOf(talosHome))
+    )
       return no(`its env sets ${k} to something else`)
   if (typeof entry.command !== 'string' || realOf(entry.command) !== realOf(trusted.bun))
     return no('its command is not the bun Talos uses')
@@ -359,34 +493,72 @@ function leadHook(file: string, folder: string, trusted: TrustedBridge | null): 
  * servers run nowhere here.
  */
 function commandsProblem(folder: string, claudeDir: string, loadsProject: boolean, ctx: LaunchContext): string | null {
-  const kit = realOf(kitVendorDir(process.env, ctx.userHome ?? homedir()))
+  const kitAsGiven = kitVendorDir(process.env, ctx.userHome ?? homedir())
+  const kit = realOf(kitAsGiven)
+  // a kit a session can write is no kit: its hooks and servers run outside the sandbox. The roots are the folder and the shared temp folders
+  // (a launch may name others, a test names none: its kit sits in a temp folder).
+  const roots = [folder, ...(ctx.writableRoots ?? tempRoots())]
+  const kitWritable = roots.some((d) => under(kit, d) || under(d, kit) || under(kitAsGiven, d))
+  let blockedByWritable = false
   const trusted = ctx.trusted === undefined ? trustedBridge() : ctx.trusted
   const kitOwn = (cmd: string, argv?: readonly string[]) => {
+    blockedByWritable = false
+    // credited only whole, in the form the kit writes (a hook line: SIMPLE_HOOK; a server: argvForm); the shell and the programs read
+    // anything else in ways this check cannot follow (a bare word run from the folder, a variable, a nested shell, a wrapper)
+    if (argv ? !argvForm(argv) : !SIMPLE_HOOK.test(cmd)) return false
     const files = namedFiles(argv ? argvWords(argv, folder) : words(cmd, folder), folder)
-    return files.length > 0 && files.every((f) => under(f, kit) || leadHook(f, folder, trusted))
+    return files.length > 0 && files.every(kitFile)
+  }
+  /** A named file (by its path as written) is the kit's: through the folder's own kit link, a lead's hook, or by path inside the kit release. */
+  const kitFile = (path: string): boolean => {
+    const f = path.replace(/\/{2,}/g, '/') // a doubled slash is the same path
+    if (f.includes('$') || f.startsWith('~') || f === folder) return false
+    let own: boolean
+    if (under(f, folder)) {
+      if (leadHook(f, folder, trusted)) return true
+      const first = relative(folder, f).split('/')[0] ?? ''
+      const link = join(folder, first)
+      own =
+        (KIT_NAMES as readonly string[]).includes(first) &&
+        isLink(link) &&
+        leadsInto(link, kit) &&
+        under(realOf(f), kit)
+    } else own = (under(f, kit) || under(f, kitAsGiven)) && under(realOf(f), kit)
+    // a link inside the kit that leads nowhere yet: whoever makes its target later (in a temp folder, say) decides what runs
+    if (own && hasDanglingLink(f)) return false
+    if (own && kitWritable) {
+      blockedByWritable = true
+      return false
+    }
+    return own
   }
   const notKits = (file: string, what: string) =>
-    `${file} runs ${what}, which is not the kit's own; move it to your user settings (~/.claude/settings.json), then start again`
+    blockedByWritable
+      ? `${file} runs ${what}, which would be the kit's own, but the kit release (${kit}) sits where a session can write (the session folder or a shared temp folder); move the kit out of there, then start again`
+      : `${file} runs ${what}, which is not the kit's own; move it to your user settings (~/.claude/settings.json), then start again`
   if (loadsProject)
     for (const dir of new Set([folder, gitRoot(folder)])) {
       for (const [, file] of projectSettings(dir))
-        for (const cmd of settingsCommands(readJson(file) ?? {})) if (!kitOwn(cmd)) return notKits(file, `"${cmd}"`)
+        for (const { name, cmd } of settingsCommands(readJson(file) ?? {})) if (!kitOwn(cmd)) return notKits(file, name)
       const mcp = join(dir, '.mcp.json')
       for (const { name, cmd, argv, entry } of mcpServers(dir)) {
-        const bad =
-          name === 'talos-app'
-            ? talosEntryProblem(mcp, entry, folder, ctx.talosHome, trusted)
-            : kitOwn(cmd, argv)
-              ? null
-              : notKits(mcp, `the ${name} server ("${cmd}")`)
+        let bad: string | null
+        if (name === 'talos-app') bad = talosEntryProblem(mcp, entry, folder, ctx.talosHome, trusted)
+        else if (!kitOwn(cmd, argv)) bad = notKits(mcp, `the ${name} server`)
+        else {
+          const what = envOrCwd(entry)
+          bad = what
+            ? `${mcp} runs the ${name} server with its own ${what}, which the extra lock does not allow for a kit server; remove the ${what}, then start again`
+            : null
+        }
         if (bad) return bad
       }
     }
   const writable = [folder, ...tempRoots()]
   const userFile = join(claudeDir, 'settings.json')
-  for (const cmd of settingsCommands(readJson(userFile) ?? {}))
+  for (const { name, cmd } of settingsCommands(readJson(userFile) ?? {}))
     if (!userCommandOk(cmd, writable))
-      return `${userFile} runs "${cmd}", which the extra lock cannot allow (it must be an absolute path to a file outside the session folder and every folder a session can write, with no npx, uvx, bunx, bun x, -m or relative script); change it, then start again`
+      return `${userFile} runs ${name}, which the extra lock cannot allow (it must be an absolute path to a file outside the session folder and every folder a session can write, with no npx, uvx, bunx, bun x, -m or relative script); change it, then start again`
   return null
 }
 
@@ -405,7 +577,7 @@ export function folderDenyWrite(folder: string): string[] {
 
 /** The folder's `hooks` or `scripts` link is gone while the settings still run scripts from it: the hooks would silently not run. */
 export function folderKitProblem(folder: string): string | null {
-  const commands = projectSettings(folder).flatMap(([, f]) => settingsCommands(readJson(f) ?? {}))
+  const commands = projectSettings(folder).flatMap(([, f]) => settingsCommands(readJson(f) ?? {}).map((c) => c.cmd))
   // only a command that names the folder's OWN hooks/ or scripts/ needs the kit's link (a lead runs `.claude/hooks/...`)
   const names = (n: string) =>
     commands.some((c) =>
@@ -458,6 +630,22 @@ function sandboxKeyProblem(file: string, s: Json | null): string | null {
 /** An Edit or Write allow rule that names a path: Claude Code makes that path a sandbox write root. */
 const PATH_ALLOW = /^(?:Edit|Write|MultiEdit|NotebookEdit)\(\s*\S.*\)$/
 
+/** The env keys a project or local settings file may carry: the ones `lead init` writes (the package-cache folders and the connector switch). Any other key can change what a hook or server runs. */
+const SETTINGS_ENV_OK: ReadonlySet<string> = new Set([...Object.keys(CACHE_ENV), 'ENABLE_CLAUDEAI_MCP_SERVERS'])
+
+/**
+ * The first project or local settings `env` key (in sorted order) that is not on the allow-list, as the plain line, or null. It always applies: the
+ * env goes into the whole session (the owner's hooks, the status line, plugins, a parent .mcp.json, and Claude Code's own git, rg and sandbox wrapper).
+ */
+function runEnvProblem(file: string, s: Json | null): string | null {
+  const bad = Object.keys(objOf(s?.env))
+    .sort()
+    .find((k) => !SETTINGS_ENV_OK.has(k))
+  return bad
+    ? `This folder's settings set ${bad}, which can change what runs outside the sandbox. Remove it from .claude/${basename(file)} to start this thread sandboxed.`
+    : null
+}
+
 /** A setting that makes a folder writable inside the lock (`additionalDirectories`, an Edit or Write allow rule with a path), as the plain line, or null. */
 function writableRootProblem(file: string, s: Json | null): string | null {
   const perms = objOf(s?.permissions)
@@ -480,12 +668,51 @@ export function folderSettingsProblem(
   o: { loadsProject: boolean } = { loadsProject: true },
 ): string | null {
   const dirs = o.loadsProject ? [...new Set([folder, gitRoot(folder)])] : []
-  const files = [...dirs.flatMap((d) => projectSettings(d).map(([, f]) => f)), join(claudeDir, 'settings.json')]
+  const userFile = join(claudeDir, 'settings.json')
+  const files = [...dirs.flatMap((d) => projectSettings(d).map(([, f]) => f)), userFile]
   for (const file of files) {
     const settings = readJson(file)
-    const why = sandboxKeyProblem(file, settings) ?? writableRootProblem(file, settings)
+    const why =
+      sandboxKeyProblem(file, settings) ??
+      writableRootProblem(file, settings) ??
+      (file === userFile ? null : runEnvProblem(file, settings))
     if (why) return why
   }
+  return null
+}
+
+/** The two refusal lines (the same words on the Mac: docs/FOLLOWUPS.md R3-1). */
+const CLONE_LINE = 'This folder contains the Talos code, or is inside it. Pick another folder and start again.'
+const BUN_LINE = 'This folder contains the program Talos runs on, or is inside it. Pick another folder and start again.'
+
+/** The clone (`<bridgeDir>/../..`) and the bun, by real path: the two places a session must never be able to write (R3-1). */
+export function recordedBridgePaths(trusted: TrustedBridge): {
+  clone: string
+  bridgeDir: string
+  bun: string
+  buns: string[]
+} {
+  const bridgeDir = realOf(trusted.bridgeDir)
+  const buns = [...new Set([trusted.bun, ...(trusted.extraBuns ?? [])].map(realOf))]
+  return { clone: dirname(dirname(bridgeDir)), bridgeDir, bun: buns[0] as string, buns }
+}
+
+/** A name as the Mac's disk compares it: Unicode NFC, then lower case. Other systems keep the name as it is. */
+export const foldName = (p: string, platform: NodeJS.Platform = process.platform): string =>
+  platform === 'darwin' ? p.normalize('NFC').toLowerCase() : p
+
+/**
+ * A folder that holds the Talos code folder (the clone) or the pinned bun, or sits inside one, is refused: the record cannot be told
+ * apart from the folder's own files there, and a session could edit what the guard hook runs outside the sandbox. By real path; on a
+ * Mac also with case ignored (its disks compare names that way). One plain line, or null (also when there is no record).
+ */
+export function cloneFenceProblem(folder: string, trusted: TrustedBridge | null): string | null {
+  if (!trusted) return null
+  const { clone, buns } = recordedBridgePaths(trusted)
+  const f = foldName(folder)
+  const overlaps = (p: string) => under(f, foldName(p)) || under(foldName(p), f)
+  if (overlaps(clone)) return CLONE_LINE
+  if (buns.some(overlaps)) return BUN_LINE
   return null
 }
 
@@ -499,7 +726,8 @@ export const folderLaunchProblem = (
   (loadsProject ? folderKitProblem(folder) : null) ??
   folderSettingsProblem(folder, claudeDir, { loadsProject }) ??
   folderLinkProblem(folder, kitVendorDir(process.env, ctx.userHome ?? homedir())) ??
-  commandsProblem(folder, claudeDir, loadsProject, ctx)
+  commandsProblem(folder, claudeDir, loadsProject, ctx) ??
+  cloneFenceProblem(folder, ctx.trusted === undefined ? trustedBridge() : ctx.trusted)
 
 /**
  * A file the session could write through another name: every existing path `folderDenyWrite` returns (the files inside, for a folder) must be a

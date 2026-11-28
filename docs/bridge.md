@@ -422,8 +422,9 @@ pinned within a moment of the answer; the 10 s poll is only a fallback.
 
 Setup of the relay is in [`SETUP.md`](SETUP.md). Three things that matter from the bridge's side:
 
-- A command-line deploy (`railway up`) may ignore `railway.json`. Set `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile`
-  as a service variable and deploy again.
+- The relay's Railway settings (Dockerfile path, healthcheck, watch paths) are set in the Railway dashboard
+  ([`deploy-railway.md`](deploy-railway.md), "Dashboard settings"). A command-line deploy (`railway up`) may not use the
+  dashboard's Dockerfile path: set `RAILWAY_DOCKERFILE_PATH=apps/relay/Dockerfile` as a service variable and deploy again.
 - Connecting the GitHub repository turns on auto-deploy on every merge to `main`.
 
 `talos-app doctor` shows `devices.json: none pinned yet` before the first `talos-app enroll`; that is normal. It fails
@@ -498,7 +499,7 @@ the dying session and acked it, and the restart skipped it.
   the valid ids.
 - Files: absolute paths, up to 10 per message, 50 MB each, uploaded with their sha256. The bridge refuses to upload
   anything inside `$TALOS_APP_HOME` (except `media/` and `approved/`), and `.env` files.
-- `reply` runs `TALOS_APP_TTS_CMD` and attaches the audio as a `voice_reply` when the owner's `voice_notes.reply_with_voice` setting is `always` (the optional `voice_text` is the spoken version); `never` does not. A stored `when_voice` ("when I send a voice note", archived) reads as `never`. Driving mode speaks every reply. The `speak`, `voice` and `voice_delegation_id` arguments were removed with voice input.
+- `reply` runs `TALOS_APP_TTS_CMD` and attaches the audio as a `voice_reply` whenever `voice_text` is given (the spoken version), whatever the owner's `voice_notes.reply_with_voice` setting says; that setting (`always`) only adds voice to a reply that has no `voice_text`, and `never` does not. A stored `when_voice` ("when I send a voice note", archived) reads as `never`. Driving mode speaks every reply (its follow-up is sent after the reply). Outside driving mode the audio is made while the files are read and waited for at most 20 seconds (`VOICE_ATTACH_WAIT_MS`); past that the text goes out alone and the audio follows as its own silent message when it is done (a failure then is only logged). Reply audio shares the read-aloud limit on parallel syntheses (`SPEAK_MAX_PARALLEL`). When `voice_text` was given and no audio was made (no TTS command, the command failed, or the upload failed), the result says `voice_text made no audio: <why>`, so the agent can send an audio file in `files` instead; the text reply still goes out. The `speak`, `voice` and `voice_delegation_id` arguments were removed with voice input.
 - `reply` adds a line to its result (never to the message, and only after a successful send) when the text has a shell command in
   inline code outside a fence, such as `` `git status` ``: the web app draws Run only on a fenced block with no language, `sh`, `bash`, `zsh` or
   `shell`. A lone command word, a path or a span inside a fence does not count; the word list is `INLINE_COMMAND_WORDS` in `apps/bridge/src/inline-commands.ts`.

@@ -598,12 +598,32 @@ signedSrc['undo.request'] = {
   message_id: msgId(192),
   ...owner,
 }
+signedSrc['plugin.add.request'] = {
+  ...env('plugin.add.request', 210),
+  control_id: ulid(211),
+  plugin: 'notes',
+  marketplace: 'market',
+  ...owner,
+}
+unsigned['plugin.add.result'] = {
+  ...env('plugin.add.result', 212),
+  control_id: ulid(211),
+  ok: true,
+  text: 'Asked the owner to add notes@market. Nothing was installed yet.',
+  at: TS,
+}
 unsigned['undo.request.result'] = {
   ...env('undo.request.result', 193),
   control_id: ulid(191),
   ok: false,
   text: 'Nothing to undo: the files already match.',
   at: TS,
+}
+unsigned['quiet.lines'] = {
+  ...env('quiet.lines', 202),
+  message_id: msgId(203),
+  thread_id: 'trip',
+  lines: ['Reading the file', 'Running the tests'],
 }
 unsigned['workers.status'] = {
   ...env('workers.status', 122),
@@ -893,6 +913,32 @@ unsigned['app.update'] = {
   state: 'superseded',
   reason: 'Replaced by a newer view',
 }
+// The remote terminal (frames-term.ts): a read-only view of the agent's pane. The three the owner signs, the credit, and what the Mac sends.
+const termId = `tm_${ulid(140)}`
+signedSrc['term.open'] = {
+  ...env('term.open', 141),
+  term_id: termId,
+  tier: 'view',
+  target: 'main',
+  cols: 120,
+  rows: 40,
+  ...owner,
+}
+signedSrc['term.resume'] = { ...env('term.resume', 142), term_id: termId, from: 4096, ...owner }
+signedSrc['term.close'] = { ...env('term.close', 143), term_id: termId, ...owner }
+unsigned['term.ack'] = { ...env('term.ack', 144), term_id: termId, upto: 4096 }
+unsigned['term.opened'] = {
+  ...env('term.opened', 145),
+  term_id: termId,
+  tier: 'view',
+  cols: 120,
+  rows: 40,
+  idle_s: 600,
+  max_s: 3600,
+}
+unsigned['term.key'] = { ...env('term.key', 146), term_id: termId, at: 4096, bytes_b64: 'G1syShtbSGhlbGxvDQo' }
+unsigned['term.out'] = { ...env('term.out', 147), term_id: termId, at: 4096, bytes_b64: 'd29ybGQNCg' }
+unsigned['term.closed'] = { ...env('term.closed', 148), term_id: termId, why: 'closed' }
 {
   const reads = readFixtures({ env, ulid, msgId, mdId, owner, SHA })
   Object.assign(unsigned, reads.unsigned)

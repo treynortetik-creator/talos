@@ -50,6 +50,16 @@ describe('the launch spec (launch-spec.ts)', () => {
     })
     expect(s.env).toEqual({ LANG: 'C.UTF-8', TALOS_APP_HOME: '/t' })
     expect(LAUNCH_SPEC_EXCLUDED_ENV).toContain('TALOS_APP_WORKER_NONCE')
+    // the two names a start sets only to resume a cut turn: the same launch as an ordinary start
+    expect(LAUNCH_SPEC_EXCLUDED_ENV).toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN')
+    expect(LAUNCH_SPEC_EXCLUDED_ENV).toContain('CLAUDE_CODE_RESUME_REASON')
+    const resumed = launchSpec({
+      argv: ['claude'],
+      baseEnv: { PATH: '/usr/bin' },
+      env: { PATH: '/usr/bin', CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1', CLAUDE_CODE_RESUME_REASON: 'user_resume' },
+      files: {},
+    })
+    expect(resumed.env).toEqual({})
   })
   it('each file the start writes is the sha256 of its exact bytes; one not written is left out', () => {
     const s = launchSpec({
@@ -118,7 +128,11 @@ describe('the resume-turn variables never reach the hash (0.26)', () => {
     const other = { ...base, env: { PATH: '/usr/bin', CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: '1' } }
     expect(launchSpecHash(other)).not.toBe(launchSpecHash(plain))
   })
-  it('the list the Mac shares (and swift-parity checks) is still the nonce alone', () => {
-    expect([...LAUNCH_SPEC_EXCLUDED_ENV]).toEqual(['TALOS_APP_WORKER_NONCE'])
+  it('the list the Mac shares (and swift-parity checks) holds the nonce and the two resume names', () => {
+    expect([...LAUNCH_SPEC_EXCLUDED_ENV]).toEqual([
+      'TALOS_APP_WORKER_NONCE',
+      'CLAUDE_CODE_RESUME_INTERRUPTED_TURN',
+      'CLAUDE_CODE_RESUME_REASON',
+    ])
   })
 })

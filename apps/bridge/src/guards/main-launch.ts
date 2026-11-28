@@ -35,6 +35,8 @@ export type LaunchIo = {
   userHome?: string
   /** The owner's own git excludes entries (default: read from his global git excludes file). */
   ownerExcludes?: (userHome: string) => string[]
+  /** The folders besides the session's that a session can write (default: the shared temp folders); tests whose kit sits in a temp folder pass []. */
+  writableRoots?: readonly string[]
   read?: (path: string) => string | null
   write?: (path: string, data: string) => void
 }
@@ -140,6 +142,7 @@ export function mainLaunchArgs(args: string[], talosHome: string, io: LaunchIo =
         userHome: io.userHome ?? homedir(),
         folder: io.cwd ?? process.cwd(),
         launchArgs: args,
+        ...(io.writableRoots ? { writableRoots: io.writableRoots } : {}),
         ...(io.claudeDir ? { claudeDir: io.claudeDir } : {}),
       },
       { ...(io.ownerExcludes ? { ownerExcludes: io.ownerExcludes } : {}), write },

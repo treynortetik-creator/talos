@@ -55,9 +55,7 @@ Status (2026-11-01): built end to end and tested in pieces, **not yet run on a r
 protocol are in `packages/protocol/src/push-rich.ts`. The phone half is Swift: `TalosPushCore` (`RichPush`: open a seal, choose
 the buttons, sign an action), `TalosPushShared/NativeKeyStore.swift` (keys and grant in the shared Keychain group),
 `TalosPushExtension` (the notification service extension that opens the seal) and `App/Plugins/TalosQuickAct.swift` (Reply and
-Approve in the background). Message text starts **off**. Turn on notifications gives the fixed phrase only, on a new phone, after Turn off then on, and on a phone
-that had notifications on before this feature. The page makes the grant only when you tap "Show message text" in Settings, and
-renews it on open only while you have it on (`features/pwa/nativePush.ts`). A phone with no grant, or an older app, gets the fixed phrase exactly as before.
+Approve in the background). Message text is **on by default** (`PUSH_TEXT_DEFAULT` in `packages/protocol/src/config.ts`, the same constant the Mac's browser-notification setting uses). The one "Turn on notifications" tap registers the token and then makes the grant, so a new phone gets words with Reply and Approve at once. The row before Turn on says only "Turn on notifications to see message words, with Reply and Approve for simple ones. Apple never sees the words. You can switch them off any time."; the detail belongs here and in the in-app help: the words travel sealed (Apple only gets the fixed phrase), only this phone can open them, and your Talos server can still read them, as it can your messages. The default applies at that tap and nowhere else: opening the app never makes a grant. The owner's own choice always wins: a tap on "Use a fixed phrase only" or "Show message text" is kept across Turn off and Turn on (`talos.nativePush.textPref`). A page from before the default (it had recorded keys) keeps its stored "off" and is offered words once ("Show message words in notifications?", Turn on or Not now; Not now is remembered). Signing out clears the choice, so the next person gets the default. If the grant cannot be made, notifications stay on and the row says "Notifications are on, but message words didn't turn on." with Try again; it never says words are on. Lock-screen words are visible to anyone holding the phone: the row and the Home card say "On a shared phone, set Show Previews to Never for Talos: iPhone Settings, Notifications, Talos, Show Previews." The page renews the grant on open only while text is on (`features/pwa/nativePush.ts`). A phone with no grant, or an older app, gets the fixed phrase exactly as before.
 
 What is proven: the Swift opens a seal the TypeScript made and the TypeScript accepts an action the Swift signed
 (`packages/protocol/fixtures/push-rich`, `swift test` in `apps/mobile/ios/TalosPushCore`); the whole app and both extensions
@@ -144,6 +142,23 @@ key it holds itself.
 What this does not protect: the relay reads every notification text and every Reply in plain text (it builds the seal, and it
 receives the Reply over TLS), and stores events encrypted with a key it holds itself. The seal keeps the words from Apple. It is
 not end-to-end encryption between phone and Mac.
+
+### Why was that push plain?
+
+Settings, under the iPhone notifications row, has one line: "Last push showed its text." or "Last push was plain: ..." with the
+cause. The relay keeps the latest outcome per phone (table `core_push_last`, one row, no history) and `GET /api/push/apns` returns
+it as `last: { rich, reason?, id?, at }`. `at` is when that push started, and an older start never replaces a newer one. `id` is
+the seal's id when the push left sealed. The relay's reasons: `no_grant`, `grant_expired`, `grant_bad`, `seal_failed`, `too_big`,
+`grant_changed`. Only a push that was given text (a reply or a card) writes the row: Send test and reminders do not. Pushes Apple
+refused, and pushes that hit the send deadline, are not recorded. The row goes with the phone: turn off, Apple's 410, a new token,
+sign-out and revoke all delete it.
+
+A phone may add its own reason through the optional TalosPush call `lastPlainReason()`, which returns
+`{ reason, id, at }`: `reason` is `phone_no_key`, `phone_open_failed` or `phone_timed_out`; `id` is the `id` of the sealed envelope
+(`talos.enc.id`) of the push it could not open; `at` is milliseconds since 1970 (a value under 1e11 is read as seconds). The page
+uses the phone's reason only when its `id` is the id the relay recorded, so a report about an older push never describes a newer
+one. An older app without the call is fine. The codes live in `packages/protocol/src/push.ts` and the words in
+`apps/web/src/features/pwa/plainPushWords.ts`.
 
 ## Passkeys in the app (WP-I6)
 

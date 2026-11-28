@@ -5,6 +5,7 @@
 
 import { DEFAULT_IDLE_PARK_MIN, DEFAULT_MAX_LIVE, WORKER_LIVE_STATES, WORKER_TIMING } from '@talos-app/protocol'
 import { type BgFound, cutLine, found, NO_BG, type Proc, procArgv, procTable } from './bg-work.ts'
+import { limitWaitDeadlineMs, limitWaitResetIso, readLimitWait } from './limit-wait.ts'
 import { NOTHING_OWED } from './owed-pointer.ts'
 import {
   capVictims,
@@ -48,7 +49,14 @@ export type SlotDeps = {
   procs?: { procTable?(): Proc[] | null; procArgv?(pid: number): string[] | null }
 }
 
+/** The notice must be gone from settled looks this long (monotonic s) before the skip is dropped: one torn frame is not the notice gone. */
+const LIMIT_WAIT_GONE_AFTER_S = 2
+
 export class WorkerSlots {
+  /** When the notice was first missed (monotonic s), per worker still holding a skip: its end is a settled miss (noteLimitWait). */
+  private readonly limitMissSince = new Map<string, number>()
+  /** The skips already said in the log, per worker and kind of end (one line per hold). */
+  private readonly skipSaid = new Set<string>()
   /** dedicated.max_live, as last read. */
   maxLive = DEFAULT_MAX_LIVE
   /** The wall clock against the monotonic one at the last tick (worker-idle.ts wallJump). */
@@ -96,6 +104,61 @@ export class WorkerSlots {
     }
   }
 
+  /**
+   * Each look at a live or busy session's pane: Claude Code's own wait at a usage limit (limit-wait.ts) showing starts the skip (its
+   * first-seen time and, when the notice names one, the reset, go into the session's own entry, workers.json, so a supervisor that
+   * starts later keeps them) and keeps it; the notice missing from settled looks ends it. Nothing here ends or starts a session.
+   */
+  noteLimitWait(w: WorkerRuntime, rows: readonly string[]): void {
+    const seen = readLimitWait(rows)
+    if (seen) {
+      this.limitMissSince.delete(w.id)
+      if (w.entry.limit_wait) return // first seen earlier (this supervisor or the last one): never moved, or a stale match would renew itself
+      const nowMs = this.m.wallMs()
+      const reset = limitWaitResetIso(seen, nowMs)
+      w.entry = { ...w.entry, limit_wait: { since: new Date(nowMs).toISOString(), ...(reset ? { reset } : {}) } }
+      this.m.changed()
+      this.m.audit('worker_limit_wait', { thread: w.id, reset: reset ?? 'unknown' })
+      return
+    }
+    if (!w.entry.limit_wait) return
+    const now = this.m.now()
+    const since = this.limitMissSince.get(w.id)
+    if (since === undefined || now < since) {
+      this.limitMissSince.set(w.id, now)
+      return
+    }
+    if (now - since < LIMIT_WAIT_GONE_AFTER_S) return
+    this.clearLimitWait(w)
+  }
+
+  /** The skip is over for this worker (the notice went, or its session ended). */
+  clearLimitWait(w: WorkerRuntime): void {
+    this.limitMissSince.delete(w.id)
+    for (const k of [...this.skipSaid]) if (k.startsWith(`${w.id}:`)) this.skipSaid.delete(k)
+    if (!w.entry.limit_wait) return
+    w.entry = { ...w.entry, limit_wait: undefined }
+    this.m.changed()
+  }
+
+  /** Does Claude Code's own wait hold this session now? It does until the reset plus 15 minutes or 6 hours after it first showed. */
+  limitWaitActive(w: WorkerRuntime): boolean {
+    const lw = w.entry.limit_wait
+    if (!lw) return false
+    const since = Date.parse(lw.since)
+    if (!Number.isFinite(since)) return false
+    const reset = lw.reset === undefined ? null : Date.parse(lw.reset)
+    return this.m.wallMs() < limitWaitDeadlineMs(since, reset)
+  }
+
+  /** An automatic end (`by`: idle, governor, update) held back by the skip: said once per hold. Owner stops and parks never come here. */
+  parkSkipped(w: WorkerRuntime, by: 'idle' | 'governor' | 'update'): void {
+    const key = `${w.id}:${by}`
+    if (this.skipSaid.has(key)) return
+    this.skipSaid.add(key)
+    this.m.audit('worker_park_skipped', { thread: w.id, why: 'limit_wait', by })
+  }
+
   /** A quiet session with nothing owed and nothing asking the owner, idle for its thread's idle_park_min, is parked. */
   async idleCheck(w: WorkerRuntime, busy: boolean): Promise<void> {
     const idleParkMin = this.m.thread(w.id)?.idleParkMin ?? DEFAULT_IDLE_PARK_MIN
@@ -103,6 +166,8 @@ export class WorkerSlots {
     const nowMono = this.m.now()
     const activeMono = w.idle.activeMono
     if (!w.host || !idleParkDue({ busy, owed: w.owed.pending, needsYou, activeMono, nowMono, idleParkMin })) return
+    // Claude Code's own wait at a usage limit is armed in this process: a park would end it (it is the owner's stop and park that do)
+    if (this.limitWaitActive(w)) return this.parkSkipped(w, 'idle')
     // a dialog or prompt on the screen now that has not held still for dialog_settle_s yet is not flagged, but it waits on the
     // owner all the same (as waitsOnOwner reads it; the Mac's guardShape, 62df2342). A screen that cannot be read never parks
     const rows = await w.host.visibleRows()

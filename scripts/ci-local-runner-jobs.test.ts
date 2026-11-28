@@ -22,6 +22,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { t as scaled } from '../packages/testkit/src/time-factor.ts'
 import { ciLocalSource, cleanEnv, copyCiLocalParts } from './ci-test-env'
 import { fakeTool } from './fake-tool'
+import { waitForFile } from './wait-loop.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const script = join(here, 'ci-local.sh')
@@ -38,6 +39,8 @@ afterAll(() => {
 const _alive = (pid: number) => spawnSync('kill', ['-0', String(pid)]).status === 0
 const started = (f: string) =>
   vi.waitUntil(() => existsSync(f) && readFileSync(f, 'utf8').trim() !== '', { timeout: 30_000, interval: 25 })
+
+const appears = (f: string) => vi.waitUntil(() => existsSync(f), { timeout: scaled(30_000), interval: 25 })
 
 const BUN_PIN = /bun-version: ([\d.]+)/.exec(
   readFileSync(join(dirname(script), '../.github/workflows/ci.yml'), 'utf8'),
@@ -166,6 +169,51 @@ describe('the desktop and mobile jobs on a commit that is already on main (push,
     expect(ran(r, 'mobile-ci-ran')).toBe(true)
     expect(r.posted()).toMatch(/passed on .*local-ci\/desktop|local-ci\/desktop.*passed on/)
     expect(r.posted()).not.toContain('skipped (')
+  })
+
+  it('a gate that waits goes before the run takes its first hold, though mobile is not begun behind desktop: desktop yields, mobile is idle, the gate runs, and the run ends with both passed', async () => {
+    // the real ci-local.sh and heavy-lock.sh on one cache. The desktop job is held up by the tmux check before its hold, so the gate
+    // (heavy-lock.sh run) comes while the run holds the machine and no hold is on; desktop then asks for the desktop mutex and yields
+    const { r, env } = swiftRepo()
+    writeFileSync(
+      env.CI_TMUX_PATHS,
+      `#!/bin/bash\ntouch "$HOME/tmux-asked"\n${waitForFile('$HOME/tmux-go', { keepWhile: 'kill -0 $PPID' })}\necho 'tmux 3.5'\n`,
+    )
+    const run = r.start(both, env)
+    await appears(join(r.home, 'tmux-asked')) // desktop is before its hold, mobile behind it
+    const gate = spawn(
+      'bash',
+      [
+        join(here, 'heavy-lock.sh'),
+        'run',
+        'gate-x',
+        '--',
+        'sh',
+        '-c',
+        `touch "${r.home}/gate-ran"; ${waitForFile(`${r.home}/gate-go`, { keepWhile: 'kill -0 $PPID' })}`,
+      ],
+      { env: { ...r.env, HEAVY_LOCK_POLL: '0.1' } },
+    )
+    live.push(gate)
+    const gateDone = new Promise<number>((res) => gate.on('exit', (c) => res(c ?? -1)))
+    await vi.waitUntil(
+      () =>
+        existsSync(join(r.cache, 'locks.queue/suites')) && readdirSync(join(r.cache, 'locks.queue/suites')).length > 0,
+      { timeout: scaled(30_000), interval: 25 },
+    )
+    expect(ran(r, 'gate-ran')).toBe(false) // the run holds the machine: the gate waits, and nothing of the run is stopped
+    writeFileSync(join(r.home, 'tmux-go'), '')
+    await appears(join(r.home, 'gate-ran')) // desktop is at its first hold and yields; mobile is idle: the gate has the machine
+    expect(ran(r, 'desktop-ci-ran')).toBe(false)
+    expect(ran(r, 'mobile-ci-ran')).toBe(false)
+    const sha = r.git(r.clone, 'rev-parse', '--short=7', 'HEAD')
+    expect(readFileSync(join(r.cache, 'logs', `${sha}-desktop.log`), 'utf8')).toMatch(/a gate waits for the machine/) // the job says why it waits
+    writeFileSync(join(r.home, 'gate-go'), '')
+    expect(await gateDone).toBe(0)
+    expect(await run.done, run.out()).toBe(0) // the run went on after the gate, with the results it would have had
+    expect(ran(r, 'desktop-ci-ran')).toBe(true)
+    expect(ran(r, 'mobile-ci-ran')).toBe(true)
+    expect(r.posted()).toMatch(/passed on .*local-ci\/mobile|local-ci\/mobile.*passed on/)
   })
 
   it('the desktop job logs its pty use: the peak of /dev/ttys* while it ran and kern.tty.ptmx_max, in its log and timings.tsv', async () => {

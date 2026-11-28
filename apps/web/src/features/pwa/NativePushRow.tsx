@@ -5,8 +5,10 @@ import { useTalosClient } from '../../lib/client.ts'
 import type { Http } from '../../lib/http.ts'
 import { nativeGrantSupported } from '../../lib/nativePush.ts'
 import { Button } from '../../ui/index.ts'
+import { wantsText } from './nativeChoice.ts'
 import {
   disableNativePush,
+  dismissWordsOffer,
   enableNativePush,
   type NativePushView,
   refreshNativePush,
@@ -52,7 +54,7 @@ export function NativePushRow({
   onTest?: () => Promise<boolean>
 }) {
   const client = useTalosClient()
-  const { view, busy, note, rich, pendingRevoke } = useNativePush()
+  const { view, busy, note, rich, pendingRevoke, textFailed, wordsOffer, lastPush } = useNativePush()
   // An older copy of the iPhone app cannot make the keys, so it has no text choice to offer or to describe.
   const canChooseText = nativeGrantSupported(scope ?? globalThis)
   const deps = { client, ...(http ? { http } : {}), ...(scope ? { scope } : {}) }
@@ -99,6 +101,11 @@ export function NativePushRow({
             : 'Notifications show a fixed phrase. Message text and the Reply and Approve buttons are off for this phone.'}
         </p>
       )}
+      {view.kind === 'on' && lastPush && (
+        <p className="m-0 text-sm text-text-2" data-testid="native-push-last">
+          {lastPush}
+        </p>
+      )}
       {view.kind === 'on' && pendingRevoke && (
         <p role="status" className="m-0 text-sm text-text-2" data-testid="native-push-pending">
           Message text is off on this phone, but your Talos server has not confirmed it yet. Talos asks again each time
@@ -108,9 +115,9 @@ export function NativePushRow({
       )}
       {view.kind === 'off' && canChooseText && (
         <p className="m-0 text-sm text-text-2" data-testid="native-push-text-intro">
-          Notifications start as a fixed phrase. After you turn them on, you can choose to show message text and the
-          Reply and Approve buttons on this phone. Apple still gets only a fixed phrase. Your Talos server can read your
-          messages, as it can today.
+          {wantsText()
+            ? 'Turn on notifications to see message words, with Reply and Approve for simple ones. Apple never sees the words. You can switch them off any time.'
+            : 'Notifications start as a fixed phrase. After you turn them on, you can choose to show message text and the Reply and Approve buttons on this phone. Apple still gets only a fixed phrase. Your Talos server can read your messages, as it can today.'}
         </p>
       )}
       {view.kind === 'off' && !canChooseText && (
@@ -119,10 +126,28 @@ export function NativePushRow({
           buttons.
         </p>
       )}
+      {(view.kind === 'off' || view.kind === 'on') && canChooseText && (
+        <p className="m-0 text-sm text-text-2" data-testid="native-push-shared">
+          On a shared phone, set Show Previews to Never for Talos: iPhone Settings, Notifications, Talos, Show Previews.
+        </p>
+      )}
       {(view.kind === 'off' || view.kind === 'on') && (
         <p className="m-0 text-sm text-text-2" data-testid="native-push-double">
           If the Home Screen app on this phone also has notifications on, you get two. Turn them off there.
         </p>
+      )}
+      {view.kind === 'on' && wordsOffer && (
+        <div className="flex flex-col gap-2" data-testid="native-push-offer">
+          <p className="m-0 text-sm text-text-2">Show message words in notifications?</p>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={busy} onClick={() => void setNativeText(deps, true)}>
+              Turn on
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => dismissWordsOffer()}>
+              Not now
+            </Button>
+          </div>
+        </div>
       )}
       {view.kind === 'error' && (
         <p role="alert" className="m-0 text-sm text-text-2" data-testid="native-push-detail">
@@ -145,7 +170,12 @@ export function NativePushRow({
           >
             Send a test notification
           </Button>
-          {rich !== null && (
+          {textFailed && (
+            <Button disabled={busy} onClick={() => void setNativeText(deps, true)}>
+              Try again
+            </Button>
+          )}
+          {rich !== null && !textFailed && (
             <Button variant="outline" disabled={busy} onClick={() => void setNativeText(deps, !rich)}>
               {rich ? 'Use a fixed phrase only' : 'Show message text'}
             </Button>

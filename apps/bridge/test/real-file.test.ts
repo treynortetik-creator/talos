@@ -327,8 +327,6 @@ const FOLDER_ONLY: Record<string, string[]> = {
     "import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs'",
     'return join(realpathSync(dir), ...rest)',
   ],
-  // the agent folder and the folder a gazetteer was built for (memory.json agent_dir, gazetteer `repo`): folders only
-  'memory/reflex.ts': ['realpathSync,', 'return realpathSync(p)'],
   // the agent folder (TALOS_AGENT_DIR), to name the kit's state folder the way the kit does (from the real path): a folder only
   'action-rule-asks.ts': ["import { readFileSync, realpathSync } from 'node:fs'", 'real = realpathSync(dir)'],
   'cli-main.ts': [

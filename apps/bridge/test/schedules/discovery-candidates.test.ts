@@ -11,11 +11,17 @@ import { chronosCandidates, discover } from '../../src/schedules/discovery.ts'
 import { REPO_DIR } from '../../src/version.ts'
 
 let home = ''
+let savedXdg: string | undefined
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'talos-disc-cand-'))
+  // discover() reads the owner's config folder from XDG_CONFIG_HOME by default: a runner that sets it must not decide these tests
+  savedXdg = process.env.XDG_CONFIG_HOME
+  delete process.env.XDG_CONFIG_HOME
 })
 afterEach(() => {
   rmSync(home, { recursive: true, force: true })
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME
+  else process.env.XDG_CONFIG_HOME = savedXdg
 })
 
 const VERSION = '{"api":1,"chronos":"0.5.1","session_runner":"talos","approval_required":true}'

@@ -2,11 +2,13 @@
 // the start refused before it takes a slot, and whether Main runs in a mode no thread session can be held to.
 import { readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
-import { dedicatedSettings, type MainLaunchConfig } from '@talos-app/protocol'
+import { AUTO_CONTINUE_AT_LIMIT_DEFAULT, dedicatedSettings, type MainLaunchConfig } from '@talos-app/protocol'
+import { mainClaudeDir } from '../claude-dir.ts'
 import { postSystemRow } from '../system-post.ts'
 import { processEnv } from './launch-env.ts'
 import { phoneThread, readAppConfig } from './notices.ts'
 import { kitVendor, permissionHookProblem } from './worker-hook.ts'
+import { enabledPluginKeys } from './worker-mcp.ts'
 import { mainNarrowedMode, managedSettingsDir, workerFolderProblem } from './worker-policy.ts'
 import {
   dedicatedMaxLive,
@@ -48,6 +50,23 @@ export function threadFenceOn(home: string): boolean {
 }
 
 /**
+ * The owner's "continue at the usage limit" switch (config.json `auto_continue_at_limit`), read again at every start: what a boolean
+ * there says, else the config default (AUTO_CONTINUE_AT_LIMIT_DEFAULT) for an absent or junk value or a file that cannot be read.
+ * The settings of each session then carry it, `true` or `false`, as Claude Code's own `autoContinueAtUsageLimit`.
+ */
+export function autoContinueAtLimitOn(home: string): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
+      auto_continue_at_limit?: unknown
+    } | null
+    const v = raw?.auto_continue_at_limit
+    return typeof v === 'boolean' ? v : AUTO_CONTINUE_AT_LIMIT_DEFAULT
+  } catch {
+    return AUTO_CONTINUE_AT_LIMIT_DEFAULT
+  }
+}
+
+/**
  * The fence's reader for each start: every configured thread's folder, read again each call. A config that cannot be read
  * for a moment never narrows the fence: the folders last read are kept. Null until one read succeeds (the start is refused).
  */
@@ -77,6 +96,8 @@ export function workerConfigReaders(
   const fencedFolders = threadFolderReader(home)
   const readConfig = (): unknown => JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
   return {
+    // the owner's continue-at-limit switch, for the usage-limit line (each start reads it again for the session's settings)
+    autoContinue: () => autoContinueAtLimitOn(home),
     threads: () => {
       const c = launchCfg()
       if (!c) return null
@@ -90,7 +111,11 @@ export function workerConfigReaders(
           void postSystemRow({ ...processEnv(), TALOS_APP_HOME: home }, tell.thread, tell.text).catch(() => {})
         }
         if (droppedThreadEntries(raw).length === 0 || tell) droppedSaid = tell ? tell.said : ''
-        return dedicatedThreads(raw, c.agentDir)
+        const list = dedicatedThreads(raw, c.agentDir)
+        // the plugins switched on in the config folder Main runs under: part of each session's launch (a change restarts it after its turn)
+        const plugins = enabledPluginKeys(mainClaudeDir(mainEnv(), userHome))
+        // null: the plugin files are there but cannot be read (a half-written file): the set is not known, so it is no change
+        return list && plugins ? list.map((t) => ({ ...t, plugins })) : list
       } catch {
         return null // the last good list is kept
       }

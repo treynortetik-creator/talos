@@ -129,4 +129,36 @@ export const configFrames = {
     }
     this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
   },
+  /**
+   * The `plugin.add.request` frame ("Add plugin to agent"): queued once for the Mac, which checks the owner's signature and answers
+   * with a card or why not (`plugin.add.result`, session/index.ts). Nothing is installed before the owner approves that card. Like
+   * undo.request: only the owner's own device, never a repeat, never queued for a Mac that is away.
+   */
+  async onPluginAddRequest(
+    this: ConfigCtx,
+    a: AppConn,
+    frame: FrameOf<'plugin.add.request'>,
+    raw: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.ownerDeviceOk(a, frame.device_id, frame.id)) return
+    const store = this.d.store
+    const seenKey = `pa:${frame.id}`
+    if (store.seen(seenKey) !== undefined) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
+    if (!this.bridgeOnline()) return this.appError(a, 'mac_offline', 'your Mac is offline', frame.id)
+    class Refused extends Error {}
+    try {
+      await this.toBridge(raw, {
+        durable: true,
+        ttl_s: 300,
+        alsoWrite: () => {
+          if (store.seen(seenKey) !== undefined) throw new Refused('duplicate')
+          store.rememberSeen(seenKey)
+        },
+      })
+    } catch (e) {
+      if (e instanceof Refused) return this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
+      return this.appError(a, 'internal', 'The relay could not save that. Nothing was sent; try again.', frame.id)
+    }
+    this.sendApp(a, mkFrame(this.d.clock, 'ack', { ref: frame.id }))
+  },
 }

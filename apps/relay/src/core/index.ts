@@ -32,6 +32,7 @@ import {
   routes as protocolRoutes,
   RELAY_DESCRIPTOR_PATH,
   sha256Hex,
+  TERM_VIEW_FEATURE,
   ThreadId,
   verifyOwnerFrame,
 } from '@talos-app/protocol'
@@ -60,10 +61,13 @@ import { aasaDocument } from './aasa.ts'
 import { bodyTimeout, idleBodyTimeout, lateRequest, limitBody, readBodyWithDeadline } from './body-guard.ts'
 import { registerBugReports } from './bug-reports.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
+import { registerRelayFeature } from './features.ts'
 import { type Conn, FrameRejected } from './hub.ts'
+import { scrubError } from './log.ts'
 import { cleanName, dispositionHeader, parseRange } from './media.ts'
 import { registerProblems } from './problems.ts'
 import { pushEndpointAllowed } from './push.ts'
+import { dropPushLast, dropPushLastIfTokenChanged, pushLast } from './push-last.ts'
 import { relayDescriptor } from './relay-descriptor.ts'
 import { type CoreRuntime, findRuntime, runtimeOf } from './runtime.ts'
 import { registerShare, shareBytesSince } from './share.ts'
@@ -87,14 +91,18 @@ const RESERVED = /^\/(api|hook|bridge|media|ws|healthz|p|\.well-known)(\/|$)/
 const descriptors = new WeakMap<object, string>()
 
 export function register(services: RelayServices): void {
+  socketLog = services.log
   // built once, at start: the id is minted here, and a value the strict schema refuses (an over-long version) stops the
   // boot with its reason instead of answering 500 to every app later
   descriptors.set(services, JSON.stringify(relayDescriptor(services.db, services.env)))
   // Services made by createRelayServices carry a runtime; the unit-test fakes do not, and need no timers.
   findRuntime(services)?.start()
+  const hub = findRuntime(services)?.hub
+  hub?.onBridgeGone(() => hub.term.bridgeGone()) // the terminal views end with the Mac; nothing waits for its next hello
   registerProblems(services)
   registerBugReports(services) // the Mac's `consumed` for a report marks it filed
   registerShare(services) // docs/V2-FEATURES.md V4: share/1 is a relay feature (works with the Mac offline)
+  registerRelayFeature(TERM_VIEW_FEATURE) // the terminal view's stream (core/term.ts); the Mac lists the same name when it can show a pane
 }
 
 const rt = (c: Context<AppEnv>): CoreRuntime => runtimeOf(c.get('services'))
@@ -197,6 +205,7 @@ function connOf(ws: WSContext): Conn {
     send: (t) => {
       if (ws.readyState === 1) ws.send(t)
     },
+    bufferedAmount: () => (ws.raw as { bufferedAmount?: number } | undefined)?.bufferedAmount ?? 0,
     close: (code, reason) => ws.close(code, reason),
     terminate: () => (ws.raw as { terminate?: () => void } | undefined)?.terminate?.() ?? ws.close(1011),
   }
@@ -212,6 +221,15 @@ function ipOf(c: Context<AppEnv>): string {
 }
 
 const wsSessions = new WeakMap<Request, Session>()
+
+// A throw inside a socket handler goes to the relay's logger (scrubbed), never to the library's own raw print.
+let socketLog: RelayServices['log'] | null = null
+const wsOptions = {
+  onError: (e: unknown) => {
+    if (socketLog) socketLog.error({ err: e }, 'socket handler threw')
+    else console.error(scrubError(e))
+  },
+}
 
 routes.get(
   '/ws',
@@ -241,7 +259,7 @@ routes.get(
         handle?.onClose()
       },
     }
-  }),
+  }, wsOptions),
 )
 
 routes.get(
@@ -267,7 +285,7 @@ routes.get(
         handle?.onClose()
       },
     }
-  }),
+  }, wsOptions),
 )
 
 // ---- push -------------------------------------------------------------------------------------------------------
@@ -296,9 +314,22 @@ routes.delete('/api/push/subscribe', requireSession, requireCsrf, async (c) => {
 
 routes.get('/api/push/apns', requireSession, async (c) => {
   const deviceId = getSession(c)?.deviceId
+  const registered = deviceId ? rt(c).store.hasPushDevice(deviceId) : false
+  // How the last message push to this phone left (Settings: "Why was that push plain?"). Absent before the first one.
+  const last = deviceId && registered ? pushLast(rt(c).store.db, deviceId) : null
   const body: ApnsStatusT = {
     configured: rt(c).push.apnsConfigured,
-    registered: deviceId ? rt(c).store.hasPushDevice(deviceId) : false,
+    registered,
+    ...(last
+      ? {
+          last: {
+            rich: last.rich,
+            ...(last.reason ? { reason: last.reason } : {}),
+            ...(last.id ? { id: last.id } : {}),
+            at: new Date(last.at).toISOString(),
+          },
+        }
+      : {}),
   }
   return c.json(body)
 })
@@ -360,9 +391,11 @@ routes.post('/api/push/apns', requireSession, requireCsrf, rateLimit('push_apns'
   if (burned.changes === 0) return c.json({ error: 'replay' }, 409)
   if (reg.op === 'unregister') {
     store.deletePushDeviceByDevice(reg.device_id)
+    dropPushLast(services.db, reg.device_id)
     return c.body(null, 204)
   }
   if (!rt(c).push.apnsConfigured) return c.json({ error: 'not_configured' }, 409)
+  if (reg.token && reg.env) dropPushLastIfTokenChanged(services.db, reg.device_id, reg.token)
   if (reg.token && reg.env) store.putPushDevice({ deviceId: reg.device_id, token: reg.token, env: reg.env })
   return c.body(null, 204)
 })

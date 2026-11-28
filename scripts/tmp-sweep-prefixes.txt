@@ -52,6 +52,8 @@ hb-w-
 # Bridge contract tests (apps/bridge/test-contract: Vitest with no run folder)
 talos-agents-contract-
 talos-contract-
+talos-fake-real-home-
+talos-outside-chronos-
 talos-sched-contract-
 
 # e2e (e2e/: Playwright, no run folder). talos-e2e-apps- is no longer made (it is inside the stack's folder now); listed for old ones.
@@ -219,3 +221,9 @@ talos-deaf-deb1-
 talos-deaf-deb2-
 talos-deaf-switch-
 talos-bg-leak-
+
+# Mac cut-turn tests (0.26): the record unit tests and the real tmux/process reap tests
+talos-cut-
+talos-cutreap-
+# Mac clone-fence tests (R1256)
+talos-fence-

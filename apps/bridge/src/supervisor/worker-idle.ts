@@ -6,6 +6,7 @@
 // client. Raw pane output is not: a status line that repaints every second would keep a worker up for ever. Output does make a
 // worker busy, and a busy worker is never parked (nor the cap's choice, worker-cap.ts).
 import { WORKER_LIVE_STATES, WORKER_TIMING, type WorkerStateT } from '@talos-app/protocol'
+import { paneLines } from './pane-lines.ts'
 import { inputBox } from './screen.ts'
 
 /**
@@ -37,7 +38,13 @@ export function wallJump(prevOffset: number | null, wallMs: number, monoS: numbe
  * set or jumps changes nothing), the same in wall ms (`lastActiveMs`: for workers.json and the cap's ranking), and the body last
  * seen (null before the first look at this pane).
  */
-export type IdleClock = { lastActiveMs: number; activeMono: number; body: string | null }
+export type IdleClock = {
+  lastActiveMs: number
+  activeMono: number
+  body: string | null
+  /** The last rows above the input box as of the latest look (pane-lines.ts), for workers.json `quiet_lines` after a quiet wait. */
+  tail?: string[] | undefined
+}
 
 /** A wall time (a tmux client's key, a time from workers.json) on the monotonic clock as the clock reads now; never in the future. */
 export const monoOf = (wallMs: number, nowMs: number, nowMono: number): number =>
@@ -54,7 +61,7 @@ export const activeNow = (c: IdleClock, nowMs: number, nowMono: number): IdleClo
 export function noteScreen(c: IdleClock, rows: string[], nowMs: number, nowMono: number): IdleClock {
   const body = screenBody(rows)
   const changed = c.body !== null && c.body !== body
-  return { ...(changed ? activeNow(c, nowMs, nowMono) : c), body }
+  return { ...(changed ? activeNow(c, nowMs, nowMono) : c), body, tail: paneLines(rows) }
 }
 
 /** What busy last read: the pane's output time as last seen, and when (monotonic s) it was seen to change. */

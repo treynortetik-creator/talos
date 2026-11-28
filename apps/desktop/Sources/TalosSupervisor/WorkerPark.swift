@@ -24,6 +24,12 @@ extension WorkerManager {
   /// SIGTERM now. Callers have checked the worker isn't mid-turn, or that the owner's stop limit has run out.
   func beginPark(_ id: String, reason: String) {
     guard let r = rt[id], r.pgid > 0 else { return }
+    // the stop limit gave up on a turn that a Restart waited for: the turn is cut by the restart, and resumed by its start
+    // (any queued start: the Linux side's rule; a fresh one is another conversation and its start clears the record unused)
+    if reason == "stop_limit", r.afterPark != nil {
+      noteCutGroups(id)  // the tools' groups as they are now, before the SIGTERM below
+      recordCutTurn(id, cutFacts(id, midTurn: true), why: .stopLimitRestart, now: now())
+    }
     notePark(id, why: reason, bg: backgroundWork(id))  // read before the signal: the work it cuts is still there to count
     signaller.signal(r.pgid, SIGTERM)
     rt[id]?.entry.state = "parking"

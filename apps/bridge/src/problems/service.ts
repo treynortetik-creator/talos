@@ -2,8 +2,8 @@
 //   in:  a `problem.item` from the relay (the app, the iPhone shell, the relay itself), the bridge's own `error` log
 //        lines, and its own unhandled rejections;
 //   out: a file in `problems/open/` (store.ts) and, for the FIRST sighting only, a content-free line in the Inbox thread.
-// Nothing here wakes the agent, starts a fix or restarts anything: a notice carries no `toAgent`, and a person (or the lead)
-// decides whether a builder looks. The service logs its own trouble with `warn`, never `error`, and a guard refuses a
+// The notice wakes nobody (no `toAgent`). The owner's OWN report is the one exception: it wakes Main once through `wake` (main-wake/),
+// with its id and a short summary. Nothing here starts a fix or restarts anything; Main, a person or the lead decides who looks. The service logs its own trouble with `warn`, never `error`, and a guard refuses a
 // report made while another is being made, so it cannot feed itself.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,7 +21,7 @@ import type { Clock } from '../clock.ts'
 import { readJsonFile, writeJsonAtomic } from '../fsutil.ts'
 import type { ErrorTap, Logger } from '../log.ts'
 import { say } from '../owner-words.ts'
-import { type FileOutcome, fileProblem, problemDirs } from './store.ts'
+import { cleanProblem, type FileOutcome, fileProblem, problemDirs } from './store.ts'
 
 /**
  * How many times a report whose picture cannot be fetched is kept for the relay to send again before it is filed without the
@@ -51,6 +51,8 @@ export type ProblemServiceDeps = {
   userHome?: string
   /** A line in the Inbox thread. No agent wake-up. */
   notice: (text: string) => Promise<void>
+  /** Wakes Main about an owner's own report: the report's fingerprint (its id is the first 12 characters) and what he typed. */
+  wake?: (a: { fingerprint: string; summary: string }) => Promise<void>
   /** Fetches the screenshot a report names; throws when it cannot be had or verified. */
   fetchScreenshot?: (ref: NonNullable<ProblemT['screenshot']>) => Promise<{ path: string }>
 }
@@ -169,8 +171,28 @@ export class ProblemService {
         problem.source === 'install' ? `another install (${problem.install})` : problem.source,
         out.count,
       )
+    await this.wakeFor(problem, out)
     await this.maybeDailyNotice()
     return 'done'
+  }
+
+  /**
+   * An owner's own report wakes Main (once: the wake piece keeps the key). A report that is already on disk and open is offered again
+   * on purpose: a bridge that stopped between filing and waking would otherwise never wake for it, and the relay's resend lands here as
+   * a duplicate. A closed report was dealt with. Another install's person is a stranger and never wakes Main; neither does an automatic one.
+   */
+  private async wakeFor(problem: ProblemT, out: FileOutcome): Promise<void> {
+    if (!this.d.wake || problem.kind !== 'owner' || problem.source === 'install' || out.result === 'refused') return
+    if (out.result !== 'filed' && out.path.startsWith(problemDirs(this.d.home).closed)) return
+    const clean = cleanProblem(problem, {
+      ...(this.d.userHome ? { userHome: this.d.userHome } : {}),
+      appHome: this.d.home,
+    })
+    try {
+      await this.d.wake({ fingerprint: out.fingerprint, summary: clean.steps?.trim() || clean.message })
+    } catch (e) {
+      this.d.log.warn('bug report wake not sent', { error: (e as Error).message })
+    }
   }
 
   // ---- from the bridge itself ----------------------------------------------------------------------------------------

@@ -213,7 +213,7 @@ describe('focus', () => {
     const opener = screen.getByRole('button', { name: 'Opener' })
     opener.focus()
     open()
-    type('Memory')
+    type('Nyx')
     fireEvent.keyDown(input(), { key: 'Enter' })
     await waitFor(() => expect(screen.queryByRole('combobox')).toBeNull())
     await new Promise((r) => setTimeout(r, 50))

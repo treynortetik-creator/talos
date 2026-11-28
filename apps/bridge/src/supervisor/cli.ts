@@ -27,7 +27,7 @@ import {
 } from 'node:fs'
 import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { MAIN_TMUX_SESSION, type MainLaunchConfig, ThreadId, TMUX_SOCKET } from '@talos-app/protocol'
-import { claudeConfigDir } from '../claude-dir.ts'
+import { mainClaudeDir } from '../claude-dir.ts'
 import type { CliIO } from '../cli-main.ts'
 import type { BridgeEnv } from '../config.ts'
 import { DeviceStore } from '../devices.ts'
@@ -396,14 +396,7 @@ function mcpLogReasonIn(dir: string): string | null | undefined {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Main's Claude Code config folder: its own CLAUDE_CONFIG_DIR (from the login shell or the settings), else ~/.claude. */
-export function mainClaudeDir(mainEnv: Record<string, string>, userHome: string): string {
-  try {
-    return claudeConfigDir(userHome, mainEnv.CLAUDE_CONFIG_DIR || undefined)
-  } catch {
-    return join(userHome, '.claude')
-  }
-}
+export { mainClaudeDir }
 
 /**
  * Claude Code's transcript of `sessionId`: `<config>/projects/<folder name>/<id>.jsonl`, written once the session has its first
@@ -509,6 +502,9 @@ WantedBy=default.target
 
 // ---- the command ------------------------------------------------------------------------------------------------------------
 
+/** The OS `cmdSupervise` warns on (a test swaps it), and the warning. */
+export const superviseHost = { platform: process.platform as string }
+export const MAC_SUPERVISE_LINE = 'On a Mac, the Talos app runs thread sessions; this supervisor runs only Main.'
 export async function cmdSupervise(env: BridgeEnv, args: string[], io: CliIO): Promise<number> {
   const home = env.home
   const [sub] = args
@@ -574,6 +570,8 @@ export async function cmdSupervise(env: BridgeEnv, args: string[], io: CliIO): P
     )
     return 2
   }
+  // APFS folds case, so the thread fence (worker-spec.ts) refuses every thread here by design; Main runs fine: warn only
+  if (superviseHost.platform === 'darwin') io.err(MAC_SUPERVISE_LINE)
   return runSupervisor(home, env.userHome, io)
 }
 

@@ -49,11 +49,11 @@ folder_readers() { # prints "<test><US><folder>" for each test that lists a fold
     )
   done
 }
-guards_reading() { # prints each guard with a gate-reads pattern that matches `f`
-  local f="$1" t p
-  [ -n "$GUARDS" ] || return 0
+guards_reading() { # guards_reading <file> [<pool>]: prints each guard of the pool (default GUARDS) with a gate-reads pattern that matches `f`
+  local f="$1" t p pool="${2-$GUARDS}"
+  [ -n "$pool" ] || return 0
   set -f # a pattern is matched, never expanded against the files (this runs in a $( ) subshell, so it stays there)
-  printf '%s\n' "$GUARDS" | while IFS= read -r t; do
+  printf '%s\n' "$pool" | while IFS= read -r t; do
     [ -n "$t" ] || continue
     # shellcheck disable=SC2254 # $p unquoted on purpose: it is the pattern
     for p in $(sed -n 's#^// gate-reads:##p' "$t"); do case "$f" in $p) printf '%s\n' "$t" && break ;; esac; done
@@ -157,14 +157,16 @@ reaches_bridge_suite() { # 0 when a change to `f` runs the whole bridge suite (t
   esac
   return 0
 }
-reader_pools() { # GUARDS, the guards over test files, and READERS_POOL, every test file (for file_readers)
+reader_pools() { # GUARDS, the guards over test files, E2E_GUARDS, the e2e specs that carry the line, and READERS_POOL, every test file (for file_readers)
+  # the e2e specs (Playwright, e2e/tests) are no *.test.ts: their own mark names the source they drive, and runs them in the e2e list
+  E2E_GUARDS="$(grep -rlE --include='*.spec.ts' '^// gate-reads:' e2e/tests 2>/dev/null)"
   # shellcheck disable=SC2086
   GUARDS="$(grep -rlE --include='*.test.ts' '^// gate-reads:' $VITEST_ROOTS apps/bridge/test 2>/dev/null)"
   # shellcheck disable=SC2086
   READERS_POOL="$(find $VITEST_ROOTS apps/bridge/test \( -name node_modules -prune \) -o \( -name '*.test.ts' -o -name '*.test.tsx' \) -type f -print 2>/dev/null)"
 }
 plan_suites() {
-  local f t d x base named US=$'\037' _LO_LINES=() vit=() bun=() e2e=() vproj=() web=() webkit=() folder_tests=()
+  local f t d x base named US=$'\037' _LO_LINES=() vit=() bun=() e2e=() e2e_marked=() vproj=() web=() webkit=() folder_tests=()
   # the tests that list files at all, once (folder_readers runs in a subshell, so it cannot keep a cache of its own)
   # shellcheck disable=SC2086
   LISTERS="$(grep -rlE --include='*.test.ts' "$LISTS_FILES" $VITEST_ROOTS apps/bridge/test 2>/dev/null)"
@@ -212,6 +214,13 @@ plan_suites() {
     lines_of "$(guards_reading "$f")"
     for t in "${_LO_LINES[@]+"${_LO_LINES[@]}"}"; do
       folder_tests+=("$t")
+      FOLDER_HITS+=("$t <- $f (reads it)")
+    done
+    # the e2e specs that read it the same way (a mark on the spec, e2e/tests), a deletion too: the spec runs, and no Vitest or bun file
+    lines_of "$(guards_reading "$f" "$E2E_GUARDS")"
+    for t in "${_LO_LINES[@]+"${_LO_LINES[@]}"}"; do
+      e2e+=("${t#e2e/}")
+      e2e_marked+=("${t#e2e/}")
       FOLDER_HITS+=("$t <- $f (reads it)")
     done
     lines_of "$(web_specs_for "$f")"
@@ -282,6 +291,7 @@ plan_suites() {
   uniq_into VIT "${vit[@]+"${vit[@]}"}"
   uniq_into BUN "${bun[@]+"${bun[@]}"}"
   uniq_into E2E "${e2e[@]+"${e2e[@]}"}"
+  uniq_into E2E_MARKED "${e2e_marked[@]+"${e2e_marked[@]}"}"
   uniq_into VPROJ "${vproj[@]+"${vproj[@]}"}"
   uniq_into WEB "${web[@]+"${web[@]}"}"
   uniq_into WEBKIT "${webkit[@]+"${webkit[@]}"}"

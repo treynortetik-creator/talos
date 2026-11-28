@@ -14,12 +14,14 @@ struct SignOutActionTests {
     var signedOut = 0
     SignOutAction.perform = { _ in signedOut += 1 }
     SignOutAction.confirm = { asked += 1; return false }
-    SignOutAction.run()
-    try await Task.sleep(nanoseconds: 150_000_000)
+    SignOutAction.run()  // the no is decided on the spot (`guard confirm()`); only perform runs, in a Task
     #expect(asked == 1 && signedOut == 0, "a no signs nothing out")
     SignOutAction.confirm = { asked += 1; return true }
     SignOutAction.run()
-    try await Task.sleep(nanoseconds: 150_000_000)
+    // the perform callback is the signal: yield the main actor to its Task (a bound only, so a yes that never performs fails and does not hang)
+    let end = Date().addingTimeInterval(5)
+    while signedOut == 0, Date() < end { await Task.yield() }
+    for _ in 0..<10 { await Task.yield() }  // a second perform, if there were one, would have run by now
     #expect(asked == 2 && signedOut == 1, "a yes signs out exactly once")
   }
 }

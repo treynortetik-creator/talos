@@ -1,5 +1,5 @@
 // Push: a fixed-template payload sent over a PushTransport to every subscription (Apple, and the browser vendors, never get message text; a phone that turned text on also gets a sealed copy, built here from the plain text, so this relay can read it), subject to the
-// owner's rules: nothing while someone is at a visible app socket (visible AND active within 60 s; `needs_you` ignores that), nothing in the quiet window, per-thread notify settings, master
+// owner's rules: nothing in the quiet window (an open app on a Mac never mutes the phone: only a device showing that very thread in front stays quiet, and it decides that itself), per-thread notify settings, master
 // switch. Transports: Web Push now (`web-push`), a no-op sink until VAPID keys are set, APNs in Phase 2 (spec 14).
 
 import https from 'node:https'
@@ -23,23 +23,32 @@ import {
   type SealEnvelopeT,
   sealPush,
   secondsUntil,
+  withPushWords,
 } from '@talos-app/protocol'
 import { checkedLookup } from '@talos-app/protocol/guarded-fetch'
 import webpush from 'web-push'
 import type { Clock, Logger, PushService, PushTransport, RichPushInput } from '../services.ts'
 import type { NtfySink } from './alerts-ntfy.ts'
 import { DEFAULT_AGENT_CONFIG } from './default-config.ts'
-import type { ApnsSender } from './push-apns.ts'
+import type { ApnsSender, SendGate } from './push-apns.ts'
+import { dropPushLast, nativeGrantExpired, putPushLast, type SealWhy } from './push-last.ts'
 import { holdForSummary } from './quiet-summary.ts'
 import type { PushSub, Store } from './store.ts'
 
 export class NoopTransport implements PushTransport {
   readonly name = 'webpush' as const
+  /** Tests read `sent` back, so they keep the last 200 sends. The relay itself passes `keep: false`: it holds nothing, so no message words sit in memory. */
+  constructor(private readonly keepOpts: { keep?: boolean } = {}) {}
   readonly sent: Array<{ endpoint: string; payload: PushPayloadT }> = []
   readonly opts: Array<{ secondsLeft?: number } | undefined> = []
   async send(sub: PushSub, payload: PushPayloadT, opts?: { secondsLeft?: number }) {
+    if (this.keepOpts.keep === false) return { ok: true, gone: false }
     this.sent.push({ endpoint: sub.endpoint, payload })
     this.opts.push(opts)
+    if (this.sent.length > 200) {
+      this.sent.shift()
+      this.opts.shift()
+    }
     return { ok: true, gone: false }
   }
 }
@@ -122,20 +131,19 @@ const SYSTEM_TEMPLATES = new Set<PushIntent['template']>([
 
 /**
  * Security alerts are the owner's only warning that someone signed in (or that a device signed in without proving its key), or
- * that another Mac took the bridge. Like the health templates they ignore the master switch and a visible socket: a tab open on
- * the Mac, or a socket an attacker keeps open with a made-up "visible" hello, must not swallow them. They stay out of ntfy and
- * HEALTH_PUSH.
+ * that another Mac took the bridge. Like the health templates they ignore the master switch: nothing open on the Mac or
+ * claimed by a socket can hold them back. They stay out of ntfy and HEALTH_PUSH.
  */
 const SIGN_IN_ALERTS = new Set<PushIntent['template']>(['sign_in', 'sign_in_unproven', 'bridge_takeover'])
 
 /**
  * The agent changed a setting that decides which alerts reach the owner (packages/protocol push.ts). Like a sign-in alert it
- * ignores the master switch and a visible socket, and like a system template the quiet window and thread alerts: a change that
+ * ignores the master switch, and like a system template the quiet window and thread alerts: a change that
  * silences him is never itself silenced.
  */
 const ALERTS_CHANGED = new Set<PushIntent['template']>(['settings_changed', 'sent_always_allowed'])
 
-/** Health templates ignore a visible socket (a desktop tab nobody watches must not swallow the phone push) and go to ntfy. */
+/** Health templates ignore the master switch and go to ntfy. */
 const HEALTH_PUSH = new Set<PushIntent['template']>([
   'session_stopped',
   'mod_quiet',
@@ -153,7 +161,6 @@ export type PushDeps = {
   log: Logger
   transport: PushTransport
   config: () => AgentConfigT | null
-  anyVisible: () => boolean
   /** Optional ntfy topic (ALERT_NTFY_URL). Health templates are mirrored to it. */
   ntfy?: NtfySink | null
   /** Native iPhone push. Null/absent until the APNS_* variables are set; then devices registered by the app get it too. */
@@ -271,20 +278,6 @@ export class CorePush implements PushService {
         this.skip(intent, 'master_off')
         return null
       }
-      // `needs_you` is exempt from the visible-socket rule: a card waits on the owner, and a desktop window nobody is
-      // reading (a tab left open on the Mac) must never swallow the push to the phone. `action_failed` is the same: the tap came
-      // from a notification button, the phone may be locked, and a visible socket on another screen is not the owner reading it. A reply or a digest stays quiet
-      // while someone is looking. The quiet window and the master switch still apply to it (quiet is owner call O7).
-      // `card_expiring`, the one reminder before a card dies, is a needs-you push in every one of these rules.
-      if (
-        !alwaysOn &&
-        !isNeedsYouTemplate(intent.template) &&
-        intent.template !== 'action_failed' &&
-        this.d.anyVisible()
-      ) {
-        this.skip(intent, 'visible')
-        return null
-      }
       if (!SYSTEM_TEMPLATES.has(intent.template)) {
         if (isQuiet(new Date(this.d.clock.now()), cfg.quiet_window, cfg.timezone)) {
           // Not lost: counted, and told as one summary when the window ends (core/quiet-summary.ts, owner call O7).
@@ -316,7 +309,7 @@ export class CorePush implements PushService {
     )
     const counts = await this.deliver(
       intent,
-      payload,
+      this.withWords(intent, cfg, payload, opts.rich),
       apple,
       opts.rich ? this.richFor(intent, cfg, payload, opts.rich) : undefined,
       opts.rich?.openOnly === true,
@@ -325,15 +318,28 @@ export class CorePush implements PushService {
   }
 
   /**
+   * The payload for browsers: a reply gets a one-line preview, and the thread's name as the title as far as "Show thread
+   * names" allows. "Show message text in browser notifications" off leaves the fixed text (which names the thread by its own
+   * setting). It is encrypted to each browser by the transport and never logged or kept. Apple's copy is built apart from
+   * this and never gets these words.
+   */
+  private withWords(intent: PushIntent, cfg: AgentConfigT, payload: PushPayloadT, rich?: RichPushInput): PushPayloadT {
+    if (intent.template !== 'reply' || !rich || cfg.notifications.web_message_text === false) return payload
+    const thread = noticeSubtitle(intent.thread_id, cfg)
+    return withPushWords(payload, { text: rich.text, ...(thread ? { thread } : {}) })
+  }
+
+  /**
    * The readable content for phones that hold a grant, with the thread's real name as the subtitle (only inside the seal,
-   * and only as far as "Show thread names" allows). Null when the push is not one that carries text.
+   * and only as far as "Show thread names" allows). Null when the push is not one that carries text; 'failed' when the
+   * content could not be built (the phone then gets the fixed phrase, and Settings says the seal failed).
    */
   private richFor(
     intent: PushIntent,
     cfg: AgentConfigT,
     payload: PushPayloadT,
     rich: RichPushInput,
-  ): RichContentT | null {
+  ): RichContentT | 'failed' | null {
     const kind = payload.talos.kind
     if (kind !== 'reply' && kind !== 'card') return null
     const subtitle = noticeSubtitle(intent.thread_id, cfg)
@@ -346,21 +352,25 @@ export class CorePush implements PushService {
         ...(rich.card ? { card: rich.card } : {}),
       })
     } catch {
-      return null
+      return 'failed'
     }
   }
 
-  /** One seal for one phone, or null (no grant, a grant that is not current, a key that will not seal): that phone gets the template. */
+  /**
+   * One seal for one phone, or the reason there is none (no grant, a grant that is not current, a key that will not seal):
+   * that phone gets the template, and Settings says why.
+   */
   private async sealFor(
     deviceId: string,
     apple: PushPayloadT,
     content: RichContentT,
-  ): Promise<{ seal: SealEnvelopeT; grantJson: string } | null> {
+  ): Promise<{ seal: SealEnvelopeT; grantJson: string } | { why: SealWhy }> {
     try {
       const g = this.d.store.nativeGrant(deviceId)
-      if (!g) return null
+      if (!g)
+        return { why: nativeGrantExpired(this.d.store.db, this.d.clock.now(), deviceId) ? 'grant_expired' : 'no_grant' }
       const parsed = NativeGrant.safeParse(JSON.parse(g.grantJson))
-      if (!parsed.success || grantScopes(parsed.data).length === 0) return null
+      if (!parsed.success || grantScopes(parsed.data).length === 0) return { why: 'grant_bad' }
       const seal = await sealPush({
         encPub: g.encPub,
         deviceId,
@@ -371,7 +381,7 @@ export class CorePush implements PushService {
       return { seal, grantJson: g.grantJson }
     } catch {
       this.d.log.error({ via: 'apns' }, 'push seal failed; sending the fixed template')
-      return null
+      return { why: 'seal_failed' }
     }
   }
 
@@ -459,7 +469,7 @@ export class CorePush implements PushService {
     intent: PushIntent,
     payload: PushPayloadT,
     applePayload: PushPayloadT,
-    rich?: RichContentT | null,
+    rich?: RichContentT | 'failed' | null,
     openOnly = false,
   ): Promise<PushCounts> {
     let unreadableSubs = 0
@@ -504,13 +514,23 @@ export class CorePush implements PushService {
     // go: the Home Screen web app and the native app are separate devices to the relay (review H4: no dedupe).
     const native = Promise.all(
       devices.map(async (dev) => {
-        const sealed = rich ? await this.sealFor(dev.deviceId, applePayload, rich) : null
+        // When this push started: the readout keeps the push sent last, not the one Apple answered last.
+        const startedAt = this.d.clock.now()
+        // One value: a seal, the reason there is none, or null (the caller gave no text, or this kind never carries it: the
+        // readout is not written for those, so Send test and a reminder cannot overwrite what the owner reads).
+        const made =
+          rich === 'failed'
+            ? { why: 'seal_failed' as const }
+            : rich
+              ? await this.sealFor(dev.deviceId, applePayload, rich)
+              : null
+        const sealed = made && 'seal' in made ? made : null
         // Sealing waits, and so does the connection to Apple, and a revoke can land in either. The sender asks this right
         // before each request leaves (the first and the retry): a device the Mac no longer trusts gets nothing; a seal made
         // for a grant that has since been replaced, revoked or has run out is dropped, so that phone gets the fixed
         // template and no message text. A store error here is a failed send (the owner's reminder logic must see it),
         // never "nobody to notify".
-        const gate = (): 'seal' | 'template' | 'none' => {
+        const gate = (): ReturnType<SendGate> => {
           try {
             if (!this.d.store.pushDeviceLive(dev.deviceId)) return 'none'
           } catch (e) {
@@ -525,7 +545,7 @@ export class CorePush implements PushService {
               { template: intent.template, via: 'apns' },
               'grant recheck failed; sending the fixed template',
             )
-            return 'template'
+            return { pick: 'template', why: 'seal_failed' }
           }
         }
         const res = (await this.withinDeadline(
@@ -547,9 +567,25 @@ export class CorePush implements PushService {
           return null
         }
         this.record(res.ok)
+        if (res.ok && made) {
+          const rich = res.body === 'sealed'
+          const why = rich ? undefined : 'why' in made ? made.why : (res.plainWhy ?? 'grant_changed')
+          try {
+            putPushLast(this.d.store.db, startedAt, dev.deviceId, {
+              rich,
+              ...(why ? { reason: why } : {}),
+              ...(rich && sealed ? { id: sealed.seal.id } : {}),
+            })
+          } catch {
+            this.d.log.error({ via: 'apns' }, 'push readout not saved')
+          }
+        }
         // Only Apple's 410 deletes a token. A 400 (BadDeviceToken, DeviceTokenNotForTopic) can be a wrong host or a
         // mistyped APNS_BUNDLE_ID, and deleting would turn a config typo into a silent permanent off (review M2).
-        if (res.gone) this.d.store.deletePushDeviceByToken(dev.token)
+        if (res.gone) {
+          this.d.store.deletePushDeviceByToken(dev.token)
+          dropPushLast(this.d.store.db, dev.deviceId)
+        }
         this.d.log.info({ template: intent.template, via: 'apns', ok: res.ok, gone: res.gone }, 'push sent')
         return res.ok
       }),

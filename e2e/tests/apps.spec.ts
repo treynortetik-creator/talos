@@ -1,3 +1,4 @@
+// gate-reads: apps/bridge/src/apps/* apps/relay/src/core/apps.ts apps/web/src/features/apps/*
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'

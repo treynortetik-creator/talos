@@ -89,10 +89,10 @@ describe('every settings row has a risk', () => {
     for (const [path, r] of rows) if (r.risk === 'mac') expect(r.agent, path).toBe(false)
   })
 
-  it('work systems are high at most; the agent may set only their words (the label and the note), never what is connected', () => {
+  it('work systems are high at most; the agent may set only their words (the label and the note) and the thread their alerts land in, never what is connected', () => {
     for (const [path, r] of rows.filter(([p]) => p.startsWith('work.'))) {
       expect(r.risk, path).not.toBe('mac')
-      expect(r.agent, path).toBe(path === 'work.label' || path === 'work.ask_note')
+      expect(r.agent, path).toBe(['work.label', 'work.ask_note', 'work.thread'].includes(path))
     }
     expect(SETTINGS_TABLE['work.enabled'].risk).toBe('high')
     expect(SETTINGS_TABLE['work.retention'].risk).toBe('high')
@@ -110,6 +110,7 @@ describe('every settings row has a risk', () => {
       'notifications.show_thread_names',
       'voice_notes.reply_with_voice',
       'voice_notes.driving_until',
+      'work.thread',
       'work.label',
       'work.ask_note',
       'session_models',
@@ -119,6 +120,7 @@ describe('every settings row has a risk', () => {
       'dev.thread_fence',
       'dev.note_lookup',
       'os_sandbox',
+      'auto_continue_at_limit',
       'settings_lock',
       'dedicated',
       'theme',
@@ -129,6 +131,7 @@ describe('every settings row has a risk', () => {
       'timezone',
       'notifications.master',
       'notifications.show_thread_names',
+      'work.thread',
       'always_allow',
       'dev.thread_fence',
       'os_sandbox',
@@ -150,6 +153,7 @@ describe('every settings row has a risk', () => {
       idle_park_min: 'low',
       color: 'low',
       effort: 'low',
+      compact_window: 'low',
       model: 'high',
       mcp_allow: 'high',
       'session_opts.cwd': 'high',

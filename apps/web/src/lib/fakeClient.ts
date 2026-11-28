@@ -47,6 +47,7 @@ import {
   signOwnerFrame,
   stripDeviceHidden,
   subThreadPatchIssue,
+  TERM_VIEW_FEATURE,
   textTypeOfFile,
   threadPatchIssue,
   writeSwitchOnFirstUse,
@@ -72,6 +73,7 @@ import { createFakeFilesSent } from './fakeFilesSent.ts'
 import { createFakeMemoryFolders } from './fakeMemoryFolders.ts'
 import { createFakeSchedules, type FakeSchedulesClient } from './fakeSchedules.ts'
 import { createFakeSession, type FakeAgentsMode, type FakeModMode, type FakeSession } from './fakeSession.ts'
+import { createFakeTerm, type FakeTerm } from './fakeTerm.ts'
 import {
   createFakeFiles,
   createFakeFolders,
@@ -138,6 +140,7 @@ export function seedState(): ClientState {
       last_seen: '2026-10-28T15:00:00.000Z',
       queue_depth: 0,
       features: [
+        'plugin-add/1', // the bridge's: the Settings plugin form
         HOST_MAC_FEATURE, // fake mode plays a Mac (lib/hostWords.ts)
         SETTINGS_LOCK_FEATURE, // the fake bridge reads Lock Talos settings
         'schedules/1',
@@ -158,10 +161,11 @@ export function seedState(): ClientState {
         'memory-roots/1',
         'run/1',
         'themes/2',
+        TERM_VIEW_FEATURE, // the fake Mac shows its pane (lib/fakeTerm.ts)
       ],
       features_at: '2026-10-28T15:00:00.000Z',
     },
-    relayFeatures: ['schedules/1', 'schedules/2', 'heartbeat/1', 'health/1', 'share/1'],
+    relayFeatures: ['schedules/1', 'schedules/2', 'heartbeat/1', 'health/1', 'share/1', TERM_VIEW_FEATURE],
     config,
     threads: config.threads,
     messages: { general: [hello] },
@@ -251,6 +255,8 @@ export type FakeClient = TalosClient & {
   readonly fakeFolders: FakeFolders
   /** CC-C3: scripted Claude Code session (state, inventory, control answers). */
   readonly session: FakeSession
+  /** The made-up tmux pane behind the terminal view: print into it, make the relay drop output, end the view. */
+  readonly fakeTerm: FakeTerm
 }
 
 export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
@@ -340,6 +346,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     const frame = { v: 1, type, id: newUlid(), ts: iso(), ...fields }
     for (const l of listeners.get(type) ?? []) l(frame as never)
   }
+  const fakeTerm = createFakeTerm({ emit, macOnline: () => store.getState().presence.bridge_online })
 
   const owner = async (frame: Record<string, unknown>) => {
     const key = await keyPromise
@@ -487,6 +494,15 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
             at: iso(),
           }),
         )
+      if (frame.type === 'plugin.add.request')
+        queueMicrotask(() =>
+          emit('plugin.add.result', {
+            control_id: frame.control_id,
+            ok: true,
+            text: `Asked the owner to add ${frame.plugin}@${frame.marketplace}. Nothing was installed yet.`,
+            at: iso(),
+          }),
+        )
       if (frame.type === 'agent.recover') {
         const failed = failNextRecover
         failNextRecover = null
@@ -526,6 +542,8 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
     memoryFolders: createFakeMemoryFolders({ macOnline: () => store.getState().presence.bridge_online }),
     bugs,
     bugReports,
+    term: fakeTerm,
+    fakeTerm,
     fakeFolders,
     speak: createFakeSpeak({
       messages: () => store.getState().messages,
@@ -663,6 +681,7 @@ export function createFakeClient(opts: FakeClientOptions = {}): FakeClient {
         ...(input.choice !== undefined ? { choice: input.choice } : {}),
         ...(input.text !== undefined ? { text: input.text } : {}),
         ...(input.always ? { always: true } : {}),
+        ...(input.session ? { session: true, ...(input.sessionHash ? { session_hash: input.sessionHash } : {}) } : {}),
       })
       const at = iso()
       // Like the real Mac: a killed or revised card is finished at once (nothing runs, so no result follows); only an

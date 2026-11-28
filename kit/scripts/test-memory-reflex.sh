@@ -123,6 +123,17 @@ check("the owner's own name (title of wiki/me.md) is on the ignore list", "riley
 check("names from ~/.config/talos/reflex-ignore.txt are on the ignore list", "acme corp helper" in g["ignore"])
 gj = json.dumps(g)
 check("nothing outside wiki/ is in the file (no memory/, no vault, no home path)", "memory/" not in gj and "/Users/" not in gj and "/home/" not in gj)
+# The same agent under a home-shaped path, on every machine (a Mac's temp folder has no /Users/ in it, so the check above
+# could pass there by luck): the file names no folder of the machine at all, so a real agent's gazetteer never carries the
+# owner's home path.
+A2 = os.path.join(SB, "Users", "riley", "agent")
+shutil.copytree(A, A2, symlinks=True)
+r2 = subprocess.run([sys.executable, os.path.join(A2, "scripts", "wiki-gazetteer.py")], capture_output=True, text=True, env=env, cwd=A2)
+sd2 = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0,'hooks'); import _talos_common as C; print(C.state_dir())"],
+                     capture_output=True, text=True, cwd=A2).stdout.strip()
+g2 = open(os.path.join(sd2, "gazetteer.json"), encoding="utf-8").read() if r2.returncode == 0 and sd2 else ""
+check("an agent under a home-shaped path: its gazetteer names no machine folder (no /Users/, no agent path)",
+      g2 != "" and "/Users/" not in g2 and A2 not in g2 and os.path.realpath(A2) not in g2, (r2.stderr or "")[-200:])
 r = subprocess.run([sys.executable, GAZ, "--check"], capture_output=True, text=True, cwd=A, env=env)
 check("--check says fresh right after a build", r.returncode == 0 and r.stdout.strip() == "fresh")
 future = time.time() + 5

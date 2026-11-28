@@ -141,6 +141,15 @@ export function register(services: RelayServices): void {
   })
   registerRelayFeature(UNDO_FEATURE)
 
+  // "Add plugin to agent": the Mac's answer to plugin.add.request (the request is taken in core/hub-config.ts; the owner's signature is checked
+  // at the bridge). The relay only passes both frames; plugin-add/1 is the BRIDGE's feature (handshake.ts): the app offers the form only with it.
+  bus.onBridgeFrame('plugin.add.result', async (frame, ctx) => {
+    ctx.reply({ v: 1, type: 'ack', id: newUlid(), ref: frame.id })
+    if (seenResults.has(frame.id)) return
+    remember(seenResults, frame.id)
+    await bus.toApps(ctx.raw, { durable: true })
+  })
+
   bus.onAppFrame('session.control', async (frame, ctx) => {
     const err = (code: string, message: string) =>
       ctx.reply({ v: 1, type: 'error', id: newUlid(), ref: frame.id, code, message })

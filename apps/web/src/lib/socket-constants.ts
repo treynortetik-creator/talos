@@ -41,8 +41,12 @@ export function overFrameLimit(frame: string): boolean {
   if (frame.length * 3 <= MAX_SIGNED_FRAME_BYTES) return false // and at most three
   return utf8.encode(frame).length > MAX_SIGNED_FRAME_BYTES
 }
-/** After the app comes back to the front: how long a ping may go unanswered before the socket is called dead. */
-export const WAKE_PROBE_MS = 2_500
+/**
+ * After the page comes back: how long the probe's ping may go unanswered before the socket is called dead. Long, because a
+ * replacement costs a reconnect and a slow link (a phone just off the radio's sleep) answers late; a dead socket is found
+ * within the same wait by the keepalive anyway.
+ */
+export const WAKE_PROBE_MS = 10_000
 /** How long a config.patch waits for the Mac to apply it after the relay stored it. */
 export const CONFIG_APPLY_MS = 20_000
 
@@ -54,3 +58,17 @@ export const CONFIG_APPLY_MS = 20_000
 export const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel'] as const
 /** At most one activity report per this long (well inside the relay's 60 s presence window). */
 export const ACTIVITY_REPORT_MS = 15_000
+/** A connection must stay up this long before the reconnect backoff starts over from the first step (the bridge's STABLE_MS). */
+export const STABLE_MS = 30_000
+/** A dial (connecting, or open and waiting for `ready`) is given this long before a trigger may replace it. */
+export const DIAL_GIVE_UP_MS = 15_000
+/**
+ * A dial (connecting, then open and waiting for `ready`) is given up on by the client's own timer after this long: the bridge's
+ * HANDSHAKE_TIMEOUT_MS (relay-client.ts), twice the relay's own 10 s limit. Longer than DIAL_GIVE_UP_MS on purpose: a trigger
+ * may replace a dial after 15 s, but a slow link (a phone's cold radio, 16 s) that is only slow must still get to connect.
+ */
+export const HANDSHAKE_GIVE_UP_MS = 20_000
+/** With no socket and a retry already scheduled, coming back to the page dials at once at most this often. */
+export const EAGER_DIAL_MS = 10_000
+/** A timer this late (a hidden tab holds timers back for minutes) still counts a link that answered lately; later is a sleep. */
+export const STABLE_LATE_MAX_MS = 10 * 60_000

@@ -3,6 +3,7 @@
 // globally. Enter / Shift+Enter live in the composer. Never a paste chord (Cmd+V, Cmd+Shift+V, Shift+Insert): dictation and paste tools
 // send those into the composer, and none of them is in the table.
 import { useEffect } from 'react'
+import { isImeKey } from '../ui/keys.ts'
 import { chordMatches, DEFAULT_KEYMAP, isActive, isMacPlatform, type KeyEntry } from './keymap.ts'
 import { detectShell } from './native/detect.ts'
 
@@ -22,7 +23,7 @@ export function useGlobalKeys(
   const mac = opts.mac ?? (macApp || isMacPlatform())
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.isComposing) return
+      if (isImeKey(ev)) return
       for (const entry of keymap) {
         if (!entry.chord || !isActive(entry, macApp) || !chordMatches(ev, entry.chord, mac)) continue
         if (!entry.inField && isField(ev.target)) return

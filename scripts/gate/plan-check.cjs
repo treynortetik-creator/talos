@@ -56,8 +56,8 @@ const ROOTS = [
   'apps/mobile',
   'scripts',
 ]
-// grep -r: recursion that follows no link, files named *.test.ts
-const grepTree = (roots) => {
+// grep -r: recursion that follows no link, files named *<suffix> (*.test.ts)
+const grepTree = (roots, suffix = '.test.ts') => {
   const out = []
   const walk = (d) => {
     let es
@@ -71,7 +71,7 @@ const grepTree = (roots) => {
       const p = `${d}/${name}`
       if (e.isSymbolicLink()) continue
       if (e.isDirectory()) walk(p)
-      else if (e.isFile() && name.endsWith('.test.ts')) out.push(p)
+      else if (e.isFile() && name.endsWith(suffix)) out.push(p)
     }
   }
   for (const r of roots) if (isDir(r)) walk(r)
@@ -116,18 +116,25 @@ const listers = grepTree([...ROOTS, 'apps/bridge/test']).filter((t) =>
   /readdirSync|globSync|readdir\(|ls-files|ls-tree|write-tree/.test(text(t)),
 )
 const pool = findPool([...ROOTS, 'apps/bridge/test'])
-// the guards over test files: each line of exactly "// gate-reads: <pattern>..." (lines split at \n alone, as grep and sed do)
-const guards = grepTree([...ROOTS, 'apps/bridge/test'])
-  .map((t) => [
-    t,
-    text(t)
-      .split('\n')
-      .filter((l) => l.startsWith('// gate-reads:'))
-      .flatMap((l) => l.slice('// gate-reads:'.length).split(/[ \t]+/))
-      .filter((p) => p !== ''),
-  ])
-  .filter(([, ps]) => ps.length)
+// the guards: each line of exactly "// gate-reads: <pattern>..." (lines split at \n alone, as grep and sed do), in the test files and,
+// for the e2e list, in the Playwright specs under e2e/tests
+const marksOf = (files) =>
+  files
+    .map((t) => [
+      t,
+      text(t)
+        .split('\n')
+        .filter((l) => l.startsWith('// gate-reads:'))
+        .flatMap((l) => l.slice('// gate-reads:'.length).split(/[ \t]+/))
+        .filter((p) => p !== ''),
+    ])
+    .filter(([, ps]) => ps.length)
+const guards = marksOf(grepTree([...ROOTS, 'apps/bridge/test']))
+const e2eGuards = marksOf(grepTree(['e2e/tests'], '.spec.ts'))
 const guardsReading = (f) => guards.filter(([, ps]) => glob(...ps)(f)).map(([t]) => t)
+// the e2e specs that read f, as the e2e list spells them (relative to e2e/)
+const e2eReading = (f) => e2eGuards.filter(([, ps]) => glob(...ps)(f)).map(([t]) => t.slice('e2e/'.length))
+const marked = []
 const scriptTests = grepTree(ROOTS)
 const bridgeTests = grepTree(['apps/bridge/test'])
 
@@ -274,6 +281,9 @@ for (const f of changed) {
   if (!CODE(f) && !f.startsWith('e2e/')) folder.push(...namers(f))
   else if (glob('*.test.ts', '*.test.tsx', '*.spec.ts', 'install.sh')(f)) folder.push(...namers(f)) // a test file, and install.sh, are read by name too
   folder.push(...guardsReading(f))
+  const readers = e2eReading(f) // a spec with a mark runs for a changed or deleted file that matches it
+  want.E2E.push(...readers)
+  marked.push(...readers)
   want.WEB.push(...webFor(f))
   want.WEBKIT.push(...webOwn(f))
   if (!exists(f)) continue
@@ -333,7 +343,7 @@ if (process.argv[2] === '1' && typeof fastPlan === 'function') {
       FAST: ['1'],
       BUN: fast.bun,
       BUN_ALL: ['0'],
-      E2E: [],
+      E2E: sorted(marked), // only the specs that read a changed file
       E2E_ALL: ['0'],
       OLD: ['0'],
       WEB: fast.web,

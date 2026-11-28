@@ -124,6 +124,7 @@ export class WorkerManager {
     })
     this.wakes = new WakeReader({ home: d.home, audit: d.audit, wallMs: d.wallMs, post: (t, x) => d.post?.(t, x) })
     this.notices = new WorkerNotices({
+      autoContinue: d.autoContinue,
       lineWaits: (id) => {
         const w = this.workers.get(id)
         return w ? this.dialogs.lineWaits(this.offerTarget(w)) : false
@@ -611,6 +612,7 @@ export class WorkerManager {
       signal: exit.signal === null ? '-' : String(exit.signal),
     })
     w.entry = status.withTurnLost({ ...w.entry, pane_pid: 0 })
+    this.slots.clearLimitWait(w) // the process (and Claude Code's timer in it) is gone
     if (!wasEnding && w.entry.state !== 'starting')
       w.entry = status.withStopped(w.entry, 'crash', false, { overwrite: true })
     this.paneGone(w)
@@ -660,6 +662,9 @@ export class WorkerManager {
       case 'park': {
         // after the current turn (the Mac's requestPark); only a tap's park gives up on a turn, at its stop limit
         const s = w0?.entry.state ?? 'off'
+        // the governor's park would end Claude Code's own wait at a usage limit (its timer is in the process); an owner's tap is not held
+        if (w0 && reason === 'governor' && WORKER_LIVE_STATES.includes(s) && this.slots.limitWaitActive(w0))
+          return this.slots.parkSkipped(w0, 'governor')
         if (w0 && WORKER_LIVE_STATES.includes(s) && !w0.turnWait)
           return this.slots.requestPark(w0, reason === 'governor' ? 'governor' : 'control', reason === 'control')
         if (w0 && s === 'stopping' && reason === 'control') this.slots.armStopLimit(w0) // a tap rescues a governor's park
@@ -751,6 +756,7 @@ export class WorkerManager {
         const seen = await this.lookAt(w)
         const rows = w.rows
         if (rows) w.idle = noteScreen(w.idle, rows, this.d.wallMs(), this.d.now())
+        if (rows) this.slots.noteLimitWait(w, rows) // Claude Code's own wait at a usage limit: the park skip
         const busy = await this.slots.isBusy(w)
         this.move(w, busy ? 'busy' : 'live')
         this.cuts.lookedAt(w, busy) // where the turn began, a new turn, the re-run guard

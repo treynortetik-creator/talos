@@ -8,7 +8,7 @@
 // it: made at once when the owner asked and his settings are not locked, otherwise a card; `high` is how much it matters, marked
 // on its card), `mac` (the agent never sets it; refused by name, and only a row with `agent: false` may say so). For a row the agent cannot propose,
 // `low`/`high` only say how sensitive it would be. The per-thread operations (create, rename, topic, icon, alerts, own session,
-// archive) are not config paths of their own: they are `THREAD_FIELD_RULES` below, with their risk, in this same file.
+// archive) are not config paths of their own: they are `THREAD_FIELD_RULES` (settings-thread-fields.ts, re-exported here), with their risk.
 //
 // A setting added to `AgentConfig` with no row here fails `pnpm typecheck`: the table is checked against every config
 // path. A setting with no way to change it from a phone or by the agent is Mac only: say so with `phone: false` and
@@ -20,20 +20,24 @@
 
 import { z } from 'zod'
 import { ALWAYS_KINDS } from './always-allow.ts'
-import { type AgentConfigT, HHMM, isIanaZone, MAX_SESSION_MODELS, ModelValue } from './config.ts'
+import {
+  type AgentConfigT,
+  AUTO_CONTINUE_AT_LIMIT_DEFAULT,
+  HHMM,
+  isIanaZone,
+  MAX_SESSION_MODELS,
+  ModelValue,
+  PUSH_TEXT_DEFAULT,
+} from './config.ts'
 import { OS_SANDBOX_TITLE, osSandboxHelpLines } from './dev.ts'
 import { IsoTs, ThreadId } from './ids.ts'
-import { THREAD_TOPIC_MAX, type ThreadT } from './models.ts'
+import { THREAD_FIELD_RULES, THREAD_FIELDS, THREAD_SETTING_EVENT_FIELDS } from './settings-thread-fields.ts'
 import { themeProblems, validateTheme } from './theme.ts'
-import { canBeDedicated, DEFAULT_IDLE_PARK_MIN, threadSessionsAllowed } from './thread-sessions.ts'
-import {
-  NewThread,
-  none,
-  Plain,
-  SETUP_THREAD_FIELD_RULES,
-  ThreadIdleValue,
-  ThreadSessionValue,
-} from './thread-setup-fields.ts'
+import { threadSessionsAllowed } from './thread-sessions.ts'
+import { NewThread, Plain } from './thread-setup-fields.ts'
+
+// The per-thread rows moved to their own file to keep this one under the size limit; every name is still exported from here.
+export * from './settings-thread-fields.ts'
 
 const QuietWindow = z
   .object({ start: HHMM, end: HHMM })
@@ -52,7 +56,7 @@ const ThemeValue = z.unknown().transform((v, ctx) => {
 })
 
 /** Config sections whose children are settings of their own. Every other top-level field is one setting. */
-type Section = 'agent' | 'owner' | 'notifications' | 'work' | 'voice_notes' | 'dev'
+type Section = 'agent' | 'owner' | 'notifications' | 'work' | 'voice_notes' | 'dev' | 'memory'
 /** `version` and `rev` belong to the file, not to the owner. */
 type FileField = 'version' | 'rev'
 
@@ -330,6 +334,23 @@ export const SETTINGS_TABLE = defineSettingsTable({
     },
     default: 'fixed_only',
   },
+  // The first 80 characters of each reply on a lock screen: the owner's switch, not the agent's (it can only be asked for in Settings).
+  'notifications.web_message_text': {
+    phone: 'section',
+    agent: false,
+    risk: 'high',
+    refusedByName: true,
+    default: PUSH_TEXT_DEFAULT,
+  },
+  // Where the owner's Nyx lives (https only; nyx.ts). The owner's, set in the app's Memory screen; the agent is refused by name.
+  // Absent means not connected: there is no default address anywhere.
+  'memory.nyx_url': {
+    phone: 'leaf',
+    agent: false,
+    risk: 'high',
+    refusedByName: true,
+    default: undefined,
+  },
   'voice_notes.reply_with_voice': {
     phone: 'section',
     agent: true,
@@ -366,7 +387,32 @@ export const SETTINGS_TABLE = defineSettingsTable({
     refusedByName: true,
     default: [],
   },
-  'work.thread': { phone: 'leaf', agent: false, risk: 'high', refusedByName: true, default: undefined },
+  // Where work alerts land. The agent may move it when the owner asks (the thread has to exist and not be archived or a system
+  // thread, the same ones the app offers); it stays `high` so a card, when one is needed, is marked so. Nothing else under `work`
+  // opens to the agent: the on/off list and the keeping rule stay refused by name.
+  'work.thread': {
+    phone: 'leaf',
+    agent: true,
+    risk: 'high',
+    agentRule: {
+      label: 'Work alert thread',
+      phrase: 'the work alert thread',
+      hint: 'a thread id from list_threads, not archived and not a system thread',
+      value: ThreadId,
+      check: (v, c) => {
+        const t = c.threads.find((x) => x.id === v)
+        if (!t)
+          return `Unknown thread "${String(v)}". Valid thread ids: ${c.threads
+            .filter((x) => !x.archived)
+            .map((x) => x.id)
+            .join(', ')}`
+        if (t.archived || (t.kind === 'system' && t.id !== 'inbox'))
+          return `thread ${t.id} can't be the work alert thread (archived or a system thread)`
+        return null
+      },
+    },
+    default: undefined,
+  },
   'work.label': {
     phone: 'leaf',
     agent: true,
@@ -508,6 +554,22 @@ export const SETTINGS_TABLE = defineSettingsTable({
     },
     default: undefined,
   },
+  // Claude Code's own wait-then-continue at a usage limit (config.ts auto_continue_at_limit). Claude Code only ever waits for the
+  // reset there, never usage credits, an upgrade or a plan change, so this is an ordinary setting: the agent changes it when asked.
+  // Takes effect at each thread session's next start.
+  auto_continue_at_limit: {
+    phone: 'leaf',
+    agent: true,
+    risk: 'low',
+    agentRule: {
+      label: 'Continue at the usage limit',
+      phrase: 'continuing at the usage limit',
+      hint: 'true (on: when a thread session hits a usage limit, Claude Code waits for the reset and goes on by itself, from its next start) or false (off: it stops at the limit)',
+      value: z.boolean(),
+      show: onOff,
+    },
+    default: AUTO_CONTINUE_AT_LIMIT_DEFAULT,
+  },
   settings_lock: {
     phone: 'leaf',
     agent: true,
@@ -638,162 +700,6 @@ export function stripDeviceHidden<T extends object>(config: T): T {
   return out as T
 }
 
-/** The thread fields whose change is a `setting.changed` event; name and archived have events of their own. */
-export const THREAD_SETTING_EVENT_FIELDS = ['topic', 'icon', 'notify', 'session'] as const
-
-/** The fields of one thread the agent may change, and what the thread-scoped paths `threads.<id>.<field>` mean. */
-export const THREAD_FIELDS = [
-  'name',
-  'topic',
-  'icon',
-  'notify',
-  'session',
-  'archived',
-  'parent',
-  'idle_park_min',
-  'color',
-  'effort',
-  'model',
-  'mcp_allow',
-  'session_opts.cwd',
-] as const
-export type ThreadField = (typeof THREAD_FIELDS)[number]
-
-export type ThreadFieldRow = {
-  /** `high`: how much it matters (marked on its card); asked for, it is made at once like a low one. */
-  readonly risk: 'low' | 'high'
-  /** `label` is the field's name in "Thread trip name: Trip → Travel"; the value rules, words and hint are the same kind as a row's. */
-  readonly rule: AgentRule
-  /**
-   * A value or a thread that makes a `low` field high: a change for which `when` is true is high. `phrase`
-   * is how the agent is told ("turning a thread's alerts off").
-   */
-  readonly alsoHigh?: {
-    readonly phrase: string
-    readonly when: (value: unknown, config: AgentConfigT, threadId: string) => boolean
-  }
-  /** The value now on the thread, raw (null when it has none); what the card shows as old, and what is compared and hashed. */
-  readonly read: (t: ThreadT) => unknown
-  /**
-   * The keys to put on the thread for a new value (`null` clears a key; a threads patch drops it). `t` is the thread as it is now,
-   * for a field inside an object of the thread (`session_opts`), whose other keys must stay.
-   */
-  readonly set: (v: unknown, t?: ThreadT) => Record<string, unknown>
-}
-
-/**
- * Per-thread operations, with their risk. Name, topic, icon, colour, effort and alerts are low; a thread's own session, archiving it and putting
- * it under another thread are high (a session uses the owner's plan; archiving keeps the thread's inbox copies; a sub-thread takes
- * its parent's folder, model and MCP list). A session's folder, model and MCP list are high too: they are what it can reach.
- */
-export const THREAD_FIELD_RULES: Readonly<Record<ThreadField, ThreadFieldRow>> = {
-  name: {
-    risk: 'low',
-    rule: { label: 'name', phrase: 'thread names', hint: '1-40 chars', value: Plain(1, 40) },
-    read: (t) => t.name,
-    set: (v) => ({ name: v }),
-  },
-  topic: {
-    risk: 'low',
-    rule: {
-      label: 'topic',
-      phrase: 'thread topics',
-      hint: `the "what goes here" line, up to ${THREAD_TOPIC_MAX} chars, "" to clear it`,
-      value: Plain(0, THREAD_TOPIC_MAX),
-      show: none,
-    },
-    read: (t) => t.topic ?? '',
-    set: (v) => ({ topic: v === '' ? null : v }),
-  },
-  icon: {
-    risk: 'low',
-    rule: {
-      label: 'icon',
-      phrase: 'thread icons',
-      hint: 'an icon key or one emoji, up to 16 chars, "" to clear it',
-      value: Plain(0, 16),
-      show: none,
-    },
-    read: (t) => t.icon ?? '',
-    set: (v) => ({ icon: v === '' ? null : v }),
-  },
-  notify: {
-    risk: 'low',
-    rule: {
-      label: 'alerts',
-      phrase: 'thread alerts',
-      hint: '"all", "needs_you" or "off"',
-      value: z.enum(['all', 'needs_you', 'off']),
-    },
-    // A thread on 'off' gets no push at all, approval-card pushes included (relay push.ts `thread_off`; security notices and health
-    // alarms are system templates and still arrive). So 'off' is high, and so is any change to the default thread's alerts, where
-    // the approval cards land.
-    alsoHigh: {
-      phrase: "turning a thread's alerts off or changing the default thread's alerts",
-      when: (v, c, id) => v === 'off' || id === c.default_thread,
-    },
-    read: (t) => t.notify,
-    set: (v) => ({ notify: v }),
-  },
-  session: {
-    risk: 'high',
-    rule: {
-      label: 'own session',
-      phrase: 'thread sessions',
-      hint: '"dedicated" (its own Claude Code session) or "shared" (the main session answers)',
-      value: ThreadSessionValue,
-    },
-    read: (t) => t.session ?? 'shared',
-    set: (v) => ({ session: v }),
-  },
-  archived: {
-    risk: 'high',
-    rule: {
-      label: 'archived',
-      phrase: 'archiving threads',
-      hint: 'true to archive an agent-made thread (never the default thread), false to bring it back',
-      value: z.boolean(),
-      show: (v) => (v === true ? 'yes' : v === false ? 'no' : String(v)),
-    },
-    read: (t) => t.archived,
-    set: (v) => ({ archived: v }),
-  },
-  parent: {
-    risk: 'high',
-    rule: {
-      label: 'under',
-      phrase: 'putting a thread under another thread or taking it out',
-      hint: 'the id of a top-level thread to put it under (sub-threads go one level deep), or null to take it out',
-      value: ThreadId.nullable(),
-      show: (v) => (v === null ? 'no thread (top level)' : String(v)),
-    },
-    read: (t) => t.parent_id ?? null,
-    set: (v) => ({ parent_id: v }),
-  },
-  // How long a thread's own session may sit idle before it is parked (Pantheon 2026-11-15, with the dev panel). Only this key of
-  // session_opts is written; the folder, model and MCP list stay as they are.
-  idle_park_min: {
-    risk: 'low',
-    rule: {
-      label: 'idle minutes before parking',
-      phrase: "how long a thread's own session idles before it is parked",
-      hint: `5-720 minutes (default ${DEFAULT_IDLE_PARK_MIN})`,
-      value: ThreadIdleValue,
-      show: (v) => `${String(v)} min`,
-    },
-    read: (t) => t.session_opts?.idle_park_min ?? DEFAULT_IDLE_PARK_MIN,
-    set: (v, t) => ({ session_opts: { ...(t?.session_opts ?? {}), idle_park_min: v } }),
-  },
-  ...SETUP_THREAD_FIELD_RULES,
-}
-
-/** Whether a thread may have its own session, in the words a refusal uses; null when it may. */
-export function sessionRefusal(config: AgentConfigT, threadId: string): string | null {
-  return canBeDedicated(config, threadId)
-    ? null
-    : `thread ${threadId} can't have its own session: the default thread, general, inbox and archived threads are always shared`
-}
-
 type Table = typeof SETTINGS_TABLE
 type PathsWhere<K extends keyof SettingRow, V> = {
   [P in keyof Table]: Table[P][K & keyof Table[P]] extends V ? P : never
@@ -858,14 +764,16 @@ export const AGENT_SETTING_PATHS = rows.filter(([, r]) => r.agent).map(([p]) => 
 ]
 
 /**
- * Names an agent refusal calls out. A section the agent can reach part of (`agent`, `voice_notes`) is named by the full
+ * Names an agent refusal calls out. A setting inside a section (`voice_notes.driving_until`, `memory.nyx_url`) is named by the full
  * path; any other is named by its top-level field. The per-thread Mac-only options (`HIGH_RISK_SETTING_PATHS`, today
  * `threads.session_opts.ops_read`) are named by their full path.
  */
 export const AGENT_REFUSED_NAMES: readonly string[] = unique([
   ...rows
     .filter(([, r]) => r.refusedByName)
-    .map(([path]) => (rows.some(([p, r]) => r.agent && topOf(p) === topOf(path)) ? path : topOf(path))),
+    .map(([path]) =>
+      path.includes('.') || rows.some(([p, r]) => r.agent && topOf(p) === topOf(path)) ? path : topOf(path),
+    ),
   ...HIGH_RISK_SETTING_PATHS,
 ])
 

@@ -89,6 +89,8 @@ describe('integrations list and work gate', () => {
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent).toMatch(/pass through your Talos server/)
     expect(dialog.textContent).toMatch(/Passthrough/)
+    expect(dialog.textContent).toMatch(/keeps it, up to 7 days/)
+    expect(dialog.textContent).not.toMatch(/after an hour/)
     expect(client.sent).toHaveLength(0)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }))
     await waitFor(() => expect(client.store.getState().config?.work.enabled).toContain('slack'))

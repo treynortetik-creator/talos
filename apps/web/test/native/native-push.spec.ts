@@ -20,6 +20,10 @@ type Mode = {
   grant?: boolean
   /** This phone remembers the owner chose message text and holds the keys. Defaults to `grant`. */
   localText?: boolean
+  /** The relay answers the grant POST with a refusal. */
+  rejectGrant?: boolean
+  /** An older page that recorded notifications on with text off: 0.11 keeps it off and offers words once. */
+  keptOff?: boolean
 }
 
 async function open(page: Page, mode: Mode) {
@@ -29,6 +33,10 @@ async function open(page: Page, mode: Mode) {
     if (m.localText ?? m.grant) {
       localStorage.setItem('talos.nativePush.text', 'on')
       localStorage.setItem('talos.nativePush.grantStored', '1')
+    }
+    if (m.keptOff) {
+      localStorage.setItem('talos.nativePush.choice', 'on')
+      localStorage.setItem('talos.nativePush.text', 'off')
     }
     const win = window as unknown as Record<string, unknown>
     win.__push = { calls: [] as string[] }
@@ -78,6 +86,7 @@ async function open(page: Page, mode: Mode) {
     const req = route.request()
     if (req.method() === 'POST') {
       posted = req.postDataJSON()
+      if (mode.rejectGrant) return route.fulfill({ status: 401, json: { error: 'bad_signature' } })
       held = (posted as { type?: string }).type === 'native.grant'
       return route.fulfill({ status: 204 })
     }
@@ -191,18 +200,16 @@ test('an older shell is told notifications are a fixed phrase, with no text choi
   await expect(page.getByTestId('native-push-names')).not.toContainText('turn on message text')
 })
 
-test('Turn on makes no grant; "Show message text" (a tap, by keyboard) registers a signed one and hands the shell exactly those bytes', async ({
+test('Turn on is one tap to words: it registers a signed grant and hands the shell exactly those bytes', async ({
   page,
 }) => {
   await open(page, { grantCalls: true })
-  await page.getByRole('button', { name: 'Turn on notifications' }).click()
-  await expect(status(page)).toHaveText('On')
-  expect(await page.evaluate(() => (window as unknown as { __grantPosted: () => unknown }).__grantPosted())).toBeNull()
-  await expect(page.getByTestId('native-push-text')).toContainText('Notifications show a fixed phrase')
-  const show = page.getByRole('button', { name: 'Show message text' })
-  await show.focus()
+  await expect(page.getByTestId('native-push-shared')).toContainText('set Show Previews to Never for Talos')
+  await page.getByRole('button', { name: 'Turn on notifications' }).focus()
   await page.keyboard.press('Enter')
+  await expect(status(page)).toHaveText('On')
   await expect(page.getByTestId('native-push-text')).toContainText('Apple only gets a fixed phrase')
+  await expect(page.getByRole('button', { name: 'Use a fixed phrase only' })).toBeVisible()
   const posted = (await page.evaluate(() =>
     (window as unknown as { __grantPosted: () => unknown }).__grantPosted(),
   )) as Record<string, unknown>
@@ -215,4 +222,27 @@ test('Turn on makes no grant; "Show message text" (a tap, by keyboard) registers
   expect(typeof posted.osig).toBe('string')
   const stored = await page.evaluate(() => (window as unknown as { __push: { grant?: string } }).__push.grant)
   expect(JSON.parse(stored ?? 'null')).toEqual(posted)
+  await noHorizontalScroll(page)
+})
+
+test('a grant the relay refuses shows as words not turned on, with Try again, never as on', async ({ page }) => {
+  await open(page, { grantCalls: true, rejectGrant: true })
+  await page.getByRole('button', { name: 'Turn on notifications' }).click()
+  await expect(status(page)).toHaveText('On')
+  await expect(page.getByText("Notifications are on, but message words didn't turn on.")).toBeVisible()
+  await expect(page.getByTestId('native-push-text')).toContainText('Notifications show a fixed phrase')
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible()
+  await noHorizontalScroll(page)
+})
+
+test('an older page with text off is offered words once; Not now hides it for good', async ({ page }) => {
+  await open(page, { permission: 'granted', registered: true, grantCalls: true, keptOff: true })
+  await expect(page.getByText('Show message words in notifications?')).toBeVisible()
+  await expect(page.getByTestId('native-push-text')).toContainText('fixed phrase')
+  await noHorizontalScroll(page)
+  await page.getByRole('button', { name: 'Not now' }).click()
+  await expect(page.getByText('Show message words in notifications?')).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByTestId('native-push-text')).toContainText('fixed phrase')
+  await expect(page.getByText('Show message words in notifications?')).toHaveCount(0)
 })

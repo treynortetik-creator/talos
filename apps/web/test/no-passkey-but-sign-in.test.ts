@@ -1,6 +1,7 @@
 // The owner's ruling, 2026-11-14: "There should be zero Face ID approvals... make sure it's gone from the app everywhere."
 // Sign-in keeps its passkey; nothing else in the web app asks for one, names one, or says Face ID. This fails if a card, a
 // setting, a revoke or any other screen brings a passkey step back (the protocol side is packages/protocol/test/no-step-up.test.ts).
+// gate-reads: apps/web/src/*.ts apps/web/src/*.tsx
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'

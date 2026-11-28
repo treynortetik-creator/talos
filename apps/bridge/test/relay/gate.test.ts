@@ -12,7 +12,9 @@ import { agentUnlessLocked, terminalOnly } from '../../src/talos.ts'
 import { SETTINGS_LOCKED } from '../../src/trust.ts'
 import { refusedForWorkers } from '../../src/worker/cli-refusal.ts'
 import { tempHome } from '../helpers.ts'
-import { cli, connectProject, world } from './helpers.ts'
+import { cli, connectProject, useWorldCleanup, world } from './helpers.ts'
+
+useWorldCleanup()
 
 const homes: string[] = []
 afterEach(() => {

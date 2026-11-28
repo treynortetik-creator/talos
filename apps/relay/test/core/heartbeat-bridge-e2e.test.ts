@@ -79,6 +79,9 @@ async function world() {
       TALOS_APP_RELAY_URL: relay.httpBase,
       TALOS_APP_BRIDGE: '1',
       TALOS_EXPLAINER: 'off',
+      // the Chronos box is this bridge's test root: the program, its HOME and its config are all inside it
+      TALOS_TEST_ROOT: box.dir,
+      HOME: box.home,
       TALOS_APP_CHRONOS_BIN: box.bin,
     },
   }).start()

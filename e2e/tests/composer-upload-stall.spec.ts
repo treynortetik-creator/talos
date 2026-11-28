@@ -1,3 +1,4 @@
+// gate-reads: apps/web/src/features/composer/useComposerAttachments.ts apps/web/src/features/composer/uploadError.ts
 // An attachment upload that never answers must not lock the message box (the owner, 2026-11-20 03:22: text and a photo in the
 // box, no Send, Enter did nothing, a reload fixed it). The real relay and bridge; the browser's request to /api/media is held
 // with no answer, as a lost request or a relay hiccup would leave it.

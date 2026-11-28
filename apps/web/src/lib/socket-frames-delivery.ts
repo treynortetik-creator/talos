@@ -21,9 +21,11 @@ export function onDevicePinned(ctx: FrameContext, frame: FrameOf<'device.pinned'
 }
 
 export function onAck(ctx: FrameContext, frame: FrameOf<'ack'>): void {
-  const { pending, onAcked } = ctx
+  const { pending, onAcked, emit } = ctx
   // `lastSeq` only advances from stored frames (message.stored, replies, catch-up batches), never from an ack: an
   // ack can carry a seq above catch-up pages that are still arriving, and the next `hello` would skip them.
+  // A Save from the schedule form the Mac applied at once (there is no card): the form hears it before its wait ends
+  if (frame.applied) emit('ack', frame as unknown as Record<string, unknown>)
   const p = pending.get(frame.ref)
   if (p) {
     clearTimeout(p.timer)

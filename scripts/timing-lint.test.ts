@@ -363,7 +363,7 @@ describe('what counts as a wait', () => {
     expect(rules('apps/bridge/test/a.test.ts', body('await setTimeout(t(1500))', tp + BUN))).toEqual([])
   })
 
-  it("expect.poll's { timeout } adds to the sum (clio-graph: 15 s + 30 s against 30 s); describe.configure sets the limit", () => {
+  it("expect.poll's { timeout } adds to the sum (a graph spec: 15 s + 30 s against 30 s); describe.configure sets the limit", () => {
     const pw = (c: string, pre = '') => `${PW}${pre}test('x', async ({ page }) => {\n  ${c}\n})\n`
     const two =
       'await expect(a).toHaveCount(1, { timeout: 15_000 })\n  await expect.poll(() => n(), { timeout: 30_000 }).toBe(1)'

@@ -32,9 +32,16 @@ describe('the e2e stack holds its relay port until the relay listens (fb7426b: 1
     const boot = lines.findIndex((l) => /^\s*let relay = await boot\(\)/.test(l))
     expect(boot).toBeGreaterThan(0)
     expect(lines[boot - 1]).toMatch(/^\s*await reserved\.release\(\)/)
-    const init = lines.findIndex((l) => /spawnSync\('bun', \['run', BRIDGE_CLI, 'init'/.test(l))
+    // the init command line: found by its argv (written in the spawn itself or in a `const initArgv = [...]` the spawn uses), and the
+    // spawn that runs it. Both must be found: a -1 would make every "before" check below pass for nothing.
+    const init = lines.findIndex((l) => /'run', BRIDGE_CLI, 'init'/.test(l))
+    const initSpawn = lines.findIndex((l) => /spawnSync\(\s*(initArgv\[0\]|'bun', \['run', BRIDGE_CLI, 'init')/.test(l))
     const reserve = lines.findIndex((l) => /= await reservePort\(\)/.test(l))
     expect(reserve).toBeGreaterThan(0)
+    expect(init).toBeGreaterThan(0)
+    expect(initSpawn).toBeGreaterThan(0)
     expect(reserve).toBeLessThan(init)
+    expect(reserve).toBeLessThan(initSpawn)
+    expect(initSpawn).toBeLessThan(boot)
   })
 })

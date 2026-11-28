@@ -238,18 +238,21 @@ public struct TmuxCommands: Equatable, Sendable {
 
   public func killSession() -> [String] { base + ["kill-session", "-t", sessionTarget] }
 
-  /// `#{client_activity}` (seconds since 1970) of each client attached to the session (Option C's typing guard).
+  /// `#{client_activity}` (seconds since 1970) of each client attached to the session that is a person's terminal (Option C's typing
+  /// guard). A control-mode client (the remote terminal view's: `-C attach -f ignore-size`, never typed through) prints an empty row,
+  /// so watching the pane is never read as the owner being at the keyboard (startup keys, restarts, idle parking). Same format as the
+  /// bridge's tmux-commands.ts.
   public func listClientsActivity() -> [String] {
-    base + ["list-clients", "-t", sessionTarget, "-F", "#{client_activity}"]
+    base + ["list-clients", "-t", sessionTarget, "-F", "#{?client_control_mode,,#{client_activity}}"]
   }
 
-  /// `listClientsActivity` output → one time per attached client, empty when nobody is attached. nil when any row can't
-  /// be read: that isn't "nobody is typing".
+  /// `listClientsActivity` output → one time per attached client that is a person's terminal, empty when there is none. An empty row
+  /// is a control-mode client (the remote view) and is skipped. nil when any other row can't be read: that isn't "nobody is typing".
   public static func parseClientActivity(_ out: String) -> [Double]? {
-    var rows = out.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-    if rows.last == "" { rows.removeLast() }
+    let rows = out.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
     var times: [Double] = []
     for r in rows {
+      if r.isEmpty { continue }  // a control-mode client (the remote view): not someone at the keyboard
       guard let t = Double(r) else { return nil }
       times.append(t)
     }

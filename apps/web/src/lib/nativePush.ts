@@ -4,7 +4,15 @@
 //
 // The plugin never talks to the relay and never receives a relay address: it asks iOS for permission and a token, and
 // reports taps on a notification. The page signs and sends the registration.
-import { APNS_ENVS, type ApnsEnvT, ApnsToken, NativeNavigate, RawP256 } from '@talos-app/protocol'
+import {
+  APNS_ENVS,
+  type ApnsEnvT,
+  ApnsToken,
+  NativeNavigate,
+  PHONE_PLAIN_REASONS,
+  type PhonePlainReasonT,
+  RawP256,
+} from '@talos-app/protocol'
 import { createHttp } from './http.ts'
 import { isNativeShell } from './native.ts'
 
@@ -297,5 +305,38 @@ export async function clearNativeGrant(scope: unknown = globalThis): Promise<voi
     await (plugin(scope) as { clearGrant?: Method } | null)?.clearGrant?.()
   } catch {
     /* the relay no longer holds the grant either way */
+  }
+}
+
+/** What the phone's notification extension reported through TalosPush: a reason, the id of the seal it could not open, and when (ms). */
+export type PhonePlain = { reason: PhonePlainReasonT; id: string; at: number }
+
+const SEAL_ID = /^[A-Za-z0-9_-]{22}$/
+
+/** Checks what crossed from native code: a known phone reason and a time, or null. */
+export function parsePhonePlain(raw: unknown): PhonePlain | null {
+  const r = raw as { reason?: unknown; id?: unknown; at?: unknown } | null
+  if (typeof r !== 'object' || r === null) return null
+  if (!PHONE_PLAIN_REASONS.includes(r.reason as PhonePlainReasonT)) return null
+  if (typeof r.id !== 'string' || !SEAL_ID.test(r.id)) return null
+  const ms = typeof r.at === 'number' ? r.at : typeof r.at === 'string' ? Date.parse(r.at) : Number.NaN
+  if (!Number.isFinite(ms) || ms <= 0) return null
+  // Below 1e11 is seconds (that is 1973 in ms), not milliseconds: a phone that sent seconds is understood, not trusted blindly.
+  const at = ms < 1e11 ? Math.floor(ms) * 1000 : ms
+  return { reason: r.reason as PhonePlainReasonT, id: r.id, at }
+}
+
+/**
+ * The reason the phone's notification extension gave the last time it showed the plain phrase instead of the message text
+ * (`lastPlainReason` on TalosPush: `{ reason, id, at }`). Null when this build of the shell has no such call, or it says nothing
+ * usable: the page then goes by what the relay says. Never throws.
+ */
+export async function nativeLastPlainReason(scope: unknown = globalThis): Promise<PhonePlain | null> {
+  try {
+    const p = plugin(scope) as { lastPlainReason?: Method } | null
+    if (!nativePushAvailable(scope) || typeof p?.lastPlainReason !== 'function') return null
+    return parsePhonePlain(await p.lastPlainReason())
+  } catch {
+    return null
   }
 }

@@ -922,6 +922,9 @@ Meta: `share_id`, `share_source`, files as `file_path*` (never `file_name`: a sh
 
 ### V5.3 UI (WP-V5, `apps/web/src/features/memory/**`, `/memory`)
 
+> Removed 2026-11-27: the app no longer browses memory; `/memory` is the Nyx setup screen and notes are read in Nyx. Kept for
+> the record.
+
 ```
  Memory          [ Search notes…        ]
  Notes ▸ projects ▸ example-project

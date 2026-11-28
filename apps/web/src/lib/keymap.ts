@@ -72,7 +72,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   e('topCard', 'Open top Needs-you card', 'Go to', null, { kind: 'ui', name: 'topCard' }),
   e('searchMessages', 'Search messages', 'Go to', null, { kind: 'nav', to: '/search' }),
   e('schedules', 'Schedules', 'Go to', null, { kind: 'nav', to: '/schedules' }),
-  e('memory', 'Memory', 'Go to', null, { kind: 'nav', to: '/memory' }),
+  e('memory', 'Nyx', 'Go to', null, { kind: 'nav', to: '/memory' }),
   e('settings', 'Settings', 'Go to', null, { kind: 'nav', to: '/settings' }),
   e('shortcuts', 'Keyboard shortcuts', 'Go to', { code: 'Slash' }, { kind: 'nav', to: '/settings/shortcuts' }),
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(thread),
@@ -105,7 +105,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   e('sessionPanel', 'Agent panel', 'Panels', { code: 'Period' }, { kind: 'ui', name: 'sessionPanel' }),
   e('sidebar', 'Fold or unfold the sidebar', 'Panels', { code: 'Backslash' }, { kind: 'ui', name: 'sidebar' }),
   e('reportBug', 'Report a bug', 'App', null, { kind: 'ui', name: 'bugReport' }),
-  e('close', 'Close', 'App', { code: 'Escape', mod: false }, { kind: 'ui', name: 'close' }, { repeat: true }),
+  e('close', 'Close', 'App', { code: 'Escape', mod: false }, { kind: 'ui', name: 'close' }, { repeat: false }),
 ]
 
 /** The table with the owner's overrides laid over it: a chord replaces the default, `null` unbinds. Pure; unknown ids are ignored. */

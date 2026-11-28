@@ -16,7 +16,7 @@ import {
   sha256Hex,
   signOwnerFrame,
 } from '@talos-app/protocol'
-import type { FakeBridge } from '@talos-app/testkit'
+import { bridgeChildEnv, type FakeBridge } from '@talos-app/testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLogger } from '../../../bridge/src/log.ts'
 import { ProblemService } from '../../../bridge/src/problems/service.ts'
@@ -47,9 +47,12 @@ function cli(home: string, args: string[]) {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env))
     if (v !== undefined && !/^(TALOS_|CLAUDE_CODE_|CLAUDECODE$|CHRONOS_RUN$)/.test(k)) env[k] = v
-  const out = spawnSync('bun', ['run', CLI, ...args], {
+  const argv = ['bun', 'run', CLI, ...args]
+  const out = spawnSync(argv[0] as string, argv.slice(1), {
     cwd: join(REPO, 'apps/bridge'),
-    env: { ...env, TALOS_APP_HOME: home, HOME: join(home, '..') },
+    // the fake home's folder is the CLI's test root: its HOME, inbox and Claude folder are inside it
+    env: bridgeChildEnv(argv, { TALOS_APP_HOME: home, TALOS_TEST_ROOT: join(home, '..'), HOME: join(home, '..') }, env)
+      .env,
     encoding: 'utf8',
     timeout: 30_000,
   })

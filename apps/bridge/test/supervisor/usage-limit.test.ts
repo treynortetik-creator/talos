@@ -188,6 +188,30 @@ describe('the usage-limit screen', () => {
   })
 })
 
+describe('the thread’s line when "continue at the usage limit" is on', () => {
+  const a = 'talos-app supervise attach trip'
+  const info = { model: 'Fable', kind: 'model', resets: '4pm (Europe/Paris)', parts: null } as const
+  it('off or not said: the line is exactly today’s', () => {
+    const today = usageLimitThreadLine(info, a)
+    expect(usageLimitThreadLine(info, a, false, false)).toBe(today)
+    expect(today).not.toContain('by itself')
+  })
+  it('on: says Claude Code will go on by itself at the reset, and still that Talos pressed nothing and the way on', () => {
+    const line = usageLimitThreadLine(info, a, false, true)
+    expect(line).toBe(
+      `This thread's session hit the usage limit for Fable. It resets 4pm (Europe/Paris). Continue at the usage limit is on: Claude Code will wait for the reset and go on by itself, if it can wait that long (it does not wait for a reset more than a day away). Talos pressed nothing on that screen: some of its options spend money or change your plan. To go on now, press Esc in this thread's pane (${a}), then /model <another model>.`,
+    )
+  })
+  it('on, for every kind: never says to answer, approve, accept or confirm, and never tells the owner to pick one', () => {
+    for (const kind of ['model', 'weekly', 'five_hour', 'team_budget', 'spend', 'trial', 'unnamed'] as const) {
+      const l = usageLimitThreadLine({ model: 'Fable', kind, resets: null, parts: null }, a, true, true).toLowerCase()
+      expect(l).toContain('by itself')
+      for (const w of ['answer', 'approve', 'accept', 'confirm', 'choose', 'select', 'press 2', 'pick'])
+        expect(l).not.toContain(w)
+    }
+  })
+})
+
 describe('one line an appearance, at most one an hour (the Mac’s UsageLimitWatch)', () => {
   it('a torn frame is not the screen gone; a new appearance inside the hour gets no second line; a clock set back none', () => {
     const w = new UsageLimitWatch()

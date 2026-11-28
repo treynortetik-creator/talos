@@ -276,7 +276,11 @@ struct WorkerIdleActivity {
     #expect(r.wait(15) { r.mgr.needsYou()["trip"] != nil }, "the question was never flagged: \(r.mgr.needsYou())")
     #expect(r.staysUp(for: 6, "parked while a question was on screen"), "more than the idle limit")
     FileManager.default.createFile(atPath: gone, contents: nil)
-    #expect(r.wait(15) { r.state("trip") == "parked" }, "answered, but it never parked: \(r.why("trip"))")
+    // two steps, each waited on by itself (a loaded runner spent one shared 15 s window): the hold ends once no dialog shape has been
+    // seen for the settle, then the idle limit parks it
+    #expect(r.wait(20) { r.mgr.needsYou()["trip"] == nil }, "the question never cleared: \(r.mgr.needsYou())")
+    let cleared = r.why("trip")
+    #expect(r.wait(20) { r.state("trip") == "parked" }, "cleared, but it never parked: \(r.why("trip")) (at the clear: \(cleared))")
   }
 
   /// A relaunch: the new copy takes the worker over with what the file says (the saved last activity, the last pointer, the start) and

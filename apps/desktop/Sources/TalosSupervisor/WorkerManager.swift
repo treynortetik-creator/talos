@@ -63,8 +63,7 @@ public final class WorkerManager: @unchecked Sendable {
     /// while the app is down, the time away is wall clock (a closed lid counts), and a turn that ended just before the relaunch still
     /// reads as running for `busyWindow`. So no turn is cut on the file's word alone at the first look.
     public var adoptedStopFloor: Double = 120
-    /// How long a worker may sit on a dialog during its start before it is stopped as `needs_mac`. The owner answers the dialog
-    /// in the Terminals window meanwhile; the ready timeout does not run while it is on screen. On the awake clock.
+    /// How long a worker may sit on a dialog during its start before it is stopped as `needs_mac` (the owner answers it in the Terminals window; no ready timeout meanwhile). Awake clock.
     public var dialogLimit: Double = 900
     /// Wait before a failed notice post is tried again (three tries, then the app says so).
     public var noticeRetry: Double = 30
@@ -84,6 +83,7 @@ public final class WorkerManager: @unchecked Sendable {
     public var cardLifetime: Double = 86400
     /// How long an unchanged dialog is not offered again after an answer's Enter of unknown delivery (a tmux timeout); awake clock.
     public var unsentEnterMemory: Double = 5
+    public var echoWait: Double = WorkerManager.echoWait  // how long a pressed key gets to show on the pane before the answer is unconfirmed; the tests widen it
     /// A change to a running session's folder, model, effort or MCP list is acted on once it has stood this long (awake clock).
     public var launchChangeSettle: Double = 30
     /// Tests: park after this many seconds instead of the thread's `idle_park_min`.
@@ -250,6 +250,8 @@ public final class WorkerManager: @unchecked Sendable {
     /// A new id was given for a file with nothing to resume, and no start has gone live since: the next such refusal stops the
     /// thread instead of making another id.
     var gaveNewId = false
+    /// What the last screen said about plan mode and Esc, and a re-run's turn in progress (WorkerCutTurn.swift).
+    var cut = CutTurnWatch()
   }
 
   /// Read under `publishedLock`: the tick rewrites the launch fields on the queue while the Terminals window reads this on the
@@ -330,9 +332,7 @@ public final class WorkerManager: @unchecked Sendable {
   public var updateRestart = UpdateRestartWiring()
   var updateState = UpdateRestartState()
   /// The `config.threads` entries left out that the owner was last told about, and how often that line clearly failed (WorkerSubThreads.swift).
-  var droppedSaid = ""
-  var droppedTries = 0
-  var droppedRetryAt: Double = 0
+  var droppedSaid = "", droppedTries = 0, droppedRetryAt: Double = 0
   var stopped = false
   /// The shapes of unknown status parts already in the audit this run (`noteUnknownStatusParts`).
   var unknownShapesSeen = Set<String>()
@@ -696,6 +696,7 @@ public final class WorkerManager: @unchecked Sendable {
       && !SessionTranscript.isSaved(sessionId: sessionId, folder: cwd, claudeDir: claudeDir)
     let resumes = resume && !unsaved
     let nonce = Self.nonce()
+    let rerun = cutTurnPlan(id, sessionId: sessionId, resumes: resumes, now: t)  // a turn the last launch had cut, to resume (WorkerCutTurn.swift)
     seedThreadState(id, name: s.name)
     let d = dir(id)
     let launch = d + "/launch.sh"
@@ -712,7 +713,8 @@ public final class WorkerManager: @unchecked Sendable {
       let spec = try WorkerSpec.build(
         specInputs(
           id, s, cwd: cwd, parent: folder.parent, hook: hook, main: main, plan: plan, mcpConfigPath: written?.path, sessionId: sessionId,
-          resume: resumes, nonce: nonce, base: base, threadFence: threadFenceForStart(id, dry: false), osSandbox: sandbox?.pieces))
+          resume: resumes, nonce: nonce, base: base, threadFence: threadFenceForStart(id, dry: false), osSandbox: sandbox?.pieces,
+          resumeCutTurn: rerun != nil))
       let parts = launchSpecParts(spec: spec, plan: plan, talosOnly: written?.bytes, hook: hook, base: base)
       specHash = parts.hash
       instructionsHash = Self.instructionsHash(spec, parts)
@@ -739,7 +741,7 @@ public final class WorkerManager: @unchecked Sendable {
     rt[id]?.entry.started_at = ISOTime.string(t)
     let launched = WorkersFile.Launched(
       cwd: cwd, model: s.model, effort: s.effort, mcp_allow: s.mcpAllow, spec_hash: specHash, update_tried_hash: r.entry.launched?.update_tried_hash,
-      instructions_hash: instructionsHash)
+      instructions_hash: instructionsHash, compact_window: s.compactWindow)
     rt[id]?.entry.launched = launched  // a spec tried stays tried
     writeFile()
     if sandboxRefusedAtSpawn(id, cwd: cwd, base: base, launch: launch) { return }  // the check again, as the last step (WorkerLaunchPlan.swift)
@@ -786,6 +788,7 @@ public final class WorkerManager: @unchecked Sendable {
     r.entry.parked_at = nil
     r.entry.error = nil
     r.entry.clearStatusFields()
+    if let rerun { beginCutTurnRerun(&r, id, rerun, nonce: nonce, now: t) }
     rt[id] = r
     dirty = true
     emit(.started(thread: id, resume: resumes))
@@ -886,6 +889,7 @@ public final class WorkerManager: @unchecked Sendable {
       let capture = run(tmux(id).capturePane())
       guard capture.ok else { return }
       let rows = TmuxCommands.parseCapture(capture.out)
+      noteCutLook(id, rows: rows)  // plan mode, an Esc, and the groups the session's tools lead (WorkerCutTurn.swift)
       let scr = DialogMatcher.workerScreen(rows)
       // A worker's screen is a conversation (a resumed one too), and it may quote any dialog's words. Only a whole dialog (its
       // frame, its phrase, numbered options, at the bottom of the screen) that has held still for `dialogSettle` is one. `scr`,
@@ -942,7 +946,7 @@ public final class WorkerManager: @unchecked Sendable {
       rt[id] = r
       let busy = readsBusy(id, ps, now: t)
       noteDeafScreen(id, rows: rows, busy: busy)  // the deaf-thread alarm (WorkerDeaf.swift)
-      if !busy { noteTurnEnded(id, now: t) }
+      noteTurnState(id, busy: busy, now: t)  // a quiet pane ends the turn (a re-run's, only once it has been seen running)
       if r.entry.state == "stopping" {
         // here, after the pane and the screen were read: a failed read never gets this far
         if !busy {
@@ -984,17 +988,5 @@ public final class WorkerManager: @unchecked Sendable {
     default:
       return
     }
-  }
-
-  func fail(_ id: String, _ code: String, _ detail: String, axis: String? = nil) {
-    if rt[id] == nil { return }
-    rt[id]?.entry.state = "failed"
-    rt[id]?.entry.error = .init(code: code, detail: WorkersFile.ErrorInfo.clipDetail(detail), at: ISOTime.string(now()), axis: axis)
-    rt[id]?.folderChangeTo = nil
-    rt[id]?.pendingPointer = false
-    rt[id]?.afterPark = nil
-    rt[id]?.heldSince = nil
-    dirty = true
-    emit(.failed(thread: id, code: code))
   }
 }
